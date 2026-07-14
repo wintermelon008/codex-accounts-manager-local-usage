@@ -6,15 +6,19 @@ import type {
   DashboardLocalUsageDayModelViewModel,
   DashboardLocalUsageDayViewModel,
   DashboardLocalUsageModelViewModel,
+  DashboardLocalUsageThreeHourModelViewModel,
+  DashboardLocalUsageThreeHourViewModel,
   DashboardLocalUsageTokenTotals,
   DashboardLocalUsageViewModel
 } from "../domain/dashboard/types";
 
 export const LOCAL_USAGE_CACHE_TTL_MS = 15 * 60 * 1000;
-export const LOCAL_USAGE_PERIOD_DAYS = 30;
+export const LOCAL_USAGE_PERIOD_DAYS = 14;
+export const LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT = 8;
 
-const CACHE_FILE_NAME = "local-usage-analytics-v2.json";
-const CACHE_SCHEMA_VERSION = 2;
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
+const CACHE_FILE_NAME = "local-usage-analytics-v3.json";
+const CACHE_SCHEMA_VERSION = 3;
 const UNKNOWN_MODEL = "unknown";
 
 type LocalUsageScanInput = {
@@ -180,6 +184,8 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
   const byDate = new Map(empty.byDay.map((row) => [row.date, row]));
   const byModel = new Map<string, DashboardLocalUsageModelViewModel>();
   const byDayAndModel = new Map<string, DashboardLocalUsageDayModelViewModel>();
+  const byThreeHour = new Map(empty.byThreeHour.map((row) => [row.startAt, row]));
+  const byThreeHourAndModel = new Map<string, DashboardLocalUsageThreeHourModelViewModel>();
   const sourceFiles = new Set<string>();
   const total = empty.total;
   let eventCount = 0;
@@ -218,8 +224,13 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
           continue;
         }
 
-        const date = dateKeyFromEvent(event["timestamp"], input.timeZone);
-        if (!date || !allowedDates.has(date)) {
+        const timestamp = timestampFromEvent(event["timestamp"]);
+        if (timestamp == null) {
+          continue;
+        }
+
+        const date = dateKey(timestamp, input.timeZone);
+        if (!allowedDates.has(date)) {
           continue;
         }
 
@@ -241,6 +252,17 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
         addTotals(modelBucket, usage);
         addTotals(dayModelBucket, usage);
         day.eventCount += 1;
+
+        const threeHourBucketStartAt = threeHourBucketStart(timestamp, input.now);
+        const threeHourBucket =
+          threeHourBucketStartAt == null ? undefined : byThreeHour.get(threeHourBucketStartAt);
+        if (threeHourBucket) {
+          const threeHourModelBucket = getOrCreateThreeHourModelBucket(byThreeHourAndModel, threeHourBucket.startAt, model);
+          addTotals(threeHourBucket, usage);
+          addTotals(threeHourModelBucket, usage);
+          threeHourBucket.eventCount += 1;
+        }
+
         eventCount += 1;
         fileHasUsage = true;
       }
@@ -270,6 +292,10 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
       byModel: [...byModel.values()].sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)),
       byDayAndModel: [...byDayAndModel.values()].sort(
         (a, b) => a.date.localeCompare(b.date) || b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)
+      ),
+      byThreeHour: [...byThreeHour.values()].sort((a, b) => a.startAt - b.startAt),
+      byThreeHourAndModel: [...byThreeHourAndModel.values()].sort(
+        (a, b) => a.startAt - b.startAt || b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)
       )
     },
     input.now
@@ -304,7 +330,9 @@ function createEmptySnapshot(
       ...emptyTotals()
     })),
     byModel: [],
-    byDayAndModel: []
+    byDayAndModel: [],
+    byThreeHour: recentThreeHourBuckets(now),
+    byThreeHourAndModel: []
   };
 }
 
@@ -371,6 +399,26 @@ function getOrCreateDayModelBucket(
   return created;
 }
 
+function getOrCreateThreeHourModelBucket(
+  buckets: Map<string, DashboardLocalUsageThreeHourModelViewModel>,
+  startAt: number,
+  model: string
+): DashboardLocalUsageThreeHourModelViewModel {
+  const key = `${startAt}\u0000${model}`;
+  const existing = buckets.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const created: DashboardLocalUsageThreeHourModelViewModel = {
+    startAt,
+    model,
+    ...emptyTotals()
+  };
+  buckets.set(key, created);
+  return created;
+}
+
 function readLastTokenUsage(payload: Record<string, unknown>): DashboardLocalUsageTokenTotals | undefined {
   const info = asRecord(payload["info"]);
   const usage = asRecord(info?.["last_token_usage"]);
@@ -406,13 +454,39 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function dateKeyFromEvent(value: unknown, timeZone: string): string | undefined {
+function timestampFromEvent(value: unknown): number | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
 
   const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? dateKey(timestamp, timeZone) : undefined;
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function recentThreeHourBuckets(now: number): DashboardLocalUsageThreeHourViewModel[] {
+  const earliestStartAt = now - LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT * THREE_HOURS_MS;
+  return Array.from({ length: LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT }, (_, index) => {
+    const startAt = earliestStartAt + index * THREE_HOURS_MS;
+    return {
+      startAt,
+      endAt: startAt + THREE_HOURS_MS,
+      eventCount: 0,
+      ...emptyTotals()
+    };
+  });
+}
+
+function threeHourBucketStart(timestamp: number, now: number): number | undefined {
+  const earliestStartAt = now - LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT * THREE_HOURS_MS;
+  if (timestamp < earliestStartAt || timestamp > now) {
+    return undefined;
+  }
+
+  const index = Math.min(
+    LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT - 1,
+    Math.floor((timestamp - earliestStartAt) / THREE_HOURS_MS)
+  );
+  return earliestStartAt + index * THREE_HOURS_MS;
 }
 
 function recentDateKeys(now: number, periodDays: number, timeZone: string): string[] {
@@ -525,7 +599,11 @@ function isUsageSnapshot(value: unknown): value is DashboardLocalUsageViewModel 
     Array.isArray(candidate["byModel"]) &&
     candidate["byModel"].every(isUsageModel) &&
     Array.isArray(candidate["byDayAndModel"]) &&
-    candidate["byDayAndModel"].every(isUsageDayModel)
+    candidate["byDayAndModel"].every(isUsageDayModel) &&
+    Array.isArray(candidate["byThreeHour"]) &&
+    candidate["byThreeHour"].every(isUsageThreeHour) &&
+    Array.isArray(candidate["byThreeHourAndModel"]) &&
+    candidate["byThreeHourAndModel"].every(isUsageThreeHourModel)
   );
 }
 
@@ -556,6 +634,23 @@ function isUsageDayModel(value: unknown): value is DashboardLocalUsageDayModelVi
     typeof candidate["model"] === "string" &&
     isTokenTotals(candidate)
   );
+}
+
+function isUsageThreeHour(value: unknown): value is DashboardLocalUsageThreeHourViewModel {
+  const candidate = asRecord(value);
+  return Boolean(
+    candidate &&
+      isFiniteNumber(candidate["startAt"]) &&
+      isFiniteNumber(candidate["endAt"]) &&
+      candidate["endAt"] > candidate["startAt"] &&
+      isFiniteNumber(candidate["eventCount"]) &&
+      isTokenTotals(candidate)
+  );
+}
+
+function isUsageThreeHourModel(value: unknown): value is DashboardLocalUsageThreeHourModelViewModel {
+  const candidate = asRecord(value);
+  return Boolean(candidate && isFiniteNumber(candidate["startAt"]) && typeof candidate["model"] === "string" && isTokenTotals(candidate));
 }
 
 function isTokenTotals(value: unknown): value is DashboardLocalUsageTokenTotals {

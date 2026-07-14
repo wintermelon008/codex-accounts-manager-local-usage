@@ -37,10 +37,10 @@ describe("extension manifest configuration", () => {
     };
     const properties = manifest.contributes?.configuration?.properties;
 
-    expect(properties?.["codexAccounts.localUsageDefaultRangeDays"]).toMatchObject({
-      type: "number",
-      default: 7,
-      enum: [7, 14, 30]
+    expect(properties?.["codexAccounts.localUsageDefaultRange"]).toMatchObject({
+      type: "string",
+      default: "7d",
+      enum: ["24h", "7d", "14d"]
     });
     expect(properties?.["codexAccounts.localUsageShowEquivalentPrice"]).toMatchObject({
       type: "boolean",

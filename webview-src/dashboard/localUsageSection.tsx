@@ -1,32 +1,45 @@
 import type { ComponentChildren } from "preact";
+import { useEffect, useState } from "preact/hooks";
 import type {
   DashboardCopy,
-  DashboardLocalUsageRangeDays,
+  DashboardLocalUsageRange,
   DashboardLocalUsageViewModel,
   DashboardSettings
 } from "../../src/domain/dashboard/types";
-import { deriveLocalUsageRange, estimateStandardApiCost, LOCAL_USAGE_RANGE_OPTIONS } from "./localUsageInsights";
+import {
+  deriveLocalUsageRange,
+  estimateStandardApiCost,
+  LOCAL_USAGE_RANGE_OPTIONS,
+  type LocalUsagePriceEstimate
+} from "./localUsageInsights";
 
 export function LocalUsageSection(props: {
   usage?: DashboardLocalUsageViewModel;
   copy: DashboardCopy;
   settings: DashboardSettings;
-  onRangeChange: (days: DashboardLocalUsageRangeDays) => void;
+  onRangeChange: (range: DashboardLocalUsageRange) => void;
 }) {
   const { usage, copy, settings } = props;
+  const [selectedRange, setSelectedRange] = useState(settings.localUsageDefaultRange);
+
+  useEffect(() => {
+    setSelectedRange(settings.localUsageDefaultRange);
+  }, [settings.localUsageDefaultRange]);
+
   if (!usage) {
     return null;
   }
 
-  const range = deriveLocalUsageRange(usage, settings.localUsageDefaultRangeDays);
+  const range = deriveLocalUsageRange(usage, selectedRange);
   const price = estimateStandardApiCost(range.byModel);
-  const subtitle = copy.localUsageSub.replace("{days}", String(range.days));
+  const subtitle = copy.localUsageSub.replace("{range}", rangeLabel(copy, range.range));
   const freshness = usage.isRefreshing
     ? copy.localUsageRefreshing
     : usage.calculatedAt != null
       ? `${copy.localUsageUpdated}: ${formatTimestamp(usage.calculatedAt)}`
       : undefined;
   const priceSub = price.unpricedTokens > 0 ? copy.localUsagePriceUnpriced : copy.localUsagePriceSub;
+  const showPrice = settings.localUsageShowEquivalentPrice;
 
   return (
     <section class="section local-usage-section">
@@ -47,7 +60,7 @@ export function LocalUsageSection(props: {
         <>
           <div class="local-usage-cards">
             <UsageMetric label={copy.localUsageTotal} value={range.total.totalTokens} tone="primary" />
-            {settings.localUsageShowEquivalentPrice ? (
+            {showPrice ? (
               <UsageMetric
                 label={copy.localUsagePrice}
                 value={formatUsd(price.amountUsd)}
@@ -63,25 +76,39 @@ export function LocalUsageSection(props: {
 
           <div class="local-usage-layout">
             <UsageBars
-              title={copy.localUsageDaily}
-              rows={range.byDay.map((row) => ({ label: row.date, value: row.totalTokens }))}
+              title={range.range === "24h" ? copy.localUsageThreeHour : copy.localUsageDaily}
+              rows={range.bars.map((row) => ({
+                key: row.key,
+                label: row.startAt != null && row.endAt != null ? formatThreeHourRange(row.startAt, row.endAt) : row.date ?? "",
+                value: row.total.totalTokens,
+                price: row.price
+              }))}
               control={
                 <RangeSelector
                   copy={copy}
-                  selectedDays={settings.localUsageDefaultRangeDays}
-                  onChange={props.onRangeChange}
+                  selectedRange={selectedRange}
+                  onChange={(nextRange) => {
+                    setSelectedRange(nextRange);
+                    props.onRangeChange(nextRange);
+                  }}
                 />
               }
-              scrollable={range.days > 7}
+              scrollable={range.range === "14d"}
+              showPrice={showPrice}
+              animationKey={range.range}
             />
             <UsageBars
               title={copy.localUsageByModel}
               titleMeta={copy.localUsageSameRange}
               rows={range.byModel.slice(0, 8).map((row) => ({
+                key: `model-${row.model}`,
                 label: row.model === "unknown" ? copy.localUsageModelUnknown : row.model,
-                value: row.totalTokens
+                value: row.totalTokens,
+                price: estimateStandardApiCost([row])
               }))}
               emptyLabel={copy.localUsageUnavailable}
+              showPrice={showPrice}
+              animationKey={range.range}
             />
           </div>
 
@@ -99,20 +126,20 @@ export function LocalUsageSection(props: {
 
 function RangeSelector(props: {
   copy: DashboardCopy;
-  selectedDays: DashboardLocalUsageRangeDays;
-  onChange: (days: DashboardLocalUsageRangeDays) => void;
+  selectedRange: DashboardLocalUsageRange;
+  onChange: (range: DashboardLocalUsageRange) => void;
 }) {
   return (
     <div class="local-usage-range" aria-label={props.copy.localUsageDefaultRangeTitle}>
-      {LOCAL_USAGE_RANGE_OPTIONS.map((days) => (
+      {LOCAL_USAGE_RANGE_OPTIONS.map((range) => (
         <button
-          key={days}
-          class={`local-usage-range-btn ${props.selectedDays === days ? "active" : ""}`}
+          key={range}
+          class={`local-usage-range-btn ${props.selectedRange === range ? "active" : ""}`}
           type="button"
-          aria-pressed={props.selectedDays === days}
-          onClick={() => props.onChange(days)}
+          aria-pressed={props.selectedRange === range}
+          onClick={() => props.onChange(range)}
         >
-          {rangeLabel(props.copy, days)}
+          {rangeLabel(props.copy, range)}
         </button>
       ))}
     </div>
@@ -144,9 +171,11 @@ function UsageBars(props: {
   title: string;
   titleMeta?: string;
   control?: ComponentChildren;
-  rows: Array<{ label: string; value: number }>;
+  rows: Array<{ key: string; label: string; value: number; price?: LocalUsagePriceEstimate }>;
   emptyLabel?: string;
   scrollable?: boolean;
+  showPrice: boolean;
+  animationKey: string;
 }) {
   const max = Math.max(...props.rows.map((row) => row.value), 0);
   return (
@@ -159,18 +188,23 @@ function UsageBars(props: {
         {props.control}
       </div>
       {props.rows.length > 0 ? (
-        <div class={`local-usage-bars ${props.scrollable ? "is-scrollable" : ""}`}>
-          {props.rows.map((row) => (
-            <div class="local-usage-bar-row" key={row.label}>
-              <span class="local-usage-bar-label" title={row.label}>
-                {row.label}
-              </span>
-              <div class="local-usage-bar-track" aria-label={`${row.label}: ${formatNumber(row.value)}`}>
-                <div class="local-usage-bar-fill" style={{ width: `${barWidth(row.value, max)}%` }}></div>
+        <div key={props.animationKey} class={`local-usage-bars is-range-transition ${props.scrollable ? "is-scrollable" : ""}`}>
+          {props.rows.map((row) => {
+            const value = formatTokenAndPrice(row.value, row.price, props.showPrice);
+            return (
+              <div class="local-usage-bar-row" key={row.key}>
+                <span class="local-usage-bar-label" title={row.label}>
+                  {row.label}
+                </span>
+                <div class="local-usage-bar-track" aria-label={`${row.label}: ${value}`}>
+                  <div class="local-usage-bar-fill" style={{ width: `${barWidth(row.value, max)}%` }}></div>
+                </div>
+                <span class="local-usage-bar-value" title={value}>
+                  {value}
+                </span>
               </div>
-              <span class="local-usage-bar-value">{formatNumber(row.value)}</span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div class="local-usage-empty">{props.emptyLabel}</div>
@@ -179,12 +213,12 @@ function UsageBars(props: {
   );
 }
 
-function rangeLabel(copy: DashboardCopy, days: DashboardLocalUsageRangeDays): string {
-  switch (days) {
-    case 14:
+function rangeLabel(copy: DashboardCopy, range: DashboardLocalUsageRange): string {
+  switch (range) {
+    case "24h":
+      return copy.localUsageRange24Hours;
+    case "14d":
       return copy.localUsageRange14Days;
-    case 30:
-      return copy.localUsageRange30Days;
     default:
       return copy.localUsageRange7Days;
   }
@@ -197,6 +231,21 @@ function barWidth(value: number, max: number): number {
   return Math.max(2, Math.min(100, (value / max) * 100));
 }
 
+function formatTokenAndPrice(
+  tokens: number,
+  price: LocalUsagePriceEstimate | undefined,
+  showPrice: boolean
+): string {
+  const tokenText = formatNumber(tokens);
+  if (!showPrice || !price) {
+    return tokenText;
+  }
+  if (price.pricedTokens <= 0) {
+    return `${tokenText}(—)`;
+  }
+  return `${tokenText}(${formatCompactUsd(price.amountUsd)}${price.unpricedTokens > 0 ? "+" : ""})`;
+}
+
 function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(Math.round(value));
 }
@@ -205,11 +254,34 @@ function formatUsd(value: number): string {
   return `US$${new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}`;
 }
 
+function formatCompactUsd(value: number): string {
+  return `US$${new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)}`;
+}
+
+function formatThreeHourRange(startAt: number, endAt: number): string {
+  const start = new Date(startAt);
+  const end = new Date(endAt);
+  const dateFormatter = new Intl.DateTimeFormat(undefined, { month: "2-digit", day: "2-digit" });
+  const timeFormatter = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  const startDate = dateFormatter.format(start);
+  const endDate = dateFormatter.format(end);
+  const startTime = timeFormatter.format(start);
+  const endTime = timeFormatter.format(end);
+  return startDate === endDate
+    ? `${startDate} ${startTime}–${endTime}`
+    : `${startDate} ${startTime}–${endDate} ${endTime}`;
+}
+
 function formatTimestamp(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
-    minute: "2-digit"
+    minute: "2-digit",
+    hour12: false
   }).format(new Date(timestamp));
 }

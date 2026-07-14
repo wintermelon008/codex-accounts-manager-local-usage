@@ -388,9 +388,8 @@ function App() {
           usage={snapshot.localUsage}
           copy={snapshot.copy}
           settings={snapshot.settings}
-          onRangeChange={(days) => {
-            patchSettings({ localUsageDefaultRangeDays: days });
-            sendSetting("localUsageDefaultRangeDays", days);
+          onRangeChange={(range) => {
+            sendSetting("localUsageDefaultRange", range);
           }}
         />
       </div>

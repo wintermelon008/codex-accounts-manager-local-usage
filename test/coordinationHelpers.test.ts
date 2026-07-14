@@ -141,7 +141,7 @@ describe("workbench refresh signature helpers", () => {
       logoUri: "logo",
       settings: {
         dashboardTheme: "auto",
-        localUsageDefaultRangeDays: 7,
+        localUsageDefaultRange: "7d",
         localUsageShowEquivalentPrice: true,
         codexAppRestartEnabled: false,
         codexAppRestartMode: "manual",
@@ -206,7 +206,7 @@ describe("workbench refresh signature helpers", () => {
       logoUri: "logo",
       settings: {
         dashboardTheme: "auto",
-        localUsageDefaultRangeDays: 7,
+        localUsageDefaultRange: "7d",
         localUsageShowEquivalentPrice: true,
         codexAppRestartEnabled: false,
         codexAppRestartMode: "manual",

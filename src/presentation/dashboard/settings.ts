@@ -6,7 +6,7 @@ import {
   getCodexAccountsConfiguration,
   normalizeAutoRefreshMinutes,
   normalizeDashboardTheme,
-  normalizeLocalUsageRangeDays
+  normalizeLocalUsageRange
 } from "../../infrastructure/config/extensionSettings";
 import { isDashboardLanguageOption } from "../../localization/languages";
 
@@ -62,9 +62,9 @@ export async function handleDashboardSettingUpdate(
         updated = true;
       }
       break;
-    case "localUsageDefaultRangeDays":
-      if (typeof value === "number") {
-        await updateDashboardConfiguration(config, key, normalizeLocalUsageRangeDays(value));
+    case "localUsageDefaultRange":
+      if (typeof value === "string") {
+        await updateDashboardConfiguration(config, key, normalizeLocalUsageRange(value));
         updated = true;
       }
       break;
