@@ -33,7 +33,9 @@ const localUsage = {
   },
   byDay: [],
   byModel: [],
-  byDayAndModel: []
+  byDayAndModel: [],
+  byThreeHour: [],
+  byThreeHourAndModel: []
 };
 
 function createState(): DashboardState {
@@ -44,7 +46,7 @@ function createState(): DashboardState {
     logoUri: "logo",
     settings: {
       dashboardTheme: "dark",
-      localUsageDefaultRangeDays: 7,
+      localUsageDefaultRange: "7d",
       localUsageShowEquivalentPrice: true,
       displayLanguage: "en",
       autoRefreshMinutes: 0,

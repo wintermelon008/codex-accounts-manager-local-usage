@@ -57,7 +57,9 @@ export function buildDashboardStateSignature(state: DashboardState): string {
         total: state.localUsage.total,
         byDay: state.localUsage.byDay,
         byModel: state.localUsage.byModel,
-        byDayAndModel: state.localUsage.byDayAndModel
+        byDayAndModel: state.localUsage.byDayAndModel,
+        byThreeHour: state.localUsage.byThreeHour,
+        byThreeHourAndModel: state.localUsage.byThreeHourAndModel
       })
     : "";
 
@@ -67,7 +69,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.brandSub,
     state.settings.dashboardTheme,
     state.settings.displayLanguage,
-    state.settings.localUsageDefaultRangeDays,
+    state.settings.localUsageDefaultRange,
     state.settings.localUsageShowEquivalentPrice ? "1" : "0",
     state.settings.autoRefreshMinutes,
     state.settings.autoSwitchEnabled ? "1" : "0",

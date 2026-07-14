@@ -74,25 +74,25 @@ export function SettingsOverlay(props: {
             sub={props.copy.localUsageSettingsSub}
             options={[
               {
+                key: "local-usage-24h",
+                title: props.copy.localUsageRange24Hours,
+                description: props.copy.localUsageRange24HoursDesc,
+                active: props.settings.localUsageDefaultRange === "24h",
+                onClick: () => patchAndSend("localUsageDefaultRange", "24h")
+              },
+              {
                 key: "local-usage-7d",
                 title: props.copy.localUsageRange7Days,
                 description: props.copy.localUsageRange7DaysDesc,
-                active: props.settings.localUsageDefaultRangeDays === 7,
-                onClick: () => patchAndSend("localUsageDefaultRangeDays", 7)
+                active: props.settings.localUsageDefaultRange === "7d",
+                onClick: () => patchAndSend("localUsageDefaultRange", "7d")
               },
               {
                 key: "local-usage-14d",
                 title: props.copy.localUsageRange14Days,
                 description: props.copy.localUsageRange14DaysDesc,
-                active: props.settings.localUsageDefaultRangeDays === 14,
-                onClick: () => patchAndSend("localUsageDefaultRangeDays", 14)
-              },
-              {
-                key: "local-usage-30d",
-                title: props.copy.localUsageRange30Days,
-                description: props.copy.localUsageRange30DaysDesc,
-                active: props.settings.localUsageDefaultRangeDays === 30,
-                onClick: () => patchAndSend("localUsageDefaultRangeDays", 30)
+                active: props.settings.localUsageDefaultRange === "14d",
+                onClick: () => patchAndSend("localUsageDefaultRange", "14d")
               }
             ]}
           />

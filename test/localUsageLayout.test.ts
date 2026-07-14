@@ -53,7 +53,10 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(cards.indexOf("copy.localUsageTotal")).toBeLessThan(cards.indexOf("copy.localUsagePrice"));
     expect(cards.indexOf("copy.localUsagePrice")).toBeLessThan(cards.indexOf("copy.localUsageInput"));
     expect(section).toContain("<RangeSelector");
-    expect(settings).toContain("localUsageDefaultRangeDays");
+    expect(section).toContain("formatTokenAndPrice");
+    expect(section).toContain("formatThreeHourRange");
+    expect(settings).toContain("localUsageDefaultRange");
+    expect(settings).not.toContain("localUsageDefaultRangeDays");
     expect(settings).toContain("localUsageShowEquivalentPrice");
   });
 });

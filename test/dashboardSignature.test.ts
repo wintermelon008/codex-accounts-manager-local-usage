@@ -13,7 +13,7 @@ function createState(overrides?: {
     logoUri: "logo",
     settings: {
       dashboardTheme: "dark",
-      localUsageDefaultRangeDays: 7,
+      localUsageDefaultRange: "7d",
       localUsageShowEquivalentPrice: true,
       displayLanguage: "zh",
       autoRefreshMinutes: 0,
@@ -80,7 +80,7 @@ describe("buildDashboardStateSignature", () => {
       ...base,
       settings: {
         ...base.settings,
-        localUsageDefaultRangeDays: 14
+        localUsageDefaultRange: "14d"
       }
     };
     const usageChanged: DashboardState = {
@@ -88,7 +88,7 @@ describe("buildDashboardStateSignature", () => {
       localUsage: {
         status: "ready",
         isRefreshing: false,
-        periodDays: 30,
+        periodDays: 14,
         calculatedAt: 100,
         nextRefreshAt: 200,
         sourceFileCount: 1,
@@ -124,6 +124,29 @@ describe("buildDashboardStateSignature", () => {
         byDayAndModel: [
           {
             date: "2026-07-14",
+            model: "gpt-5.6-sol",
+            inputTokens: 10,
+            cachedInputTokens: 2,
+            outputTokens: 3,
+            reasoningOutputTokens: 1,
+            totalTokens: 13
+          }
+        ],
+        byThreeHour: [
+          {
+            startAt: 100,
+            endAt: 10_800_100,
+            eventCount: 1,
+            inputTokens: 10,
+            cachedInputTokens: 2,
+            outputTokens: 3,
+            reasoningOutputTokens: 1,
+            totalTokens: 13
+          }
+        ],
+        byThreeHourAndModel: [
+          {
+            startAt: 100,
             model: "gpt-5.6-sol",
             inputTokens: 10,
             cachedInputTokens: 2,

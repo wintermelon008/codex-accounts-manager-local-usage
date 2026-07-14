@@ -8,7 +8,7 @@ import type {
 
 export type DashboardSettingKey =
   | "dashboardTheme"
-  | "localUsageDefaultRangeDays"
+  | "localUsageDefaultRange"
   | "localUsageShowEquivalentPrice"
   | "codexAppRestartEnabled"
   | "codexAppRestartMode"
@@ -29,7 +29,7 @@ export type DashboardSettingKey =
 
 export interface DashboardSettings {
   dashboardTheme: DashboardThemeOption;
-  localUsageDefaultRangeDays: DashboardLocalUsageRangeDays;
+  localUsageDefaultRange: DashboardLocalUsageRange;
   localUsageShowEquivalentPrice: boolean;
   codexAppRestartEnabled: boolean;
   codexAppRestartMode: "auto" | "manual";
@@ -53,7 +53,7 @@ export interface DashboardSettings {
 
 export type DashboardThemeOption = "auto" | "dark" | "light";
 
-export type DashboardLocalUsageRangeDays = 7 | 14 | 30;
+export type DashboardLocalUsageRange = "24h" | "7d" | "14d";
 
 export interface DashboardCopy {
   panelTitle: string;
@@ -167,6 +167,7 @@ export interface DashboardCopy {
   localUsageCached: string;
   localUsageByModel: string;
   localUsageDaily: string;
+  localUsageThreeHour: string;
   localUsageUpdated: string;
   localUsageRefreshing: string;
   localUsageLoading: string;
@@ -175,17 +176,17 @@ export interface DashboardCopy {
   localUsageModelUnknown: string;
   localUsageNote: string;
   localUsagePriceNote: string;
+  localUsageRange24Hours: string;
   localUsageRange7Days: string;
   localUsageRange14Days: string;
-  localUsageRange30Days: string;
   localUsageSameRange: string;
   localUsageSettingsTitle: string;
   localUsageSettingsSub: string;
   localUsageDefaultRangeTitle: string;
   localUsageDefaultRangeSub: string;
+  localUsageRange24HoursDesc: string;
   localUsageRange7DaysDesc: string;
   localUsageRange14DaysDesc: string;
-  localUsageRange30DaysDesc: string;
   localUsagePriceSettingsTitle: string;
   localUsagePriceSettingsSub: string;
   localUsagePriceSettingsNote: string;
@@ -414,6 +415,17 @@ export interface DashboardLocalUsageDayModelViewModel extends DashboardLocalUsag
   model: string;
 }
 
+export interface DashboardLocalUsageThreeHourViewModel extends DashboardLocalUsageTokenTotals {
+  startAt: number;
+  endAt: number;
+  eventCount: number;
+}
+
+export interface DashboardLocalUsageThreeHourModelViewModel extends DashboardLocalUsageTokenTotals {
+  startAt: number;
+  model: string;
+}
+
 /**
  * A sanitized, machine-local view of Codex session usage. It deliberately has
  * no account identifiers, credentials, paths, or conversation content.
@@ -430,6 +442,8 @@ export interface DashboardLocalUsageViewModel {
   byDay: DashboardLocalUsageDayViewModel[];
   byModel: DashboardLocalUsageModelViewModel[];
   byDayAndModel: DashboardLocalUsageDayModelViewModel[];
+  byThreeHour: DashboardLocalUsageThreeHourViewModel[];
+  byThreeHourAndModel: DashboardLocalUsageThreeHourModelViewModel[];
 }
 
 export type DashboardBatchResultKind =

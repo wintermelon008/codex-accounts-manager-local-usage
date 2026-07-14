@@ -1,15 +1,15 @@
 # Local usage dashboard customization
 
-This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.3`.
+This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.4`.
 
 ## Scope
 
-- Adds a read-only local Codex token summary below Saved Accounts. The dashboard and Settings window offer 7-, 14-, and 30-day views; the scanner retains a sanitized 30-day aggregate.
-- Aggregates model, daily, input, output, cached-input, and total-token metadata from `$CODEX_HOME/sessions` (default `~/.codex/sessions`).
+- Adds a read-only local Codex token summary below Saved Accounts. The dashboard and Settings window offer `24h`, `7d`, and `14d` views. The `24h` view is rendered as eight three-hour rows.
+- Aggregates model, daily, three-hour, input, output, cached-input, and total-token metadata from `$CODEX_HOME/sessions` (default `~/.codex/sessions`).
 - Does not read or send session text, account identities, auth data, or raw paths to the Dashboard Webview.
 - Persists only sanitized aggregates in VS Code global storage and scans at most once every 15 minutes. Opening the Dashboard inside that window does not trigger another scan.
-- The selected range filters that cached 30-day aggregate locally, so daily usage, model distribution, totals, and event count always use the same range and range changes do not rescan files.
-- Shows an optional estimated standard OpenAI API price in USD between total and input tokens. It is an informational estimate only, not a Codex subscription bill.
+- The scanner retains a sanitized 14-day daily aggregate and a matching rolling 24-hour aggregate. The selected range filters this cached data locally, so usage rows, model distribution, totals, and event count always use the same range and range changes do not rescan files.
+- Shows an optional estimated standard OpenAI API price in USD between total and input tokens, and alongside each usage bar as `Token(US$price)`. It is an informational estimate only, not a Codex subscription bill.
 
 The displayed values are local session observations, not ChatGPT account quota or billing data.
 
@@ -24,7 +24,7 @@ The estimate deliberately excludes tool fees, long-context premiums, cache write
 The existing Dashboard Settings window has a **Local Usage Dashboard** section with a persisted default range and a **Show Estimated API Price** toggle. The corresponding VS Code configuration keys are:
 
 ```json
-"codexAccounts.localUsageDefaultRangeDays": 7,
+"codexAccounts.localUsageDefaultRange": "7d",
 "codexAccounts.localUsageShowEquivalentPrice": true
 ```
 

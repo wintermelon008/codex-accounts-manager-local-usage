@@ -1,24 +1,34 @@
 import type {
   DashboardLocalUsageModelViewModel,
-  DashboardLocalUsageRangeDays,
+  DashboardLocalUsageRange,
   DashboardLocalUsageTokenTotals,
   DashboardLocalUsageViewModel
 } from "../../src/domain/dashboard/types";
 
-export const LOCAL_USAGE_RANGE_OPTIONS: readonly DashboardLocalUsageRangeDays[] = [7, 14, 30];
-
-export type LocalUsageRangeViewModel = {
-  days: number;
-  eventCount: number;
-  total: DashboardLocalUsageTokenTotals;
-  byDay: DashboardLocalUsageViewModel["byDay"];
-  byModel: DashboardLocalUsageModelViewModel[];
-};
+export const LOCAL_USAGE_RANGE_OPTIONS: readonly DashboardLocalUsageRange[] = ["24h", "7d", "14d"];
 
 export type LocalUsagePriceEstimate = {
   amountUsd: number;
   pricedTokens: number;
   unpricedTokens: number;
+};
+
+export type LocalUsageRangeBar = {
+  key: string;
+  date?: string;
+  startAt?: number;
+  endAt?: number;
+  eventCount: number;
+  total: DashboardLocalUsageTokenTotals;
+  price: LocalUsagePriceEstimate;
+};
+
+export type LocalUsageRangeViewModel = {
+  range: DashboardLocalUsageRange;
+  eventCount: number;
+  total: DashboardLocalUsageTokenTotals;
+  bars: LocalUsageRangeBar[];
+  byModel: DashboardLocalUsageModelViewModel[];
 };
 
 type ApiRateCard = {
@@ -48,32 +58,46 @@ const API_RATE_CARDS: Array<{ matches: (model: string) => boolean; rates: ApiRat
 
 export function deriveLocalUsageRange(
   usage: DashboardLocalUsageViewModel,
-  requestedDays: DashboardLocalUsageRangeDays
+  requestedRange: DashboardLocalUsageRange
 ): LocalUsageRangeViewModel {
-  const days = Math.min(requestedDays, usage.byDay.length);
+  if (requestedRange === "24h") {
+    return deriveThreeHourRange(usage);
+  }
+
+  const days = requestedRange === "14d" ? 14 : 7;
   const byDay = usage.byDay.slice(-days);
   const includedDates = new Set(byDay.map((day) => day.date));
-  const byModel = new Map<string, DashboardLocalUsageModelViewModel>();
+  const modelsByDate = new Map<string, DashboardLocalUsageModelViewModel[]>();
+  const includedModels: DashboardLocalUsageModelViewModel[] = [];
 
   for (const row of usage.byDayAndModel) {
     if (!includedDates.has(row.date)) {
       continue;
     }
 
-    const existing = byModel.get(row.model) ?? {
-      model: row.model,
-      ...emptyTotals()
-    };
-    addTotals(existing, row);
-    byModel.set(row.model, existing);
+    const bucket = modelsByDate.get(row.date) ?? [];
+    bucket.push(row);
+    modelsByDate.set(row.date, bucket);
+    includedModels.push(row);
   }
 
+  const bars = byDay.map((day) => {
+    const modelUsage = aggregateModelUsage(modelsByDate.get(day.date) ?? []);
+    return {
+      key: `day-${day.date}`,
+      date: day.date,
+      eventCount: day.eventCount,
+      total: copyTotals(day),
+      price: estimateStandardApiCost(modelUsage)
+    };
+  });
+
   return {
-    days,
-    eventCount: byDay.reduce((count, day) => count + day.eventCount, 0),
-    total: byDay.reduce<DashboardLocalUsageTokenTotals>((total, day) => addTotals(total, day), emptyTotals()),
-    byDay,
-    byModel: [...byModel.values()].sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model))
+    range: requestedRange,
+    eventCount: bars.reduce((count, bar) => count + bar.eventCount, 0),
+    total: sumTotals(bars.map((bar) => bar.total)),
+    bars,
+    byModel: aggregateModelUsage(includedModels)
   };
 }
 
@@ -103,9 +127,65 @@ export function estimateStandardApiCost(
   return { amountUsd, pricedTokens, unpricedTokens };
 }
 
+function deriveThreeHourRange(usage: DashboardLocalUsageViewModel): LocalUsageRangeViewModel {
+  const modelsByBucket = new Map<number, DashboardLocalUsageModelViewModel[]>();
+  for (const row of usage.byThreeHourAndModel) {
+    const bucket = modelsByBucket.get(row.startAt) ?? [];
+    bucket.push(row);
+    modelsByBucket.set(row.startAt, bucket);
+  }
+
+  const bars = usage.byThreeHour.map((bucket) => {
+    const modelUsage = aggregateModelUsage(modelsByBucket.get(bucket.startAt) ?? []);
+    return {
+      key: `three-hour-${bucket.startAt}`,
+      startAt: bucket.startAt,
+      endAt: bucket.endAt,
+      eventCount: bucket.eventCount,
+      total: copyTotals(bucket),
+      price: estimateStandardApiCost(modelUsage)
+    };
+  });
+
+  return {
+    range: "24h",
+    eventCount: bars.reduce((count, bar) => count + bar.eventCount, 0),
+    total: sumTotals(bars.map((bar) => bar.total)),
+    bars,
+    byModel: aggregateModelUsage(usage.byThreeHourAndModel)
+  };
+}
+
+function aggregateModelUsage(
+  rows: readonly DashboardLocalUsageModelViewModel[]
+): DashboardLocalUsageModelViewModel[] {
+  const byModel = new Map<string, DashboardLocalUsageModelViewModel>();
+  for (const row of rows) {
+    const existing = byModel.get(row.model) ?? { model: row.model, ...emptyTotals() };
+    addTotals(existing, row);
+    byModel.set(row.model, existing);
+  }
+
+  return [...byModel.values()].sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model));
+}
+
 function rateCardForModel(model: string): ApiRateCard | undefined {
   const normalized = model.trim().toLowerCase();
   return API_RATE_CARDS.find((entry) => entry.matches(normalized))?.rates;
+}
+
+function copyTotals(source: DashboardLocalUsageTokenTotals): DashboardLocalUsageTokenTotals {
+  return {
+    inputTokens: source.inputTokens,
+    cachedInputTokens: source.cachedInputTokens,
+    outputTokens: source.outputTokens,
+    reasoningOutputTokens: source.reasoningOutputTokens,
+    totalTokens: source.totalTokens
+  };
+}
+
+function sumTotals(rows: readonly DashboardLocalUsageTokenTotals[]): DashboardLocalUsageTokenTotals {
+  return rows.reduce<DashboardLocalUsageTokenTotals>((total, row) => addTotals(total, row), emptyTotals());
 }
 
 function emptyTotals(): DashboardLocalUsageTokenTotals {

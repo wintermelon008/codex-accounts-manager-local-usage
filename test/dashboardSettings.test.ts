@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
+import { ExtensionSettingsStore } from "../src/infrastructure/config/extensionSettings";
 import { handleDashboardSettingUpdate } from "../src/presentation/dashboard/settings";
 
 describe("handleDashboardSettingUpdate", () => {
@@ -43,16 +44,28 @@ describe("handleDashboardSettingUpdate", () => {
       get: vi.fn(),
       update,
       inspect: vi.fn(() => ({
-        key: "codexAccounts.localUsageDefaultRangeDays",
-        defaultValue: 7
+        key: "codexAccounts.localUsageDefaultRange",
+        defaultValue: "7d"
       }))
     } as never);
 
-    await expect(handleDashboardSettingUpdate("localUsageDefaultRangeDays", 14)).resolves.toBe(true);
-    await expect(handleDashboardSettingUpdate("localUsageDefaultRangeDays", 99)).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("localUsageDefaultRange", "24h")).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("localUsageDefaultRange", "unsupported")).resolves.toBe(true);
 
-    expect(update).toHaveBeenNthCalledWith(1, "localUsageDefaultRangeDays", 14, vscode.ConfigurationTarget.Global);
-    expect(update).toHaveBeenNthCalledWith(2, "localUsageDefaultRangeDays", 7, vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(1, "localUsageDefaultRange", "24h", vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(2, "localUsageDefaultRange", "7d", vscode.ConfigurationTarget.Global);
+  });
+
+  it("migrates a legacy numeric range when the new range has not been explicitly configured", () => {
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((key: string, fallback: unknown) => (key === "localUsageDefaultRangeDays" ? 14 : fallback)),
+      inspect: vi.fn(() => ({
+        key: "codexAccounts.localUsageDefaultRange",
+        defaultValue: "7d"
+      }))
+    } as never);
+
+    expect(new ExtensionSettingsStore().getDashboardSettings().localUsageDefaultRange).toBe("14d");
   });
 
   it("persists the equivalent-price visibility setting", async () => {

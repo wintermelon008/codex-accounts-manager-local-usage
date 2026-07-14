@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DashboardLocalUsageViewModel } from "../src/domain/dashboard/types";
 import {
   LOCAL_USAGE_CACHE_TTL_MS,
+  LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT,
   LocalUsageAnalyticsService,
   scanLocalUsageSessions
 } from "../src/services/localUsageAnalytics";
@@ -90,6 +91,12 @@ describe("scanLocalUsageSessions", () => {
       expect.objectContaining({ date: "2026-07-13", model: "gpt-5.6-sol", totalTokens: 140 }),
       expect.objectContaining({ date: "2026-07-14", model: "gpt-5.6-luna", totalTokens: 70 })
     ]);
+    expect(result.byThreeHour).toHaveLength(LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT);
+    expect(result.byThreeHour.reduce((sum, bucket) => sum + bucket.totalTokens, 0)).toBe(70);
+    expect(result.byThreeHour.reduce((sum, bucket) => sum + bucket.eventCount, 0)).toBe(1);
+    expect(result.byThreeHourAndModel).toEqual([
+      expect.objectContaining({ model: "gpt-5.6-luna", totalTokens: 70 })
+    ]);
   });
 });
 
@@ -119,7 +126,7 @@ describe("LocalUsageAnalyticsService", () => {
     const firstCached = await service.getSnapshot();
     expect(firstCached.total.totalTokens).toBe(100);
     expect(scanner).toHaveBeenCalledTimes(1);
-    await expect(readFile(path.join(storagePath, "local-usage-analytics-v2.json"), "utf8")).resolves.toContain(
+    await expect(readFile(path.join(storagePath, "local-usage-analytics-v3.json"), "utf8")).resolves.toContain(
       '"totalTokens":100'
     );
 
@@ -167,7 +174,9 @@ function readySnapshot(periodDays: number, calculatedAt: number, totalTokens: nu
     },
     byDay: [],
     byModel: [],
-    byDayAndModel: []
+    byDayAndModel: [],
+    byThreeHour: [],
+    byThreeHourAndModel: []
   };
 }
 

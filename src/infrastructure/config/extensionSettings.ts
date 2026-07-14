@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type {
-  DashboardLocalUsageRangeDays,
+  DashboardLocalUsageRange,
   DashboardSettings,
   DashboardThemeOption
 } from "../../domain/dashboard/types";
@@ -19,7 +19,10 @@ export class ExtensionSettingsStore {
 
     return {
       dashboardTheme: normalizeDashboardTheme(config.get<string>("dashboardTheme", "auto")),
-      localUsageDefaultRangeDays: normalizeLocalUsageRangeDays(config.get<number>("localUsageDefaultRangeDays", 7)),
+      localUsageDefaultRange: normalizeLocalUsageRange(
+        explicitConfigurationValue(config, "localUsageDefaultRange") ??
+          config.get<number>("localUsageDefaultRangeDays", 7)
+      ),
       localUsageShowEquivalentPrice: config.get<boolean>("localUsageShowEquivalentPrice", true),
       codexAppRestartEnabled: config.get<boolean>("codexAppRestartEnabled", false),
       codexAppRestartMode: config.get<"auto" | "manual">("codexAppRestartMode") ?? "manual",
@@ -60,11 +63,19 @@ export function normalizeDashboardTheme(value: string | undefined): DashboardThe
   return value === "dark" || value === "light" || value === "auto" ? value : "auto";
 }
 
-export function normalizeLocalUsageRangeDays(value: number): DashboardLocalUsageRangeDays {
-  if (value === 14 || value === 30) {
+export function normalizeLocalUsageRange(value: unknown): DashboardLocalUsageRange {
+  if (value === "24h" || value === "7d" || value === "14d") {
     return value;
   }
-  return 7;
+
+  // Preserve the dashboard selection for installations that used the
+  // pre-24h numeric setting, without retaining the retired 30-day view.
+  return value === 14 ? "14d" : "7d";
+}
+
+function explicitConfigurationValue(config: vscode.WorkspaceConfiguration, key: string): unknown {
+  const inspected = config.inspect<unknown>(key);
+  return inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
 }
 
 export function normalizeAutoRefreshMinutes(value: number): number {
