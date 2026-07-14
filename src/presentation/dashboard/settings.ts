@@ -5,7 +5,8 @@ import {
   ExtensionSettingsStore,
   getCodexAccountsConfiguration,
   normalizeAutoRefreshMinutes,
-  normalizeDashboardTheme
+  normalizeDashboardTheme,
+  normalizeLocalUsageRangeDays
 } from "../../infrastructure/config/extensionSettings";
 import { isDashboardLanguageOption } from "../../localization/languages";
 
@@ -32,6 +33,7 @@ export async function handleDashboardSettingUpdate(
     case "backgroundTokenRefreshEnabled":
     case "quotaWarningEnabled":
     case "debugNetwork":
+    case "localUsageShowEquivalentPrice":
       if (typeof value === "boolean") {
         await updateDashboardConfiguration(config, key, value);
         updated = true;
@@ -57,6 +59,12 @@ export async function handleDashboardSettingUpdate(
     case "autoRefreshMinutes":
       if (typeof value === "number") {
         await updateDashboardConfiguration(config, key, normalizeAutoRefreshMinutes(value));
+        updated = true;
+      }
+      break;
+    case "localUsageDefaultRangeDays":
+      if (typeof value === "number") {
+        await updateDashboardConfiguration(config, key, normalizeLocalUsageRangeDays(value));
         updated = true;
       }
       break;
@@ -95,7 +103,9 @@ function resolveConfigurationTarget(
   return vscode.ConfigurationTarget.Global;
 }
 
-export async function pickDashboardCodexAppPath(settingsStore: Pick<ExtensionSettingsStore, "resolveLanguage">): Promise<void> {
+export async function pickDashboardCodexAppPath(
+  settingsStore: Pick<ExtensionSettingsStore, "resolveLanguage">
+): Promise<void> {
   const pickerCopy = getDashboardCopy(settingsStore.resolveLanguage());
   const selected = await vscode.window.showOpenDialog({
     canSelectFiles: true,

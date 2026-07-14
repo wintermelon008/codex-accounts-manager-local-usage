@@ -1,5 +1,9 @@
 import * as vscode from "vscode";
-import type { DashboardSettings, DashboardThemeOption } from "../../domain/dashboard/types";
+import type {
+  DashboardLocalUsageRangeDays,
+  DashboardSettings,
+  DashboardThemeOption
+} from "../../domain/dashboard/types";
 import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } from "../../localization/languages";
 import { normalizeQuotaColorThresholds } from "../../utils";
 
@@ -15,6 +19,8 @@ export class ExtensionSettingsStore {
 
     return {
       dashboardTheme: normalizeDashboardTheme(config.get<string>("dashboardTheme", "auto")),
+      localUsageDefaultRangeDays: normalizeLocalUsageRangeDays(config.get<number>("localUsageDefaultRangeDays", 7)),
+      localUsageShowEquivalentPrice: config.get<boolean>("localUsageShowEquivalentPrice", true),
       codexAppRestartEnabled: config.get<boolean>("codexAppRestartEnabled", false),
       codexAppRestartMode: config.get<"auto" | "manual">("codexAppRestartMode") ?? "manual",
       backgroundTokenRefreshEnabled: config.get<boolean>("backgroundTokenRefreshEnabled", true),
@@ -52,6 +58,13 @@ export class ExtensionSettingsStore {
 
 export function normalizeDashboardTheme(value: string | undefined): DashboardThemeOption {
   return value === "dark" || value === "light" || value === "auto" ? value : "auto";
+}
+
+export function normalizeLocalUsageRangeDays(value: number): DashboardLocalUsageRangeDays {
+  if (value === 14 || value === 30) {
+    return value;
+  }
+  return 7;
 }
 
 export function normalizeAutoRefreshMinutes(value: number): number {

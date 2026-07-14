@@ -8,6 +8,8 @@ import type {
 
 export type DashboardSettingKey =
   | "dashboardTheme"
+  | "localUsageDefaultRangeDays"
+  | "localUsageShowEquivalentPrice"
   | "codexAppRestartEnabled"
   | "codexAppRestartMode"
   | "backgroundTokenRefreshEnabled"
@@ -27,6 +29,8 @@ export type DashboardSettingKey =
 
 export interface DashboardSettings {
   dashboardTheme: DashboardThemeOption;
+  localUsageDefaultRangeDays: DashboardLocalUsageRangeDays;
+  localUsageShowEquivalentPrice: boolean;
   codexAppRestartEnabled: boolean;
   codexAppRestartMode: "auto" | "manual";
   backgroundTokenRefreshEnabled: boolean;
@@ -48,6 +52,8 @@ export interface DashboardSettings {
 }
 
 export type DashboardThemeOption = "auto" | "dark" | "light";
+
+export type DashboardLocalUsageRangeDays = 7 | 14 | 30;
 
 export interface DashboardCopy {
   panelTitle: string;
@@ -150,6 +156,39 @@ export interface DashboardCopy {
   organization: string;
   savedAccounts: string;
   savedAccountsSub: string;
+  localUsageTitle: string;
+  localUsageSub: string;
+  localUsageTotal: string;
+  localUsagePrice: string;
+  localUsagePriceSub: string;
+  localUsagePriceUnpriced: string;
+  localUsageInput: string;
+  localUsageOutput: string;
+  localUsageCached: string;
+  localUsageByModel: string;
+  localUsageDaily: string;
+  localUsageUpdated: string;
+  localUsageRefreshing: string;
+  localUsageLoading: string;
+  localUsageUnavailable: string;
+  localUsageEvents: string;
+  localUsageModelUnknown: string;
+  localUsageNote: string;
+  localUsagePriceNote: string;
+  localUsageRange7Days: string;
+  localUsageRange14Days: string;
+  localUsageRange30Days: string;
+  localUsageSameRange: string;
+  localUsageSettingsTitle: string;
+  localUsageSettingsSub: string;
+  localUsageDefaultRangeTitle: string;
+  localUsageDefaultRangeSub: string;
+  localUsageRange7DaysDesc: string;
+  localUsageRange14DaysDesc: string;
+  localUsageRange30DaysDesc: string;
+  localUsagePriceSettingsTitle: string;
+  localUsagePriceSettingsSub: string;
+  localUsagePriceSettingsNote: string;
   teamName: string;
   login: string;
   switchBtn: string;
@@ -353,6 +392,46 @@ export interface DashboardTokenAutomationViewModel {
   lastFailureMessage?: string;
 }
 
+export interface DashboardLocalUsageTokenTotals {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+}
+
+export interface DashboardLocalUsageDayViewModel extends DashboardLocalUsageTokenTotals {
+  date: string;
+  eventCount: number;
+}
+
+export interface DashboardLocalUsageModelViewModel extends DashboardLocalUsageTokenTotals {
+  model: string;
+}
+
+export interface DashboardLocalUsageDayModelViewModel extends DashboardLocalUsageTokenTotals {
+  date: string;
+  model: string;
+}
+
+/**
+ * A sanitized, machine-local view of Codex session usage. It deliberately has
+ * no account identifiers, credentials, paths, or conversation content.
+ */
+export interface DashboardLocalUsageViewModel {
+  status: "loading" | "ready" | "unavailable";
+  isRefreshing: boolean;
+  periodDays: number;
+  calculatedAt?: number;
+  nextRefreshAt?: number;
+  sourceFileCount: number;
+  eventCount: number;
+  total: DashboardLocalUsageTokenTotals;
+  byDay: DashboardLocalUsageDayViewModel[];
+  byModel: DashboardLocalUsageModelViewModel[];
+  byDayAndModel: DashboardLocalUsageDayModelViewModel[];
+}
+
 export type DashboardBatchResultKind =
   | "tags_set"
   | "tags_add"
@@ -386,6 +465,7 @@ export interface DashboardState {
   announcements: CodexAnnouncementState;
   indexHealth: CodexIndexHealthSummary;
   accounts: DashboardAccountViewModel[];
+  localUsage?: DashboardLocalUsageViewModel;
 }
 
 export type DashboardActionName =

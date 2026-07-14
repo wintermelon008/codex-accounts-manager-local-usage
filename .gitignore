@@ -4,6 +4,12 @@ coverage
 *.vsix
 .claude
 .vscode
+.vscode-server
+.codex
+auth.json
+auth.local.json
+.env
+.env.local
 .idea
 media/webview/dashboard
 .aitasks
