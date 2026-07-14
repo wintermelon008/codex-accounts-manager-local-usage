@@ -10,6 +10,7 @@ import { useDashboardActions, useDashboardHostSync, useDashboardModals } from ".
 import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon } from "./icons";
 import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
 import { SavedAccountCard } from "./savedAccountCard";
+import { LocalUsageSection } from "./localUsageSection";
 import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
 
@@ -383,6 +384,15 @@ function App() {
             </div>
           </section>
         ) : null}
+        <LocalUsageSection
+          usage={snapshot.localUsage}
+          copy={snapshot.copy}
+          settings={snapshot.settings}
+          onRangeChange={(days) => {
+            patchSettings({ localUsageDefaultRangeDays: days });
+            sendSetting("localUsageDefaultRangeDays", days);
+          }}
+        />
       </div>
 
       <SettingsOverlay

@@ -16,6 +16,26 @@ vi.mock("../src/presentation/dashboard/resetCreditsBackfill", () => ({
 
 import { publishDashboardSnapshot } from "../src/presentation/dashboard/panel";
 
+const localUsage = {
+  status: "ready" as const,
+  isRefreshing: false,
+  periodDays: 7,
+  calculatedAt: 1,
+  nextRefreshAt: 2,
+  sourceFileCount: 1,
+  eventCount: 1,
+  total: {
+    inputTokens: 10,
+    cachedInputTokens: 2,
+    outputTokens: 5,
+    reasoningOutputTokens: 1,
+    totalTokens: 15
+  },
+  byDay: [],
+  byModel: [],
+  byDayAndModel: []
+};
+
 function createState(): DashboardState {
   return {
     lang: "en",
@@ -24,6 +44,8 @@ function createState(): DashboardState {
     logoUri: "logo",
     settings: {
       dashboardTheme: "dark",
+      localUsageDefaultRangeDays: 7,
+      localUsageShowEquivalentPrice: true,
       displayLanguage: "en",
       autoRefreshMinutes: 0,
       backgroundTokenRefreshEnabled: true,
@@ -82,6 +104,35 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | "ti
 }
 
 describe("publishDashboardSnapshot", () => {
+  it("includes the sanitized local usage snapshot without delaying the dashboard", async () => {
+    const state = createState();
+    buildDashboardStateMock.mockResolvedValue(state);
+    backfillMissingResetCreditExpiriesMock.mockResolvedValue(false);
+    const usageAnalytics = {
+      getSnapshot: vi.fn(async () => localUsage)
+    };
+
+    await publishDashboardSnapshot({
+      repo: {} as never,
+      settingsStore: {} as never,
+      logoUri: "logo",
+      announcementsState: state.announcements,
+      setPanelTitle: vi.fn(),
+      postMessage: vi.fn(async () => true),
+      schedulePublishState: vi.fn(),
+      usageAnalytics: usageAnalytics as never
+    });
+
+    expect(usageAnalytics.getSnapshot).toHaveBeenCalledTimes(1);
+    expect(buildDashboardStateMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "logo",
+      state.announcements,
+      localUsage
+    );
+  });
+
   it("publishes the current snapshot without waiting for reset credits backfill", async () => {
     const state = createState();
     let resolveBackfill: (value: boolean) => void = () => undefined;

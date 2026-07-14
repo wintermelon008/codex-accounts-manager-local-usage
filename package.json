@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16",
+  "version": "0.1.16-local.3",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -71,6 +71,21 @@
           ],
           "default": "auto",
           "markdownDescription": "Language used by Codex Accounts Manager. `auto` follows the current VS Code display language. Dashboard, details, and core notifications use localized copy when available and fall back to English for any missing edge-case strings."
+        },
+        "codexAccounts.localUsageDefaultRangeDays": {
+          "type": "number",
+          "enum": [
+            7,
+            14,
+            30
+          ],
+          "default": 7,
+          "markdownDescription": "Default date range for the local Codex usage dashboard. Changing the range only filters the cached local aggregate and does not trigger an additional scan."
+        },
+        "codexAccounts.localUsageShowEquivalentPrice": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show an estimated standard OpenAI API cost in USD for the selected local usage range. This is not a Codex subscription bill."
         },
         "codexAccounts.autoRefreshMinutes": {
           "type": "number",
@@ -227,13 +242,20 @@
     "watch:webview": "vite build --watch --config vite.webview.config.mts",
     "compile": "npm run typecheck:webview && npm run build:webview && tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "npm run compile && vsce package",
+    "package": "npm run verify:customization && npm run compile && vsce package",
+    "verify:customization": "node scripts/verify-customization-baseline.mjs",
     "lint": "eslint src webview-src --ext ts,tsx",
     "lint:fix": "eslint src webview-src --ext ts,tsx --fix",
     "test": "vitest run",
     "verify": "npm run lint && npm run typecheck:webview && tsc -p ./",
     "format": "prettier --write \"src/**/*.ts\" \"webview-src/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"webview-src/**/*.{ts,tsx}\""
+  },
+  "codexAccountsLocalCustomization": {
+    "feature": "local-usage-dashboard",
+    "upstreamVersion": "0.1.16",
+    "upstreamCommit": "4b1689deafd2d303700c5cc26e6fd285979634e4",
+    "reviewRequiredOnUpstreamUpdate": true
   },
   "devDependencies": {
     "@types/node": "^20.16.11",

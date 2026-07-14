@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAccountsRepositoryState } from "../src/storage/accountsRepositoryState";
-import {
-  assertWriteAllowed,
-  markPendingSave,
-  readPendingOrCachedIndex
-} from "../src/storage/accountsWriteCoordinator";
+import { assertWriteAllowed, markPendingSave, readPendingOrCachedIndex } from "../src/storage/accountsWriteCoordinator";
 import { ErrorCode, StorageError } from "../src/core/errors";
 import { parseSharedJsonInput, toImportActionPayload } from "../src/presentation/dashboard/actionUtils";
-import { buildWorkbenchRefreshSignature, shouldRunAccountScheduler } from "../src/presentation/workbench/refreshSignature";
+import {
+  buildWorkbenchRefreshSignature,
+  shouldRunAccountScheduler
+} from "../src/presentation/workbench/refreshSignature";
 import { buildDashboardStateSignature } from "../src/presentation/dashboard/signature";
 import { runWithConcurrencyLimit } from "../src/utils/concurrency";
 import { normalizeAutoRefreshMinutes } from "../src/infrastructure/config/extensionSettings";
@@ -142,6 +141,8 @@ describe("workbench refresh signature helpers", () => {
       logoUri: "logo",
       settings: {
         dashboardTheme: "auto",
+        localUsageDefaultRangeDays: 7,
+        localUsageShowEquivalentPrice: true,
         codexAppRestartEnabled: false,
         codexAppRestartMode: "manual",
         backgroundTokenRefreshEnabled: true,
@@ -205,6 +206,8 @@ describe("workbench refresh signature helpers", () => {
       logoUri: "logo",
       settings: {
         dashboardTheme: "auto",
+        localUsageDefaultRangeDays: 7,
+        localUsageShowEquivalentPrice: true,
         codexAppRestartEnabled: false,
         codexAppRestartMode: "manual",
         backgroundTokenRefreshEnabled: true,

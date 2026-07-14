@@ -10,10 +10,12 @@ import type {
 import { ExtensionSettingsStore } from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
 import { AnnouncementService, type AnnouncementOptions } from "../../services/announcements";
+import { LocalUsageAnalyticsService } from "../../services/localUsageAnalytics";
 import { renderDashboardShell } from "./shell";
 import { buildDashboardStateSignature } from "./signature";
 import { executeDashboardActionMessage } from "./actionHandlers";
 import { clearDashboardCodexAppPath, dispatchDashboardClientMessage } from "./messageDispatcher";
+import { isLocalUsageCustomizationCompatible } from "./localUsageCompatibility";
 import { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
@@ -30,16 +32,19 @@ type PublishDashboardSnapshotParams = {
   setPanelTitle: (title: string) => void;
   postMessage: (message: DashboardHostMessage) => Thenable<boolean>;
   schedulePublishState: () => void;
+  usageAnalytics?: LocalUsageAnalyticsService;
   lastPublishedStateSignature?: string;
   force?: boolean;
 };
 
 export async function publishDashboardSnapshot(params: PublishDashboardSnapshotParams): Promise<string | undefined> {
+  const localUsage = await params.usageAnalytics?.getSnapshot(() => params.schedulePublishState());
   const state = await buildDashboardState(
     params.repo,
     params.settingsStore,
     params.logoUri,
-    params.announcementsState
+    params.announcementsState,
+    localUsage
   );
   void backfillMissingResetCreditExpiries(params.repo, state.accounts, params.schedulePublishState).catch(() => undefined);
 
@@ -65,6 +70,8 @@ class DashboardPanelController {
   private webviewReady = false;
   private publishTimer: NodeJS.Timeout | undefined;
   private lastPublishedStateSignature: string | undefined;
+  private usageAnalytics: LocalUsageAnalyticsService | undefined;
+  private usageAnalyticsCompatibility: Promise<boolean> | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -194,6 +201,7 @@ class DashboardPanelController {
       },
       postMessage: (message) => this.panel!.webview.postMessage(message),
       schedulePublishState: () => this.schedulePublishState(),
+      usageAnalytics: await this.getUsageAnalytics(),
       lastPublishedStateSignature: this.lastPublishedStateSignature,
       force
     });
@@ -271,6 +279,18 @@ class DashboardPanelController {
       version: packageJson.version ?? "0.0.0",
       locale: this.settingsStore.resolveLanguage()
     };
+  }
+
+  private async getUsageAnalytics(): Promise<LocalUsageAnalyticsService | undefined> {
+    this.usageAnalyticsCompatibility ??= isLocalUsageCustomizationCompatible(this.context);
+    if (!(await this.usageAnalyticsCompatibility)) {
+      return undefined;
+    }
+
+    this.usageAnalytics ??= new LocalUsageAnalyticsService({
+      globalStoragePath: this.context.globalStorageUri.fsPath
+    });
+    return this.usageAnalytics;
   }
 }
 

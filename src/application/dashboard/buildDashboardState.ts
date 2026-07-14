@@ -1,4 +1,9 @@
-import { DashboardAccountViewModel, DashboardMetricViewModel, DashboardState } from "../../domain/dashboard/types";
+import {
+  DashboardAccountViewModel,
+  DashboardLocalUsageViewModel,
+  DashboardMetricViewModel,
+  DashboardState
+} from "../../domain/dashboard/types";
 import { AccountsRepository } from "../../storage";
 import { ExtensionSettingsStore } from "../../infrastructure/config/extensionSettings";
 import { formatAccountStructure, formatAuthProvider, formatPlanType, getDashboardCopy } from "./copy";
@@ -14,7 +19,8 @@ export async function buildDashboardState(
   repo: AccountsRepository,
   settingsStore: ExtensionSettingsStore,
   logoUri: string,
-  announcements: CodexAnnouncementState
+  announcements: CodexAnnouncementState,
+  localUsage?: DashboardLocalUsageViewModel
 ): Promise<DashboardState> {
   const lang = settingsStore.resolveLanguage();
   const baseSettings = settingsStore.getDashboardSettings();
@@ -67,6 +73,7 @@ export async function buildDashboardState(
     },
     announcements,
     indexHealth,
+    localUsage,
     accounts: sortedAccounts.map((account) =>
       mapAccount(
         account,

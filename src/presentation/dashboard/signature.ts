@@ -45,6 +45,21 @@ export function buildDashboardStateSignature(state: DashboardState): string {
       )
       .join("|")
   ].join(":");
+  const localUsageSignature = state.localUsage
+    ? JSON.stringify({
+        status: state.localUsage.status,
+        isRefreshing: state.localUsage.isRefreshing,
+        periodDays: state.localUsage.periodDays,
+        calculatedAt: state.localUsage.calculatedAt,
+        nextRefreshAt: state.localUsage.nextRefreshAt,
+        sourceFileCount: state.localUsage.sourceFileCount,
+        eventCount: state.localUsage.eventCount,
+        total: state.localUsage.total,
+        byDay: state.localUsage.byDay,
+        byModel: state.localUsage.byModel,
+        byDayAndModel: state.localUsage.byDayAndModel
+      })
+    : "";
 
   return [
     state.lang,
@@ -52,6 +67,8 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.brandSub,
     state.settings.dashboardTheme,
     state.settings.displayLanguage,
+    state.settings.localUsageDefaultRangeDays,
+    state.settings.localUsageShowEquivalentPrice ? "1" : "0",
     state.settings.autoRefreshMinutes,
     state.settings.autoSwitchEnabled ? "1" : "0",
     state.settings.hourlyQuotaControlEnabled ? "1" : "0",
@@ -74,6 +91,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.indexHealth.lastErrorMessage ?? "",
     state.indexHealth.lastRecoveredAt ?? "",
     announcementSignature,
-    accountSignature
+    accountSignature,
+    localUsageSignature
   ].join("||");
 }

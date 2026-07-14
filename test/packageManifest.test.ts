@@ -22,4 +22,32 @@ describe("extension manifest configuration", () => {
     });
     expect(property?.markdownDescription).toContain("Automatically reload");
   });
+
+  it("declares persisted local usage range and equivalent-price settings", () => {
+    const manifestPath = path.resolve(__dirname, "../package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      contributes?: {
+        configuration?: {
+          properties?: Record<
+            string,
+            { type?: string; default?: unknown; enum?: unknown[]; markdownDescription?: string }
+          >;
+        };
+      };
+    };
+    const properties = manifest.contributes?.configuration?.properties;
+
+    expect(properties?.["codexAccounts.localUsageDefaultRangeDays"]).toMatchObject({
+      type: "number",
+      default: 7,
+      enum: [7, 14, 30]
+    });
+    expect(properties?.["codexAccounts.localUsageShowEquivalentPrice"]).toMatchObject({
+      type: "boolean",
+      default: true
+    });
+    expect(properties?.["codexAccounts.localUsageShowEquivalentPrice"]?.markdownDescription).toContain(
+      "Codex subscription bill"
+    );
+  });
 });

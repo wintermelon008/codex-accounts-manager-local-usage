@@ -1,4 +1,9 @@
-import type { DashboardCopy, DashboardSettingKey, DashboardSettings, DashboardState } from "../../src/domain/dashboard/types";
+import type {
+  DashboardCopy,
+  DashboardSettingKey,
+  DashboardSettings,
+  DashboardState
+} from "../../src/domain/dashboard/types";
 import {
   SettingsDiscreteSlider,
   SettingsLanguageBlock,
@@ -64,6 +69,41 @@ export function SettingsOverlay(props: {
               props.onSendSetting("displayLanguage", value);
             }}
           />
+          <SettingsSegmentBlock
+            title={props.copy.localUsageSettingsTitle}
+            sub={props.copy.localUsageSettingsSub}
+            options={[
+              {
+                key: "local-usage-7d",
+                title: props.copy.localUsageRange7Days,
+                description: props.copy.localUsageRange7DaysDesc,
+                active: props.settings.localUsageDefaultRangeDays === 7,
+                onClick: () => patchAndSend("localUsageDefaultRangeDays", 7)
+              },
+              {
+                key: "local-usage-14d",
+                title: props.copy.localUsageRange14Days,
+                description: props.copy.localUsageRange14DaysDesc,
+                active: props.settings.localUsageDefaultRangeDays === 14,
+                onClick: () => patchAndSend("localUsageDefaultRangeDays", 14)
+              },
+              {
+                key: "local-usage-30d",
+                title: props.copy.localUsageRange30Days,
+                description: props.copy.localUsageRange30DaysDesc,
+                active: props.settings.localUsageDefaultRangeDays === 30,
+                onClick: () => patchAndSend("localUsageDefaultRangeDays", 30)
+              }
+            ]}
+          />
+          <SettingsToggleBlock
+            title={props.copy.localUsagePriceSettingsTitle}
+            sub={props.copy.localUsagePriceSettingsSub}
+            enabled={props.settings.localUsageShowEquivalentPrice}
+            onToggle={(enabled) => patchAndSend("localUsageShowEquivalentPrice", enabled)}
+          >
+            <div class="settings-note">{props.copy.localUsagePriceSettingsNote}</div>
+          </SettingsToggleBlock>
           <SettingsToggleBlock
             title={props.copy.codexAppRestartTitle}
             sub={props.copy.codexAppRestartSub}
@@ -185,7 +225,9 @@ export function SettingsOverlay(props: {
                 values={AUTO_SWITCH_LOCK_VALUES}
                 accent="violet"
                 valueLabel={(value) =>
-                  value === 0 ? props.copy.autoSwitchLockOff : formatTemplate(props.copy.autoSwitchLockValueTemplate, value)
+                  value === 0
+                    ? props.copy.autoSwitchLockOff
+                    : formatTemplate(props.copy.autoSwitchLockValueTemplate, value)
                 }
                 description={(value) =>
                   value === 0

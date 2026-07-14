@@ -13,6 +13,8 @@ function createState(overrides?: {
     logoUri: "logo",
     settings: {
       dashboardTheme: "dark",
+      localUsageDefaultRangeDays: 7,
+      localUsageShowEquivalentPrice: true,
       displayLanguage: "zh",
       autoRefreshMinutes: 0,
       backgroundTokenRefreshEnabled: true,
@@ -70,5 +72,71 @@ describe("buildDashboardStateSignature", () => {
     );
 
     expect(after).not.toBe(before);
+  });
+
+  it("changes when local usage settings or the cached aggregate changes", () => {
+    const base = createState();
+    const rangeChanged: DashboardState = {
+      ...base,
+      settings: {
+        ...base.settings,
+        localUsageDefaultRangeDays: 14
+      }
+    };
+    const usageChanged: DashboardState = {
+      ...base,
+      localUsage: {
+        status: "ready",
+        isRefreshing: false,
+        periodDays: 30,
+        calculatedAt: 100,
+        nextRefreshAt: 200,
+        sourceFileCount: 1,
+        eventCount: 1,
+        total: {
+          inputTokens: 10,
+          cachedInputTokens: 2,
+          outputTokens: 3,
+          reasoningOutputTokens: 1,
+          totalTokens: 13
+        },
+        byDay: [
+          {
+            date: "2026-07-14",
+            eventCount: 1,
+            inputTokens: 10,
+            cachedInputTokens: 2,
+            outputTokens: 3,
+            reasoningOutputTokens: 1,
+            totalTokens: 13
+          }
+        ],
+        byModel: [
+          {
+            model: "gpt-5.6-sol",
+            inputTokens: 10,
+            cachedInputTokens: 2,
+            outputTokens: 3,
+            reasoningOutputTokens: 1,
+            totalTokens: 13
+          }
+        ],
+        byDayAndModel: [
+          {
+            date: "2026-07-14",
+            model: "gpt-5.6-sol",
+            inputTokens: 10,
+            cachedInputTokens: 2,
+            outputTokens: 3,
+            reasoningOutputTokens: 1,
+            totalTokens: 13
+          }
+        ]
+      }
+    };
+
+    const baseSignature = buildDashboardStateSignature(base);
+    expect(buildDashboardStateSignature(rangeChanged)).not.toBe(baseSignature);
+    expect(buildDashboardStateSignature(usageChanged)).not.toBe(baseSignature);
   });
 });
