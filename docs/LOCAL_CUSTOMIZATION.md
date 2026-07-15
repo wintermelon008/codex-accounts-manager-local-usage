@@ -1,6 +1,6 @@
 # Local usage dashboard customization
 
-This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.4`.
+This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.5`.
 
 ## Scope
 
@@ -9,7 +9,7 @@ This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6f
 - Does not read or send session text, account identities, auth data, or raw paths to the Dashboard Webview.
 - Persists only sanitized aggregates in VS Code global storage and scans at most once every 15 minutes. Opening the Dashboard inside that window does not trigger another scan.
 - The scanner retains a sanitized 14-day daily aggregate and a matching rolling 24-hour aggregate. The selected range filters this cached data locally, so usage rows, model distribution, totals, and event count always use the same range and range changes do not rescan files.
-- Shows an optional estimated standard OpenAI API price in USD between total and input tokens, and alongside each usage bar as `Token(US$price)`. It is an informational estimate only, not a Codex subscription bill.
+- Shows an optional estimated standard OpenAI API price in USD between total and input tokens, and alongside each usage bar as `Token (US$price)`. Unknown models stay in range totals but are omitted from the model-distribution list. It is an informational estimate only, not a Codex subscription bill.
 
 The displayed values are local session observations, not ChatGPT account quota or billing data.
 

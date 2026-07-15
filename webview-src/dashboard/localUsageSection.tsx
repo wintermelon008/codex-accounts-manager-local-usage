@@ -40,6 +40,7 @@ export function LocalUsageSection(props: {
       : undefined;
   const priceSub = price.unpricedTokens > 0 ? copy.localUsagePriceUnpriced : copy.localUsagePriceSub;
   const showPrice = settings.localUsageShowEquivalentPrice;
+  const visibleModels = range.byModel.filter((row) => row.model !== "unknown");
 
   return (
     <section class="section local-usage-section">
@@ -100,9 +101,9 @@ export function LocalUsageSection(props: {
             <UsageBars
               title={copy.localUsageByModel}
               titleMeta={copy.localUsageSameRange}
-              rows={range.byModel.slice(0, 8).map((row) => ({
+              rows={visibleModels.slice(0, 8).map((row) => ({
                 key: `model-${row.model}`,
-                label: row.model === "unknown" ? copy.localUsageModelUnknown : row.model,
+                label: row.model,
                 value: row.totalTokens,
                 price: estimateStandardApiCost([row])
               }))}
@@ -241,9 +242,9 @@ function formatTokenAndPrice(
     return tokenText;
   }
   if (price.pricedTokens <= 0) {
-    return `${tokenText}(—)`;
+    return `${tokenText} (—)`;
   }
-  return `${tokenText}(${formatCompactUsd(price.amountUsd)}${price.unpricedTokens > 0 ? "+" : ""})`;
+  return `${tokenText} (${formatCompactUsd(price.amountUsd)})`;
 }
 
 function formatNumber(value: number): string {
