@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "feature": "local-usage-dashboard",
   "extensionId": "wannanbigpig.codex-accounts-manager",
-  "localBuildVersion": "0.1.16-local.4",
+  "localBuildVersion": "0.1.16-local.5",
   "upstream": {
     "version": "0.1.16",
     "commit": "4b1689deafd2d303700c5cc26e6fd285979634e4"
@@ -45,10 +45,10 @@
   "expectedFileSha256": {
     ".gitignore": "b32bf57ccd5f19b9a357744e70ba531a08ed3974d3f87d5fb24d6e977f51e1bc",
     ".vscodeignore": "502dd2c2cb99983fd1fe155158f359134dfbd818d329f12c46ac95275e4f3667",
-    "docs/LOCAL_CUSTOMIZATION.md": "2600e39ee038c75449e3a908a07e60dddaf0806670effd85fe67f2b6e54755d7",
-    "media/webview/quotaSummary.css": "9ed11ffe0037863bd06253c07eadf3be4011547dd7991c2eae457d08870605da",
-    "package-lock.json": "41ba6d8317671cbca5fbb226b85c53376a1ba436183596d0aed96e1d49b6f933",
-    "package.json": "64f615ce83dda76ca49c32b199e09459ff96e0b2ef6ec144cb18664cf492891d",
+    "docs/LOCAL_CUSTOMIZATION.md": "61c172e81303317846c3c157a9da9e6d2dee9210c021848838a82697bdd61364",
+    "media/webview/quotaSummary.css": "cc09f449633c89b2040f2f70895a675a6773315e0b6b77496a6657747e0f673b",
+    "package-lock.json": "322c3edfb043d119592f6ce340e54305e70cff8639283b795fcefa667824abaf",
+    "package.json": "a9dd6e14402ba3e1855c9d7b0143fa5d2979cf67ad722d889a53f7c9687da26b",
     "scripts/verify-customization-baseline.mjs": "f1e9927371eddc143f7e4cb96ddd8f35fa9bc678773a8d6a2ffa59168ac734d6",
     "src/application/dashboard/buildDashboardState.ts": "04f260653ea74af2760cfa6bf096802e49d4940f6ed4ff0b4d5e6952f96bb712",
     "src/domain/dashboard/types.ts": "809d9cc49f5e6f0af8a95ff6bbcf309b90a84344eb2471e6d6508c0635c5a81a",
@@ -64,12 +64,12 @@
     "test/dashboardSettings.test.ts": "f909a6e3862696b662ce84c6c7c76cc5c07ae7d8adbc7a5cdb760a8299d96307",
     "test/dashboardSignature.test.ts": "07270a0cd6ff8c09fd06c23a50a235e0ba9f3f60c63caed7faaffc27071d0dbf",
     "test/localUsageAnalytics.test.ts": "3038fd35ddb1d2543868f2a9f2c1c93fe1fa8dd605716634df285b97b54d4e77",
-    "test/localUsageCompatibility.test.ts": "aceb11a2a7839747505d428bc5011fb5892c0b8d9e4aa74930ef46cfe9113f56",
+    "test/localUsageCompatibility.test.ts": "fca24ae9399e7c9391f0c348d218448d556392f198a73b694927a75ab8a44c43",
     "test/localUsageInsights.test.ts": "5d2416603e027401e2e8da21a32a4da163335dd520ec985600d204bed8bcd05c",
-    "test/localUsageLayout.test.ts": "b99ec736a349cd526902e4beed3d3470f374355f17a8b5713e222c5dbbd5e293",
+    "test/localUsageLayout.test.ts": "7168e15990ef71515370507ecb98365f6fd33a6a8938933137a72b17ee3a1d64",
     "test/packageManifest.test.ts": "fad41e9392520b87059029b2fd38c1bc53023a353b34d326aed26da100694368",
     "webview-src/dashboard/localUsageInsights.ts": "0b35229d215f394bb3e500fab1deb46d83075b12868b6357f4a7a290a37b1b32",
-    "webview-src/dashboard/localUsageSection.tsx": "787412917f71177e71c9c9464731a4acf5a0269437710f0207c8ae0fdad70edf",
+    "webview-src/dashboard/localUsageSection.tsx": "5bfcb3ec8d9e7d3fe3459f0879b1b7e9c3a215d31b63b2d1f461253755e69a02",
     "webview-src/dashboard/main.tsx": "af01bd490018b9a496320db1902e05828c49c9ecf45c22eb8a8ea8a43c92ff9d",
     "webview-src/dashboard/settingsOverlay.tsx": "0a6866a62946eb58d960ed5245f46a2d75652e6b2020a6d891c422120d7e79e5"
   }

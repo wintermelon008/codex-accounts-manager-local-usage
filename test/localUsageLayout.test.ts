@@ -38,8 +38,8 @@ describe("local usage dashboard placement and responsive guards", () => {
     );
     expect(localUsageStyles).not.toContain("position:");
     expect(localUsageStyles).not.toMatch(/\.(?:overview|toolbar|accounts|modal)-/);
-    expect(localUsageStyles).toContain("font-size: 18px");
     expect(localUsageStyles).toContain("font-size: 16px");
+    expect(localUsageStyles).toContain("font-size: 14px");
   });
 
   it("keeps price between total and input, and exposes range controls in the dashboard and settings", () => {
@@ -55,6 +55,9 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(section).toContain("<RangeSelector");
     expect(section).toContain("formatTokenAndPrice");
     expect(section).toContain("formatThreeHourRange");
+    expect(section).toContain('const visibleModels = range.byModel.filter((row) => row.model !== "unknown")');
+    expect(section).toContain('`${tokenText} (${formatCompactUsd(price.amountUsd)})`');
+    expect(section).not.toContain('unpricedTokens > 0 ? "+"');
     expect(settings).toContain("localUsageDefaultRange");
     expect(settings).not.toContain("localUsageDefaultRangeDays");
     expect(settings).toContain("localUsageShowEquivalentPrice");

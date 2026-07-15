@@ -5,7 +5,7 @@ const manifest = {
   schemaVersion: 1,
   feature: "local-usage-dashboard",
   extensionId: "wannanbigpig.codex-accounts-manager",
-  localBuildVersion: "0.1.16-local.4",
+  localBuildVersion: "0.1.16-local.5",
   upstream: {
     version: "0.1.16",
     commit: "4b1689deafd2d303700c5cc26e6fd285979634e4"
@@ -15,7 +15,7 @@ const manifest = {
 const packageJson = {
   publisher: "wannanbigpig",
   name: "codex-accounts-manager",
-  version: "0.1.16-local.4"
+  version: "0.1.16-local.5"
 };
 
 describe("hasCompatibleLocalUsageManifest", () => {

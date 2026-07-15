@@ -3737,7 +3737,7 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
 .local-usage-freshness {
   max-width: 280px;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.4;
   text-align: right;
 }
@@ -3750,7 +3750,7 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
   border-radius: 14px;
   background: var(--bg-elevated);
   color: var(--text-secondary);
-  font-size: 16px;
+  font-size: 14px;
 }
 .local-usage-cards {
   display: grid;
@@ -3774,7 +3774,7 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
 }
 .local-usage-card-label {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -3783,18 +3783,18 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
   margin-top: 5px;
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 900;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .local-usage-card-sub {
-  min-height: 21px;
+  min-height: 20px;
   margin-top: 3px;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3818,12 +3818,12 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
   flex-wrap: wrap;
   gap: 5px 8px;
   color: var(--text-primary);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 850;
 }
 .local-usage-panel-title span {
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
 }
 .local-usage-panel-head {
@@ -3852,7 +3852,7 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
   color: var(--text-muted);
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 750;
 }
 .local-usage-range-btn:last-child {
@@ -3887,7 +3887,7 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
 .local-usage-bar-value {
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 16px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3918,7 +3918,7 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
 }
 .local-usage-empty {
   color: var(--text-muted);
-  font-size: 16px;
+  font-size: 14px;
 }
 .local-usage-footer {
   display: flex;
@@ -3926,7 +3926,7 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
   gap: 10px;
   margin-top: 10px;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.45;
 }
 .local-usage-footer span:last-child {
@@ -4114,7 +4114,7 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
     grid-template-columns: 1fr;
   }
   .local-usage-card-value {
-    font-size: 18px;
+    font-size: 16px;
   }
   .local-usage-panel {
     padding: 11px;
