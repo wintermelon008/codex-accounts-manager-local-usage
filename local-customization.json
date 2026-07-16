@@ -79,8 +79,8 @@
   "expectedFileSha256": {
     ".gitignore": "b32bf57ccd5f19b9a357744e70ba531a08ed3974d3f87d5fb24d6e977f51e1bc",
     ".vscodeignore": "502dd2c2cb99983fd1fe155158f359134dfbd818d329f12c46ac95275e4f3667",
-    "README.en.md": "0a3d23f1d458d46678b17276e66c9f48d06c2a20df1846639c810052c75484cc",
-    "README.md": "4e5ea249c1f42fe586ca8fd3a79f535f8f7cde44eb05147acacd72bdc65e6d4f",
+    "README.en.md": "7838b89c1eb254f76eaa8f5a67ea6e73a5f92b2566fc568e87b60ce8f7c54182",
+    "README.md": "96f93cfedd27597d9b4b9929700ac86fe247826048e7fce7855a832b675e7bb0",
     "docs/HOT_SWITCH.md": "da4ad03312622b1a9ecd11f727eac724fbf8437b0b2303a23ba8890cbf69fcd4",
     "docs/LOCAL_CUSTOMIZATION.md": "7ad7d2f530af25e5e749c3dab92493cfe972a7220ff044a9b3bb962be1a0bc49",
     "media/webview/quotaSummary.css": "cc09f449633c89b2040f2f70895a675a6773315e0b6b77496a6657747e0f673b",

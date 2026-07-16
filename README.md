@@ -1,4 +1,4 @@
-# Codex Accounts Manager 
+# Codex Accounts Manager
 
 [English](README.en.md) · 简体中文
 
@@ -24,11 +24,11 @@ VS Code 扩展，用于管理多个 Codex 账号、查看配额总览，并快�
 
 ## 界面预览
 
-| 配额总览 | 详情面板 |
-| --- | --- |
-| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/dashboard.png" alt="Codex Tools 配额总览" width="420" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/detail.png" alt="Codex Tools 详情面板" width="420" /> |
-| 设置面板 | 状态栏 |
-| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/setting.png" alt="Codex Tools 设置面板" width="260" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/status_bar.png" alt="Codex Tools 状态栏" width="220" /> |
+| 配额总览                                                                                                                                   | 详情面板                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/dashboard.png" alt="Codex Tools 配额总览" width="420" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/detail.png" alt="Codex Tools 详情面板" width="420" />   |
+| 设置面板                                                                                                                                   | 状态栏                                                                                                                                    |
+| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/setting.png" alt="Codex Tools 设置面板" width="260" />   | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/status_bar.png" alt="Codex Tools 状态栏" width="220" /> |
 
 ---
 
@@ -104,6 +104,39 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 - 该功能仍是进程级单账号，不支持给同时运行的不同 turn 分配不同账号
 - 首次安装 runtime 需要运行 `Codex Accounts: Install Experimental Seamless Runtime` 并 reload 一次；Remote-SSH/WSL/Dev Container 会由 manager 生成并复制当前用户的本地 User Setting，无需手工替换发布文档中的固定路径
 - 详细启用步骤、分档规则、兼容范围与回滚方式见 [docs/HOT_SWITCH.md](docs/HOT_SWITCH.md)
+
+#### 如何启用与配置
+
+1. 导入至少两个你有权使用的 Codex 账号，并执行一次“刷新全部配额”。
+2. 从命令面板运行 `Codex Accounts: Install Experimental Seamless Runtime`。首次安装后按提示 reload 一次；之后的成功切号不再需要 reload。
+3. Remote-SSH、WSL 或 Dev Container 会生成当前环境对应的 `chatgpt.cliExecutable` 设置。把它粘贴到打开的本地 User Settings JSON，不要复制其他机器的绝对路径，也不要写入 Remote Settings。
+4. 在账号 Dashboard 勾选至少两个账号，点击“设为无感切号池”。只有池内账号参与五小时额度分档调度。
+5. 打开 Dashboard 设置，启用“无感切号（实验性）”和“20% 分档无感平衡”，并把配额自动刷新设为 `1 ~ 5` 分钟。
+6. 设置等待时间和普通会话策略：推荐先使用 `defer`；需要无人值守续跑时可选择 `interruptAndContinue`，但必须接受非幂等工具操作可能重复执行的风险。
+
+对应的用户行为配置示例：
+
+```json
+{
+  "codexAccounts.seamlessSwitchEnabled": true,
+  "codexAccounts.seamlessSwitchQuotaBandsEnabled": true,
+  "codexAccounts.autoRefreshMinutes": 5,
+  "codexAccounts.hotSwitchGraceSeconds": 60,
+  "codexAccounts.hotSwitchLongTurnPolicy": "defer"
+}
+```
+
+`codexAccounts.hotSwitchEnabled`、runtime shim 和 `chatgpt.cliExecutable` 由安装/移除命令管理，不要只手工修改技术开关来安装，也不要把本机生成的 CLI 路径提交到仓库。无感分档不要求同时开启官方“自动切号”或“5 小时配额控制”。
+
+#### 启用后的效果
+
+- 空闲时手动切号会在同一个 Codex app-server 中更新认证，现有 conversation/thread 保持不变，不弹出 reload 提示。
+- 运行中的 turn 会先获得配置的自然完成时间；`defer` 会安全延后本次普通会话切换，`interruptAndContinue` 会中断旧 turn，并在切号后为同一 thread 自动发送一次带恢复上下文的 `Continue`。
+- 活动 Goal 会先暂停；超过等待时间后可中断旧 turn，切号成功后自动恢复原 Goal、workspace、sandbox 和 approval 状态。
+- 自动刷新发现当前账号的有效五小时剩余额度下降一个 20% 档位时，会从池内选择数据新鲜、档位不低且额度更合适的账号进行无 reload 切换。
+- runtime 会强制下一轮使用新的 HTTP 认证，避免旧 thread 继续复用旧账号 WebSocket。身份校验、runtime 或回滚失败时会 fail closed，保持或恢复旧账号，不把仅写入磁盘误报为成功。
+- Dashboard 和状态栏会显示新的活动账号；底层仍是全局单账号，不是每个 conversation 独立绑定账号。
+- 关闭“无感切号（实验性）”会恢复原有写入账号与 reload 流程但保留 runtime；若要恢复官方默认 transport，运行 `Codex Accounts: Remove Experimental Seamless Runtime` 并按提示 reload 一次。
 
 ### 后台令牌刷新与网络调试
 
