@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type * as vscode from "vscode";
 
 const MANIFEST_FILE_NAME = "local-customization.json";
-const FEATURE_NAME = "local-usage-dashboard";
+const COMPATIBLE_FEATURE_NAMES = new Set(["local-enhancements", "local-usage-dashboard"]);
 const EXTENSION_ID = "wannanbigpig.codex-accounts-manager";
 
 /**
@@ -41,7 +41,8 @@ export function hasCompatibleLocalUsageManifest(manifest: unknown, packageJson: 
   const upstream = asRecord(customization["upstream"]);
   return (
     customization["schemaVersion"] === 1 &&
-    customization["feature"] === FEATURE_NAME &&
+    typeof customization["feature"] === "string" &&
+    COMPATIBLE_FEATURE_NAMES.has(customization["feature"]) &&
     customization["extensionId"] === EXTENSION_ID &&
     customization["localBuildVersion"] === version &&
     typeof publisher === "string" &&
@@ -54,5 +55,7 @@ export function hasCompatibleLocalUsageManifest(manifest: unknown, packageJson: 
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }

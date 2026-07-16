@@ -3,3 +3,5 @@
  */
 
 export * from "./authFile";
+export * from "./hotSwitchBridge";
+export * from "./hotSwitchRuntime";

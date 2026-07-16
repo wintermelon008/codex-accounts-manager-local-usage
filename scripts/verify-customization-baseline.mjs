@@ -13,8 +13,8 @@ const baseline = customization?.upstream?.commit;
 const protectedFiles = new Set(customization?.protectedFiles ?? []);
 const expectedHashes = customization?.expectedFileSha256 ?? {};
 
-if (customization?.schemaVersion !== 1 || customization?.feature !== "local-usage-dashboard") {
-  fail("local-customization.json is not a recognized local usage customization manifest");
+if (customization?.schemaVersion !== 1 || customization?.feature !== "local-enhancements") {
+  fail("local-customization.json is not a recognized local enhancement manifest");
 }
 if (!baseline || typeof baseline !== "string") {
   fail("local-customization.json has no upstream commit baseline");

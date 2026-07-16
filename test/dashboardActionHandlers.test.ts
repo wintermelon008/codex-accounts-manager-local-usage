@@ -84,7 +84,37 @@ describe("executeDashboardActionMessage", () => {
       }
     );
 
-    expect(executeCommandMock).toHaveBeenCalledWith("codexAccounts.refreshQuota", expect.objectContaining({ id: "account-1" }));
+    expect(executeCommandMock).toHaveBeenCalledWith(
+      "codexAccounts.refreshQuota",
+      expect.objectContaining({ id: "account-1" })
+    );
+    expect(result.status).toBe("completed");
+  });
+
+  it("removes any selected accounts from the seamless-switch pool", async () => {
+    const removeFromBalancePool = vi.fn().mockResolvedValue([]);
+    const schedulePublishState = vi.fn();
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: { removeFromBalancePool } as unknown as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState,
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "removeFromBalancePool",
+        requestId: "req-remove-pool",
+        payload: { accountIds: ["account-1"] }
+      }
+    );
+
+    expect(removeFromBalancePool).toHaveBeenCalledWith(["account-1"]);
+    expect(schedulePublishState).toHaveBeenCalledOnce();
     expect(result.status).toBe("completed");
   });
 });

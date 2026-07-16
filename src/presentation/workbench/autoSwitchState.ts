@@ -59,7 +59,9 @@ export function clearAutoSwitchLock(accountId?: string): void {
 
 export function isAutoSwitchLocked(accountId: string | undefined): boolean {
   pruneExpiredLock();
-  return Boolean(accountId && state.lockedAccountId === accountId && state.lockedUntil && state.lockedUntil > Date.now());
+  return Boolean(
+    accountId && state.lockedAccountId === accountId && state.lockedUntil && state.lockedUntil > Date.now()
+  );
 }
 
 export function recordAutoSwitchReason(reason: CodexAutoSwitchReason): void {

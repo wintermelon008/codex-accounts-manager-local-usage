@@ -2,7 +2,10 @@ import { vi } from "vitest";
 
 vi.mock("vscode", () => ({
   env: {
-    language: "en"
+    language: "en",
+    clipboard: {
+      writeText: vi.fn()
+    }
   },
   commands: {
     executeCommand: vi.fn()

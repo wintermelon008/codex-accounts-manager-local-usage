@@ -16,6 +16,7 @@ import { AnnouncementService, type AnnouncementOptions } from "../../services/an
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
 import { getCommandCopy, t } from "../../utils";
 import { clearAutoSwitchLock, setAutoSwitchLock } from "../workbench/autoSwitchState";
+import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchState";
 import { promptForTags } from "../tagEditor";
 import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from "./actionUtils";
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
@@ -122,6 +123,10 @@ async function runDashboardAction(
       return undefined;
     case "updateTags":
       return handleUpdateTags(ctx.repo, ctx.resolveLanguage, ctx.schedulePublishState, payload, account, translate);
+    case "setBalancePool":
+      return handleSetBalancePool(ctx.repo, payload, ctx.schedulePublishState, ctx.resolveLanguage());
+    case "removeFromBalancePool":
+      return handleRemoveFromBalancePool(ctx.repo, payload, ctx.schedulePublishState, ctx.resolveLanguage());
     case "setAutoSwitchLock":
       return handleAutoSwitchLock(payload, account, ctx.schedulePublishState);
     case "batchRefresh":
@@ -284,10 +289,7 @@ async function handleOpenExternalUrl(payload: DashboardActionPayload | undefined
   return undefined;
 }
 
-async function handleDownloadJsonFile(
-  context: vscode.ExtensionContext,
-  payload: DashboardActionPayload | undefined
-) {
+async function handleDownloadJsonFile(context: vscode.ExtensionContext, payload: DashboardActionPayload | undefined) {
   const text = payload?.text ?? "";
   const defaultName = payload?.filename?.trim() ?? "codex-accounts-manager-share.json";
   if (!text) {
@@ -338,9 +340,12 @@ async function handleImportSharedJson(
     );
     return toImportActionPayload(result);
   } catch (error) {
-    const message = translate(payload?.recoveryMode ? "message.restoreFromSharedFailed" : "message.importSharedJsonFailed", {
-      message: toFailureMessage(error)
-    });
+    const message = translate(
+      payload?.recoveryMode ? "message.restoreFromSharedFailed" : "message.importSharedJsonFailed",
+      {
+        message: toFailureMessage(error)
+      }
+    );
     void vscode.window.showErrorMessage(message);
     throw new Error(message);
   }
@@ -383,7 +388,7 @@ async function handleUpdateTags(
     return undefined;
   }
   const dashboardCopy = getDashboardCopy(resolveLanguage());
-  const targetAccount = targetIds.length === 1 ? account ?? (await repo.getAccount(targetIds[0]!)) : undefined;
+  const targetAccount = targetIds.length === 1 ? (account ?? (await repo.getAccount(targetIds[0]!))) : undefined;
   const mode = payload?.mode === "add" || payload?.mode === "remove" ? payload.mode : "set";
   const tags = await promptForTags({
     copy: dashboardCopy,
@@ -439,6 +444,52 @@ function handleAutoSwitchLock(
   return undefined;
 }
 
+async function handleSetBalancePool(
+  repo: AccountsRepository,
+  payload: DashboardActionPayload | undefined,
+  schedulePublishState: () => void,
+  language: DashboardLanguage
+): Promise<undefined> {
+  const accountIds = [...new Set(payload?.accountIds ?? [])];
+  if (accountIds.length < 2) {
+    throw new Error(
+      language === "zh" || language === "zh-hant"
+        ? "无感切号池至少需要两个账号"
+        : "Select at least two accounts for the seamless-switch pool"
+    );
+  }
+  await repo.setBalancePool(accountIds);
+  resetSeamlessSwitchRuntimeState();
+  schedulePublishState();
+  void vscode.window.showInformationMessage(
+    language === "zh" || language === "zh-hant"
+      ? `已将 ${accountIds.length} 个账号设为五小时额度无感切号池`
+      : `${accountIds.length} accounts are now in the 5-hour quota seamless-switch pool`
+  );
+  return undefined;
+}
+
+async function handleRemoveFromBalancePool(
+  repo: AccountsRepository,
+  payload: DashboardActionPayload | undefined,
+  schedulePublishState: () => void,
+  language: DashboardLanguage
+): Promise<undefined> {
+  const accountIds = [...new Set(payload?.accountIds ?? [])];
+  if (!accountIds.length) {
+    return undefined;
+  }
+  await repo.removeFromBalancePool(accountIds);
+  resetSeamlessSwitchRuntimeState();
+  schedulePublishState();
+  void vscode.window.showInformationMessage(
+    language === "zh" || language === "zh-hant"
+      ? `已将 ${accountIds.length} 个账号移出无感切号池`
+      : `${accountIds.length} accounts were removed from the seamless-switch pool`
+  );
+  return undefined;
+}
+
 async function handleBatchRefresh(
   repo: AccountsRepository,
   schedulePublishState: () => void,
@@ -446,7 +497,9 @@ async function handleBatchRefresh(
   translate: ReturnType<typeof t>
 ) {
   const targetIds = payload?.accountIds ?? [];
-  const accountsById = new Map(await Promise.all(targetIds.map(async (id) => [id, await repo.getAccount(id)] as const)));
+  const accountsById = new Map(
+    await Promise.all(targetIds.map(async (id) => [id, await repo.getAccount(id)] as const))
+  );
   let success = 0;
   let failed = 0;
   const failures: DashboardBatchResultFailure[] = [];
@@ -501,24 +554,31 @@ async function handleBatchResync(
   translate: ReturnType<typeof t>
 ) {
   const targetIds = payload?.accountIds ?? [];
-  const accountsById = new Map(await Promise.all(targetIds.map(async (id) => [id, await repo.getAccount(id)] as const)));
+  const accountsById = new Map(
+    await Promise.all(targetIds.map(async (id) => [id, await repo.getAccount(id)] as const))
+  );
   let success = 0;
   let failed = 0;
   const failures: DashboardBatchResultFailure[] = [];
-  await runWithConcurrencyLimit(targetIds, 4, async (id) => {
-    try {
-      await resyncAccountInfo(repo, id);
-      success += 1;
-    } catch (error) {
-      failed += 1;
-      failures.push({
-        accountId: id,
-        email: accountsById.get(id)?.email,
-        message: toFailureMessage(error)
-      });
-      console.warn(`[codexAccounts] batch profile resync failed for ${id}:`, error);
-    }
-  }, { delayMs: CODEX_BATCH_REFRESH_DELAY_MS });
+  await runWithConcurrencyLimit(
+    targetIds,
+    4,
+    async (id) => {
+      try {
+        await resyncAccountInfo(repo, id);
+        success += 1;
+      } catch (error) {
+        failed += 1;
+        failures.push({
+          accountId: id,
+          email: accountsById.get(id)?.email,
+          message: toFailureMessage(error)
+        });
+        console.warn(`[codexAccounts] batch profile resync failed for ${id}:`, error);
+      }
+    },
+    { delayMs: CODEX_BATCH_REFRESH_DELAY_MS }
+  );
   schedulePublishState();
   const message = translate("message.batchResyncSummary", {
     success,
@@ -560,7 +620,9 @@ async function handleBatchRemove(
   if (!targetIds.length) {
     return undefined;
   }
-  const accountsById = new Map(await Promise.all(targetIds.map(async (id) => [id, await repo.getAccount(id)] as const)));
+  const accountsById = new Map(
+    await Promise.all(targetIds.map(async (id) => [id, await repo.getAccount(id)] as const))
+  );
   const choice = await vscode.window.showWarningMessage(
     translate("message.batchRemoveConfirm", { count: targetIds.length }),
     { modal: true },
@@ -662,11 +724,7 @@ async function handleConsumeResetCredit(
     : `Reset your rate limit and keep working without interruption. You have ${available} reset(s) available.`;
   const confirmBtn = isZh ? "重置速率限制" : "Reset Rate Limit";
 
-  const choice = await vscode.window.showWarningMessage(
-    `${title}\n\n${body}`,
-    { modal: true },
-    confirmBtn
-  );
+  const choice = await vscode.window.showWarningMessage(`${title}\n\n${body}`, { modal: true }, confirmBtn);
   if (choice !== confirmBtn) {
     return undefined;
   }

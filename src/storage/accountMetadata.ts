@@ -187,6 +187,7 @@ export function buildAccountRecordDraft(params: {
     isActive: params.forceActive,
     // New accounts should not silently opt into the status popup.
     showInStatusBar: params.existing?.showInStatusBar ?? false,
+    balancePoolEnabled: params.existing?.balancePoolEnabled ?? false,
     dismissedHealthIssueKey: params.existing?.dismissedHealthIssueKey,
     lastQuotaAt: params.existing?.lastQuotaAt,
     quotaSummary: params.existing?.quotaSummary,

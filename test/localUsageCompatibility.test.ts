@@ -21,6 +21,7 @@ const packageJson = {
 describe("hasCompatibleLocalUsageManifest", () => {
   it("enables the feature only for the reviewed local package identity", () => {
     expect(hasCompatibleLocalUsageManifest(manifest, packageJson)).toBe(true);
+    expect(hasCompatibleLocalUsageManifest({ ...manifest, feature: "local-enhancements" }, packageJson)).toBe(true);
   });
 
   it("fails closed after a package version mismatch", () => {

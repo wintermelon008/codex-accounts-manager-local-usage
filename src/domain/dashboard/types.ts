@@ -15,6 +15,10 @@ export type DashboardSettingKey =
   | "backgroundTokenRefreshEnabled"
   | "autoRefreshMinutes"
   | "autoSwitchEnabled"
+  | "seamlessSwitchEnabled"
+  | "seamlessSwitchQuotaBandsEnabled"
+  | "hotSwitchGraceSeconds"
+  | "hotSwitchLongTurnPolicy"
   | "hourlyQuotaControlEnabled"
   | "autoSwitchReloadWindowEnabled"
   | "autoSwitchHourlyThreshold"
@@ -36,6 +40,11 @@ export interface DashboardSettings {
   backgroundTokenRefreshEnabled: boolean;
   autoRefreshMinutes: number;
   autoSwitchEnabled: boolean;
+  hotSwitchEnabled: boolean;
+  seamlessSwitchEnabled: boolean;
+  seamlessSwitchQuotaBandsEnabled: boolean;
+  hotSwitchGraceSeconds: number;
+  hotSwitchLongTurnPolicy: "defer" | "interrupt" | "interruptAndContinue";
   hourlyQuotaControlEnabled: boolean;
   autoSwitchReloadWindowEnabled: boolean;
   autoSwitchHourlyThreshold: number;
@@ -365,6 +374,7 @@ export interface DashboardAccountViewModel {
   organizationId?: string;
   isActive: boolean;
   isCurrentWindowAccount: boolean;
+  balancePoolEnabled: boolean;
   showInStatusBar: boolean;
   canToggleStatusBar: boolean;
   statusToggleTitle: string;
@@ -502,6 +512,8 @@ export type DashboardActionName =
   | "startOAuthAutoFlow"
   | "completeOAuthSession"
   | "updateTags"
+  | "setBalancePool"
+  | "removeFromBalancePool"
   | "setAutoSwitchLock"
   | "batchRefresh"
   | "batchResyncProfile"

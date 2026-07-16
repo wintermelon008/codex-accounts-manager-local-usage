@@ -1,6 +1,6 @@
-# Local usage dashboard customization
+# Local extension customizations
 
-This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.5`.
+This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.13`.
 
 ## Scope
 
@@ -10,8 +10,28 @@ This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6f
 - Persists only sanitized aggregates in VS Code global storage and scans at most once every 15 minutes. Opening the Dashboard inside that window does not trigger another scan.
 - The scanner retains a sanitized 14-day daily aggregate and a matching rolling 24-hour aggregate. The selected range filters this cached data locally, so usage rows, model distribution, totals, and event count always use the same range and range changes do not rescan files.
 - Shows an optional estimated standard OpenAI API price in USD between total and input tokens, and alongside each usage bar as `Token (US$price)`. Unknown models stay in range totals but are omitted from the model-distribution list. It is an informational estimate only, not a Codex subscription bill.
+- The fail-closed usage compatibility check accepts the current aggregate `local-enhancements` manifest and the legacy `local-usage-dashboard` manifest; a reviewed aggregate build must not hide the usage block solely because the manifest scope expanded.
 
 The displayed values are local session observations, not ChatGPT account quota or billing data.
+
+## Experimental account hot switch
+
+- Adds a bundled local CLI shim that proxies the official Codex app-server over stdio; it is not a resident HTTP service.
+- Forces Responses HTTP streaming inside the installed runtime because Codex `0.144.2` caches an authenticated WebSocket per loaded thread. This ensures the next turn on the same thread resolves the newly selected account instead of continuing to bill the old WebSocket identity.
+- Adds an explicit multi-account seamless-switch pool and fixed 20% bands for valid five-hour remaining quota. Its configuration, scheduler state, and fail-closed execution are independent of upstream Auto Switch.
+- Gives active turns a configurable 60-second grace period, queues new turn starts, and never changes authentication while an old turn remains active.
+- Pauses active persisted Goals, interrupts an over-grace Goal turn, and restores the Goal after success, rollback, cancellation, or manager disconnect without changing thread-sticky workspace and permission settings.
+- Offers opt-in ordinary-turn interruption and one-shot same-thread continuation; the default safely defers the switch and retries on a later quota refresh.
+- Adds a user-facing Seamless Switching master toggle. Turning it off restores the original persisted-account/reload workflow without uninstalling the runtime; the quota-band scheduler, ordinary-turn policy, and Goal recovery remain child settings of this mode.
+- Adds explicit Set Pool and Remove from Pool batch actions; a pool with fewer than two members is valid and simply leaves band scheduling inactive.
+- Generates the exact local User `chatgpt.cliExecutable` setting for Remote-SSH, WSL, and Dev Container hosts instead of publishing a user-specific absolute path. The enable/disable prompts copy the value and open User Settings.
+- Treats either a successful `initialize` response or the client's `initialized` notification as a usable app-server handshake. If hot switching is enabled but the runtime bridge is not ready, switching fails closed and does not fall back to rewriting persisted auth.
+- Keeps the existing reload behavior only when the experimental feature is disabled. A failed or deferred in-flight transaction leaves the persisted account unchanged instead of writing new auth while a turn is active.
+- Never writes credentials into the shim configuration or logs. Runtime IPC is scoped to the current extension-host PID and local user.
+- Separates the stable account-record email from the access-token runtime email reported by Codex. A runtime alias is accepted only after the access token's user ID matches the managed account, so legitimate alias drift does not trigger rollback without weakening fail-closed identity checks.
+- Adds a credential-free `verify:seamless-auth` check that starts a selected real Codex binary with synthetic accounts and proves an A-to-B auth change on the same thread. This must be rerun after a Codex protocol/runtime upgrade.
+
+See [HOT_SWITCH.md](HOT_SWITCH.md) for setup, exact scheduling rules, concurrency semantics, compatibility limits, and rollback.
 
 ## Equivalent API price
 

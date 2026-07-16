@@ -175,6 +175,8 @@ export interface CodexAccountRecord {
   isActive: boolean;
   /** 是否在状态栏显示 */
   showInStatusBar?: boolean;
+  /** 是否参与五小时额度分档平衡 */
+  balancePoolEnabled?: boolean;
   /** 忽略中的健康问题键 */
   dismissedHealthIssueKey?: string;
   /** 最后刷新配额的时间戳 (毫秒) */

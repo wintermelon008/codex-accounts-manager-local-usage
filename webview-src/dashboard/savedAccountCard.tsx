@@ -132,8 +132,18 @@ export function SavedAccountCard(props: {
                   </span>
                 </button>
               ) : null}
-              <button class="saved-control saved-edit-tags-btn" type="button" aria-label={copy.editTagsBtn} disabled={props.busy} onClick={props.onEditTags}>
-                {props.updateTagsPending ? <span class="saved-toggle-spinner" aria-hidden="true"></span> : <EditTagsIcon />}
+              <button
+                class="saved-control saved-edit-tags-btn"
+                type="button"
+                aria-label={copy.editTagsBtn}
+                disabled={props.busy}
+                onClick={props.onEditTags}
+              >
+                {props.updateTagsPending ? (
+                  <span class="saved-toggle-spinner" aria-hidden="true"></span>
+                ) : (
+                  <EditTagsIcon />
+                )}
                 <span class="saved-control-tip align-right" aria-hidden="true">
                   {copy.editTagsBtn}
                 </span>
@@ -162,6 +172,11 @@ export function SavedAccountCard(props: {
                 <span class="pill plan">{account.planTypeLabel}</span>
                 {account.isActive ? <span class="pill active">{copy.primaryAccount}</span> : null}
                 {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
+                {account.balancePoolEnabled ? (
+                  <span class="pill active">
+                    {props.lang === "zh" ? "无感切号池" : props.lang === "zh-hant" ? "無感切換池" : "Seamless Pool"}
+                  </span>
+                ) : null}
                 {renderHealthPill(account)}
               </div>
             </div>
@@ -170,7 +185,14 @@ export function SavedAccountCard(props: {
           <div class="saved-progress">
             {visibleMetrics.length > 0 ? (
               visibleMetrics.map((metric) => (
-                <MetricRow key={metric.key} metric={metric} lang={props.lang} settings={settings} copy={copy} now={now} />
+                <MetricRow
+                  key={metric.key}
+                  metric={metric}
+                  lang={props.lang}
+                  settings={settings}
+                  copy={copy}
+                  now={now}
+                />
               ))
             ) : (
               <div class="quota-empty-placeholder">{copy.resetUnknown}</div>
@@ -188,16 +210,51 @@ export function SavedAccountCard(props: {
           <div class="saved-card-divider"></div>
           <div class="saved-actions" onClick={stopFlip}>
             {account.isActive && !account.isCurrentWindowAccount ? (
-              <ActionButton icon={renderReloadIcon()} iconOnly label={copy.reloadBtn} pending={props.reloadPromptPending} disabled={props.busy} onClick={() => onAction("reloadPrompt", account.id)} />
+              <ActionButton
+                icon={renderReloadIcon()}
+                iconOnly
+                label={copy.reloadBtn}
+                pending={props.reloadPromptPending}
+                disabled={props.busy}
+                onClick={() => onAction("reloadPrompt", account.id)}
+              />
             ) : null}
             {showReauthorizeButton ? (
-              <ActionButton icon={renderReauthorizeIcon()} iconOnly label={copy.reauthorizeBtn} pending={props.reauthorizePending} disabled={props.busy} onClick={() => onAction("reauthorize", account.id)} />
+              <ActionButton
+                icon={renderReauthorizeIcon()}
+                iconOnly
+                label={copy.reauthorizeBtn}
+                pending={props.reauthorizePending}
+                disabled={props.busy}
+                onClick={() => onAction("reauthorize", account.id)}
+              />
             ) : null}
             {showResyncButton ? (
-              <ActionButton icon={renderResyncProfileIcon()} iconOnly label={resyncButtonLabel} pending={props.resyncProfilePending} disabled={props.busy} onClick={() => onAction("resyncProfile", account.id)} />
+              <ActionButton
+                icon={renderResyncProfileIcon()}
+                iconOnly
+                label={resyncButtonLabel}
+                pending={props.resyncProfilePending}
+                disabled={props.busy}
+                onClick={() => onAction("resyncProfile", account.id)}
+              />
             ) : null}
-            <ActionButton icon={renderSwitchIcon()} iconOnly label={copy.switchBtn} pending={props.switchPending} disabled={props.busy} onClick={() => onAction("switch", account.id)} />
-            <ActionButton icon={renderRefreshIcon()} iconOnly label={copy.refreshBtn} pending={props.refreshPending} disabled={props.busy} onClick={() => onAction("refresh", account.id)} />
+            <ActionButton
+              icon={renderSwitchIcon()}
+              iconOnly
+              label={copy.switchBtn}
+              pending={props.switchPending}
+              disabled={props.busy}
+              onClick={() => onAction("switch", account.id)}
+            />
+            <ActionButton
+              icon={renderRefreshIcon()}
+              iconOnly
+              label={copy.refreshBtn}
+              pending={props.refreshPending}
+              disabled={props.busy}
+              onClick={() => onAction("refresh", account.id)}
+            />
             {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
               <ActionButton
                 icon={renderResetCreditsIcon()}
@@ -208,8 +265,22 @@ export function SavedAccountCard(props: {
                 onClick={() => onAction("consumeResetCredit", account.id)}
               />
             ) : null}
-            <ActionButton icon={renderDetailsIcon()} iconOnly label={copy.detailsBtn} pending={props.detailsPending} disabled={props.busy} onClick={() => onAction("details", account.id, { privacyMode })} />
-            <ActionButton icon={renderRemoveIcon()} iconOnly label={copy.removeBtn} pending={props.removePending} disabled={props.busy} onClick={() => onAction("remove", account.id)} />
+            <ActionButton
+              icon={renderDetailsIcon()}
+              iconOnly
+              label={copy.detailsBtn}
+              pending={props.detailsPending}
+              disabled={props.busy}
+              onClick={() => onAction("details", account.id, { privacyMode })}
+            />
+            <ActionButton
+              icon={renderRemoveIcon()}
+              iconOnly
+              label={copy.removeBtn}
+              pending={props.removePending}
+              disabled={props.busy}
+              onClick={() => onAction("remove", account.id)}
+            />
           </div>
         </section>
 
@@ -244,7 +315,9 @@ export function SavedAccountCard(props: {
               <CardDetailRow label={copy.userId} value={userIdDisplay} />
             </div>
             <div class="saved-back-tags">
-              <div class="account-tag-row">{renderTagList(account.tags) ?? <span class="tag-pill muted">{resolveNoTags(props.lang)}</span>}</div>
+              <div class="account-tag-row">
+                {renderTagList(account.tags) ?? <span class="tag-pill muted">{resolveNoTags(props.lang)}</span>}
+              </div>
             </div>
             <div class="saved-back-hint">{resolveBackHint(props.lang)}</div>
           </div>
@@ -254,7 +327,10 @@ export function SavedAccountCard(props: {
   );
 }
 
-function resolveBackLabel(key: "workspace" | "subscription" | "addMethod" | "createdAt" | "status", lang: DashboardState["lang"]): string {
+function resolveBackLabel(
+  key: "workspace" | "subscription" | "addMethod" | "createdAt" | "status",
+  lang: DashboardState["lang"]
+): string {
   const zh = lang === "zh" || lang === "zh-hant";
   const labels = {
     workspace: zh ? "工作空间" : "Workspace",
@@ -292,7 +368,11 @@ function CardDetailRow(props: { label: string; value: string; title?: string; co
   return (
     <div class="saved-detail-row">
       <span class="saved-detail-label">{props.label}:</span>
-      <span class="saved-detail-value" title={props.title ?? props.value} style={props.color ? { color: props.color } : undefined}>
+      <span
+        class="saved-detail-value"
+        title={props.title ?? props.value}
+        style={props.color ? { color: props.color } : undefined}
+      >
         {props.value}
       </span>
     </div>
