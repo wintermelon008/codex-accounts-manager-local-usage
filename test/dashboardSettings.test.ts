@@ -83,4 +83,91 @@ describe("handleDashboardSettingUpdate", () => {
 
     expect(update).toHaveBeenCalledWith("localUsageShowEquivalentPrice", false, vscode.ConfigurationTarget.Global);
   });
+
+  it("persists and normalizes hot-switch grace and long-turn policy settings", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(),
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+    } as never);
+
+    await expect(handleDashboardSettingUpdate("hotSwitchGraceSeconds", 1_000)).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("hotSwitchLongTurnPolicy", "interruptAndContinue")).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("hotSwitchLongTurnPolicy", "unsupported")).resolves.toBe(true);
+
+    expect(update).toHaveBeenNthCalledWith(1, "hotSwitchGraceSeconds", 300, vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(
+      2,
+      "hotSwitchLongTurnPolicy",
+      "interruptAndContinue",
+      vscode.ConfigurationTarget.Global
+    );
+    expect(update).toHaveBeenNthCalledWith(3, "hotSwitchLongTurnPolicy", "defer", vscode.ConfigurationTarget.Global);
+  });
+
+  it("reads the legacy quota-band setting only until the seamless setting is explicit", () => {
+    const inspect = vi.fn((key: string) =>
+      key === "seamlessSwitchQuotaBandsEnabled"
+        ? { key: `codexAccounts.${key}`, defaultValue: false }
+        : { key: `codexAccounts.${key}` }
+    );
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((key: string, fallback: unknown) => (key === "balanceByQuotaBandsEnabled" ? true : fallback)),
+      inspect
+    } as never);
+
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchQuotaBandsEnabled).toBe(true);
+
+    inspect.mockImplementation((key: string) =>
+      key === "seamlessSwitchQuotaBandsEnabled"
+        ? { key: `codexAccounts.${key}`, defaultValue: false, globalValue: false }
+        : { key: `codexAccounts.${key}` }
+    );
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchQuotaBandsEnabled).toBe(false);
+  });
+
+  it("persists quota-band scheduling under the seamless setting key", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(),
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+    } as never);
+
+    await expect(handleDashboardSettingUpdate("seamlessSwitchQuotaBandsEnabled", true)).resolves.toBe(true);
+
+    expect(update).toHaveBeenCalledWith("seamlessSwitchQuotaBandsEnabled", true, vscode.ConfigurationTarget.Global);
+  });
+
+  it("migrates the installed runtime flag to the seamless behavior switch until explicitly configured", () => {
+    const inspect = vi.fn((key: string) => ({ key: `codexAccounts.${key}`, defaultValue: false }));
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((key: string, fallback: unknown) => (key === "hotSwitchEnabled" ? true : fallback)),
+      inspect
+    } as never);
+
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchEnabled).toBe(true);
+
+    inspect.mockImplementation((key: string) => ({
+      key: `codexAccounts.${key}`,
+      defaultValue: false,
+      ...(key === "seamlessSwitchEnabled" ? { globalValue: false } : {})
+    }));
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchEnabled).toBe(false);
+  });
+
+  it("persists the seamless behavior master switch without uninstalling the runtime", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(),
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+    } as never);
+
+    await expect(handleDashboardSettingUpdate("seamlessSwitchEnabled", false)).resolves.toBe(true);
+
+    expect(update).toHaveBeenCalledWith("seamlessSwitchEnabled", false, vscode.ConfigurationTarget.Global);
+    expect(update).not.toHaveBeenCalledWith("hotSwitchEnabled", expect.anything(), expect.anything());
+  });
 });

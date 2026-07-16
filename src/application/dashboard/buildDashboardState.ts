@@ -162,6 +162,7 @@ function mapAccount(
     organizationId: account.organizationId,
     isActive: account.isActive,
     isCurrentWindowAccount: account.id === currentWindowAccountId,
+    balancePoolEnabled: Boolean(account.balancePoolEnabled),
     showInStatusBar: Boolean(account.showInStatusBar),
     canToggleStatusBar,
     statusToggleTitle: canToggleStatusBar

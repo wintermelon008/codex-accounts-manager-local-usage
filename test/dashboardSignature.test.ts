@@ -19,6 +19,11 @@ function createState(overrides?: {
       autoRefreshMinutes: 0,
       backgroundTokenRefreshEnabled: true,
       autoSwitchEnabled: false,
+      hotSwitchEnabled: true,
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: false,
+      hotSwitchGraceSeconds: 60,
+      hotSwitchLongTurnPolicy: "defer",
       hourlyQuotaControlEnabled: false,
       autoSwitchReloadWindowEnabled: false,
       autoSwitchHourlyThreshold: 20,
@@ -53,6 +58,7 @@ function createState(overrides?: {
         tags: [],
         planTypeLabel: "Plus",
         isActive: true,
+        balancePoolEnabled: false,
         showInStatusBar: false,
         healthKind: "healthy",
         dismissedHealth: false,
@@ -161,5 +167,47 @@ describe("buildDashboardStateSignature", () => {
     const baseSignature = buildDashboardStateSignature(base);
     expect(buildDashboardStateSignature(rangeChanged)).not.toBe(baseSignature);
     expect(buildDashboardStateSignature(usageChanged)).not.toBe(baseSignature);
+  });
+
+  it("changes when quota-band balancing or pool membership changes", () => {
+    const base = createState();
+    const settingChanged: DashboardState = {
+      ...base,
+      settings: { ...base.settings, seamlessSwitchQuotaBandsEnabled: true }
+    };
+    const poolChanged: DashboardState = {
+      ...base,
+      accounts: [{ ...base.accounts[0]!, balancePoolEnabled: true }]
+    };
+
+    const baseSignature = buildDashboardStateSignature(base);
+    expect(buildDashboardStateSignature(settingChanged)).not.toBe(baseSignature);
+    expect(buildDashboardStateSignature(poolChanged)).not.toBe(baseSignature);
+  });
+
+  it("changes when the hot-switch grace period or long-turn policy changes", () => {
+    const base = createState();
+    const graceChanged: DashboardState = {
+      ...base,
+      settings: { ...base.settings, hotSwitchGraceSeconds: 30 }
+    };
+    const policyChanged: DashboardState = {
+      ...base,
+      settings: { ...base.settings, hotSwitchLongTurnPolicy: "interruptAndContinue" }
+    };
+
+    const baseSignature = buildDashboardStateSignature(base);
+    expect(buildDashboardStateSignature(graceChanged)).not.toBe(baseSignature);
+    expect(buildDashboardStateSignature(policyChanged)).not.toBe(baseSignature);
+  });
+
+  it("changes when seamless switching is disabled", () => {
+    const base = createState();
+    const disabled: DashboardState = {
+      ...base,
+      settings: { ...base.settings, seamlessSwitchEnabled: false }
+    };
+
+    expect(buildDashboardStateSignature(disabled)).not.toBe(buildDashboardStateSignature(base));
   });
 });

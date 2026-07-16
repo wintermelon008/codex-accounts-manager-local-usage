@@ -65,6 +65,7 @@ export function RecoveryPanel(props: {
 
 export function BatchSelectionBar(props: {
   copy: DashboardCopy;
+  lang: DashboardState["lang"];
   selectedCount: number;
   tagsPending: boolean;
   refreshPending: boolean;
@@ -77,6 +78,8 @@ export function BatchSelectionBar(props: {
   onShare: () => void;
   onAddTags: () => void;
   onRemoveTags: () => void;
+  onSetBalancePool: () => void;
+  onRemoveFromBalancePool: () => void;
 }) {
   return (
     <div class="batch-bar">
@@ -86,6 +89,20 @@ export function BatchSelectionBar(props: {
         </ActionButton>
         <ActionButton class="toolbar-btn" pending={props.tagsPending} onClick={props.onRemoveTags}>
           {props.copy.removeTagsBtn}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" disabled={props.selectedCount < 2} onClick={props.onSetBalancePool}>
+          {props.lang === "zh"
+            ? "设为无感切号池"
+            : props.lang === "zh-hant"
+              ? "設為無感切換池"
+              : "Set Seamless-switch Pool"}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" onClick={props.onRemoveFromBalancePool}>
+          {props.lang === "zh"
+            ? "移出无感切号池"
+            : props.lang === "zh-hant"
+              ? "移出無感切換池"
+              : "Remove from Seamless Pool"}
         </ActionButton>
         <ActionButton class="toolbar-btn" pending={props.refreshPending} onClick={props.onRefresh}>
           {props.copy.batchRefreshBtn}

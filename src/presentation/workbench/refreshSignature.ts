@@ -19,6 +19,7 @@ export function buildWorkbenchRefreshSignature(params: {
         account.userId ?? "",
         (account.tags ?? []).join(","),
         account.isActive ? "1" : "0",
+        account.balancePoolEnabled ? "1" : "0",
         account.showInStatusBar ? "1" : "0",
         account.lastQuotaAt ?? 0,
         account.updatedAt,

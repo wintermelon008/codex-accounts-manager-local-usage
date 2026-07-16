@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.5",
+  "version": "0.1.16-local.13",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -105,6 +105,50 @@
           "default": false,
           "markdownDescription": "Automatically switch away from the active account when its quota falls below the configured hourly or weekly threshold. Candidate accounts are ranked by the best matching remaining quota."
         },
+        "codexAccounts.hotSwitchEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Technical installation flag for the experimental seamless-switch runtime. Use the Install/Remove Experimental Seamless Runtime commands so the local CLI shim and original executable are managed safely. Initial setup requires one reload; Remote environments receive a generated local User setting instead of a hard-coded path. The installed runtime uses HTTP streaming to prevent an existing thread from reusing an old account's authenticated WebSocket. The user-facing behavior switch is `codexAccounts.seamlessSwitchEnabled`."
+        },
+        "codexAccounts.seamlessSwitchEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Route account changes through the installed no-reload runtime and enable seamless quota-band scheduling. When enabled without a ready runtime, account changes fail closed. When disabled, account changes use the original persisted-account and reload workflow. This does not uninstall the runtime or restore its underlying HTTP transport; use the Remove command for a complete rollback."
+        },
+        "codexAccounts.hotSwitchGraceSeconds": {
+          "type": "number",
+          "minimum": 10,
+          "maximum": 300,
+          "multipleOf": 1,
+          "default": 60,
+          "markdownDescription": "How long seamless account switching waits for active Codex turns to finish naturally. Active Goal turns are interrupted after this grace period and the Goal is resumed on the new account."
+        },
+        "codexAccounts.hotSwitchLongTurnPolicy": {
+          "type": "string",
+          "enum": [
+            "defer",
+            "interrupt",
+            "interruptAndContinue"
+          ],
+          "enumDescriptions": [
+            "Keep ordinary turns running and defer the account switch (recommended).",
+            "Interrupt ordinary turns after the grace period, switch accounts, and leave the interrupted threads for manual continuation.",
+            "Interrupt ordinary turns after the grace period, switch accounts, and start one marked continuation turn in each interrupted thread. This can repeat non-idempotent external side effects, so use it only when that risk is acceptable."
+          ],
+          "default": "defer",
+          "markdownDescription": "Policy for ordinary turns that remain active after the hot-switch grace period. Goal turns always use Goal pause/interruption/resume semantics. Authentication is never changed while an old turn is still active."
+        },
+        "codexAccounts.seamlessSwitchQuotaBandsEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable the seamless-switch scheduler for selected accounts. It balances valid 5-hour quota in fixed 20% bands and switches only through the no-reload runtime after active Codex turns reach a safe boundary. This is independent of the upstream Auto Switch feature."
+        },
+        "codexAccounts.balanceByQuotaBandsEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Deprecated compatibility setting for pre-local.11 installations. Use `codexAccounts.seamlessSwitchQuotaBandsEnabled` instead.",
+          "deprecationMessage": "Use codexAccounts.seamlessSwitchQuotaBandsEnabled instead."
+        },
         "codexAccounts.hourlyQuotaControlEnabled": {
           "type": "boolean",
           "default": false,
@@ -190,6 +234,14 @@
         "title": "Codex Accounts: Add Account via OAuth"
       },
       {
+        "command": "codexAccounts.enableHotSwitch",
+        "title": "Codex Accounts: Install Experimental Seamless Runtime"
+      },
+      {
+        "command": "codexAccounts.disableHotSwitch",
+        "title": "Codex Accounts: Remove Experimental Seamless Runtime"
+      },
+      {
         "command": "codexAccounts.importCurrentAuth",
         "title": "Codex Accounts: Import Current auth.json"
       },
@@ -244,6 +296,7 @@
     "watch": "tsc -watch -p ./",
     "package": "npm run verify:customization && npm run compile && vsce package",
     "verify:customization": "node scripts/verify-customization-baseline.mjs",
+    "verify:seamless-auth": "node scripts/verify-seamless-http-auth.mjs",
     "lint": "eslint src webview-src --ext ts,tsx",
     "lint:fix": "eslint src webview-src --ext ts,tsx --fix",
     "test": "vitest run",
@@ -252,7 +305,7 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"webview-src/**/*.{ts,tsx}\""
   },
   "codexAccountsLocalCustomization": {
-    "feature": "local-usage-dashboard",
+    "feature": "local-enhancements",
     "upstreamVersion": "0.1.16",
     "upstreamCommit": "4b1689deafd2d303700c5cc26e6fd285979634e4",
     "reviewRequiredOnUpstreamUpdate": true

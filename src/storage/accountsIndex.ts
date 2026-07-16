@@ -105,6 +105,7 @@ function isValidAccountsIndex(value: unknown): value is CodexAccountsIndex {
       typeof record.email === "string" &&
       typeof record.createdAt === "number" &&
       typeof record.updatedAt === "number" &&
+      (record.balancePoolEnabled === undefined || typeof record.balancePoolEnabled === "boolean") &&
       (record.tags === undefined || (Array.isArray(record.tags) && record.tags.every((tag) => typeof tag === "string")))
     );
   });

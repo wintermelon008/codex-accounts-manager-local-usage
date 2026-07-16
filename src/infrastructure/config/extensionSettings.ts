@@ -1,9 +1,5 @@
 import * as vscode from "vscode";
-import type {
-  DashboardLocalUsageRange,
-  DashboardSettings,
-  DashboardThemeOption
-} from "../../domain/dashboard/types";
+import type { DashboardLocalUsageRange, DashboardSettings, DashboardThemeOption } from "../../domain/dashboard/types";
 import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } from "../../localization/languages";
 import { normalizeQuotaColorThresholds } from "../../utils";
 
@@ -29,6 +25,11 @@ export class ExtensionSettingsStore {
       backgroundTokenRefreshEnabled: config.get<boolean>("backgroundTokenRefreshEnabled", true),
       autoRefreshMinutes: normalizeAutoRefreshMinutes(config.get<number>("autoRefreshMinutes", 0)),
       autoSwitchEnabled: config.get<boolean>("autoSwitchEnabled", false),
+      hotSwitchEnabled: config.get<boolean>("hotSwitchEnabled", false),
+      seamlessSwitchEnabled: isSeamlessSwitchEnabled(config),
+      seamlessSwitchQuotaBandsEnabled: isSeamlessSwitchQuotaBandsEnabled(config),
+      hotSwitchGraceSeconds: normalizeHotSwitchGraceSeconds(config.get<number>("hotSwitchGraceSeconds", 60)),
+      hotSwitchLongTurnPolicy: normalizeHotSwitchLongTurnPolicy(config.get<string>("hotSwitchLongTurnPolicy", "defer")),
       hourlyQuotaControlEnabled: config.get<boolean>("hourlyQuotaControlEnabled", false),
       autoSwitchReloadWindowEnabled: config.get<boolean>("autoSwitchReloadWindowEnabled", false),
       autoSwitchHourlyThreshold: normalizeAutoSwitchThreshold(config.get<number>("autoSwitchHourlyThreshold", 20)),
@@ -78,12 +79,45 @@ function explicitConfigurationValue(config: vscode.WorkspaceConfiguration, key: 
   return inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
 }
 
+export function isSeamlessSwitchQuotaBandsEnabled(
+  config: vscode.WorkspaceConfiguration = getCodexAccountsConfiguration()
+): boolean {
+  const configured = explicitConfigurationValue(config, "seamlessSwitchQuotaBandsEnabled");
+  if (typeof configured === "boolean") {
+    return configured;
+  }
+  return config.get<boolean>("balanceByQuotaBandsEnabled", false);
+}
+
+export function isSeamlessSwitchEnabled(
+  config: vscode.WorkspaceConfiguration = getCodexAccountsConfiguration()
+): boolean {
+  const configured = explicitConfigurationValue(config, "seamlessSwitchEnabled");
+  if (typeof configured === "boolean") {
+    return configured;
+  }
+  return config.get<boolean>("hotSwitchEnabled", false);
+}
+
 export function normalizeAutoRefreshMinutes(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return 0;
   }
 
   return Math.max(1, Math.min(60, Math.round(value)));
+}
+
+export function normalizeHotSwitchGraceSeconds(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 60;
+  }
+  return Math.max(10, Math.min(300, Math.round(value)));
+}
+
+export function normalizeHotSwitchLongTurnPolicy(
+  value: string | undefined
+): "defer" | "interrupt" | "interruptAndContinue" {
+  return value === "interrupt" || value === "interruptAndContinue" ? value : "defer";
 }
 
 export function getCodexAccountsConfiguration(): vscode.WorkspaceConfiguration {

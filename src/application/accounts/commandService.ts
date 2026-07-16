@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { loginWithOAuth } from "../../auth";
-import { getCodexHome } from "../../codex";
+import { CodexHotSwitchRuntime, RuntimeAccountSwitchOutcome, getCodexHome } from "../../codex";
 import { getErrorMessage } from "../../core";
 import { CodexAccountRecord, SharedCodexAccountJson } from "../../core/types";
 import { AccountsRepository } from "../../storage";
@@ -9,17 +9,14 @@ import { buildAccountStorageId } from "../../utils/accountIdentity";
 import { extractClaims } from "../../utils/jwt";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
 import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
-import {
-  getCommandCopy,
-  logNetworkEvent,
-  t
-} from "../../utils";
+import { promptForManualHotSwitchConfiguration } from "../../presentation/workbench/hotSwitchSetup";
+import { getCommandCopy, logNetworkEvent, t } from "../../utils";
 import { openDetailsPanel } from "../../ui";
 import { openQuotaSummaryPanel } from "../../ui/quotaSummary";
 import {
   RefreshView,
   formatAccountToastLabel,
-  maybeAutoSwitchForActiveQuota,
+  maybeSwitchForActiveQuota,
   maybeWarnForActiveQuota,
   refreshImportedAccountQuota,
   refreshSingleQuota,
@@ -35,8 +32,57 @@ export class AccountsCommandService {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly repo: AccountsRepository,
-    private readonly view: RefreshView
+    private readonly view: RefreshView,
+    private readonly hotSwitchRuntime: CodexHotSwitchRuntime
   ) {}
+
+  async enableHotSwitch(): Promise<void> {
+    const result = await this.hotSwitchRuntime.enable();
+    if (result.error) {
+      void vscode.window.showErrorMessage(`Unable to install the Codex seamless-switch runtime: ${result.error}`);
+      return;
+    }
+    if (result.requiresUserConfiguration) {
+      await promptForManualHotSwitchConfiguration(result, "enable");
+      return;
+    }
+    if (result.requiresReload) {
+      const choice = await vscode.window.showInformationMessage(
+        "The Codex seamless-switch runtime is installed. Reload this window once to activate it.",
+        "Reload once",
+        "Later"
+      );
+      if (choice === "Reload once") {
+        await vscode.commands.executeCommand("workbench.action.reloadWindow");
+      }
+      return;
+    }
+    void vscode.window.showInformationMessage("The Codex seamless-switch runtime is installed.");
+  }
+
+  async disableHotSwitch(): Promise<void> {
+    const result = await this.hotSwitchRuntime.disable();
+    if (result.error) {
+      void vscode.window.showErrorMessage(`Unable to remove the Codex seamless-switch runtime: ${result.error}`);
+      return;
+    }
+    if (result.requiresUserConfiguration) {
+      await promptForManualHotSwitchConfiguration(result, "disable");
+      return;
+    }
+    if (result.requiresReload) {
+      const choice = await vscode.window.showInformationMessage(
+        "The Codex seamless-switch runtime is removed. Reload this window once to restore the standard Codex runtime.",
+        "Reload once",
+        "Later"
+      );
+      if (choice === "Reload once") {
+        await vscode.commands.executeCommand("workbench.action.reloadWindow");
+      }
+      return;
+    }
+    void vscode.window.showInformationMessage("The Codex seamless-switch runtime is removed.");
+  }
 
   async addAccount(): Promise<void> {
     const copy = getCommandCopy();
@@ -177,10 +223,34 @@ export class AccountsCommandService {
       return;
     }
 
-    await this.withProgress(copy.progressSwitch(account.email), async () => {
-      await this.repo.switchAccount(account.id);
-    });
+    const runtimeOutcome = await this.withProgress<RuntimeAccountSwitchOutcome>(
+      copy.progressSwitch(account.email),
+      async () => {
+        const outcome = (await this.view.switchRuntimeAccount?.(account.id)) ?? { status: "unavailable" as const };
+        if (outcome.status === "unavailable") {
+          await this.repo.switchAccount(account.id);
+        }
+        return outcome;
+      }
+    );
+
+    if (runtimeOutcome.status === "deferred") {
+      void vscode.window.showInformationMessage(
+        `Account switch deferred because ${runtimeOutcome.activeTurns} ordinary Codex turn(s) remained active after the grace period.`
+      );
+      return;
+    }
+    if (runtimeOutcome.status === "failed") {
+      void vscode.window.showWarningMessage(`Codex account switch was not applied: ${runtimeOutcome.message}`);
+      return;
+    }
+
     this.view.markObservedAuthIdentity?.(account.id);
+    if (runtimeOutcome.status === "switched") {
+      this.view.refresh();
+      void vscode.window.showInformationMessage(`Switched to ${formatAccountToastLabel(account)} without reloading.`);
+      return;
+    }
 
     await handleCodexAppRestartPreference({ allowManualPrompt: true });
     this.view.refresh();
@@ -240,7 +310,7 @@ export class AccountsCommandService {
     }
 
     this.view.refresh();
-    const switched = await maybeAutoSwitchForActiveQuota(this.repo, this.view);
+    const switched = await maybeSwitchForActiveQuota(this.repo, this.view);
     if (!switched) {
       await maybeWarnForActiveQuota(this.repo);
     }
@@ -433,15 +503,15 @@ export class AccountsCommandService {
     return selected?.account;
   }
 
-  private async withProgress(
+  private async withProgress<T>(
     title: string,
     callback: (
       progress: vscode.Progress<{ message?: string; increment?: number }>,
       token: vscode.CancellationToken
-    ) => Promise<void>,
+    ) => Promise<T>,
     options?: { cancellable?: boolean }
-  ): Promise<void> {
-    await vscode.window.withProgress(
+  ): Promise<T> {
+    return vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title,

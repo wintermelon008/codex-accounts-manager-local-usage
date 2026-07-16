@@ -3,6 +3,7 @@ import { AccountsCommandService } from "../application/accounts/commandService";
 export { refreshImportedAccountQuota } from "../application/accounts/quota";
 import { CodexAccountRecord } from "../core/types";
 import { AccountsRepository } from "../storage";
+import { CodexHotSwitchRuntime, RuntimeAccountSwitchOutcome } from "../codex";
 
 /**
  * 注册所有命令
@@ -10,26 +11,50 @@ import { AccountsRepository } from "../storage";
 export function registerCommands(
   context: vscode.ExtensionContext,
   repo: AccountsRepository,
-  view: { refresh(): void; markObservedAuthIdentity?: (accountId?: string) => void }
+  view: {
+    refresh(): void;
+    markObservedAuthIdentity?: (accountId?: string) => void;
+    switchRuntimeAccount?: (accountId: string) => Promise<RuntimeAccountSwitchOutcome>;
+  },
+  hotSwitchRuntime: CodexHotSwitchRuntime
 ): void {
-  const service = new AccountsCommandService(context, repo, view);
+  const service = new AccountsCommandService(context, repo, view, hotSwitchRuntime);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexAccounts.addAccount", () => service.addAccount()),
+    vscode.commands.registerCommand("codexAccounts.enableHotSwitch", () => service.enableHotSwitch()),
+    vscode.commands.registerCommand("codexAccounts.disableHotSwitch", () => service.disableHotSwitch()),
     vscode.commands.registerCommand("codexAccounts.importCurrentAuth", () => service.importCurrentAuth()),
     vscode.commands.registerCommand("codexAccounts.reauthorizeAccount", (item?: CodexAccountRecord) =>
       service.reauthorizeAccount(item)
     ),
-    vscode.commands.registerCommand("codexAccounts.switchAccount", (item?: CodexAccountRecord) => service.switchAccount(item)),
-    vscode.commands.registerCommand("codexAccounts.refreshQuota", (item?: CodexAccountRecord) => service.refreshQuota(item)),
-    vscode.commands.registerCommand("codexAccounts.refreshAllQuotas", (options?: { silent?: boolean }) => service.refreshAllQuotas(options)),
-    vscode.commands.registerCommand("codexAccounts.restoreAccountsFromBackup", () => service.restoreAccountsFromBackup()),
-    vscode.commands.registerCommand("codexAccounts.restoreAccountsFromAuthJson", () => service.restoreAccountsFromAuthJson()),
-    vscode.commands.registerCommand("codexAccounts.restoreAccountsFromSharedJson", () => service.restoreAccountsFromSharedJson()),
-    vscode.commands.registerCommand("codexAccounts.removeAccount", (item?: CodexAccountRecord) => service.removeAccount(item)),
-    vscode.commands.registerCommand("codexAccounts.toggleStatusBarAccount", (item?: CodexAccountRecord) => service.toggleStatusBarAccount(item)),
-    vscode.commands.registerCommand("codexAccounts.openDetails", (item?: CodexAccountRecord, options?: { privacyMode?: boolean }) =>
-      service.openDetails(item, options)
+    vscode.commands.registerCommand("codexAccounts.switchAccount", (item?: CodexAccountRecord) =>
+      service.switchAccount(item)
+    ),
+    vscode.commands.registerCommand("codexAccounts.refreshQuota", (item?: CodexAccountRecord) =>
+      service.refreshQuota(item)
+    ),
+    vscode.commands.registerCommand("codexAccounts.refreshAllQuotas", (options?: { silent?: boolean }) =>
+      service.refreshAllQuotas(options)
+    ),
+    vscode.commands.registerCommand("codexAccounts.restoreAccountsFromBackup", () =>
+      service.restoreAccountsFromBackup()
+    ),
+    vscode.commands.registerCommand("codexAccounts.restoreAccountsFromAuthJson", () =>
+      service.restoreAccountsFromAuthJson()
+    ),
+    vscode.commands.registerCommand("codexAccounts.restoreAccountsFromSharedJson", () =>
+      service.restoreAccountsFromSharedJson()
+    ),
+    vscode.commands.registerCommand("codexAccounts.removeAccount", (item?: CodexAccountRecord) =>
+      service.removeAccount(item)
+    ),
+    vscode.commands.registerCommand("codexAccounts.toggleStatusBarAccount", (item?: CodexAccountRecord) =>
+      service.toggleStatusBarAccount(item)
+    ),
+    vscode.commands.registerCommand(
+      "codexAccounts.openDetails",
+      (item?: CodexAccountRecord, options?: { privacyMode?: boolean }) => service.openDetails(item, options)
     ),
     vscode.commands.registerCommand("codexAccounts.openCodexHome", () => service.openCodexHome()),
     vscode.commands.registerCommand("codexAccounts.showQuotaSummary", () => service.showQuotaSummary())

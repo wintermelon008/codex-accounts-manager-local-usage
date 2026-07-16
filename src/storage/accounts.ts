@@ -335,10 +335,7 @@ export class AccountsRepository {
   /**
    * 获取账号的令牌
    */
-  async getTokens(
-    accountId: string,
-    options: { syncExternal?: boolean } = {}
-  ): Promise<CodexTokens | undefined> {
+  async getTokens(accountId: string, options: { syncExternal?: boolean } = {}): Promise<CodexTokens | undefined> {
     try {
       // 内存缓存命中直接返回，避免 Dashboard 刷新时重复读 Keychain
       const cached = this.tokenCache.get(accountId);
@@ -846,6 +843,55 @@ export class AccountsRepository {
     return account;
   }
 
+  async setBalancePool(accountIds: string[]): Promise<CodexAccountRecord[]> {
+    const index = await this.readIndex();
+    const selectedIds = new Set(accountIds);
+    const selectedAccounts = index.accounts.filter((account) => selectedIds.has(account.id));
+    if (selectedAccounts.length !== selectedIds.size) {
+      throw createError.accountNotFound(
+        accountIds.find((id) => !index.accounts.some((account) => account.id === id)) ?? ""
+      );
+    }
+
+    let changed = false;
+    for (const account of index.accounts) {
+      const enabled = selectedIds.has(account.id);
+      if (Boolean(account.balancePoolEnabled) !== enabled) {
+        account.balancePoolEnabled = enabled;
+        account.updatedAt = Date.now();
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.writeIndex(index);
+    }
+    return selectedAccounts.map((account) => ({ ...account, balancePoolEnabled: true }));
+  }
+
+  async removeFromBalancePool(accountIds: string[]): Promise<CodexAccountRecord[]> {
+    const index = await this.readIndex();
+    const selectedIds = new Set(accountIds);
+    const selectedAccounts = index.accounts.filter((account) => selectedIds.has(account.id));
+    if (selectedAccounts.length !== selectedIds.size) {
+      throw createError.accountNotFound(
+        accountIds.find((id) => !index.accounts.some((account) => account.id === id)) ?? ""
+      );
+    }
+
+    let changed = false;
+    for (const account of selectedAccounts) {
+      if (account.balancePoolEnabled === true) {
+        account.balancePoolEnabled = false;
+        account.updatedAt = Date.now();
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.writeIndex(index);
+    }
+    return selectedAccounts.map((account) => ({ ...account, balancePoolEnabled: false }));
+  }
+
   /**
    * 更新配额信息
    *
@@ -908,7 +954,8 @@ export class AccountsRepository {
         .catch(() => undefined);
     }
 
-    const nextStoredTokens = updatedTokens ?? (account.accountId !== previousStoredAccountId ? storedTokens : undefined);
+    const nextStoredTokens =
+      updatedTokens ?? (account.accountId !== previousStoredAccountId ? storedTokens : undefined);
     if (storedTokens && nextStoredTokens) {
       const effectiveNextTokens = {
         ...nextStoredTokens,
@@ -1080,11 +1127,7 @@ export class AccountsRepository {
   /**
    * 更新重置次数快照（由后台 fetchResetCredits 拉取后调用）。
    */
-  async updateResetCreditsSnapshot(
-    accountId: string,
-    availableCount: number,
-    nextExpiresAt?: number
-  ): Promise<void> {
+  async updateResetCreditsSnapshot(accountId: string, availableCount: number, nextExpiresAt?: number): Promise<void> {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
     if (!account?.quotaSummary) {
@@ -1138,9 +1181,7 @@ export class AccountsRepository {
    */
   private async readIndex(): Promise<CodexAccountsIndex> {
     if (this.state.indexHealth.status === "corrupted_unrecoverable") {
-      throw createError.storageWriteBlocked(
-        "Accounts index is corrupted and must be restored before continuing."
-      );
+      throw createError.storageWriteBlocked("Accounts index is corrupted and must be restored before continuing.");
     }
 
     const cached = readPendingOrCachedIndex(this.state, CACHE_TTL_MS);
@@ -1250,10 +1291,7 @@ export class AccountsRepository {
   }
 }
 
-function shouldSyncTokensFromAuthFile(
-  current: CodexTokens | undefined,
-  next: CodexTokens
-): boolean {
+function shouldSyncTokensFromAuthFile(current: CodexTokens | undefined, next: CodexTokens): boolean {
   return toComparableTokenSnapshot(current) !== toComparableTokenSnapshot(next);
 }
 
@@ -1318,7 +1356,10 @@ function canAdoptExternalMirrorTokens(
   }
 
   if (
-    hasRequiredIdentityMismatch(account?.email ? normalizeEmailIdentity(account.email) : undefined, externalClaims?.email) ||
+    hasRequiredIdentityMismatch(
+      account?.email ? normalizeEmailIdentity(account.email) : undefined,
+      externalClaims?.email
+    ) ||
     hasRequiredIdentityMismatch(account?.userId, externalClaims?.userId) ||
     hasRequiredIdentityMismatch(account?.accountId, external.accountId ?? externalClaims?.accountId) ||
     hasRequiredIdentityMismatch(account?.organizationId, externalClaims?.organizationId)
@@ -1360,12 +1401,14 @@ function buildExpectedMirrorIdentity(
 
 function buildExternalMirrorIdentity(
   external: AideckMirrorTokenSnapshot,
-  claims: {
-    email?: string;
-    userId?: string;
-    accountId?: string;
-    organizationId?: string;
-  } | undefined = safeExtractTokenClaims(external)
+  claims:
+    | {
+        email?: string;
+        userId?: string;
+        accountId?: string;
+        organizationId?: string;
+      }
+    | undefined = safeExtractTokenClaims(external)
 ): {
   email?: string;
   userId?: string;

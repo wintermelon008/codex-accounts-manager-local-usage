@@ -1,0 +1,320 @@
+import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
+
+const CONNECT_TIMEOUT_MS = 2_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+const SWITCH_COMPLETION_BUFFER_MS = 2 * 60 * 1000;
+
+export type HotSwitchLongTurnPolicy = "defer" | "interrupt" | "interruptAndContinue";
+
+export type HotSwitchStatus = {
+  runtimeProtocolVersion: number;
+  ready: boolean;
+  initializeResponseReceived: boolean;
+  initializedNotificationReceived: boolean;
+  activeTurns: number;
+  pendingSwitch: boolean;
+  switching: boolean;
+  httpTransportForced: boolean;
+  transportMode: "http" | "default";
+  shimPid: number;
+  appServerPid: number | null;
+};
+
+export type HotSwitchIdentity = {
+  accountType: string | null;
+  email: string | null;
+  planType: string | null;
+  externalAuthActive: boolean;
+  managedAccountId: string | null;
+  managedLocalAccountId: string | null;
+  httpTransportForced: boolean;
+};
+
+export type HotSwitchAccountParams = {
+  accessToken: string;
+  accountId: string;
+  localAccountId: string;
+  previousAccountId: string;
+  previousLocalAccountId: string;
+  previousExpectedEmail: string;
+  expectedEmail: string;
+  planType?: string;
+  gracePeriodMs: number;
+  longTurnPolicy: HotSwitchLongTurnPolicy;
+};
+
+export type HotSwitchAccountResult =
+  | {
+      status: "switched";
+      accountId: string;
+      email: string | null;
+      activeTurns: number;
+      interruptedTurns: number;
+      continuedThreads: number;
+    }
+  | {
+      status: "deferred";
+      reason: "activeOrdinaryTurns" | "uninterruptibleTurns" | "interruptFailed";
+      activeTurns: number;
+    };
+
+export type RuntimeAccountSwitchOutcome =
+  | HotSwitchAccountResult
+  | { status: "unavailable" }
+  | { status: "failed"; message: string };
+
+export type HotSwitchRefreshResult = {
+  accessToken: string;
+  chatgptAccountId: string;
+  chatgptPlanType: string | null;
+};
+
+export type HotSwitchRefreshRequest = {
+  previousAccountId?: string;
+  localAccountId?: string;
+  expectedEmail?: string;
+};
+
+type PendingRequest = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+};
+
+type RpcMessage = {
+  id?: string | number | null;
+  method?: string;
+  params?: Record<string, unknown>;
+  result?: unknown;
+  error?: { message?: string };
+};
+
+export class CodexHotSwitchBridge {
+  private socket: net.Socket | undefined;
+  private connectPromise: Promise<net.Socket> | undefined;
+  private inputBuffer = "";
+  private requestSequence = 0;
+  private disposed = false;
+  private readonly pending = new Map<string, PendingRequest>();
+
+  constructor(
+    private readonly refreshAuth: (request: HotSwitchRefreshRequest) => Promise<HotSwitchRefreshResult>,
+    private readonly activateLocalAccount: (localAccountId: string) => Promise<void> = async () => undefined,
+    private readonly extensionHostPid = process.pid
+  ) {}
+
+  async getStatus(): Promise<HotSwitchStatus> {
+    return this.request<HotSwitchStatus>("runtime/status", {}, REQUEST_TIMEOUT_MS);
+  }
+
+  async getIdentity(): Promise<HotSwitchIdentity> {
+    return this.request<HotSwitchIdentity>("runtime/identity", {}, REQUEST_TIMEOUT_MS);
+  }
+
+  async switchAccount(params: HotSwitchAccountParams): Promise<HotSwitchAccountResult> {
+    const timeoutMs = Math.max(REQUEST_TIMEOUT_MS, params.gracePeriodMs + SWITCH_COMPLETION_BUFFER_MS);
+    return this.request<HotSwitchAccountResult>("runtime/switch", params, timeoutMs);
+  }
+
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.socket?.destroy();
+    this.socket = undefined;
+    this.connectPromise = undefined;
+    this.rejectPending(new Error("Codex hot-switch bridge disposed"));
+  }
+
+  private async request<T>(method: string, params: object, timeoutMs: number): Promise<T> {
+    if (this.disposed) {
+      throw new Error("Codex hot-switch bridge is disposed");
+    }
+
+    const socket = await this.connect();
+    const id = `manager:${++this.requestSequence}`;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        if (!socket.destroyed && method === "runtime/switch") {
+          socket.write(
+            `${JSON.stringify({
+              id: `cancel:${id}`,
+              method: "runtime/cancel",
+              params: { requestId: id }
+            })}\n`
+          );
+        }
+        reject(new Error(`${method} timed out`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as T),
+        reject,
+        timer
+      });
+      socket.write(`${JSON.stringify({ id, method, params })}\n`);
+    });
+  }
+
+  private connect(): Promise<net.Socket> {
+    if (this.socket && !this.socket.destroyed) {
+      return Promise.resolve(this.socket);
+    }
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+
+    this.connectPromise = new Promise<net.Socket>((resolve, reject) => {
+      const socket = net.createConnection(getHotSwitchSocketPath(this.extensionHostPid));
+      const timeout = setTimeout(() => {
+        socket.destroy();
+        reject(new Error("Codex hot-switch runtime is not available"));
+      }, CONNECT_TIMEOUT_MS);
+
+      const failConnect = (error: Error): void => {
+        clearTimeout(timeout);
+        reject(new Error(`Codex hot-switch runtime is not available: ${error.message}`));
+      };
+
+      socket.once("error", failConnect);
+      socket.once("connect", () => {
+        clearTimeout(timeout);
+        socket.off("error", failConnect);
+        this.socket = socket;
+        this.attachSocket(socket);
+        resolve(socket);
+      });
+    }).finally(() => {
+      this.connectPromise = undefined;
+    });
+
+    return this.connectPromise;
+  }
+
+  private attachSocket(socket: net.Socket): void {
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      this.inputBuffer += chunk;
+      let newlineIndex = this.inputBuffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const line = this.inputBuffer.slice(0, newlineIndex).replace(/\r$/u, "");
+        this.inputBuffer = this.inputBuffer.slice(newlineIndex + 1);
+        if (line.length > 0) {
+          this.handleLine(socket, line);
+        }
+        newlineIndex = this.inputBuffer.indexOf("\n");
+      }
+    });
+    socket.on("close", () => {
+      if (this.socket === socket) {
+        this.socket = undefined;
+      }
+      this.inputBuffer = "";
+      this.rejectPending(new Error("Codex hot-switch runtime disconnected"));
+    });
+    socket.on("error", () => {
+      // The close handler rejects all outstanding requests with a sanitized error.
+    });
+  }
+
+  private handleLine(socket: net.Socket, line: string): void {
+    const message = parseRpcMessage(line);
+    if (!message || message.id === undefined || message.id === null) {
+      return;
+    }
+
+    const id = String(message.id);
+    const pending = this.pending.get(id);
+    if (pending && !message.method) {
+      this.pending.delete(id);
+      clearTimeout(pending.timer);
+      if (message.error) {
+        pending.reject(new Error(message.error.message ?? "Codex hot-switch request failed"));
+      } else {
+        pending.resolve(message.result);
+      }
+      return;
+    }
+
+    if (message.method === "auth/refresh") {
+      const request: HotSwitchRefreshRequest = {
+        previousAccountId:
+          typeof message.params?.["previousAccountId"] === "string" ? message.params["previousAccountId"] : undefined,
+        localAccountId:
+          typeof message.params?.["localAccountId"] === "string" ? message.params["localAccountId"] : undefined,
+        expectedEmail:
+          typeof message.params?.["expectedEmail"] === "string" ? message.params["expectedEmail"] : undefined
+      };
+      void this.refreshAuth(request).then(
+        (result) => this.writeResponse(socket, message.id!, { result }),
+        (error: unknown) =>
+          this.writeResponse(socket, message.id!, {
+            error: {
+              code: -32001,
+              message: error instanceof Error ? error.message : "Unable to refresh Codex credentials"
+            }
+          })
+      );
+      return;
+    }
+
+    if (message.method === "account/activate") {
+      const localAccountId =
+        typeof message.params?.["localAccountId"] === "string" ? message.params["localAccountId"] : undefined;
+      if (!localAccountId) {
+        this.writeResponse(socket, message.id, {
+          error: { code: -32602, message: "Missing local account identifier" }
+        });
+        return;
+      }
+      void this.activateLocalAccount(localAccountId).then(
+        () => this.writeResponse(socket, message.id!, { result: {} }),
+        (error: unknown) =>
+          this.writeResponse(socket, message.id!, {
+            error: {
+              code: -32002,
+              message: error instanceof Error ? error.message : "Unable to activate the managed account"
+            }
+          })
+      );
+    }
+  }
+
+  private writeResponse(
+    socket: net.Socket,
+    id: string | number,
+    payload: { result?: unknown; error?: { code: number; message: string } }
+  ): void {
+    if (!socket.destroyed) {
+      socket.write(`${JSON.stringify({ id, ...payload })}\n`);
+    }
+  }
+
+  private rejectPending(error: Error): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+}
+
+export function getHotSwitchSocketPath(extensionHostPid: number): string {
+  if (process.platform === "win32") {
+    return `\\\\.\\pipe\\codex-accounts-manager-${extensionHostPid}`;
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : "user";
+  return path.join(os.tmpdir(), `codex-accounts-manager-${uid}`, `${extensionHostPid}.sock`);
+}
+
+function parseRpcMessage(line: string): RpcMessage | undefined {
+  try {
+    const value: unknown = JSON.parse(line);
+    return value && typeof value === "object" ? (value as RpcMessage) : undefined;
+  } catch {
+    return undefined;
+  }
+}

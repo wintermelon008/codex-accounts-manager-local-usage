@@ -1,8 +1,11 @@
 import * as vscode from "vscode";
+import type { RuntimeAccountSwitchOutcome } from "../../codex";
 import { createError } from "../../core";
 import { CodexAccountRecord } from "../../core/types";
 import {
   getCodexAccountsConfiguration,
+  isSeamlessSwitchEnabled,
+  isSeamlessSwitchQuotaBandsEnabled,
   normalizeAutoSwitchThreshold,
   normalizeQuotaWarningThreshold
 } from "../../infrastructure/config/extensionSettings";
@@ -14,12 +17,20 @@ import {
   isAutoSwitchLocked,
   recordAutoSwitchReason
 } from "../../presentation/workbench/autoSwitchState";
+import {
+  acknowledgeSeamlessQuotaBand,
+  getSeamlessSwitchRuntimeSnapshot,
+  observeSeamlessQuotaBand,
+  recordSeamlessSelection
+} from "../../presentation/workbench/seamlessSwitchState";
 import { clearTokenAutomationError } from "../../presentation/workbench/tokenAutomationState";
 import { getCommandCopy, getLanguage, getQuotaWarningCopy } from "../../utils";
 import { getDashboardCopy } from "../dashboard/copy";
 import { autoReloadWindowForAccount, handleCodexAppRestartPreference } from "./switchEffects";
+import { getFiveHourQuotaBand, selectBalanceCandidate } from "./balanceScheduler";
 
 const AUTO_SWITCH_ENABLED = "autoSwitchEnabled";
+const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
 const HOURLY_QUOTA_CONTROL_ENABLED = "hourlyQuotaControlEnabled";
 const AUTO_SWITCH_RELOAD_WINDOW_ENABLED = "autoSwitchReloadWindowEnabled";
 const AUTO_SWITCH_HOURLY_THRESHOLD = "autoSwitchHourlyThreshold";
@@ -32,6 +43,7 @@ const quotaWarningCounts = new Map<string, number>();
 export type RefreshView = {
   refresh(): void;
   markObservedAuthIdentity?: (accountId?: string) => void;
+  switchRuntimeAccount?: (accountId: string) => Promise<RuntimeAccountSwitchOutcome>;
 };
 
 type RefreshSingleQuotaOptions = {
@@ -92,7 +104,7 @@ export async function refreshSingleQuota(
   if (shouldRefreshView) {
     view.refresh();
   }
-  const switched = warnQuota && account.isActive ? await maybeAutoSwitchForActiveQuota(repo, view) : false;
+  const switched = warnQuota && account.isActive ? await maybeSwitchForActiveQuota(repo, view) : false;
   if (warnQuota) {
     if (switched) {
       return;
@@ -162,9 +174,9 @@ async function syncResetCreditsSnapshot(
       updatedAccount.quotaSummary.resetCreditsAvailable = snapshot.availableCount;
       updatedAccount.quotaSummary.resetCreditsNextExpiresAt = snapshot.nextExpiresAt;
     }
-    await repo.updateResetCreditsSnapshot(accountId, snapshot.availableCount, snapshot.nextExpiresAt).catch(
-      () => undefined
-    );
+    await repo
+      .updateResetCreditsSnapshot(accountId, snapshot.availableCount, snapshot.nextExpiresAt)
+      .catch(() => undefined);
     view?.refresh();
   } catch {
     return;
@@ -198,6 +210,79 @@ export async function maybeWarnForActiveQuota(repo: AccountsRepository): Promise
     return;
   }
   await maybeWarnForAccount(repo, active.id);
+}
+
+export async function maybeSwitchForActiveQuota(repo: AccountsRepository, view: RefreshView): Promise<boolean> {
+  const config = getCodexAccountsConfiguration();
+  if (isSeamlessSwitchEnabled(config) && isSeamlessSwitchQuotaBandsEnabled(config)) {
+    return maybeSeamlessBalanceSwitchForActiveQuota(repo, view);
+  }
+  return maybeAutoSwitchForActiveQuota(repo, view);
+}
+
+export async function maybeSeamlessBalanceSwitchForActiveQuota(
+  repo: AccountsRepository,
+  view: RefreshView
+): Promise<boolean> {
+  const config = getCodexAccountsConfiguration();
+  if (
+    !isSeamlessSwitchEnabled(config) ||
+    !isSeamlessSwitchQuotaBandsEnabled(config) ||
+    !config.get<boolean>(HOT_SWITCH_ENABLED, false)
+  ) {
+    return false;
+  }
+
+  const accounts = await repo.listAccounts();
+  const active = accounts.find((account) => account.isActive);
+  if (
+    !active?.quotaSummary ||
+    active.quotaError ||
+    active.balancePoolEnabled !== true ||
+    !hasComparableHourlyWindow(active) ||
+    accounts.filter((account) => account.balancePoolEnabled === true).length < 2
+  ) {
+    return false;
+  }
+
+  const activeBand = getFiveHourQuotaBand(active.quotaSummary.hourlyPercentage);
+  if (!observeSeamlessQuotaBand(active.id, activeBand)) {
+    return false;
+  }
+
+  const next = selectBalanceCandidate({
+    accounts,
+    activeAccountId: active.id,
+    activeBand,
+    lastSelectedAt: getSeamlessSwitchRuntimeSnapshot().lastSelectedAt ?? {}
+  });
+  if (!next) {
+    return false;
+  }
+
+  const runtimeOutcome = (await view.switchRuntimeAccount?.(next.id)) ?? { status: "unavailable" as const };
+  if (runtimeOutcome.status === "deferred") {
+    console.info(
+      `[codexAccounts] seamless quota-band switch deferred with ${runtimeOutcome.activeTurns} active turn(s): ${runtimeOutcome.reason}`
+    );
+    return false;
+  }
+  if (runtimeOutcome.status === "failed") {
+    console.warn(`[codexAccounts] seamless quota-band switch failed safely: ${runtimeOutcome.message}`);
+    return false;
+  }
+  if (runtimeOutcome.status === "unavailable") {
+    console.warn("[codexAccounts] seamless quota-band switch skipped because the no-reload runtime is unavailable");
+    return false;
+  }
+
+  acknowledgeSeamlessQuotaBand(active.id, activeBand);
+  if (next.quotaSummary && hasComparableHourlyWindow(next)) {
+    recordSeamlessSelection(next.id, getFiveHourQuotaBand(next.quotaSummary.hourlyPercentage));
+  }
+  view.markObservedAuthIdentity?.(next.id);
+  view.refresh();
+  return true;
 }
 
 export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, view: RefreshView): Promise<boolean> {
@@ -255,7 +340,12 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
     fromEmail: active.email,
     toAccountId: next.id,
     toEmail: next.email,
-    trigger: activeHourlyTriggered && activeWeeklyTriggered ? "hourly_and_weekly" : activeHourlyTriggered ? "hourly" : "weekly",
+    trigger:
+      activeHourlyTriggered && activeWeeklyTriggered
+        ? "hourly_and_weekly"
+        : activeHourlyTriggered
+          ? "hourly"
+          : "weekly",
     matchedRules,
     hourlyThreshold,
     weeklyThreshold,
@@ -380,8 +470,20 @@ function compareAutoSwitchCandidate(
   activeWeeklyTriggered: boolean
 ) {
   return (left: CodexAccountRecord, right: CodexAccountRecord): number => {
-    const leftScore = getAutoSwitchScore(left, hourlyThreshold, weeklyThreshold, activeHourlyTriggered, activeWeeklyTriggered);
-    const rightScore = getAutoSwitchScore(right, hourlyThreshold, weeklyThreshold, activeHourlyTriggered, activeWeeklyTriggered);
+    const leftScore = getAutoSwitchScore(
+      left,
+      hourlyThreshold,
+      weeklyThreshold,
+      activeHourlyTriggered,
+      activeWeeklyTriggered
+    );
+    const rightScore = getAutoSwitchScore(
+      right,
+      hourlyThreshold,
+      weeklyThreshold,
+      activeHourlyTriggered,
+      activeWeeklyTriggered
+    );
     return rightScore - leftScore;
   };
 }

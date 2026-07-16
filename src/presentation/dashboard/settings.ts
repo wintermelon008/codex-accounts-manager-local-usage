@@ -6,9 +6,12 @@ import {
   getCodexAccountsConfiguration,
   normalizeAutoRefreshMinutes,
   normalizeDashboardTheme,
+  normalizeHotSwitchGraceSeconds,
+  normalizeHotSwitchLongTurnPolicy,
   normalizeLocalUsageRange
 } from "../../infrastructure/config/extensionSettings";
 import { isDashboardLanguageOption } from "../../localization/languages";
+import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchState";
 
 type DashboardConfigurationKey = DashboardSettingKey | "codexAppPath";
 
@@ -28,6 +31,8 @@ export async function handleDashboardSettingUpdate(
       break;
     case "codexAppRestartEnabled":
     case "autoSwitchEnabled":
+    case "seamlessSwitchEnabled":
+    case "seamlessSwitchQuotaBandsEnabled":
     case "hourlyQuotaControlEnabled":
     case "autoSwitchReloadWindowEnabled":
     case "backgroundTokenRefreshEnabled":
@@ -36,12 +41,21 @@ export async function handleDashboardSettingUpdate(
     case "localUsageShowEquivalentPrice":
       if (typeof value === "boolean") {
         await updateDashboardConfiguration(config, key, value);
+        if (key === "seamlessSwitchEnabled" || key === "seamlessSwitchQuotaBandsEnabled") {
+          resetSeamlessSwitchRuntimeState();
+        }
         updated = true;
       }
       break;
     case "codexAppRestartMode":
       if (value === "auto" || value === "manual") {
         await updateDashboardConfiguration(config, key, value);
+        updated = true;
+      }
+      break;
+    case "hotSwitchLongTurnPolicy":
+      if (typeof value === "string") {
+        await updateDashboardConfiguration(config, key, normalizeHotSwitchLongTurnPolicy(value));
         updated = true;
       }
       break;
@@ -53,6 +67,12 @@ export async function handleDashboardSettingUpdate(
     case "autoSwitchLockMinutes":
       if (typeof value === "number") {
         await updateDashboardConfiguration(config, key, value);
+        updated = true;
+      }
+      break;
+    case "hotSwitchGraceSeconds":
+      if (typeof value === "number") {
+        await updateDashboardConfiguration(config, key, normalizeHotSwitchGraceSeconds(value));
         updated = true;
       }
       break;

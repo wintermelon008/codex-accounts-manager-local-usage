@@ -339,6 +339,7 @@ function App() {
               {selectedCount > 0 ? (
                 <BatchSelectionBar
                   copy={snapshot.copy}
+                  lang={snapshot.lang}
                   selectedCount={selectedCount}
                   refreshPending={batchRefreshPending}
                   resyncPending={batchResyncPending}
@@ -351,6 +352,12 @@ function App() {
                   onShare={handleShareTokens}
                   onAddTags={() => handleBatchTagMutation("add")}
                   onRemoveTags={() => handleBatchTagMutation("remove")}
+                  onSetBalancePool={() =>
+                    sendAction("setBalancePool", undefined, { accountIds: state.selectedAccountIds })
+                  }
+                  onRemoveFromBalancePool={() =>
+                    sendAction("removeFromBalancePool", undefined, { accountIds: state.selectedAccountIds })
+                  }
                 />
               ) : null}
             </div>

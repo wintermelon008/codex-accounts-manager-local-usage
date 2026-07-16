@@ -89,6 +89,22 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 - 可设置临时锁定时长，避免刚触发后被频繁切号
 - 配置低配额告警，触发后显示本地化提示
 
+### 实验性无感切号与分档平衡
+
+- 官方`自动切号`保持原有阈值、选号和 reload 行为；本地新增的 20% 分档、账号池、无 reload 执行及会话恢复全部位于独立的`无感切号（实验性）`
+- `无感切号`具有独立总开关；关闭后手动切号和外部账号变化恢复原有写入账号并按需 reload 的流程，不卸载 runtime，再次开启无需重新配置 shim
+- 无感分档不依赖官方`自动切号`或`5 小时配额控制`；启用后会优先使用自己的安全调度路径，runtime 不可用时不会回退为磁盘切号
+- 可勾选至少两个账号组成五小时额度无感切号池，并按固定 20% 档位自动调度；批量选中账号后也可显式移出池
+- 当前账号下降一档后，默认等待 60 秒让正在运行的 Codex turn 自然完成，再在同一个 app-server 中热切换账号
+- 活动持久 Goal 会先暂停；等待期后仍未结束则中断旧 turn，切号成功后自动恢复；同一 thread 的工作区、sandbox 与 approval 设置保持不变
+- 普通会话可选择延后切换、中断后手动继续，或实验性的中断后同 thread 自动 `Continue`；自动续接无法为非幂等外部操作提供 exactly-once 保证
+- 普通会话策略和等待时间始终显示；热切换已启用但 runtime 未 ready 时安全失败，不会出现只改磁盘账号、运行中 app-server 未切换的假成功
+- 屏障期间新的 turn 会排队，原 conversation/thread 保持不变；后续成功切换不需要 reload window
+- runtime 会禁用 Responses WebSocket 复用，确保已有 thread 的下一轮真正使用新账号；代价是可能增加少量 HTTP 建连开销。关闭无感总开关只恢复原切号逻辑，完整恢复官方 transport 需移除 runtime 并 reload
+- 该功能仍是进程级单账号，不支持给同时运行的不同 turn 分配不同账号
+- 首次安装 runtime 需要运行 `Codex Accounts: Install Experimental Seamless Runtime` 并 reload 一次；Remote-SSH/WSL/Dev Container 会由 manager 生成并复制当前用户的本地 User Setting，无需手工替换发布文档中的固定路径
+- 详细启用步骤、分档规则、兼容范围与回滚方式见 [docs/HOT_SWITCH.md](docs/HOT_SWITCH.md)
+
 ### 后台令牌刷新与网络调试
 
 - 支持后台自动刷新已保存账号的 token（默认开启）
@@ -157,6 +173,11 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
   - 开启后可分别设置 `5 小时` / `每周` 配额阈值
   - 刷新后如果当前激活账号触达阈值，会尝试自动切换到其他可用账号
   - 5 小时阈值仅在 `5 小时配额控制` 开启时生效；每周阈值独立生效
+- `无感切号（实验性）`
+  - 总开关关闭时恢复原本的账号切换/reload 逻辑，但保留已安装 runtime
+  - 可开启独立的 `20% 分档无感平衡`，无需开启官方自动切号或五小时配额控制
+  - 先在账号列表中勾选至少两个账号并点击“设为无感切号池”；也可批量选择后点击“移出无感切号池”
+  - 可设置安全等待时间和普通会话恢复策略；分档调度建议配合 `1 ~ 5` 分钟的配额自动刷新
 - `Codex App 启动路径`
   - 可选自定义桌面端路径
   - 留空时使用自动检测
@@ -206,6 +227,8 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 在 VS Code 命令面板中可使用以下命令：
 
 - `Codex Accounts: Add Account via OAuth`
+- `Codex Accounts: Install Experimental Seamless Runtime`
+- `Codex Accounts: Remove Experimental Seamless Runtime`
 - `Codex Accounts: Import Current auth.json`
 - `Codex Accounts: Reauthorize Account`
 - `Codex Accounts: Switch Account`

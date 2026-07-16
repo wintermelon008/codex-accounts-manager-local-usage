@@ -20,6 +20,8 @@ export const BLOCKING_GLOBAL_ACTIONS = new Set<DashboardActionName>([
   "batchRefresh",
   "batchResyncProfile",
   "batchRemove",
+  "setBalancePool",
+  "removeFromBalancePool",
   "restoreFromBackup",
   "restoreFromAuthJson",
   "importSharedJson",
@@ -41,6 +43,8 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
     case "refresh":
     case "remove":
     case "toggleStatusBar":
+    case "setBalancePool":
+    case "removeFromBalancePool":
       return 30_000;
     case "refreshAnnouncements":
     case "markAnnouncementRead":

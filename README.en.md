@@ -65,6 +65,22 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 - Skip restart if the desktop app is installed but not currently running
 - Currently supports common macOS, Windows, and Linux install/process patterns
 
+### Experimental Seamless Switching and Quota Balancing
+
+- Upstream `Auto Switch` keeps its original thresholds, candidate selection, and reload behavior. All local additions—20% bands, the account pool, no-reload execution, and conversation recovery—live under the separate `Seamless account switching (experimental)` group
+- A separate Seamless Switching master toggle restores the original persisted-account and reload workflow when off without uninstalling the runtime, so turning it back on does not require reinstalling the shim
+- Seamless quota-band scheduling does not depend on upstream `Auto Switch` or `5-hour quota control`; while enabled it uses its own fail-closed path and never falls back to a persisted-only account change
+- Select at least two accounts as a five-hour seamless-switch pool with fixed 20% bands, or explicitly remove selected accounts from that pool
+- When the active account drops a band, give running Codex turns a 60-second natural-completion grace period before hot-switching the same app-server
+- Pause active persisted Goals, interrupt an old Goal turn that outlives the grace period, and resume the Goal after switching while preserving the thread's workspace, sandbox, and approval settings
+- For ordinary turns, choose between deferring the switch, interrupting for manual continuation, or an experimental same-thread automatic `Continue`; automatic continuation cannot guarantee exactly-once non-idempotent external effects
+- Keep the ordinary-turn policy and grace controls visible; when hot switching is enabled but its runtime is not ready, fail closed instead of reporting a persisted-only account change as a successful live switch
+- Queue new turns behind the switch barrier while preserving the existing conversation/thread state
+- Keep one process-wide account active at a time; this does not assign different accounts to simultaneous turns
+- Run `Codex Accounts: Install Experimental Seamless Runtime` and reload once for initial setup; on Remote-SSH, WSL, or Dev Containers the manager generates and copies the current user's local User setting, so release instructions never rely on a hard-coded home path
+- The installed runtime disables Responses WebSocket reuse so an existing thread's next turn actually uses the newly selected account. Disabling the Seamless Switching master toggle restores the original switch/reload logic; removing the runtime and reloading also restores the official transport
+- See [docs/HOT_SWITCH.md](docs/HOT_SWITCH.md) for exact scheduling, compatibility, security, and rollback details
+
 ### Quota Visibility
 
 Each account can show:
@@ -123,6 +139,8 @@ You can change these directly from the settings button in the top-right corner o
   - When enabled, set separate thresholds for `5-hour` and `weekly` quota
   - After refresh, the extension can switch to another saved account when the active one hits a threshold
   - The 5-hour threshold only applies while `5-hour Quota Control` is enabled; the weekly threshold remains independent
+  - Optional `20% Quota Band Balancing` requires selecting at least two accounts with the dashboard's `Set Balance Pool` batch action
+  - Use a `1 ~ 5` minute automatic refresh interval so every candidate has fresh quota data
 - `Codex App Launch Path`
   - Optional custom desktop app path
   - Leave empty to use auto-detection
@@ -153,6 +171,8 @@ You can change these directly from the settings button in the top-right corner o
 Available commands in the VS Code Command Palette:
 
 - `Codex Accounts: Add Account via OAuth`
+- `Codex Accounts: Install Experimental Seamless Runtime`
+- `Codex Accounts: Remove Experimental Seamless Runtime`
 - `Codex Accounts: Import Current auth.json`
 - `Codex Accounts: Switch Account`
 - `Codex Accounts: Refresh Quota`

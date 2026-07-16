@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { refreshImportedAccountQuota } from "../../commands";
-import { getAuthJsonPath, readAuthFile } from "../../codex";
+import { RuntimeAccountSwitchOutcome, getAuthJsonPath, readAuthFile } from "../../codex";
 import { getErrorMessage } from "../../core";
 import type { AccountsRepository } from "../../storage";
 import { readCurrentAuthAccountStorageId } from "../../utils/accountIdentity";
@@ -16,6 +16,7 @@ import { promptWindowReloadForAccount } from "../../application/accounts/switchE
 type RefreshView = {
   refresh: () => void;
   markObservedAuthIdentity: (accountId?: string) => void;
+  switchRuntimeAccount?: (accountId: string) => Promise<RuntimeAccountSwitchOutcome>;
 };
 
 export class WorkbenchRefreshCoordinator {
@@ -200,6 +201,18 @@ export class WorkbenchRefreshCoordinator {
       }
 
       if (!needsWindowReloadForAccount(nextActive.id)) {
+        return;
+      }
+
+      const runtimeOutcome = (await view.switchRuntimeAccount?.(nextActive.id)) ?? { status: "unavailable" as const };
+      if (runtimeOutcome.status === "switched") {
+        return;
+      }
+      if (runtimeOutcome.status === "deferred" || runtimeOutcome.status === "failed") {
+        console.warn(
+          "[codexAccounts] external account change is waiting for a safe runtime boundary:",
+          runtimeOutcome.status === "deferred" ? runtimeOutcome.reason : runtimeOutcome.message
+        );
         return;
       }
 

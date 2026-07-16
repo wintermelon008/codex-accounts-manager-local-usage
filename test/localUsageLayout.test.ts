@@ -56,10 +56,41 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(section).toContain("formatTokenAndPrice");
     expect(section).toContain("formatThreeHourRange");
     expect(section).toContain('const visibleModels = range.byModel.filter((row) => row.model !== "unknown")');
-    expect(section).toContain('`${tokenText} (${formatCompactUsd(price.amountUsd)})`');
+    expect(section).toContain("`${tokenText} (${formatCompactUsd(price.amountUsd)})`");
     expect(section).not.toContain('unpricedTokens > 0 ? "+"');
     expect(settings).toContain("localUsageDefaultRange");
     expect(settings).not.toContain("localUsageDefaultRangeDays");
     expect(settings).toContain("localUsageShowEquivalentPrice");
+  });
+
+  it("presents seamless switching separately from the auto-switch trigger", () => {
+    const settings = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/settingsOverlay.tsx"), "utf8");
+    const autoSwitchHiddenStack = settings.indexOf(
+      '<div class={`settings-stack ${props.settings.autoSwitchEnabled ? "" : "is-hidden"}`}>'
+    );
+    const seamlessBoundary = settings.indexOf('? "无感切号（实验性）"', autoSwitchHiddenStack);
+    const policy = settings.indexOf('key: "hot-switch-defer"');
+
+    expect(autoSwitchHiddenStack).toBeGreaterThan(-1);
+    expect(seamlessBoundary).toBeGreaterThan(autoSwitchHiddenStack);
+    expect(policy).toBeGreaterThan(seamlessBoundary);
+    expect(settings).toContain("无感切号（实验性）");
+    expect(settings).toContain("Seamless account switching (experimental)");
+    expect(settings).toContain("关闭后恢复 Manager 原有的账号写入与 reload 流程");
+    expect(settings).toContain("20% 分档无感平衡");
+    expect(settings).toContain('patchAndSend("seamlessSwitchEnabled"');
+    expect(settings).toContain('patchAndSend("seamlessSwitchQuotaBandsEnabled"');
+    expect(settings.slice(autoSwitchHiddenStack, seamlessBoundary)).not.toContain("seamlessSwitchQuotaBandsEnabled");
+    expect(settings).toContain("安装或移除 runtime 请使用命令面板");
+    expect(settings).not.toContain('patchAndSend("hotSwitchEnabled"');
+  });
+
+  it("exposes a batch action for removing selected accounts from the seamless-switch pool", () => {
+    const accountViews = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/accountViews.tsx"), "utf8");
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+
+    expect(accountViews).toContain("移出无感切号池");
+    expect(accountViews).toContain("onRemoveFromBalancePool");
+    expect(main).toContain('sendAction("removeFromBalancePool"');
   });
 });

@@ -28,7 +28,11 @@ vi.mock("../src/application/accounts/switchEffects", () => ({
   autoReloadWindowForAccount: autoReloadWindowForAccountMock
 }));
 
-import { maybeAutoSwitchForActiveQuota, maybeWarnForAccount, refreshSingleQuota } from "../src/application/accounts/quota";
+import {
+  maybeAutoSwitchForActiveQuota,
+  maybeWarnForAccount,
+  refreshSingleQuota
+} from "../src/application/accounts/quota";
 import { setCurrentWindowRuntimeAccountId } from "../src/presentation/workbench/windowRuntimeAccount";
 
 type QuotaRefreshRepo = Pick<
@@ -113,14 +117,7 @@ describe("refreshSingleQuota token automation state", () => {
       forceRefresh: true
     });
 
-    expect(repo.updateQuota).toHaveBeenCalledWith(
-      account.id,
-      undefined,
-      undefined,
-      tokens,
-      "pro",
-      "1800000000"
-    );
+    expect(repo.updateQuota).toHaveBeenCalledWith(account.id, undefined, undefined, tokens, "pro", "1800000000");
   });
 
   it("can wait for the subscription refresh before completing account info sync", async () => {
@@ -430,6 +427,44 @@ describe("refreshSingleQuota token automation state", () => {
     expect(switched).toBe(true);
     expect(handleCodexAppRestartPreferenceMock).toHaveBeenCalledWith({ allowManualPrompt: false });
     expect(autoReloadWindowForAccountMock).toHaveBeenCalledWith(next.id);
+  });
+
+  it("keeps upstream auto-switch execution independent from the seamless runtime", async () => {
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: vi.fn((key: string, defaultValue?: unknown) => {
+        const values: Record<string, unknown> = {
+          autoSwitchEnabled: true,
+          hourlyQuotaControlEnabled: true,
+          autoSwitchHourlyThreshold: 20,
+          autoSwitchWeeklyThreshold: 20
+        };
+        return values[key] ?? defaultValue;
+      }),
+      update: vi.fn()
+    } as never);
+
+    const active = createAccount("active", true, 10, 80);
+    const candidate = createAccount("candidate", false, 100, 100);
+    const repo = {
+      listAccounts: vi.fn(async () => [active, candidate]),
+      switchAccount: vi.fn(async () => undefined)
+    };
+    const view = {
+      refresh: vi.fn(),
+      markObservedAuthIdentity: vi.fn(),
+      switchRuntimeAccount: vi.fn(async () => ({
+        status: "deferred" as const,
+        reason: "activeOrdinaryTurns" as const,
+        activeTurns: 1
+      }))
+    };
+
+    setCurrentWindowRuntimeAccountId(candidate.id);
+    await expect(maybeAutoSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(true);
+    expect(repo.switchAccount).toHaveBeenCalledWith(candidate.id);
+    expect(view.switchRuntimeAccount).not.toHaveBeenCalled();
+    expect(view.markObservedAuthIdentity).toHaveBeenCalledWith(candidate.id);
+    expect(view.refresh).toHaveBeenCalledOnce();
   });
 });
 
