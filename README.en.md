@@ -1,4 +1,4 @@
-# Codex Accounts Manager 
+# Codex Accounts Manager
 
 English · [简体中文](README.md)
 
@@ -22,11 +22,11 @@ Manage multiple Codex accounts inside VS Code, inspect quota usage, switch the a
 
 ## Preview
 
-| Quota Dashboard | Details Panel |
-| --- | --- |
-| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/dashboard.png" alt="Codex Tools quota dashboard" width="420" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/detail.png" alt="Codex Tools details panel" width="420" /> |
-| Settings Panel | Status Bar |
-| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/setting.png" alt="Codex Tools settings panel" width="260" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/status_bar.png" alt="Codex Tools status bar" width="220" /> |
+| Quota Dashboard                                                                                                                                   | Details Panel                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/dashboard.png" alt="Codex Tools quota dashboard" width="420" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/detail.png" alt="Codex Tools details panel" width="420" />  |
+| Settings Panel                                                                                                                                    | Status Bar                                                                                                                                    |
+| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/setting.png" alt="Codex Tools settings panel" width="260" />    | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/status_bar.png" alt="Codex Tools status bar" width="220" /> |
 
 ---
 
@@ -80,6 +80,39 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 - Run `Codex Accounts: Install Experimental Seamless Runtime` and reload once for initial setup; on Remote-SSH, WSL, or Dev Containers the manager generates and copies the current user's local User setting, so release instructions never rely on a hard-coded home path
 - The installed runtime disables Responses WebSocket reuse so an existing thread's next turn actually uses the newly selected account. Disabling the Seamless Switching master toggle restores the original switch/reload logic; removing the runtime and reloading also restores the official transport
 - See [docs/HOT_SWITCH.md](docs/HOT_SWITCH.md) for exact scheduling, compatibility, security, and rollback details
+
+#### Enable and configure
+
+1. Import at least two Codex accounts that you are authorized to use, then run **Refresh All Quotas** once.
+2. Run `Codex Accounts: Install Experimental Seamless Runtime` from the Command Palette. Reload once when prompted after the initial installation; later successful switches do not require reloads.
+3. On Remote-SSH, WSL, or Dev Containers, paste the generated `chatgpt.cliExecutable` entry into the opened local User Settings JSON. Do not copy an absolute path from another machine and do not put it in Remote Settings.
+4. Select at least two accounts in the dashboard and choose **Set as Seamless-Switch Pool**. Only pool members participate in five-hour quota-band scheduling.
+5. In dashboard settings, enable **Seamless account switching (experimental)** and **20% quota-band seamless balancing**, then set automatic quota refresh to `1–5` minutes.
+6. Choose a grace period and ordinary-turn policy. Start with `defer`; use `interruptAndContinue` only for unattended continuation and only when repeated non-idempotent tool effects are acceptable.
+
+Example user-facing configuration:
+
+```json
+{
+  "codexAccounts.seamlessSwitchEnabled": true,
+  "codexAccounts.seamlessSwitchQuotaBandsEnabled": true,
+  "codexAccounts.autoRefreshMinutes": 5,
+  "codexAccounts.hotSwitchGraceSeconds": 60,
+  "codexAccounts.hotSwitchLongTurnPolicy": "defer"
+}
+```
+
+The install/remove commands manage `codexAccounts.hotSwitchEnabled`, the runtime shim, and `chatgpt.cliExecutable`. Do not install the runtime by changing only the technical flag, and never commit a machine-generated CLI path. Seamless quota-band scheduling does not require upstream **Auto Switch** or **5-hour Quota Control**.
+
+#### What to expect
+
+- An idle manual switch updates authentication in the same Codex app-server. Existing conversations and threads remain intact, with no reload prompt.
+- A running turn first receives the configured natural-completion grace period. `defer` safely postpones an ordinary-turn switch; `interruptAndContinue` interrupts the old turn and starts one recovery-marked `Continue` in the same thread after switching.
+- An active Goal is paused first. If its turn outlives the grace period, the runtime can interrupt it and then restore the same Goal, workspace, sandbox, and approval state after switching.
+- When automatic refresh observes the active account crossing down a 20% five-hour quota band, the scheduler selects a fresh, eligible pool account with an equal or better band and switches without reloading.
+- The runtime forces the next turn to use the new HTTP credentials instead of reusing an old authenticated WebSocket. Identity, runtime, or rollback failures fail closed and keep or restore the previous account rather than reporting a persisted-only change as success.
+- The dashboard and status bar show the new active account. Authentication is still process-wide; accounts are not bound independently per conversation.
+- Turning off **Seamless account switching (experimental)** restores the original persisted-account/reload workflow while keeping the runtime installed. Run `Codex Accounts: Remove Experimental Seamless Runtime` and reload once to restore the official transport as well.
 
 ### Quota Visibility
 
