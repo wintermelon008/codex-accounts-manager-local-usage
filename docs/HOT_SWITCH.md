@@ -107,7 +107,9 @@ shim 以真实 `turn.id` 跟踪 app-server 中的活动 turn：
 
 普通会话的自动 Continue 不是恢复同一个 turn，而是在同一 thread 中新建一轮。恢复上下文会要求先检查 thread 历史、当前工作区与已完成工具结果，只继续未完成部分；这能降低重复执行概率，但无法为任意 MCP、网络请求、消息发送或其他非幂等外部副作用提供 exactly-once 保证。因此它是显式 opt-in 的实验策略，不通过创建“临时 Goal”实现，也不会覆盖或留下持久 Goal。
 
-每个 VS Code extension host 都有独立屏障。跨窗口切换依靠现有 `auth.json` watcher 传播目标账号，而不是分布式事务；窗口会在各自正在运行的 turn 完成后收敛，因此切换期间允许旧 turn 按原账号正常结束。
+每个 VS Code extension host 都有独立屏障。跨窗口切换依靠现有 `auth.json` watcher 传播目标账号，而不是分布式事务；窗口会在各自正在运行的 turn 完成后收敛，因此切换期间允许旧 turn 按原账号正常结束。watcher 收到 deferred 结果后会继续定时尝试，直到该窗口的 runtime 已是目标账号；失败结果不会无限重试。
+
+同一 app-server 中的多个会话可能让 `turn/completed` 早于对应的 `turn/start` RPC 响应到达 shim。runtime 会保留有界的终态 turn ID 集合，避免迟到响应或通知把已完成 turn 重新计为活动；若 interrupt 明确返回“该 turn 已不活动”，则将其视为 app-server 的终态确认并继续屏障，而不会吞掉其他中断错误。
 
 控制桥的请求上限为“配置等待期 + 2 分钟事务缓冲”，不再固定等待 30 分钟。管理端主动取消或连接关闭会恢复此前暂停的 Goal 后放行队列；已经开始执行的登录事务不会被中途打断。如果目标登录和旧账号回滚都失败，runtime 身份属于不确定状态，必须 reload 以重新建立可信状态。
 
@@ -136,7 +138,7 @@ shim 以真实 `turn.id` 跟踪 app-server 中的活动 turn：
 
 ```bash
 node --check runtime/codex-app-server-shim.cjs
-npx vitest run test/hotSwitchBridge.test.ts test/hotSwitchRuntime.test.ts test/quotaBandBalancing.test.ts
+npx vitest run test/hotSwitchBridge.test.ts test/hotSwitchRuntime.test.ts test/refreshCoordinator.test.ts test/quotaBandBalancing.test.ts
 CODEX_APP_SERVER_BIN=/path/to/codex npm run verify:seamless-auth
 npm run verify
 npm run package

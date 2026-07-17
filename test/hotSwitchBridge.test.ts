@@ -523,6 +523,89 @@ describe("CodexHotSwitchBridge", () => {
     await messages.next((message) => message.id === "defer-complete");
   }, 15_000);
 
+  it("does not resurrect a completed turn when the turn/start response arrives last", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "late-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "late-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "reorder-next", method: "test/reorderNextTurnStartResponse", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "reorder-next");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "late-turn", method: "turn/start", params: { threadId: "late-thread", input: [] } })}\n`
+    );
+    await messages.next((message) => message.id === "late-turn");
+
+    await expect(bridge.getStatus()).resolves.toMatchObject({ activeTurns: 0 });
+  }, 15_000);
+
+  it("reconciles an already inactive turn and continues the account switch", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "inactive-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "inactive-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "inactive-turn", method: "turn/start", params: { threadId: "inactive-thread", input: [] } })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "inactive-thread"
+    );
+    shim.stdin.write(`${JSON.stringify({ id: "forget-active", method: "test/forget-active", params: {} })}\n`);
+    await messages.next((message) => message.id === "forget-active");
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 25,
+        longTurnPolicy: "interruptAndContinue"
+      })
+    ).resolves.toMatchObject({
+      status: "switched",
+      accountId: "account-b",
+      activeTurns: 0,
+      interruptedTurns: 0,
+      continuedThreads: 0
+    });
+  }, 15_000);
+
   it("interrupts and continues an ordinary thread on the new account when explicitly enabled", async () => {
     const root = path.resolve(__dirname, "..");
     shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {

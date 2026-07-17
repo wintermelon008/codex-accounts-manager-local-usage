@@ -100,6 +100,7 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 - 普通会话可选择延后切换、中断后手动继续，或实验性的中断后同 thread 自动 `Continue`；自动续接无法为非幂等外部操作提供 exactly-once 保证
 - 普通会话策略和等待时间始终显示；热切换已启用但 runtime 未 ready 时安全失败，不会出现只改磁盘账号、运行中 app-server 未切换的假成功
 - 屏障期间新的 turn 会排队，原 conversation/thread 保持不变；后续成功切换不需要 reload window
+- 多个会话共享同一 app-server 时，runtime 会容忍 `turn/completed` 与 `turn/start` 响应乱序，并对已经结束的 turn 做安全对账；其他窗口的切换若被 defer，会在安全边界后自动重试收敛
 - runtime 会禁用 Responses WebSocket 复用，确保已有 thread 的下一轮真正使用新账号；代价是可能增加少量 HTTP 建连开销。关闭无感总开关只恢复原切号逻辑，完整恢复官方 transport 需移除 runtime 并 reload
 - 该功能仍是进程级单账号，不支持给同时运行的不同 turn 分配不同账号
 - 首次安装 runtime 需要运行 `Codex Accounts: Install Experimental Seamless Runtime` 并 reload 一次；Remote-SSH/WSL/Dev Container 会由 manager 生成并复制当前用户的本地 User Setting，无需手工替换发布文档中的固定路径

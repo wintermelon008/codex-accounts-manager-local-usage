@@ -13,6 +13,7 @@ const INTERNAL_REQUEST_TIMEOUT_MS = 30_000;
 const REFRESH_REQUEST_TIMEOUT_MS = 30_000;
 const RECOVERY_CONTEXT_KEY = "codex-account-manager/recovery";
 const CONFIG_PATH = path.join(__dirname, "codex-app-server-shim.json");
+const MAX_TERMINAL_TURN_IDS = 2_048;
 const RUNTIME_PROTOCOL_VERSION = 2;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
 const SEAMLESS_HTTP_PROVIDER_CONFIG =
@@ -56,6 +57,7 @@ const pendingInternalRequests = new Map();
 const pendingControlRequests = new Map();
 const submittedTurnStarts = new Map();
 const activeTurns = new Map();
+const terminalTurnIds = new Set();
 const initializeRequests = new Set();
 const controlSockets = new Set();
 
@@ -157,7 +159,9 @@ function handleCodexLine(line) {
       if (!message.error) {
         const turnId = readTurnId(message.result);
         if (turnId) {
-          activeTurns.set(turnId, submittedThreadId);
+          if (!terminalTurnIds.has(turnId)) {
+            activeTurns.set(turnId, submittedThreadId);
+          }
         } else {
           anonymousActiveTurnCount += 1;
         }
@@ -168,7 +172,7 @@ function handleCodexLine(line) {
 
   if (message.method === "turn/started") {
     const turnId = readTurnId(message.params);
-    if (turnId) {
+    if (turnId && !terminalTurnIds.has(turnId)) {
       if (!activeTurns.has(turnId) && anonymousActiveTurnCount > 0) {
         anonymousActiveTurnCount -= 1;
       }
@@ -178,6 +182,9 @@ function handleCodexLine(line) {
 
   if (message.method === "turn/completed") {
     const turnId = readTurnId(message.params);
+    if (turnId) {
+      rememberTerminalTurnId(turnId);
+    }
     const request = pendingSwitch;
     if (turnId && request && request.interruptedTurnIds.delete(turnId)) {
       const threadId = readThreadId(message.params) || activeTurns.get(turnId);
@@ -547,8 +554,13 @@ async function handleSwitchGraceExpired(request) {
       } catch (error) {
         if (activeTurns.has(turnId)) {
           request.interruptedTurnIds.delete(turnId);
-          interruptFailed = true;
-          safeLog(`failed to interrupt turn before account switch: ${safeErrorMessage(error)}`);
+          if (isAlreadyInactiveTurnError(error)) {
+            activeTurns.delete(turnId);
+            rememberTerminalTurnId(turnId);
+          } else {
+            interruptFailed = true;
+            safeLog(`failed to interrupt turn before account switch: ${safeErrorMessage(error)}`);
+          }
         }
       }
     })
@@ -938,6 +950,23 @@ function getActiveThreadIds() {
     }
   }
   return threadIds;
+}
+
+function rememberTerminalTurnId(turnId) {
+  terminalTurnIds.delete(turnId);
+  terminalTurnIds.add(turnId);
+  while (terminalTurnIds.size > MAX_TERMINAL_TURN_IDS) {
+    const oldestTurnId = terminalTurnIds.values().next().value;
+    if (oldestTurnId === undefined) {
+      break;
+    }
+    terminalTurnIds.delete(oldestTurnId);
+  }
+}
+
+function isAlreadyInactiveTurnError(error) {
+  const message = safeErrorMessage(error).trim().toLowerCase();
+  return message.includes("no active turn to interrupt") || message.includes("turn is not active");
 }
 
 function readTurnId(value) {

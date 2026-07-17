@@ -13,6 +13,8 @@ import { buildWorkbenchRefreshSignature } from "./refreshSignature";
 import { getTokenAutomationSnapshot } from "./tokenAutomationState";
 import { promptWindowReloadForAccount } from "../../application/accounts/switchEffects";
 
+const EXTERNAL_RUNTIME_RETRY_DELAY_MS = 1_000;
+
 type RefreshView = {
   refresh: () => void;
   markObservedAuthIdentity: (accountId?: string) => void;
@@ -92,14 +94,25 @@ export class WorkbenchRefreshCoordinator {
     );
 
     let syncTimer: NodeJS.Timeout | undefined;
+    let syncInFlight = false;
+    let disposed = false;
     let promptVisible = false;
 
-    const scheduleSync = (): void => {
+    const scheduleSync = (delayMs = 300): void => {
+      if (disposed) {
+        return;
+      }
       if (syncTimer) {
         clearTimeout(syncTimer);
       }
 
       syncTimer = setTimeout(() => {
+        syncTimer = undefined;
+        if (syncInFlight) {
+          scheduleSync(delayMs);
+          return;
+        }
+        syncInFlight = true;
         void this.syncActiveAccountFromExternalChange(
           view,
           () => {
@@ -109,16 +122,28 @@ export class WorkbenchRefreshCoordinator {
             promptVisible = false;
           },
           () => promptVisible
+        ).then(
+          (shouldRetry) => {
+            syncInFlight = false;
+            if (shouldRetry) {
+              scheduleSync(EXTERNAL_RUNTIME_RETRY_DELAY_MS);
+            }
+          },
+          (error) => {
+            syncInFlight = false;
+            console.warn("[codexAccounts] external account synchronization failed:", getErrorMessage(error));
+          }
         );
-      }, 300);
+      }, delayMs);
     };
 
-    watcher.onDidChange(scheduleSync, null, this.context.subscriptions);
-    watcher.onDidCreate(scheduleSync, null, this.context.subscriptions);
-    watcher.onDidDelete(scheduleSync, null, this.context.subscriptions);
+    watcher.onDidChange(() => scheduleSync(), null, this.context.subscriptions);
+    watcher.onDidCreate(() => scheduleSync(), null, this.context.subscriptions);
+    watcher.onDidDelete(() => scheduleSync(), null, this.context.subscriptions);
 
     return {
       dispose: (): void => {
+        disposed = true;
         watcher.dispose();
         if (syncTimer) {
           clearTimeout(syncTimer);
@@ -171,7 +196,7 @@ export class WorkbenchRefreshCoordinator {
     markVisible: () => void,
     markHidden: () => void,
     isVisible: () => boolean
-  ): Promise<void> {
+  ): Promise<boolean> {
     const previousObservedIdentity = this.lastObservedAuthIdentity;
     const nextObservedIdentity = await this.readObservedAuthIdentity();
     this.lastObservedAuthIdentity = nextObservedIdentity;
@@ -183,37 +208,44 @@ export class WorkbenchRefreshCoordinator {
     const nextActive = afterAccounts.find((account) => account.isActive);
 
     if (isVisible()) {
-      return;
+      return false;
     }
 
     try {
       if (!nextActive && afterAccounts.length > 0) {
         if (previousObservedIdentity === nextObservedIdentity) {
-          return;
+          return false;
         }
         markVisible();
         await this.promptImportCurrentAccount(view);
-        return;
+        return false;
       }
 
-      if (!nextActive || previousObservedIdentity === nextObservedIdentity) {
-        return;
+      if (!nextActive) {
+        return false;
       }
 
       if (!needsWindowReloadForAccount(nextActive.id)) {
-        return;
+        return false;
       }
 
       const runtimeOutcome = (await view.switchRuntimeAccount?.(nextActive.id)) ?? { status: "unavailable" as const };
       if (runtimeOutcome.status === "switched") {
-        return;
+        return false;
       }
-      if (runtimeOutcome.status === "deferred" || runtimeOutcome.status === "failed") {
+      if (runtimeOutcome.status === "deferred") {
         console.warn(
           "[codexAccounts] external account change is waiting for a safe runtime boundary:",
-          runtimeOutcome.status === "deferred" ? runtimeOutcome.reason : runtimeOutcome.message
+          runtimeOutcome.reason
         );
-        return;
+        return true;
+      }
+      if (runtimeOutcome.status === "failed") {
+        console.warn(
+          "[codexAccounts] external account change failed before reaching the target runtime:",
+          runtimeOutcome.message
+        );
+        return false;
       }
 
       const copy = getExternalAuthSyncCopy();
@@ -228,6 +260,7 @@ export class WorkbenchRefreshCoordinator {
       if (choice === copy.reloadNow) {
         await vscode.commands.executeCommand("workbench.action.reloadWindow");
       }
+      return false;
     } finally {
       markHidden();
     }
