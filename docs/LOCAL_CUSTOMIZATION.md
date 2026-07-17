@@ -22,6 +22,7 @@ The displayed values are local session observations, not ChatGPT account quota o
 - Gives active turns a configurable 60-second grace period, queues new turn starts, and never changes authentication while an old turn remains active.
 - Pauses active persisted Goals, interrupts an over-grace Goal turn, and restores the Goal after success, rollback, cancellation, or manager disconnect without changing thread-sticky workspace and permission settings.
 - Offers opt-in ordinary-turn interruption and one-shot same-thread continuation; the default safely defers the switch and retries on a later quota refresh.
+- Keeps a bounded terminal-turn ledger so late `turn/start` responses cannot resurrect completed turns, reconciles explicit already-inactive interrupt results, and retries deferred cross-window convergence after the safe boundary.
 - Adds a user-facing Seamless Switching master toggle. Turning it off restores the original persisted-account/reload workflow without uninstalling the runtime; the quota-band scheduler, ordinary-turn policy, and Goal recovery remain child settings of this mode.
 - Adds explicit Set Pool and Remove from Pool batch actions; a pool with fewer than two members is valid and simply leaves band scheduling inactive.
 - Generates the exact local User `chatgpt.cliExecutable` setting for Remote-SSH, WSL, and Dev Container hosts instead of publishing a user-specific absolute path. The enable/disable prompts copy the value and open User Settings.

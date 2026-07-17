@@ -10,6 +10,7 @@ const goals = new Map();
 const threadSettings = new Map();
 let turnSequence = 0;
 let goalSequence = 0;
+let reorderNextTurnStartResponse = false;
 
 emit({ method: "test/runtimeArgs", params: { args: process.argv.slice(2) } });
 
@@ -93,6 +94,17 @@ function handleLine(line) {
       const activeTurn = { id: `turn-${turnSequence}`, threadId: message.params.threadId };
       activeTurns.push(activeTurn);
       const turn = { id: activeTurn.id, items: [], itemsView: { type: "all" }, status: "inProgress" };
+      if (reorderNextTurnStartResponse) {
+        reorderNextTurnStartResponse = false;
+        emit({ method: "turn/started", params: { threadId: message.params.threadId, turn } });
+        activeTurns.pop();
+        emit({
+          method: "turn/completed",
+          params: { threadId: message.params.threadId, turn: { ...turn, status: "completed" } }
+        });
+        respond(message.id, { turn });
+        break;
+      }
       respond(message.id, { turn });
       emit({ method: "turn/started", params: { threadId: message.params.threadId, turn } });
       break;
@@ -133,12 +145,20 @@ function handleLine(line) {
       respond(message.id, {});
       break;
     }
+    case "test/forget-active":
+      activeTurns.shift();
+      respond(message.id, {});
+      break;
+    case "test/reorderNextTurnStartResponse":
+      reorderNextTurnStartResponse = true;
+      respond(message.id, {});
+      break;
     case "turn/interrupt": {
       const turnIndex = activeTurns.findIndex(
         (turn) => turn.id === message.params.turnId && turn.threadId === message.params.threadId
       );
       if (turnIndex < 0) {
-        emit({ id: message.id, error: { code: -32000, message: "turn is not active" } });
+        emit({ id: message.id, error: { code: -32000, message: "no active turn to interrupt" } });
         break;
       }
       const [activeTurn] = activeTurns.splice(turnIndex, 1);

@@ -16,6 +16,7 @@ vi.mock("vscode", () => ({
       update: vi.fn(),
       inspect: vi.fn()
     })),
+    createFileSystemWatcher: vi.fn(),
     onDidChangeConfiguration: vi.fn()
   },
   window: {
@@ -27,5 +28,6 @@ vi.mock("vscode", () => ({
     Global: 1,
     Workspace: 2,
     WorkspaceFolder: 3
-  }
+  },
+  RelativePattern: class RelativePattern {}
 }));
