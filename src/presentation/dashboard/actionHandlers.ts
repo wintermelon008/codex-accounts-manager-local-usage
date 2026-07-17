@@ -127,6 +127,8 @@ async function runDashboardAction(
       return handleSetBalancePool(ctx.repo, payload, ctx.schedulePublishState, ctx.resolveLanguage());
     case "removeFromBalancePool":
       return handleRemoveFromBalancePool(ctx.repo, payload, ctx.schedulePublishState, ctx.resolveLanguage());
+    case "toggleBalancePool":
+      return handleToggleBalancePool(ctx.repo, account, ctx.schedulePublishState);
     case "setAutoSwitchLock":
       return handleAutoSwitchLock(payload, account, ctx.schedulePublishState);
     case "batchRefresh":
@@ -487,6 +489,20 @@ async function handleRemoveFromBalancePool(
       ? `已将 ${accountIds.length} 个账号移出无感切号池`
       : `${accountIds.length} accounts were removed from the seamless-switch pool`
   );
+  return undefined;
+}
+
+async function handleToggleBalancePool(
+  repo: AccountsRepository,
+  account: CodexAccountRecord | undefined,
+  schedulePublishState: () => void
+): Promise<undefined> {
+  if (!account) {
+    return undefined;
+  }
+  await repo.setBalancePoolMembership(account.id, account.balancePoolEnabled !== true);
+  resetSeamlessSwitchRuntimeState();
+  schedulePublishState();
   return undefined;
 }
 

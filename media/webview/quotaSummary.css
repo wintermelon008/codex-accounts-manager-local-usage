@@ -1604,6 +1604,9 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
   height: 30px;
   min-height: 30px;
 }
+.saved-actions .saved-pool-toggle {
+  margin-right: auto;
+}
 .saved-back-body {
   flex: 1;
   display: flex;
@@ -3451,9 +3454,7 @@ html[data-theme="auto"] body.vscode-light .segment-btn.active .segment-copy {
   height: 30px;
   padding: 0;
   border-radius: 999px;
-  background:
-    linear-gradient(180deg, rgba(35, 48, 70, 0.92), rgba(15, 23, 42, 0.98)),
-    var(--bg-elevated);
+  background: linear-gradient(180deg, rgba(35, 48, 70, 0.92), rgba(15, 23, 42, 0.98)), var(--bg-elevated);
   border: 1px solid rgba(148, 163, 184, 0.32);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.04),
@@ -3470,9 +3471,7 @@ html[data-theme="auto"] body.vscode-light .segment-btn.active .segment-copy {
 }
 .settings-inline-toggle.active {
   border-color: var(--border-accent);
-  background:
-    linear-gradient(135deg, #1d4ed8, #2563eb 48%, #0ea5e9),
-    var(--accent-blue);
+  background: linear-gradient(135deg, #1d4ed8, #2563eb 48%, #0ea5e9), var(--accent-blue);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.18),
     0 0 0 1px rgba(56, 139, 253, 0.2),
@@ -3503,9 +3502,7 @@ html[data-theme="auto"] body.vscode-light .segment-btn.active .segment-copy {
 }
 html[data-theme="light"] .settings-inline-toggle,
 html[data-theme="auto"] body.vscode-light .settings-inline-toggle {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(226, 232, 240, 0.92)),
-    var(--bg-elevated);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(226, 232, 240, 0.92)), var(--bg-elevated);
   border-color: rgba(15, 23, 42, 0.18);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.72),
@@ -3522,9 +3519,7 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle:focus-visible 
 }
 html[data-theme="light"] .settings-inline-toggle.active,
 html[data-theme="auto"] body.vscode-light .settings-inline-toggle.active {
-  background:
-    linear-gradient(135deg, #0969da, #1d4ed8),
-    var(--accent-blue);
+  background: linear-gradient(135deg, #0969da, #1d4ed8), var(--accent-blue);
   border-color: rgba(9, 105, 218, 0.72);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
@@ -3678,17 +3673,13 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
   padding: 14px 16px;
   border: 1px solid rgba(116, 200, 255, 0.32);
   border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(94, 108, 172, 0.28), rgba(42, 47, 76, 0.58)),
-    rgba(19, 24, 44, 0.78);
+  background: linear-gradient(180deg, rgba(94, 108, 172, 0.28), rgba(42, 47, 76, 0.58)), rgba(19, 24, 44, 0.78);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
 }
 
 .recovery-banner.is-danger {
   border-color: rgba(255, 124, 124, 0.42);
-  background:
-    linear-gradient(180deg, rgba(127, 64, 84, 0.26), rgba(45, 24, 36, 0.6)),
-    rgba(19, 24, 44, 0.78);
+  background: linear-gradient(180deg, rgba(127, 64, 84, 0.26), rgba(45, 24, 36, 0.6)), rgba(19, 24, 44, 0.78);
 }
 
 .recovery-banner-body {

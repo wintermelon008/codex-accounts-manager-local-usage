@@ -67,10 +67,11 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 
 ### Experimental Seamless Switching and Quota Balancing
 
-- Upstream `Auto Switch` keeps its original thresholds, candidate selection, and reload behavior. All local additions—20% bands, the account pool, no-reload execution, and conversation recovery—live under the separate `Seamless account switching (experimental)` group
+- Upstream `Auto Switch` keeps its original thresholds, candidate selection, and reload behavior. All local additions—configurable quota bands, the account pool, no-reload execution, and conversation recovery—live under the separate `Seamless account switching (experimental)` group
 - A separate Seamless Switching master toggle restores the original persisted-account and reload workflow when off without uninstalling the runtime, so turning it back on does not require reinstalling the shim
 - Seamless quota-band scheduling does not depend on upstream `Auto Switch` or `5-hour quota control`; while enabled it uses its own fail-closed path and never falls back to a persisted-only account change
-- Select at least two accounts as a five-hour seamless-switch pool with fixed 20% bands, or explicitly remove selected accounts from that pool
+- Use the switch at the lower-left of each account card to control its five-hour seamless-switch pool membership, or update several accounts with the batch actions. A pool with at least two members supports `1/5 (20%)`, `1/4 (25%)`, `1/3 (33%)`, or `1/2 (50%)` bands when both the active and candidate accounts report usable 5-hour windows
+- Optionally enable the 1% emergency switch. At 1% or lower of a usable 5-hour window it bypasses the initial baseline and grace period, interrupts active turns, and switches only to a strictly higher pool account above 1%. If a turn already stopped with structured `usageLimitExceeded`, including a structured `turn/start` RPC rejection, the runtime also recovers that recent thread after switching. It is off by default because non-idempotent effects can repeat
 - When the active account drops a band, give running Codex turns a 60-second natural-completion grace period before hot-switching the same app-server
 - Pause active persisted Goals, interrupt an old Goal turn that outlives the grace period, and resume the Goal after switching while preserving the thread's workspace, sandbox, and approval settings
 - For ordinary turns, choose between deferring the switch, interrupting for manual continuation, or an experimental same-thread automatic `Continue`; automatic continuation cannot guarantee exactly-once non-idempotent external effects
@@ -86,9 +87,9 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 1. Import at least two Codex accounts that you are authorized to use, then run **Refresh All Quotas** once.
 2. Run `Codex Accounts: Install Experimental Seamless Runtime` from the Command Palette. Reload once when prompted after the initial installation; later successful switches do not require reloads.
 3. On Remote-SSH, WSL, or Dev Containers, paste the generated `chatgpt.cliExecutable` entry into the opened local User Settings JSON. Do not copy an absolute path from another machine and do not put it in Remote Settings.
-4. Select at least two accounts in the dashboard and choose **Set as Seamless-Switch Pool**. Only pool members participate in five-hour quota-band scheduling.
-5. In dashboard settings, enable **Seamless account switching (experimental)** and **20% quota-band seamless balancing**, then set automatic quota refresh to `1–5` minutes.
-6. Choose a grace period and ordinary-turn policy. Start with `defer`; use `interruptAndContinue` only for unattended continuation and only when repeated non-idempotent tool effects are acceptable.
+4. Use the switch at the lower-left of each account card to add at least two accounts to the pool, or select several accounts and use the batch action. Only enabled pool members with usable 5-hour windows participate in quota-band and 1% emergency scheduling; an account with only a weekly window is safely skipped even if the UI shows hourly `0%`.
+5. In dashboard settings, enable **Seamless account switching (experimental)** and **Seamless quota-band balancing**, choose a band size (default `1/5 (20%)`), then set automatic quota refresh to `1–5` minutes.
+6. Choose a grace period and ordinary-turn policy. Enable the separate **1% emergency forced switch** only when avoiding quota exhaustion outweighs the risk of repeated non-idempotent effects.
 
 Example user-facing configuration:
 
@@ -96,6 +97,8 @@ Example user-facing configuration:
 {
   "codexAccounts.seamlessSwitchEnabled": true,
   "codexAccounts.seamlessSwitchQuotaBandsEnabled": true,
+  "codexAccounts.seamlessSwitchQuotaBandSize": 20,
+  "codexAccounts.seamlessSwitchEmergencySwitchEnabled": false,
   "codexAccounts.autoRefreshMinutes": 5,
   "codexAccounts.hotSwitchGraceSeconds": 60,
   "codexAccounts.hotSwitchLongTurnPolicy": "defer"
@@ -109,7 +112,8 @@ The install/remove commands manage `codexAccounts.hotSwitchEnabled`, the runtime
 - An idle manual switch updates authentication in the same Codex app-server. Existing conversations and threads remain intact, with no reload prompt.
 - A running turn first receives the configured natural-completion grace period. `defer` safely postpones an ordinary-turn switch; `interruptAndContinue` interrupts the old turn and starts one recovery-marked `Continue` in the same thread after switching.
 - An active Goal is paused first. If its turn outlives the grace period, the runtime can interrupt it and then restore the same Goal, workspace, sandbox, and approval state after switching.
-- When automatic refresh observes the active account crossing down a 20% five-hour quota band, the scheduler selects a fresh, eligible pool account with an equal or better band and switches without reloading.
+- When automatic refresh observes the active account crossing down a configured five-hour quota band, the scheduler selects a fresh, eligible pool account only when its actual remaining quota is strictly higher than the active account's. If the active account is already the highest, it keeps consuming without a switch. Changing the size establishes a fresh baseline.
+- With the 1% emergency setting enabled, even a first observation at 1% can trigger. Active turns are interrupted; ordinary threads that just stopped on quota exhaustion receive one recovery-marked `Continue` after switching, while persistent Goals use pause/resume semantics and a `usageLimited` Goal is explicitly reactivated. Both terminal notifications and structured `turn/start` quota rejections are recognized. Recent-failure records expire after two minutes and a newer turn on the same thread clears them, so they do not become a persistent stopped state. An account with only weekly quota does not enter this path. If no account above 1% is eligible, the old account remains active and a later refresh retries.
 - The runtime forces the next turn to use the new HTTP credentials instead of reusing an old authenticated WebSocket. Identity, runtime, or rollback failures fail closed and keep or restore the previous account rather than reporting a persisted-only change as success.
 - The dashboard and status bar show the new active account. Authentication is still process-wide; accounts are not bound independently per conversation.
 - Turning off **Seamless account switching (experimental)** restores the original persisted-account/reload workflow while keeping the runtime installed. Run `Codex Accounts: Remove Experimental Seamless Runtime` and reload once to restore the official transport as well.
@@ -172,7 +176,8 @@ You can change these directly from the settings button in the top-right corner o
   - When enabled, set separate thresholds for `5-hour` and `weekly` quota
   - After refresh, the extension can switch to another saved account when the active one hits a threshold
   - The 5-hour threshold only applies while `5-hour Quota Control` is enabled; the weekly threshold remains independent
-  - Optional `20% Quota Band Balancing` requires selecting at least two accounts with the dashboard's `Set Balance Pool` batch action
+  - Optional quota-band balancing supports 20%, 25%, 33%, and 50% bands and requires at least two enabled account-card pool switches
+  - An optional 1% emergency switch interrupts active turns and recovers recently quota-exhausted threads on an eligible account
   - Use a `1 ~ 5` minute automatic refresh interval so every candidate has fresh quota data
 - `Codex App Launch Path`
   - Optional custom desktop app path

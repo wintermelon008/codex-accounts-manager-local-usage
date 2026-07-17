@@ -77,9 +77,16 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(settings).toContain("无感切号（实验性）");
     expect(settings).toContain("Seamless account switching (experimental)");
     expect(settings).toContain("关闭后恢复 Manager 原有的账号写入与 reload 流程");
-    expect(settings).toContain("20% 分档无感平衡");
+    expect(settings).toContain("额度分档无感平衡");
+    expect(settings).toContain("1/5 (20%)");
+    expect(settings).toContain("1/4 (25%)");
+    expect(settings).toContain("1/3 (33%)");
+    expect(settings).toContain("1/2 (50%)");
+    expect(settings).toContain("1% 紧急强制切号");
     expect(settings).toContain('patchAndSend("seamlessSwitchEnabled"');
     expect(settings).toContain('patchAndSend("seamlessSwitchQuotaBandsEnabled"');
+    expect(settings).toContain('patchAndSend("seamlessSwitchQuotaBandSize"');
+    expect(settings).toContain('patchAndSend("seamlessSwitchEmergencySwitchEnabled"');
     expect(settings.slice(autoSwitchHiddenStack, seamlessBoundary)).not.toContain("seamlessSwitchQuotaBandsEnabled");
     expect(settings).toContain("安装或移除 runtime 请使用命令面板");
     expect(settings).not.toContain('patchAndSend("hotSwitchEnabled"');
@@ -92,5 +99,19 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(accountViews).toContain("移出无感切号池");
     expect(accountViews).toContain("onRemoveFromBalancePool");
     expect(main).toContain('sendAction("removeFromBalancePool"');
+  });
+
+  it("exposes a per-account seamless-switch pool toggle at the left of the card action row", () => {
+    const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
+    const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
+    const actions = card.slice(
+      card.indexOf('<div class="saved-actions"'),
+      card.indexOf("</div>", card.indexOf('<div class="saved-actions"'))
+    );
+
+    expect(actions).toContain("saved-pool-toggle");
+    expect(actions).toContain('onAction("toggleBalancePool", account.id)');
+    expect(stylesheet).toContain(".saved-pool-toggle");
+    expect(stylesheet).toContain("margin-right: auto");
   });
 });

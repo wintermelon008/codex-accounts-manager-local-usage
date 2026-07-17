@@ -55,6 +55,8 @@ function createState(): DashboardState {
       hotSwitchEnabled: false,
       seamlessSwitchEnabled: false,
       seamlessSwitchQuotaBandsEnabled: false,
+      seamlessSwitchQuotaBandSize: 20,
+      seamlessSwitchEmergencySwitchEnabled: false,
       hotSwitchGraceSeconds: 60,
       hotSwitchLongTurnPolicy: "defer",
       hourlyQuotaControlEnabled: false,

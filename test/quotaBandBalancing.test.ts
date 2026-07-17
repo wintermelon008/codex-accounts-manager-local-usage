@@ -14,10 +14,15 @@ import {
 } from "../src/presentation/workbench/seamlessSwitchState";
 
 describe("5-hour quota band balancing", () => {
-  it("maps exact 20% boundaries into stable bands", () => {
-    expect([100, 81, 80, 61, 60, 41, 40, 21, 20, 1, 0].map(getFiveHourQuotaBand)).toEqual([
+  it("maps exact configured boundaries into stable bands", () => {
+    expect([100, 81, 80, 61, 60, 41, 40, 21, 20, 1, 0].map((value) => getFiveHourQuotaBand(value))).toEqual([
       5, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0
     ]);
+    expect([100, 76, 75, 51, 50, 26, 25, 1, 0].map((value) => getFiveHourQuotaBand(value, 25))).toEqual([
+      4, 4, 3, 3, 2, 2, 1, 1, 0
+    ]);
+    expect([100, 67, 66, 34, 33, 1, 0].map((value) => getFiveHourQuotaBand(value, 33))).toEqual([3, 3, 2, 2, 1, 1, 0]);
+    expect([100, 51, 50, 1, 0].map((value) => getFiveHourQuotaBand(value, 50))).toEqual([2, 2, 1, 1, 0]);
     expect(didQuotaBandDrop(undefined, 4)).toBe(false);
     expect(didQuotaBandDrop(4, 4)).toBe(false);
     expect(didQuotaBandDrop(4, 3)).toBe(true);
@@ -60,6 +65,25 @@ describe("5-hour quota band balancing", () => {
     ).toBeUndefined();
   });
 
+  it("uses the configured band size and can exclude emergency-depleted candidates", () => {
+    const now = 10_000_000;
+    const active = account("active", 25, now);
+    const depleted = account("depleted", 1, now);
+    const healthy = account("healthy", 26, now);
+
+    expect(
+      selectBalanceCandidate({
+        accounts: [active, depleted, healthy],
+        activeAccountId: active.id,
+        activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage, 25),
+        quotaBandSize: 25,
+        minimumHourlyPercentage: 1,
+        lastSelectedAt: {},
+        now
+      })?.id
+    ).toBe("healthy");
+  });
+
   it("rejects malformed percentages and quota timestamps outside the freshness window", () => {
     const now = 10_000_000;
     const active = account("active", 59, now);
@@ -92,6 +116,19 @@ describe("5-hour quota band balancing", () => {
 
     acknowledgeSeamlessQuotaBand("active", 4);
     expect(observeSeamlessQuotaBand("active", 4)).toBe(false);
+  });
+
+  it("establishes a fresh baseline when the configured band size changes", () => {
+    initSeamlessSwitchRuntimeState({
+      globalState: {
+        get: () => undefined,
+        update: async () => undefined
+      }
+    } as never);
+
+    expect(observeSeamlessQuotaBand("active", 5, 20)).toBe(false);
+    expect(observeSeamlessQuotaBand("active", 4, 20)).toBe(true);
+    expect(observeSeamlessQuotaBand("active", 4, 25)).toBe(false);
   });
 });
 

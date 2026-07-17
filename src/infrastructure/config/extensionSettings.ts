@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { DashboardLocalUsageRange, DashboardSettings, DashboardThemeOption } from "../../domain/dashboard/types";
+import type { SeamlessQuotaBandSize } from "../../core/types";
 import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } from "../../localization/languages";
 import { normalizeQuotaColorThresholds } from "../../utils";
 
@@ -28,6 +29,10 @@ export class ExtensionSettingsStore {
       hotSwitchEnabled: config.get<boolean>("hotSwitchEnabled", false),
       seamlessSwitchEnabled: isSeamlessSwitchEnabled(config),
       seamlessSwitchQuotaBandsEnabled: isSeamlessSwitchQuotaBandsEnabled(config),
+      seamlessSwitchQuotaBandSize: normalizeSeamlessQuotaBandSize(
+        config.get<number>("seamlessSwitchQuotaBandSize", 20)
+      ),
+      seamlessSwitchEmergencySwitchEnabled: config.get<boolean>("seamlessSwitchEmergencySwitchEnabled", false),
       hotSwitchGraceSeconds: normalizeHotSwitchGraceSeconds(config.get<number>("hotSwitchGraceSeconds", 60)),
       hotSwitchLongTurnPolicy: normalizeHotSwitchLongTurnPolicy(config.get<string>("hotSwitchLongTurnPolicy", "defer")),
       hourlyQuotaControlEnabled: config.get<boolean>("hourlyQuotaControlEnabled", false),
@@ -112,6 +117,10 @@ export function normalizeHotSwitchGraceSeconds(value: number): number {
     return 60;
   }
   return Math.max(10, Math.min(300, Math.round(value)));
+}
+
+export function normalizeSeamlessQuotaBandSize(value: unknown): SeamlessQuotaBandSize {
+  return value === 25 || value === 33 || value === 50 ? value : 20;
 }
 
 export function normalizeHotSwitchLongTurnPolicy(

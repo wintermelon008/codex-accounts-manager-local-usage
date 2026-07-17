@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.13",
+  "version": "0.1.16-local.18",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -141,7 +141,29 @@
         "codexAccounts.seamlessSwitchQuotaBandsEnabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Enable the seamless-switch scheduler for selected accounts. It balances valid 5-hour quota in fixed 20% bands and switches only through the no-reload runtime after active Codex turns reach a safe boundary. This is independent of the upstream Auto Switch feature."
+          "markdownDescription": "Enable the seamless-switch scheduler for selected accounts. It balances valid 5-hour quota using the configured band size and switches only through the no-reload runtime after active Codex turns reach a safe boundary. This is independent of the upstream Auto Switch feature."
+        },
+        "codexAccounts.seamlessSwitchQuotaBandSize": {
+          "type": "number",
+          "enum": [
+            20,
+            25,
+            33,
+            50
+          ],
+          "enumDescriptions": [
+            "Five equal bands (1/5, 20%).",
+            "Four equal bands (1/4, 25%).",
+            "Three equal bands (1/3, displayed as 33%).",
+            "Two equal bands (1/2, 50%)."
+          ],
+          "default": 20,
+          "markdownDescription": "Quota band granularity used by seamless balancing. Changing it establishes a fresh baseline and does not immediately switch accounts."
+        },
+        "codexAccounts.seamlessSwitchEmergencySwitchEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When seamless quota balancing is enabled and the active 5-hour quota reaches 1% or lower, bypass the normal band-drop baseline and grace period, interrupt active turns, switch to a pool account above 1%, and recover both interrupted turns and recently usage-limited threads. This emergency behavior can repeat non-idempotent external side effects."
         },
         "codexAccounts.balanceByQuotaBandsEnabled": {
           "type": "boolean",

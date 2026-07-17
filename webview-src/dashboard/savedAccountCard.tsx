@@ -37,6 +37,7 @@ export function SavedAccountCard(props: {
   detailsPending: boolean;
   removePending: boolean;
   togglePending: boolean;
+  poolTogglePending: boolean;
   updateTagsPending: boolean;
   consumeResetCreditPending: boolean;
   selected: boolean;
@@ -52,6 +53,7 @@ export function SavedAccountCard(props: {
       | "refresh"
       | "remove"
       | "toggleStatusBar"
+      | "toggleBalancePool"
       | "consumeResetCredit"
       | "openExternalUrl",
     accountId?: string,
@@ -63,6 +65,17 @@ export function SavedAccountCard(props: {
   const emailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const backEmailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const selectionLabel = props.selected ? copy.deselectAccount : copy.selectAccount;
+  const poolToggleLabel = account.balancePoolEnabled
+    ? props.lang === "zh"
+      ? "移出无感切号池"
+      : props.lang === "zh-hant"
+        ? "移出無感切換池"
+        : "Remove from seamless-switch pool"
+    : props.lang === "zh"
+      ? "加入无感切号池"
+      : props.lang === "zh-hant"
+        ? "加入無感切換池"
+        : "Add to seamless-switch pool";
   const showReauthorizeButton = account.healthKind === "reauthorize" && !account.dismissedHealth;
   const [flipped, setFlipped] = useState(false);
   const showResyncButton = account.healthKind !== "reauthorize";
@@ -209,6 +222,21 @@ export function SavedAccountCard(props: {
           ) : null}
           <div class="saved-card-divider"></div>
           <div class="saved-actions" onClick={stopFlip}>
+            <button
+              class={`saved-control saved-status-toggle saved-pool-toggle ${account.balancePoolEnabled ? "is-checked" : ""} ${props.poolTogglePending ? "is-pending" : ""}`}
+              type="button"
+              aria-label={poolToggleLabel}
+              aria-pressed={account.balancePoolEnabled}
+              disabled={props.busy}
+              onClick={() => onAction("toggleBalancePool", account.id)}
+            >
+              <span class="saved-status-toggle-indicator" aria-hidden="true">
+                <span></span>
+              </span>
+              <span class="saved-control-tip align-left" aria-hidden="true">
+                {poolToggleLabel}
+              </span>
+            </button>
             {account.isActive && !account.isCurrentWindowAccount ? (
               <ActionButton
                 icon={renderReloadIcon()}

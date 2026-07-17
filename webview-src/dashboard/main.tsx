@@ -380,6 +380,7 @@ function App() {
                   detailsPending={isActionPending("details", account.id)}
                   removePending={isActionPending("remove", account.id)}
                   togglePending={isActionPending("toggleStatusBar", account.id)}
+                  poolTogglePending={isActionPending("toggleBalancePool", account.id)}
                   updateTagsPending={isActionPending("updateTags", account.id)}
                   consumeResetCreditPending={isActionPending("consumeResetCredit", account.id)}
                   selected={selectedAccountIds.has(account.id)}

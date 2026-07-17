@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { refreshImportedAccountQuota } from "../../commands";
-import { RuntimeAccountSwitchOutcome, getAuthJsonPath, readAuthFile } from "../../codex";
+import { RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome, getAuthJsonPath, readAuthFile } from "../../codex";
 import { getErrorMessage } from "../../core";
 import type { AccountsRepository } from "../../storage";
 import { readCurrentAuthAccountStorageId } from "../../utils/accountIdentity";
@@ -18,7 +18,10 @@ const EXTERNAL_RUNTIME_RETRY_DELAY_MS = 1_000;
 type RefreshView = {
   refresh: () => void;
   markObservedAuthIdentity: (accountId?: string) => void;
-  switchRuntimeAccount?: (accountId: string) => Promise<RuntimeAccountSwitchOutcome>;
+  switchRuntimeAccount?: (
+    accountId: string,
+    options?: RuntimeAccountSwitchOptions
+  ) => Promise<RuntimeAccountSwitchOutcome>;
 };
 
 export class WorkbenchRefreshCoordinator {

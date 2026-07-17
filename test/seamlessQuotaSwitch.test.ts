@@ -47,6 +47,110 @@ describe("seamless 5-hour quota-band switching", () => {
     expect(view.refresh).toHaveBeenCalledOnce();
   });
 
+  it("uses the configured quota-band size", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchQuotaBandSize: 25,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 100);
+    const candidate = account("candidate", false, 100);
+    const repo = repository(active, candidate);
+    const view = { refresh: vi.fn(), switchRuntimeAccount: vi.fn(async () => switched(candidate)) };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    active.quotaSummary!.hourlyPercentage = 75;
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      true
+    );
+  });
+
+  it("keeps the current account when it still has the highest quota in the triggered band", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 100);
+    const lowerSameBandCandidate = account("candidate", false, 70);
+    const repo = repository(active, lowerSameBandCandidate);
+    const view = { refresh: vi.fn(), switchRuntimeAccount: vi.fn(async () => switched(lowerSameBandCandidate)) };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    active.quotaSummary!.hourlyPercentage = 80;
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    expect(view.switchRuntimeAccount).not.toHaveBeenCalled();
+  });
+
+  it("forces an immediate interrupt-and-continue switch at 1% without requiring a prior baseline", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchQuotaBandSize: 33,
+      seamlessSwitchEmergencySwitchEnabled: true,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 1);
+    const candidate = account("candidate", false, 67);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+    const view = { refresh: vi.fn(), switchRuntimeAccount };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      true
+    );
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
+  });
+
+  it("does not force a first-observation switch at 1% when the emergency setting is disabled", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchEmergencySwitchEnabled: false,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 1);
+    const candidate = account("candidate", false, 100);
+    const repo = repository(active, candidate);
+    const view = { refresh: vi.fn(), switchRuntimeAccount: vi.fn(async () => switched(candidate)) };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    expect(view.switchRuntimeAccount).not.toHaveBeenCalled();
+  });
+
+  it("does not force-switch to another account at or below the 1% emergency floor", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchEmergencySwitchEnabled: true,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 1);
+    const candidate = account("candidate", false, 1);
+    const repo = repository(active, candidate);
+    const view = { refresh: vi.fn(), switchRuntimeAccount: vi.fn(async () => switched(candidate)) };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    expect(view.switchRuntimeAccount).not.toHaveBeenCalled();
+  });
+
   it("fails closed instead of falling through to upstream Auto Switch when the runtime is unavailable", async () => {
     configure({
       seamlessSwitchEnabled: true,

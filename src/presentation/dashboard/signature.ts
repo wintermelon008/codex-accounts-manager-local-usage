@@ -77,6 +77,8 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.settings.hotSwitchEnabled ? "1" : "0",
     state.settings.seamlessSwitchEnabled ? "1" : "0",
     state.settings.seamlessSwitchQuotaBandsEnabled ? "1" : "0",
+    state.settings.seamlessSwitchQuotaBandSize,
+    state.settings.seamlessSwitchEmergencySwitchEnabled ? "1" : "0",
     state.settings.hotSwitchGraceSeconds,
     state.settings.hotSwitchLongTurnPolicy,
     state.settings.hourlyQuotaControlEnabled ? "1" : "0",

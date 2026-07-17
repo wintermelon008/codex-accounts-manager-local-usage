@@ -140,6 +140,40 @@ describe("handleDashboardSettingUpdate", () => {
     expect(update).toHaveBeenCalledWith("seamlessSwitchQuotaBandsEnabled", true, vscode.ConfigurationTarget.Global);
   });
 
+  it("persists supported quota-band sizes and normalizes unsupported values", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(),
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+    } as never);
+
+    await expect(handleDashboardSettingUpdate("seamlessSwitchQuotaBandSize", 33)).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("seamlessSwitchQuotaBandSize", 40)).resolves.toBe(true);
+
+    expect(update).toHaveBeenNthCalledWith(1, "seamlessSwitchQuotaBandSize", 33, vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(2, "seamlessSwitchQuotaBandSize", 20, vscode.ConfigurationTarget.Global);
+  });
+
+  it("reads and persists the 1% emergency switch setting", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((key: string, fallback: unknown) =>
+        key === "seamlessSwitchEmergencySwitchEnabled" ? true : fallback
+      ),
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+    } as never);
+
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchEmergencySwitchEnabled).toBe(true);
+    await expect(handleDashboardSettingUpdate("seamlessSwitchEmergencySwitchEnabled", false)).resolves.toBe(true);
+    expect(update).toHaveBeenCalledWith(
+      "seamlessSwitchEmergencySwitchEnabled",
+      false,
+      vscode.ConfigurationTarget.Global
+    );
+  });
+
   it("migrates the installed runtime flag to the seamless behavior switch until explicitly configured", () => {
     const inspect = vi.fn((key: string) => ({ key: `codexAccounts.${key}`, defaultValue: false }));
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({

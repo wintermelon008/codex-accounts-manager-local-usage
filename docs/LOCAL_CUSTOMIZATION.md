@@ -1,6 +1,6 @@
 # Local extension customizations
 
-This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.13`.
+This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.18`.
 
 ## Scope
 
@@ -18,13 +18,14 @@ The displayed values are local session observations, not ChatGPT account quota o
 
 - Adds a bundled local CLI shim that proxies the official Codex app-server over stdio; it is not a resident HTTP service.
 - Forces Responses HTTP streaming inside the installed runtime because Codex `0.144.2` caches an authenticated WebSocket per loaded thread. This ensures the next turn on the same thread resolves the newly selected account instead of continuing to bill the old WebSocket identity.
-- Adds an explicit multi-account seamless-switch pool and fixed 20% bands for valid five-hour remaining quota. Its configuration, scheduler state, and fail-closed execution are independent of upstream Auto Switch.
+- Adds an explicit multi-account seamless-switch pool with selectable 20%, 25%, 33%, or 50% bands for valid five-hour remaining quota. A candidate must be strictly higher than the active account, so an already-highest active account keeps consuming; accounts that only report a weekly window are excluded. Its configuration, scheduler state, and fail-closed execution are independent of upstream Auto Switch.
+- Adds an opt-in 1% emergency path that bypasses the normal baseline and grace period, excludes candidates at or below 1%, and uses immediate interrupt-and-Continue semantics while still waiting for all old turns to terminate before changing authentication. Terminal `error` notifications and structured `turn/start` RPC rejections carrying `usageLimitExceeded`, plus compatible failed-turn payloads, are retained briefly so already-stopped ordinary threads can receive one continuation; persistent Goals are paused/resumed and `usageLimited` Goals are explicitly reactivated after the switch. Newer work and the two-minute TTL suppress stale recovery. Non-sensitive runtime counters expose observed failures and successful ordinary/Goal recoveries for live diagnostics.
 - Gives active turns a configurable 60-second grace period, queues new turn starts, and never changes authentication while an old turn remains active.
 - Pauses active persisted Goals, interrupts an over-grace Goal turn, and restores the Goal after success, rollback, cancellation, or manager disconnect without changing thread-sticky workspace and permission settings.
 - Offers opt-in ordinary-turn interruption and one-shot same-thread continuation; the default safely defers the switch and retries on a later quota refresh.
 - Keeps a bounded terminal-turn ledger so late `turn/start` responses cannot resurrect completed turns, reconciles explicit already-inactive interrupt results, and retries deferred cross-window convergence after the safe boundary.
 - Adds a user-facing Seamless Switching master toggle. Turning it off restores the original persisted-account/reload workflow without uninstalling the runtime; the quota-band scheduler, ordinary-turn policy, and Goal recovery remain child settings of this mode.
-- Adds explicit Set Pool and Remove from Pool batch actions; a pool with fewer than two members is valid and simply leaves band scheduling inactive.
+- Adds a per-account pool switch at the lower-left of every saved-account card plus explicit Set Pool and Remove from Pool batch actions; a pool with fewer than two members is valid and simply leaves band scheduling inactive.
 - Generates the exact local User `chatgpt.cliExecutable` setting for Remote-SSH, WSL, and Dev Container hosts instead of publishing a user-specific absolute path. The enable/disable prompts copy the value and open User Settings.
 - Treats either a successful `initialize` response or the client's `initialized` notification as a usable app-server handshake. If hot switching is enabled but the runtime bridge is not ready, switching fails closed and does not fall back to rewriting persisted auth.
 - Keeps the existing reload behavior only when the experimental feature is disabled. A failed or deferred in-flight transaction leaves the persisted account unchanged instead of writing new auth while a turn is active.

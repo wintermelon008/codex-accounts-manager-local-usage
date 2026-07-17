@@ -868,6 +868,20 @@ export class AccountsRepository {
     return selectedAccounts.map((account) => ({ ...account, balancePoolEnabled: true }));
   }
 
+  async setBalancePoolMembership(accountId: string, enabled: boolean): Promise<CodexAccountRecord> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      throw createError.accountNotFound(accountId);
+    }
+    if (Boolean(account.balancePoolEnabled) !== enabled) {
+      account.balancePoolEnabled = enabled;
+      account.updatedAt = Date.now();
+      this.writeIndex(index);
+    }
+    return { ...account, balancePoolEnabled: enabled };
+  }
+
   async removeFromBalancePool(accountIds: string[]): Promise<CodexAccountRecord[]> {
     const index = await this.readIndex();
     const selectedIds = new Set(accountIds);

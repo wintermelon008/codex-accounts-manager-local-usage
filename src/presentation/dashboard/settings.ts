@@ -8,7 +8,8 @@ import {
   normalizeDashboardTheme,
   normalizeHotSwitchGraceSeconds,
   normalizeHotSwitchLongTurnPolicy,
-  normalizeLocalUsageRange
+  normalizeLocalUsageRange,
+  normalizeSeamlessQuotaBandSize
 } from "../../infrastructure/config/extensionSettings";
 import { isDashboardLanguageOption } from "../../localization/languages";
 import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchState";
@@ -33,6 +34,7 @@ export async function handleDashboardSettingUpdate(
     case "autoSwitchEnabled":
     case "seamlessSwitchEnabled":
     case "seamlessSwitchQuotaBandsEnabled":
+    case "seamlessSwitchEmergencySwitchEnabled":
     case "hourlyQuotaControlEnabled":
     case "autoSwitchReloadWindowEnabled":
     case "backgroundTokenRefreshEnabled":
@@ -44,6 +46,13 @@ export async function handleDashboardSettingUpdate(
         if (key === "seamlessSwitchEnabled" || key === "seamlessSwitchQuotaBandsEnabled") {
           resetSeamlessSwitchRuntimeState();
         }
+        updated = true;
+      }
+      break;
+    case "seamlessSwitchQuotaBandSize":
+      if (typeof value === "number") {
+        await updateDashboardConfiguration(config, key, normalizeSeamlessQuotaBandSize(value));
+        resetSeamlessSwitchRuntimeState();
         updated = true;
       }
       break;

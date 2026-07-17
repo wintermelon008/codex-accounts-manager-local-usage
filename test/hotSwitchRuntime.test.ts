@@ -191,6 +191,20 @@ describe("Codex hot-switch runtime setup", () => {
         previousExpectedEmail: "runtime-a@example.invalid"
       })
     );
+
+    switchAccount.mockClear();
+    await runtime.switchAccount("local-b", {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
+    expect(switchAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue",
+        recoverRecentUsageLimitedTurns: true
+      })
+    );
   });
 
   it("fails closed when hot switching is enabled but the runtime bridge is not ready", async () => {

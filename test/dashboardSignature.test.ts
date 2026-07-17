@@ -22,6 +22,8 @@ function createState(overrides?: {
       hotSwitchEnabled: true,
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: false,
+      seamlessSwitchQuotaBandSize: 20,
+      seamlessSwitchEmergencySwitchEnabled: false,
       hotSwitchGraceSeconds: 60,
       hotSwitchLongTurnPolicy: "defer",
       hourlyQuotaControlEnabled: false,
@@ -183,6 +185,22 @@ describe("buildDashboardStateSignature", () => {
     const baseSignature = buildDashboardStateSignature(base);
     expect(buildDashboardStateSignature(settingChanged)).not.toBe(baseSignature);
     expect(buildDashboardStateSignature(poolChanged)).not.toBe(baseSignature);
+  });
+
+  it("changes when the quota-band size or emergency switch changes", () => {
+    const base = createState();
+    const sizeChanged: DashboardState = {
+      ...base,
+      settings: { ...base.settings, seamlessSwitchQuotaBandSize: 33 }
+    };
+    const emergencyChanged: DashboardState = {
+      ...base,
+      settings: { ...base.settings, seamlessSwitchEmergencySwitchEnabled: true }
+    };
+
+    const baseSignature = buildDashboardStateSignature(base);
+    expect(buildDashboardStateSignature(sizeChanged)).not.toBe(baseSignature);
+    expect(buildDashboardStateSignature(emergencyChanged)).not.toBe(baseSignature);
   });
 
   it("changes when the hot-switch grace period or long-turn policy changes", () => {

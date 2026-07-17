@@ -69,7 +69,7 @@ describe("extension manifest configuration", () => {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
       contributes?: {
         configuration?: {
-          properties?: Record<string, { type?: string; default?: unknown }>;
+          properties?: Record<string, { type?: string; default?: unknown; enum?: unknown[] }>;
         };
         commands?: Array<{ command?: string; title?: string }>;
       };
@@ -95,6 +95,15 @@ describe("extension manifest configuration", () => {
       default: "defer"
     });
     expect(properties?.["codexAccounts.seamlessSwitchQuotaBandsEnabled"]).toMatchObject({
+      type: "boolean",
+      default: false
+    });
+    expect(properties?.["codexAccounts.seamlessSwitchQuotaBandSize"]).toMatchObject({
+      type: "number",
+      default: 20,
+      enum: [20, 25, 33, 50]
+    });
+    expect(properties?.["codexAccounts.seamlessSwitchEmergencySwitchEnabled"]).toMatchObject({
       type: "boolean",
       default: false
     });

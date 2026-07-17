@@ -91,10 +91,11 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 
 ### 实验性无感切号与分档平衡
 
-- 官方`自动切号`保持原有阈值、选号和 reload 行为；本地新增的 20% 分档、账号池、无 reload 执行及会话恢复全部位于独立的`无感切号（实验性）`
+- 官方`自动切号`保持原有阈值、选号和 reload 行为；本地新增的额度分档、账号池、无 reload 执行及会话恢复全部位于独立的`无感切号（实验性）`
 - `无感切号`具有独立总开关；关闭后手动切号和外部账号变化恢复原有写入账号并按需 reload 的流程，不卸载 runtime，再次开启无需重新配置 shim
 - 无感分档不依赖官方`自动切号`或`5 小时配额控制`；启用后会优先使用自己的安全调度路径，runtime 不可用时不会回退为磁盘切号
-- 可勾选至少两个账号组成五小时额度无感切号池，并按固定 20% 档位自动调度；批量选中账号后也可显式移出池
+- 每张账号卡片左下角都可独立控制该账号是否加入五小时额度无感切号池，也可用批量操作一次设置多个账号；池内至少有两个账号且当前/候选账号都报告有效五小时窗口时，支持 `1/5 (20%)`、`1/4 (25%)`、`1/3 (33%)` 或 `1/2 (50%)` 档位自动调度
+- 可选开启 `1% 紧急强制切号`：当前有效五小时额度降到 1% 或更低时绕过首次基线、普通分档与等待期，立即中断活动 turn，切到额度严格更高且高于 1% 的池中账号并自动 `Continue`；若 turn 已先因额度耗尽停止，runtime 也会识别近期的结构化 `usageLimitExceeded`（包括 `turn/start` 的结构化 RPC 拒绝）并在切号后恢复，默认关闭
 - 当前账号下降一档后，默认等待 60 秒让正在运行的 Codex turn 自然完成，再在同一个 app-server 中热切换账号
 - 活动持久 Goal 会先暂停；等待期后仍未结束则中断旧 turn，切号成功后自动恢复；同一 thread 的工作区、sandbox 与 approval 设置保持不变
 - 普通会话可选择延后切换、中断后手动继续，或实验性的中断后同 thread 自动 `Continue`；自动续接无法为非幂等外部操作提供 exactly-once 保证
@@ -111,9 +112,9 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 1. 导入至少两个你有权使用的 Codex 账号，并执行一次“刷新全部配额”。
 2. 从命令面板运行 `Codex Accounts: Install Experimental Seamless Runtime`。首次安装后按提示 reload 一次；之后的成功切号不再需要 reload。
 3. Remote-SSH、WSL 或 Dev Container 会生成当前环境对应的 `chatgpt.cliExecutable` 设置。把它粘贴到打开的本地 User Settings JSON，不要复制其他机器的绝对路径，也不要写入 Remote Settings。
-4. 在账号 Dashboard 勾选至少两个账号，点击“设为无感切号池”。只有池内账号参与五小时额度分档调度。
-5. 打开 Dashboard 设置，启用“无感切号（实验性）”和“20% 分档无感平衡”，并把配额自动刷新设为 `1 ~ 5` 分钟。
-6. 设置等待时间和普通会话策略：推荐先使用 `defer`；需要无人值守续跑时可选择 `interruptAndContinue`，但必须接受非幂等工具操作可能重复执行的风险。
+4. 在账号 Dashboard 使用每张卡片左下角的开关，将至少两个账号加入无感切号池；也可勾选多个账号后使用批量按钮。只有开关已开启且报告有效五小时窗口的账号参与五小时额度分档和 1% 紧急调度；仅有周额度的账号即使界面显示小时 `0%` 也会安全跳过。
+5. 打开 Dashboard 设置，启用“无感切号（实验性）”和“额度分档无感平衡”，选择所需分档（默认 `1/5 (20%)`），并把配额自动刷新设为 `1 ~ 5` 分钟。
+6. 设置等待时间和普通会话策略：推荐先使用 `defer`；需要在额度耗尽前强制保护时可另行启用“1% 紧急强制切号”，但必须接受自动续接可能重复非幂等工具操作的风险。
 
 对应的用户行为配置示例：
 
@@ -121,6 +122,8 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 {
   "codexAccounts.seamlessSwitchEnabled": true,
   "codexAccounts.seamlessSwitchQuotaBandsEnabled": true,
+  "codexAccounts.seamlessSwitchQuotaBandSize": 20,
+  "codexAccounts.seamlessSwitchEmergencySwitchEnabled": false,
   "codexAccounts.autoRefreshMinutes": 5,
   "codexAccounts.hotSwitchGraceSeconds": 60,
   "codexAccounts.hotSwitchLongTurnPolicy": "defer"
@@ -134,7 +137,8 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 - 空闲时手动切号会在同一个 Codex app-server 中更新认证，现有 conversation/thread 保持不变，不弹出 reload 提示。
 - 运行中的 turn 会先获得配置的自然完成时间；`defer` 会安全延后本次普通会话切换，`interruptAndContinue` 会中断旧 turn，并在切号后为同一 thread 自动发送一次带恢复上下文的 `Continue`。
 - 活动 Goal 会先暂停；超过等待时间后可中断旧 turn，切号成功后自动恢复原 Goal、workspace、sandbox 和 approval 状态。
-- 自动刷新发现当前账号的有效五小时剩余额度下降一个 20% 档位时，会从池内选择数据新鲜、档位不低且额度更合适的账号进行无 reload 切换。
+- 自动刷新发现当前账号的有效五小时剩余额度下降一个已配置档位时，只会从池内选择数据新鲜、档位不低且实际额度严格更高的账号进行无 reload 切换；当前账号仍是最高额度时保持它继续消耗。修改档位会先建立新基线，不会立即误切。
+- 启用 1% 紧急开关后，首次观测到 1% 也会触发；活动 turn 会先中断，刚刚因额度耗尽而结束的普通会话会在切号后收到一次带恢复上下文的 `Continue`，持久 Goal 则通过暂停/恢复继续；已经处于 `usageLimited` 的 Goal 会被显式重新激活。终态通知与 `turn/start` 的结构化额度拒绝都会被识别；近期失败记录只保留两分钟，并在同一 thread 开始新工作时清除，不会成为持久停止状态。仅有周额度而没有有效五小时窗口的账号不触发该路径。无合格候选、当前账号仍为最高额度或 runtime 失败时保持旧账号并在后续刷新重试。
 - runtime 会强制下一轮使用新的 HTTP 认证，避免旧 thread 继续复用旧账号 WebSocket。身份校验、runtime 或回滚失败时会 fail closed，保持或恢复旧账号，不把仅写入磁盘误报为成功。
 - Dashboard 和状态栏会显示新的活动账号；底层仍是全局单账号，不是每个 conversation 独立绑定账号。
 - 关闭“无感切号（实验性）”会恢复原有写入账号与 reload 流程但保留 runtime；若要恢复官方默认 transport，运行 `Codex Accounts: Remove Experimental Seamless Runtime` 并按提示 reload 一次。
@@ -209,8 +213,9 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
   - 5 小时阈值仅在 `5 小时配额控制` 开启时生效；每周阈值独立生效
 - `无感切号（实验性）`
   - 总开关关闭时恢复原本的账号切换/reload 逻辑，但保留已安装 runtime
-  - 可开启独立的 `20% 分档无感平衡`，无需开启官方自动切号或五小时配额控制
-  - 先在账号列表中勾选至少两个账号并点击“设为无感切号池”；也可批量选择后点击“移出无感切号池”
+  - 可开启独立的`额度分档无感平衡`，并选择 20%、25%、33% 或 50% 分档，无需开启官方自动切号或五小时配额控制
+  - 可选开启`1% 紧急强制切号`，在临近耗尽时立即中断、切号并自动 Continue；已经因额度耗尽停止的近期会话也会在成功切号后恢复
+  - 每张账号卡片左下角可独立开关池成员；也可批量选择账号后设置或移出无感切号池
   - 可设置安全等待时间和普通会话恢复策略；分档调度建议配合 `1 ~ 5` 分钟的配额自动刷新
 - `Codex App 启动路径`
   - 可选自定义桌面端路径
