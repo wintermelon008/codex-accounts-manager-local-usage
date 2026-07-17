@@ -84,6 +84,45 @@ describe("5-hour quota band balancing", () => {
     ).toBe("healthy");
   });
 
+  it("never selects a candidate with at most 3% weekly quota", () => {
+    const now = 10_000_000;
+    const active = account("active", 80, now);
+    const weeklyDepleted = account("weekly-depleted", 100, now);
+    weeklyDepleted.quotaSummary!.weeklyPercentage = 3;
+
+    expect(
+      selectBalanceCandidate({
+        accounts: [active, weeklyDepleted],
+        activeAccountId: active.id,
+        activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
+        lastSelectedAt: {},
+        now
+      })
+    ).toBeUndefined();
+  });
+
+  it("prioritizes weekly quota during a weekly emergency", () => {
+    const now = 10_000_000;
+    const active = account("active", 100, now);
+    active.quotaSummary!.weeklyPercentage = 1;
+    const highHourlyLowWeekly = account("high-hourly-low-weekly", 100, now);
+    highHourlyLowWeekly.quotaSummary!.weeklyPercentage = 4;
+    const lowerHourlyHealthyWeekly = account("lower-hourly-healthy-weekly", 90, now);
+    lowerHourlyHealthyWeekly.quotaSummary!.weeklyPercentage = 80;
+
+    expect(
+      selectBalanceCandidate({
+        accounts: [active, highHourlyLowWeekly, lowerHourlyHealthyWeekly],
+        activeAccountId: active.id,
+        activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
+        minimumHourlyPercentage: 1,
+        emergencyQuota: "weekly",
+        lastSelectedAt: {},
+        now
+      })?.id
+    ).toBe("lower-hourly-healthy-weekly");
+  });
+
   it("rejects malformed percentages and quota timestamps outside the freshness window", () => {
     const now = 10_000_000;
     const active = account("active", 59, now);

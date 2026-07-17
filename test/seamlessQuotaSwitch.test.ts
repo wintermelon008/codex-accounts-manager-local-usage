@@ -115,6 +115,56 @@ describe("seamless 5-hour quota-band switching", () => {
     });
   });
 
+  it("forces an immediate switch when weekly quota reaches 1%, even with high 5-hour quota", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchEmergencySwitchEnabled: true,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 100, 1);
+    const candidate = account("candidate", false, 90, 100);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+    const view = { refresh: vi.fn(), switchRuntimeAccount };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      true
+    );
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
+  });
+
+  it("forces an immediate switch for a weekly-only account at 1%", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchEmergencySwitchEnabled: true,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 0, 1);
+    active.quotaSummary!.hourlyWindowPresent = false;
+    const candidate = account("candidate", false, 0, 100);
+    candidate.quotaSummary!.hourlyWindowPresent = false;
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+    const view = { refresh: vi.fn(), switchRuntimeAccount };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      true
+    );
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
+  });
+
   it("does not force a first-observation switch at 1% when the emergency setting is disabled", async () => {
     configure({
       seamlessSwitchEnabled: true,

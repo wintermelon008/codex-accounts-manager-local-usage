@@ -170,7 +170,7 @@ function handleCodexLine(line) {
         const turnId = readTurnId(message.result);
         if (turnId) {
           if (!terminalTurnIds.has(turnId)) {
-            activeTurns.set(turnId, submittedThreadId);
+            rememberActiveTurn(turnId, submittedThreadId);
           }
         } else {
           anonymousActiveTurnCount += 1;
@@ -188,7 +188,7 @@ function handleCodexLine(line) {
       if (!activeTurns.has(turnId) && anonymousActiveTurnCount > 0) {
         anonymousActiveTurnCount -= 1;
       }
-      activeTurns.set(turnId, readThreadId(message.params));
+      rememberActiveTurn(turnId, readThreadId(message.params));
     }
   }
 
@@ -588,20 +588,8 @@ async function handleSwitchGraceExpired(request) {
   let interruptFailed = false;
   await Promise.all(
     activeEntries.map(async ([turnId, threadId]) => {
-      request.interruptedTurnIds.add(turnId);
-      try {
-        await sendInternalRequest("turn/interrupt", { threadId, turnId });
-      } catch (error) {
-        if (activeTurns.has(turnId)) {
-          request.interruptedTurnIds.delete(turnId);
-          if (isAlreadyInactiveTurnError(error)) {
-            activeTurns.delete(turnId);
-            rememberTerminalTurnId(turnId);
-          } else {
-            interruptFailed = true;
-            safeLog(`failed to interrupt turn before account switch: ${safeErrorMessage(error)}`);
-          }
-        }
+      if (await interruptActiveTurn(request, turnId, threadId)) {
+        interruptFailed = true;
       }
     })
   );
@@ -612,6 +600,34 @@ async function handleSwitchGraceExpired(request) {
     return;
   }
   await drainPendingSwitch();
+}
+
+async function interruptActiveTurn(request, initialTurnId, threadId) {
+  let turnId = initialTurnId;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    request.interruptedTurnIds.add(turnId);
+    try {
+      await sendInternalRequest("turn/interrupt", { threadId, turnId });
+      return false;
+    } catch (error) {
+      request.interruptedTurnIds.delete(turnId);
+      const replacementTurnId = attempt === 0 ? readReplacementActiveTurnId(error) : undefined;
+      if (replacementTurnId && replacementTurnId !== turnId) {
+        activeTurns.delete(turnId);
+        rememberActiveTurn(replacementTurnId, threadId);
+        turnId = replacementTurnId;
+        continue;
+      }
+      if (isAlreadyInactiveTurnError(error)) {
+        activeTurns.delete(turnId);
+        rememberTerminalTurnId(turnId);
+        return false;
+      }
+      safeLog(`failed to interrupt turn before account switch: ${safeErrorMessage(error)}`);
+      return true;
+    }
+  }
+  return false;
 }
 
 async function deferPendingSwitch(request, reason) {
@@ -641,6 +657,9 @@ async function startRecoveryTurns(request) {
   let continuedThreads = 0;
   for (const threadId of request.recoveryThreadIds) {
     try {
+      if (await isSubagentThread(threadId)) {
+        continue;
+      }
       const result = await sendInternalRequest("turn/start", {
         threadId,
         input: [{ type: "text", text: "Continue.", text_elements: [] }],
@@ -657,7 +676,7 @@ async function startRecoveryTurns(request) {
       });
       const turnId = readTurnId(result);
       if (turnId) {
-        activeTurns.set(turnId, threadId);
+        rememberActiveTurn(turnId, threadId);
       }
       if (request.recentUsageLimitedThreadIds.has(threadId)) {
         recoveredUsageLimitedThreads += 1;
@@ -669,6 +688,22 @@ async function startRecoveryTurns(request) {
     }
   }
   return continuedThreads;
+}
+
+async function isSubagentThread(threadId) {
+  try {
+    const result = await sendInternalRequest("thread/read", { threadId, includeTurns: false });
+    const thread = readThread(result);
+    if (!thread) {
+      return false;
+    }
+    return (
+      (typeof thread.parentThreadId === "string" && thread.parentThreadId.length > 0) ||
+      isSubagentThreadSource(thread.source)
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function resumePausedGoals(request) {
@@ -1019,6 +1054,17 @@ function getActiveThreadIds() {
   return threadIds;
 }
 
+function rememberActiveTurn(turnId, threadId) {
+  if (typeof threadId === "string" && threadId.length > 0) {
+    for (const [knownTurnId, knownThreadId] of activeTurns) {
+      if (knownTurnId !== turnId && knownThreadId === threadId) {
+        activeTurns.delete(knownTurnId);
+      }
+    }
+  }
+  activeTurns.set(turnId, threadId);
+}
+
 function rememberTerminalTurnId(turnId) {
   terminalTurnIds.delete(turnId);
   terminalTurnIds.add(turnId);
@@ -1090,12 +1136,31 @@ function isAlreadyInactiveTurnError(error) {
   return message.includes("no active turn to interrupt") || message.includes("turn is not active");
 }
 
+function readReplacementActiveTurnId(error) {
+  const message = safeErrorMessage(error).trim();
+  const match = /expected active turn id\s+[^\s,]+\s+but found\s+([^\s,]+)/i.exec(message);
+  return match?.[1];
+}
+
 function readTurnId(value) {
   if (!value || typeof value !== "object") {
     return undefined;
   }
   const turn = value.turn;
   return turn && typeof turn === "object" && typeof turn.id === "string" ? turn.id : undefined;
+}
+
+function readThread(value) {
+  return value && typeof value === "object" && value.thread && typeof value.thread === "object"
+    ? value.thread
+    : undefined;
+}
+
+function isSubagentThreadSource(value) {
+  return (
+    value === "subagent" ||
+    (value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, "subagent"))
+  );
 }
 
 function readThreadId(value) {
