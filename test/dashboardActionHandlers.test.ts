@@ -117,4 +117,42 @@ describe("executeDashboardActionMessage", () => {
     expect(schedulePublishState).toHaveBeenCalledOnce();
     expect(result.status).toBe("completed");
   });
+
+  it("toggles one saved account's seamless-switch pool membership", async () => {
+    const setBalancePoolMembership = vi.fn().mockResolvedValue(undefined);
+    const schedulePublishState = vi.fn();
+    const account = {
+      id: "account-1",
+      email: "dev@example.com",
+      isActive: false,
+      balancePoolEnabled: false,
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: {
+          getAccount: vi.fn().mockResolvedValue(account),
+          setBalancePoolMembership
+        } as unknown as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState,
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "toggleBalancePool" as never,
+        requestId: "req-toggle-pool",
+        accountId: account.id
+      }
+    );
+
+    expect(setBalancePoolMembership).toHaveBeenCalledWith(account.id, true);
+    expect(schedulePublishState).toHaveBeenCalledOnce();
+    expect(result.status).toBe("completed");
+  });
 });

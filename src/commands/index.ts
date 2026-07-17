@@ -3,7 +3,7 @@ import { AccountsCommandService } from "../application/accounts/commandService";
 export { refreshImportedAccountQuota } from "../application/accounts/quota";
 import { CodexAccountRecord } from "../core/types";
 import { AccountsRepository } from "../storage";
-import { CodexHotSwitchRuntime, RuntimeAccountSwitchOutcome } from "../codex";
+import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../codex";
 
 /**
  * 注册所有命令
@@ -14,7 +14,10 @@ export function registerCommands(
   view: {
     refresh(): void;
     markObservedAuthIdentity?: (accountId?: string) => void;
-    switchRuntimeAccount?: (accountId: string) => Promise<RuntimeAccountSwitchOutcome>;
+    switchRuntimeAccount?: (
+      accountId: string,
+      options?: RuntimeAccountSwitchOptions
+    ) => Promise<RuntimeAccountSwitchOutcome>;
   },
   hotSwitchRuntime: CodexHotSwitchRuntime
 ): void {

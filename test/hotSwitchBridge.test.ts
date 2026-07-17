@@ -711,6 +711,403 @@ describe("CodexHotSwitchBridge", () => {
     await messages.next((message) => message.id === "continue-complete");
   }, 15_000);
 
+  it("continues a recently quota-exhausted ordinary thread after an emergency switch", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "quota-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "quota-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "quota-original-turn",
+        method: "turn/start",
+        params: { threadId: "quota-thread", input: [] }
+      })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "quota-thread");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "quota-failed", method: "test/failUsageLimitNotification", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "quota-failed");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      activeTurns: 0,
+      recentUsageLimitedThreads: 1,
+      observedUsageLimitFailures: 1,
+      recoveredUsageLimitedThreads: 0
+    });
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue",
+        recoverRecentUsageLimitedTurns: true
+      })
+    ).resolves.toMatchObject({
+      status: "switched",
+      accountId: "account-b",
+      interruptedTurns: 0,
+      continuedThreads: 1,
+      activeTurns: 1
+    });
+
+    await expect(
+      messages.next(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "quota-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).resolves.toMatchObject({
+      params: {
+        runtimeAccountId: "account-b",
+        inputText: "Continue."
+      }
+    });
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      recentUsageLimitedThreads: 0,
+      observedUsageLimitFailures: 1,
+      recoveredUsageLimitedThreads: 1
+    });
+
+    shim.stdin.write(`${JSON.stringify({ id: "quota-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "quota-complete");
+  }, 15_000);
+
+  it("continues a quota-exhausted thread when turn/start returns a structured RPC error", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "quota-response-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "quota-response-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "quota-response-prepare", method: "test/failNextTurnStartWithUsageLimit", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "quota-response-prepare");
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "quota-response-turn",
+        method: "turn/start",
+        params: { threadId: "quota-response-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) => message.id === "quota-response-turn" && message.error?.data?.codexErrorInfo === "usageLimitExceeded"
+    );
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      activeTurns: 0,
+      recentUsageLimitedThreads: 1,
+      observedUsageLimitFailures: 1
+    });
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue",
+        recoverRecentUsageLimitedTurns: true
+      })
+    ).resolves.toMatchObject({ status: "switched", continuedThreads: 1, activeTurns: 1 });
+    await expect(
+      messages.next(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "quota-response-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).resolves.toMatchObject({ params: { runtimeAccountId: "account-b", inputText: "Continue." } });
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      recentUsageLimitedThreads: 0,
+      observedUsageLimitFailures: 1,
+      recoveredUsageLimitedThreads: 1
+    });
+
+    shim.stdin.write(`${JSON.stringify({ id: "quota-response-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "quota-response-complete");
+  }, 15_000);
+
+  it("does not continue a stale quota failure after newer work starts on the same thread", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "stale-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "stale-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "stale-failed-turn", method: "turn/start", params: { threadId: "stale-thread", input: [] } })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "stale-thread");
+    shim.stdin.write(`${JSON.stringify({ id: "stale-failed", method: "test/failUsageLimit", params: {} })}\n`);
+    await messages.next((message) => message.id === "stale-failed");
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "stale-newer-turn", method: "turn/start", params: { threadId: "stale-thread", input: [] } })}\n`
+    );
+    await messages.next((message) => message.id === "stale-newer-turn");
+    shim.stdin.write(`${JSON.stringify({ id: "stale-newer-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "stale-newer-complete");
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue",
+        recoverRecentUsageLimitedTurns: true
+      })
+    ).resolves.toMatchObject({ status: "switched", continuedThreads: 0, activeTurns: 0 });
+  }, 15_000);
+
+  it("pauses and resumes a recently quota-exhausted goal instead of sending an ordinary Continue", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "quota-goal-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "quota-goal-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "quota-goal-set",
+        method: "thread/goal/set",
+        params: { threadId: "quota-goal-thread", objective: "Keep working", status: "active" }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "quota-goal-set");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "quota-goal-turn", method: "turn/start", params: { threadId: "quota-goal-thread", input: [] } })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "quota-goal-thread"
+    );
+    shim.stdin.write(
+      `${JSON.stringify({ id: "quota-goal-failed", method: "test/failUsageLimitNotification", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "quota-goal-failed");
+
+    const switchResult = bridge.switchAccount({
+      accessToken: "access-token-b",
+      accountId: "account-b",
+      localAccountId: "local-b",
+      previousAccountId: "account-a",
+      previousLocalAccountId: "local-a",
+      previousExpectedEmail: "a@example.invalid",
+      expectedEmail: "b@example.invalid",
+      planType: "plus",
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
+    await messages.next(
+      (message) =>
+        message.method === "thread/goal/updated" &&
+        message.params?.threadId === "quota-goal-thread" &&
+        message.params?.goal?.status === "paused"
+    );
+    await messages.next(
+      (message) =>
+        message.method === "thread/goal/updated" &&
+        message.params?.threadId === "quota-goal-thread" &&
+        message.params?.goal?.status === "active"
+    );
+    await expect(switchResult).resolves.toMatchObject({
+      status: "switched",
+      accountId: "account-b",
+      continuedThreads: 0,
+      activeTurns: 0
+    });
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      recentUsageLimitedThreads: 0,
+      observedUsageLimitFailures: 1,
+      recoveredUsageLimitedThreads: 0,
+      resumedUsageLimitedGoals: 1
+    });
+    expect(
+      messages.all.some(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).toBe(false);
+  }, 15_000);
+
+  it("reactivates a usage-limited goal after an emergency switch without an ordinary Continue", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "usage-goal-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "usage-goal-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "usage-goal-set",
+        method: "thread/goal/set",
+        params: { threadId: "usage-goal-thread", objective: "Keep working", status: "active" }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "usage-goal-set");
+    await messages.next(
+      (message) =>
+        message.method === "thread/goal/updated" &&
+        message.params?.threadId === "usage-goal-thread" &&
+        message.params?.goal?.status === "active"
+    );
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "usage-goal-turn",
+        method: "turn/start",
+        params: { threadId: "usage-goal-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "usage-goal-thread"
+    );
+    shim.stdin.write(
+      `${JSON.stringify({ id: "usage-goal-failed", method: "test/failUsageLimitNotification", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "usage-goal-failed");
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "usage-goal-status",
+        method: "test/setGoalUsageLimited",
+        params: { threadId: "usage-goal-thread" }
+      })}\n`
+    );
+    await messages.next(
+      (message) =>
+        message.method === "thread/goal/updated" &&
+        message.params?.threadId === "usage-goal-thread" &&
+        message.params?.goal?.status === "usageLimited"
+    );
+
+    const switchResult = bridge.switchAccount({
+      accessToken: "access-token-b",
+      accountId: "account-b",
+      localAccountId: "local-b",
+      previousAccountId: "account-a",
+      previousLocalAccountId: "local-a",
+      previousExpectedEmail: "a@example.invalid",
+      expectedEmail: "b@example.invalid",
+      planType: "plus",
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
+    await messages.next(
+      (message) =>
+        message.method === "thread/goal/updated" &&
+        message.params?.threadId === "usage-goal-thread" &&
+        message.params?.goal?.status === "active"
+    );
+    await expect(switchResult).resolves.toMatchObject({ status: "switched", continuedThreads: 0 });
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      recentUsageLimitedThreads: 0,
+      observedUsageLimitFailures: 1,
+      recoveredUsageLimitedThreads: 0,
+      resumedUsageLimitedGoals: 1
+    });
+    expect(
+      messages.all.some(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).toBe(false);
+  }, 15_000);
+
   it("resumes a paused goal when the manager disconnects before the active turn completes", async () => {
     const root = path.resolve(__dirname, "..");
     const shimPath = path.join(root, "runtime", "codex-app-server-shim.cjs");

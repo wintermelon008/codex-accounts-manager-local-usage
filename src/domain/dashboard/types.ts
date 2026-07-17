@@ -3,7 +3,8 @@ import type {
   CodexAnnouncementState,
   CodexImportPreviewSummary,
   CodexImportResultSummary,
-  CodexIndexHealthSummary
+  CodexIndexHealthSummary,
+  SeamlessQuotaBandSize
 } from "../../core/types";
 
 export type DashboardSettingKey =
@@ -17,6 +18,8 @@ export type DashboardSettingKey =
   | "autoSwitchEnabled"
   | "seamlessSwitchEnabled"
   | "seamlessSwitchQuotaBandsEnabled"
+  | "seamlessSwitchQuotaBandSize"
+  | "seamlessSwitchEmergencySwitchEnabled"
   | "hotSwitchGraceSeconds"
   | "hotSwitchLongTurnPolicy"
   | "hourlyQuotaControlEnabled"
@@ -43,6 +46,8 @@ export interface DashboardSettings {
   hotSwitchEnabled: boolean;
   seamlessSwitchEnabled: boolean;
   seamlessSwitchQuotaBandsEnabled: boolean;
+  seamlessSwitchQuotaBandSize: SeamlessQuotaBandSize;
+  seamlessSwitchEmergencySwitchEnabled: boolean;
   hotSwitchGraceSeconds: number;
   hotSwitchLongTurnPolicy: "defer" | "interrupt" | "interruptAndContinue";
   hourlyQuotaControlEnabled: boolean;
@@ -514,6 +519,7 @@ export type DashboardActionName =
   | "updateTags"
   | "setBalancePool"
   | "removeFromBalancePool"
+  | "toggleBalancePool"
   | "setAutoSwitchLock"
   | "batchRefresh"
   | "batchResyncProfile"

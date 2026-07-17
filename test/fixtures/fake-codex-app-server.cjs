@@ -11,6 +11,7 @@ const threadSettings = new Map();
 let turnSequence = 0;
 let goalSequence = 0;
 let reorderNextTurnStartResponse = false;
+let failNextTurnStartWithUsageLimit = false;
 
 emit({ method: "test/runtimeArgs", params: { args: process.argv.slice(2) } });
 
@@ -75,6 +76,18 @@ function handleLine(line) {
     case "initialized":
       break;
     case "turn/start": {
+      if (failNextTurnStartWithUsageLimit) {
+        failNextTurnStartWithUsageLimit = false;
+        emit({
+          id: message.id,
+          error: {
+            code: -32000,
+            message: "Usage limit exceeded",
+            data: { codexErrorInfo: "usageLimitExceeded" }
+          }
+        });
+        break;
+      }
       const currentSettings = threadSettings.get(message.params.threadId) || {};
       for (const key of ["cwd", "runtimeWorkspaceRoots", "approvalPolicy", "permissions", "sandboxPolicy"]) {
         if (Object.prototype.hasOwnProperty.call(message.params, key)) {
@@ -136,10 +149,59 @@ function handleLine(line) {
       emit({ method: "thread/goal/cleared", params: { threadId: message.params.threadId } });
       break;
     }
+    case "test/setGoalUsageLimited": {
+      const previousGoal = goals.get(message.params.threadId);
+      if (previousGoal) {
+        const goal = { ...previousGoal, status: "usageLimited", updatedAt: previousGoal.updatedAt + 1 };
+        goals.set(message.params.threadId, goal);
+        emit({ method: "thread/goal/updated", params: { threadId: message.params.threadId, turnId: null, goal } });
+      }
+      respond(message.id, {});
+      break;
+    }
     case "test/complete": {
       const activeTurn = activeTurns.shift();
       if (activeTurn) {
         const turn = { id: activeTurn.id, items: [], itemsView: { type: "all" }, status: "completed" };
+        emit({ method: "turn/completed", params: { threadId: activeTurn.threadId, turn } });
+      }
+      respond(message.id, {});
+      break;
+    }
+    case "test/failUsageLimit": {
+      const activeTurn = activeTurns.shift();
+      if (activeTurn) {
+        const turn = {
+          id: activeTurn.id,
+          items: [],
+          itemsView: { type: "all" },
+          status: "errored",
+          error: {
+            message: "Usage limit exceeded",
+            codexErrorInfo: "usageLimitExceeded"
+          }
+        };
+        emit({ method: "turn/completed", params: { threadId: activeTurn.threadId, turn } });
+      }
+      respond(message.id, {});
+      break;
+    }
+    case "test/failUsageLimitNotification": {
+      const activeTurn = activeTurns.shift();
+      if (activeTurn) {
+        emit({
+          method: "error",
+          params: {
+            threadId: activeTurn.threadId,
+            turnId: activeTurn.id,
+            willRetry: false,
+            error: {
+              message: "Usage limit exceeded",
+              codexErrorInfo: "usageLimitExceeded"
+            }
+          }
+        });
+        const turn = { id: activeTurn.id, items: [], itemsView: { type: "all" }, status: "failed" };
         emit({ method: "turn/completed", params: { threadId: activeTurn.threadId, turn } });
       }
       respond(message.id, {});
@@ -151,6 +213,10 @@ function handleLine(line) {
       break;
     case "test/reorderNextTurnStartResponse":
       reorderNextTurnStartResponse = true;
+      respond(message.id, {});
+      break;
+    case "test/failNextTurnStartWithUsageLimit":
+      failNextTurnStartWithUsageLimit = true;
       respond(message.id, {});
       break;
     case "turn/interrupt": {

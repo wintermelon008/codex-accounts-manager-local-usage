@@ -264,10 +264,10 @@ export function SettingsOverlay(props: {
               <SettingsToggleBlock
                 title={
                   props.lang === "zh"
-                    ? "20% 分档无感平衡"
+                    ? "额度分档无感平衡"
                     : props.lang === "zh-hant"
-                      ? "20% 分檔無感平衡"
-                      : "20% seamless quota balancing"
+                      ? "額度分檔無感平衡"
+                      : "Seamless quota-band balancing"
                 }
                 sub={
                   props.lang === "zh"
@@ -279,6 +279,67 @@ export function SettingsOverlay(props: {
                 enabled={props.settings.seamlessSwitchQuotaBandsEnabled}
                 onToggle={(enabled) => patchAndSend("seamlessSwitchQuotaBandsEnabled", enabled)}
               />
+              <div class={`settings-stack ${props.settings.seamlessSwitchQuotaBandsEnabled ? "" : "is-hidden"}`}>
+                <SettingsSegmentBlock
+                  title={props.lang === "zh" ? "额度分档" : props.lang === "zh-hant" ? "額度分檔" : "Quota band size"}
+                  sub={
+                    props.lang === "zh"
+                      ? "选择五小时额度下降多少时触发一次无感平衡；修改后会重新建立基线。"
+                      : props.lang === "zh-hant"
+                        ? "選擇五小時額度下降多少時觸發一次無感平衡；修改後會重新建立基線。"
+                        : "Choose how much 5-hour quota must drop before seamless balancing runs; changing it establishes a new baseline."
+                  }
+                  options={([20, 25, 33, 50] as const).map((size) => ({
+                    key: `quota-band-${size}`,
+                    title:
+                      size === 20 ? "1/5 (20%)" : size === 25 ? "1/4 (25%)" : size === 33 ? "1/3 (33%)" : "1/2 (50%)",
+                    description:
+                      props.lang === "zh"
+                        ? size === 20
+                          ? "五档，切换更均衡"
+                          : size === 25
+                            ? "四档"
+                            : size === 33
+                              ? "三档"
+                              : "两档，切换更少"
+                        : props.lang === "zh-hant"
+                          ? size === 20
+                            ? "五檔，切換更均衡"
+                            : size === 25
+                              ? "四檔"
+                              : size === 33
+                                ? "三檔"
+                                : "兩檔，切換更少"
+                          : size === 20
+                            ? "Five bands; smoother balance"
+                            : size === 25
+                              ? "Four bands"
+                              : size === 33
+                                ? "Three bands"
+                                : "Two bands; fewer switches",
+                    active: props.settings.seamlessSwitchQuotaBandSize === size,
+                    onClick: () => patchAndSend("seamlessSwitchQuotaBandSize", size)
+                  }))}
+                />
+                <SettingsToggleBlock
+                  title={
+                    props.lang === "zh"
+                      ? "1% 紧急强制切号"
+                      : props.lang === "zh-hant"
+                        ? "1% 緊急強制切換"
+                        : "1% emergency forced switch"
+                  }
+                  sub={
+                    props.lang === "zh"
+                      ? "额度降到 1% 或更低时，不等待分档基线和宽限期，立即中断活动会话、切到额度高于 1% 的池中账号并自动 Continue。可能重复非幂等外部操作。"
+                      : props.lang === "zh-hant"
+                        ? "額度降到 1% 或更低時，不等待分檔基線和寬限期，立即中斷活動對話、切到額度高於 1% 的池中帳號並自動 Continue。可能重複非冪等外部操作。"
+                        : "At 1% or lower, bypass the band baseline and grace period, interrupt active turns, switch to a pool account above 1%, and auto-Continue. Non-idempotent external actions can repeat."
+                  }
+                  enabled={props.settings.seamlessSwitchEmergencySwitchEnabled}
+                  onToggle={(enabled) => patchAndSend("seamlessSwitchEmergencySwitchEnabled", enabled)}
+                />
+              </div>
               <SettingsSegmentBlock
                 title={
                   props.lang === "zh"

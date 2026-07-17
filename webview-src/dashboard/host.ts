@@ -43,6 +43,7 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
     case "refresh":
     case "remove":
     case "toggleStatusBar":
+    case "toggleBalancePool":
     case "setBalancePool":
     case "removeFromBalancePool":
       return 30_000;

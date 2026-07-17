@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { RuntimeAccountSwitchOutcome } from "../../codex";
+import type { RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import { createError } from "../../core";
 import { CodexAccountRecord } from "../../core/types";
 import {
@@ -7,7 +7,8 @@ import {
   isSeamlessSwitchEnabled,
   isSeamlessSwitchQuotaBandsEnabled,
   normalizeAutoSwitchThreshold,
-  normalizeQuotaWarningThreshold
+  normalizeQuotaWarningThreshold,
+  normalizeSeamlessQuotaBandSize
 } from "../../infrastructure/config/extensionSettings";
 import { QuotaRefreshResult, refreshQuota, fetchResetCredits } from "../../services";
 import { AccountsRepository } from "../../storage";
@@ -37,13 +38,19 @@ const AUTO_SWITCH_HOURLY_THRESHOLD = "autoSwitchHourlyThreshold";
 const AUTO_SWITCH_WEEKLY_THRESHOLD = "autoSwitchWeeklyThreshold";
 const QUOTA_WARNING_ENABLED = "quotaWarningEnabled";
 const QUOTA_WARNING_THRESHOLD = "quotaWarningThreshold";
+const SEAMLESS_QUOTA_BAND_SIZE = "seamlessSwitchQuotaBandSize";
+const SEAMLESS_EMERGENCY_SWITCH_ENABLED = "seamlessSwitchEmergencySwitchEnabled";
+const SEAMLESS_EMERGENCY_QUOTA_PERCENTAGE = 1;
 const MAX_WARNINGS_PER_CYCLE = 3;
 const quotaWarningCounts = new Map<string, number>();
 
 export type RefreshView = {
   refresh(): void;
   markObservedAuthIdentity?: (accountId?: string) => void;
-  switchRuntimeAccount?: (accountId: string) => Promise<RuntimeAccountSwitchOutcome>;
+  switchRuntimeAccount?: (
+    accountId: string,
+    options?: RuntimeAccountSwitchOptions
+  ) => Promise<RuntimeAccountSwitchOutcome>;
 };
 
 type RefreshSingleQuotaOptions = {
@@ -245,8 +252,13 @@ export async function maybeSeamlessBalanceSwitchForActiveQuota(
     return false;
   }
 
-  const activeBand = getFiveHourQuotaBand(active.quotaSummary.hourlyPercentage);
-  if (!observeSeamlessQuotaBand(active.id, activeBand)) {
+  const quotaBandSize = normalizeSeamlessQuotaBandSize(config.get<number>(SEAMLESS_QUOTA_BAND_SIZE, 20));
+  const emergencySwitch =
+    config.get<boolean>(SEAMLESS_EMERGENCY_SWITCH_ENABLED, false) &&
+    active.quotaSummary.hourlyPercentage <= SEAMLESS_EMERGENCY_QUOTA_PERCENTAGE;
+  const activeBand = getFiveHourQuotaBand(active.quotaSummary.hourlyPercentage, quotaBandSize);
+  const bandDropped = observeSeamlessQuotaBand(active.id, activeBand, quotaBandSize);
+  if (!emergencySwitch && !bandDropped) {
     return false;
   }
 
@@ -254,21 +266,31 @@ export async function maybeSeamlessBalanceSwitchForActiveQuota(
     accounts,
     activeAccountId: active.id,
     activeBand,
+    quotaBandSize,
+    minimumHourlyPercentage: emergencySwitch ? SEAMLESS_EMERGENCY_QUOTA_PERCENTAGE : undefined,
     lastSelectedAt: getSeamlessSwitchRuntimeSnapshot().lastSelectedAt ?? {}
   });
   if (!next) {
     return false;
   }
 
-  const runtimeOutcome = (await view.switchRuntimeAccount?.(next.id)) ?? { status: "unavailable" as const };
+  const runtimeOutcome = (await (emergencySwitch
+    ? view.switchRuntimeAccount?.(next.id, {
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue",
+        recoverRecentUsageLimitedTurns: true
+      })
+    : view.switchRuntimeAccount?.(next.id))) ?? { status: "unavailable" as const };
   if (runtimeOutcome.status === "deferred") {
     console.info(
-      `[codexAccounts] seamless quota-band switch deferred with ${runtimeOutcome.activeTurns} active turn(s): ${runtimeOutcome.reason}`
+      `[codexAccounts] seamless ${emergencySwitch ? "1% emergency " : "quota-band "}switch deferred with ${runtimeOutcome.activeTurns} active turn(s): ${runtimeOutcome.reason}`
     );
     return false;
   }
   if (runtimeOutcome.status === "failed") {
-    console.warn(`[codexAccounts] seamless quota-band switch failed safely: ${runtimeOutcome.message}`);
+    console.warn(
+      `[codexAccounts] seamless ${emergencySwitch ? "1% emergency " : "quota-band "}switch failed safely: ${runtimeOutcome.message}`
+    );
     return false;
   }
   if (runtimeOutcome.status === "unavailable") {
@@ -276,9 +298,13 @@ export async function maybeSeamlessBalanceSwitchForActiveQuota(
     return false;
   }
 
-  acknowledgeSeamlessQuotaBand(active.id, activeBand);
+  acknowledgeSeamlessQuotaBand(active.id, activeBand, quotaBandSize);
   if (next.quotaSummary && hasComparableHourlyWindow(next)) {
-    recordSeamlessSelection(next.id, getFiveHourQuotaBand(next.quotaSummary.hourlyPercentage));
+    recordSeamlessSelection(
+      next.id,
+      getFiveHourQuotaBand(next.quotaSummary.hourlyPercentage, quotaBandSize),
+      quotaBandSize
+    );
   }
   view.markObservedAuthIdentity?.(next.id);
   view.refresh();

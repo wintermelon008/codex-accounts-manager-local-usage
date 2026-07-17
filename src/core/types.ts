@@ -25,6 +25,8 @@ export interface CodexTokens {
 
 export type CodexAuthMode = "chatgpt" | "oauth";
 
+export type SeamlessQuotaBandSize = 20 | 25 | 33 | 50;
+
 /**
  * 配额摘要信息
  */

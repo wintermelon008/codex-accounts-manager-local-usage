@@ -50,6 +50,12 @@ export type RuntimeAccessTokenIdentity = {
   userId?: string;
 };
 
+export type RuntimeAccountSwitchOptions = {
+  gracePeriodMs?: number;
+  longTurnPolicy?: HotSwitchLongTurnPolicy;
+  recoverRecentUsageLimitedTurns?: boolean;
+};
+
 export class CodexHotSwitchRuntime implements vscode.Disposable {
   private bridge: CodexHotSwitchBridge | undefined;
   private disposed = false;
@@ -141,7 +147,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     return this.bridge.getIdentity();
   }
 
-  async switchAccount(accountId: string): Promise<HotSwitchAccountResult> {
+  async switchAccount(accountId: string, options: RuntimeAccountSwitchOptions = {}): Promise<HotSwitchAccountResult> {
     if (!isHotSwitchEnabled()) {
       throw new Error("Codex hot switch is not enabled");
     }
@@ -190,8 +196,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       previousExpectedEmail: previousRuntimeIdentity.email,
       expectedEmail: runtimeIdentity.email,
       planType: account.planType,
-      gracePeriodMs: getHotSwitchGraceSeconds() * 1_000,
-      longTurnPolicy: getHotSwitchLongTurnPolicy()
+      gracePeriodMs: options.gracePeriodMs ?? getHotSwitchGraceSeconds() * 1_000,
+      longTurnPolicy: options.longTurnPolicy ?? getHotSwitchLongTurnPolicy(),
+      recoverRecentUsageLimitedTurns: options.recoverRecentUsageLimitedTurns
     });
     return result;
   }

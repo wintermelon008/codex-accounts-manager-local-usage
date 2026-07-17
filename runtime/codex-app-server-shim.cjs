@@ -14,6 +14,8 @@ const REFRESH_REQUEST_TIMEOUT_MS = 30_000;
 const RECOVERY_CONTEXT_KEY = "codex-account-manager/recovery";
 const CONFIG_PATH = path.join(__dirname, "codex-app-server-shim.json");
 const MAX_TERMINAL_TURN_IDS = 2_048;
+const MAX_RECENT_USAGE_LIMITED_THREADS = 2_048;
+const RECENT_USAGE_LIMITED_THREAD_TTL_MS = 2 * 60 * 1000;
 const RUNTIME_PROTOCOL_VERSION = 2;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
 const SEAMLESS_HTTP_PROVIDER_CONFIG =
@@ -44,6 +46,9 @@ let anonymousActiveTurnCount = 0;
 let switching = false;
 let goalPreparationCount = 0;
 let goalRecoveryCount = 0;
+let observedUsageLimitFailures = 0;
+let recoveredUsageLimitedThreads = 0;
+let resumedUsageLimitedGoals = 0;
 let externalAuthActive = false;
 let activeManagedAccount;
 let pendingSwitch;
@@ -58,6 +63,7 @@ const pendingControlRequests = new Map();
 const submittedTurnStarts = new Map();
 const activeTurns = new Map();
 const terminalTurnIds = new Set();
+const recentUsageLimitedThreads = new Map();
 const initializeRequests = new Set();
 const controlSockets = new Set();
 
@@ -98,6 +104,10 @@ function handleOfficialLine(line) {
   if (!message) {
     writeChildLine(line);
     return;
+  }
+
+  if (isWorkStartMethod(message.method)) {
+    clearRecentUsageLimitedThread(readThreadId(message.params));
   }
 
   if ((isWorkStartMethod(message.method) || isGoalMutationMethod(message.method)) && isSwitchBarrierActive()) {
@@ -165,6 +175,8 @@ function handleCodexLine(line) {
         } else {
           anonymousActiveTurnCount += 1;
         }
+      } else if (isUsageLimitExceededError(message.error)) {
+        captureUsageLimitedThread(submittedThreadId);
       }
       void drainPendingSwitch();
     }
@@ -180,14 +192,25 @@ function handleCodexLine(line) {
     }
   }
 
+  if (
+    message.method === "error" &&
+    message.params?.willRetry === false &&
+    isUsageLimitExceededError(message.params.error)
+  ) {
+    captureUsageLimitedThread(readThreadId(message.params));
+  }
+
   if (message.method === "turn/completed") {
     const turnId = readTurnId(message.params);
+    const threadId = readThreadId(message.params) || (turnId ? activeTurns.get(turnId) : undefined);
     if (turnId) {
       rememberTerminalTurnId(turnId);
     }
     const request = pendingSwitch;
+    if (threadId && isUsageLimitExceededTurn(message.params)) {
+      captureUsageLimitedThread(threadId);
+    }
     if (turnId && request && request.interruptedTurnIds.delete(turnId)) {
-      const threadId = readThreadId(message.params) || activeTurns.get(turnId);
       request.interruptedTurnCount += 1;
       if (
         readTurnStatus(message.params) === "interrupted" &&
@@ -360,6 +383,9 @@ function queueRuntimeSwitch(socket, id, params) {
     pausedGoalThreadIds: new Set(),
     interruptedTurnIds: new Set(),
     interruptedTurnCount: 0,
+    recentUsageLimitedThreadIds:
+      params.recoverRecentUsageLimitedTurns === true ? getRecentUsageLimitedThreadIds() : new Set(),
+    recentUsageLimitedGoalThreadIds: new Set(),
     recoveryThreadIds: new Set(),
     recoveryPromise: undefined
   };
@@ -416,7 +442,8 @@ async function drainPendingSwitch() {
       localAccountId: request.params.localAccountId,
       expectedEmail: request.params.expectedEmail
     };
-    await resumePausedGoals(request);
+    const resumedPausedGoalThreadIds = await resumePausedGoals(request);
+    await resumeRecentUsageLimitedGoals(request, resumedPausedGoalThreadIds);
     const continuedThreads = await startRecoveryTurns(request);
 
     sendControlResult(request.socket, request.id, {
@@ -459,7 +486,8 @@ async function drainPendingSwitch() {
 
 async function prepareGoalsForSwitch(request) {
   try {
-    for (const threadId of getActiveThreadIds()) {
+    const threadIds = new Set([...getActiveThreadIds(), ...request.recentUsageLimitedThreadIds]);
+    for (const threadId of threadIds) {
       if (request.canceled) {
         return;
       }
@@ -469,6 +497,14 @@ async function prepareGoalsForSwitch(request) {
       }
       const goal = readGoal(goalResult);
       if (!goal || goal.status !== "active") {
+        if (request.recentUsageLimitedThreadIds.has(threadId)) {
+          if (goal?.status === "usageLimited") {
+            request.recentUsageLimitedGoalThreadIds.add(threadId);
+            request.recoveryThreadIds.delete(threadId);
+          } else {
+            request.recoveryThreadIds.add(threadId);
+          }
+        }
         continue;
       }
       const pauseResult = await sendInternalRequest("thread/goal/set", { threadId, status: "paused" });
@@ -477,6 +513,10 @@ async function prepareGoalsForSwitch(request) {
         throw new Error("Codex did not pause an active goal before account switch");
       }
       request.pausedGoalThreadIds.add(threadId);
+      if (request.recentUsageLimitedThreadIds.has(threadId)) {
+        request.recentUsageLimitedGoalThreadIds.add(threadId);
+        request.recoveryThreadIds.delete(threadId);
+      }
       if (request.canceled) {
         await recoverPausedGoals(request);
         return;
@@ -611,7 +651,7 @@ async function startRecoveryTurns(request) {
           [RECOVERY_CONTEXT_KEY]: {
             kind: "application",
             value:
-              "This is a one-shot continuation after the previous turn was interrupted for an account switch. First inspect the thread history, current workspace state, and completed tool results. Continue only unfinished work and do not repeat non-idempotent actions that already succeeded."
+              "This is a one-shot continuation after the previous turn was interrupted for an account switch or stopped by quota exhaustion immediately before an emergency switch. First inspect the thread history, current workspace state, and completed tool results. Continue only unfinished work and do not repeat non-idempotent actions that already succeeded."
           }
         }
       });
@@ -619,15 +659,20 @@ async function startRecoveryTurns(request) {
       if (turnId) {
         activeTurns.set(turnId, threadId);
       }
+      if (request.recentUsageLimitedThreadIds.has(threadId)) {
+        recoveredUsageLimitedThreads += 1;
+      }
+      clearRecentUsageLimitedThread(threadId);
       continuedThreads += 1;
     } catch (error) {
-      safeLog(`failed to start an interrupted thread continuation: ${safeErrorMessage(error)}`);
+      safeLog(`failed to start a switched thread continuation: ${safeErrorMessage(error)}`);
     }
   }
   return continuedThreads;
 }
 
 async function resumePausedGoals(request) {
+  const resumedThreadIds = new Set();
   for (const threadId of [...request.pausedGoalThreadIds]) {
     const resumeResult = await sendInternalRequest("thread/goal/set", { threadId, status: "active" });
     const resumedGoal = readGoal(resumeResult);
@@ -635,6 +680,22 @@ async function resumePausedGoals(request) {
       throw new Error("Codex did not resume a goal after account switch");
     }
     request.pausedGoalThreadIds.delete(threadId);
+    resumedThreadIds.add(threadId);
+  }
+  return resumedThreadIds;
+}
+
+async function resumeRecentUsageLimitedGoals(request, resumedPausedGoalThreadIds) {
+  for (const threadId of request.recentUsageLimitedGoalThreadIds) {
+    if (!resumedPausedGoalThreadIds.has(threadId)) {
+      const resumeResult = await sendInternalRequest("thread/goal/set", { threadId, status: "active" });
+      const resumedGoal = readGoal(resumeResult);
+      if (!resumedGoal || resumedGoal.status !== "active") {
+        throw new Error("Codex did not reactivate a usage-limited goal after account switch");
+      }
+    }
+    resumedUsageLimitedGoals += 1;
+    clearRecentUsageLimitedThread(threadId);
   }
 }
 
@@ -768,6 +829,10 @@ function runtimeStatus() {
     switching: switching || goalRecoveryCount > 0,
     httpTransportForced: forceHttpTransport,
     transportMode: forceHttpTransport ? "http" : "default",
+    recentUsageLimitedThreads: getRecentUsageLimitedThreadIds().size,
+    observedUsageLimitFailures,
+    recoveredUsageLimitedThreads,
+    resumedUsageLimitedGoals,
     shimPid: process.pid,
     appServerPid: child.pid || null
   };
@@ -909,6 +974,8 @@ function isValidSwitchParams(params) {
     Number.isInteger(params.gracePeriodMs) &&
     params.gracePeriodMs >= 0 &&
     params.gracePeriodMs <= 300_000 &&
+    (params.recoverRecentUsageLimitedTurns === undefined ||
+      typeof params.recoverRecentUsageLimitedTurns === "boolean") &&
     (params.longTurnPolicy === "defer" ||
       params.longTurnPolicy === "interrupt" ||
       params.longTurnPolicy === "interruptAndContinue")
@@ -964,6 +1031,60 @@ function rememberTerminalTurnId(turnId) {
   }
 }
 
+function rememberRecentUsageLimitedThread(threadId) {
+  if (!recentUsageLimitedThreads.has(threadId)) {
+    observedUsageLimitFailures += 1;
+  }
+  recentUsageLimitedThreads.delete(threadId);
+  recentUsageLimitedThreads.set(threadId, Date.now());
+  pruneRecentUsageLimitedThreads();
+}
+
+function captureUsageLimitedThread(threadId) {
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return;
+  }
+  rememberRecentUsageLimitedThread(threadId);
+  const request = pendingSwitch;
+  if (request?.params.recoverRecentUsageLimitedTurns !== true) {
+    return;
+  }
+  request.recentUsageLimitedThreadIds.add(threadId);
+  if (request.pausedGoalThreadIds.has(threadId)) {
+    request.recentUsageLimitedGoalThreadIds.add(threadId);
+    request.recoveryThreadIds.delete(threadId);
+  } else if (request.goalsPrepared) {
+    request.recoveryThreadIds.add(threadId);
+  }
+}
+
+function getRecentUsageLimitedThreadIds() {
+  pruneRecentUsageLimitedThreads();
+  return new Set(recentUsageLimitedThreads.keys());
+}
+
+function clearRecentUsageLimitedThread(threadId) {
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return;
+  }
+  recentUsageLimitedThreads.delete(threadId);
+  if (pendingSwitch) {
+    pendingSwitch.recentUsageLimitedThreadIds.delete(threadId);
+    pendingSwitch.recentUsageLimitedGoalThreadIds.delete(threadId);
+    pendingSwitch.recoveryThreadIds.delete(threadId);
+  }
+}
+
+function pruneRecentUsageLimitedThreads() {
+  const cutoff = Date.now() - RECENT_USAGE_LIMITED_THREAD_TTL_MS;
+  for (const [threadId, recordedAt] of recentUsageLimitedThreads) {
+    if (recordedAt >= cutoff && recentUsageLimitedThreads.size <= MAX_RECENT_USAGE_LIMITED_THREADS) {
+      break;
+    }
+    recentUsageLimitedThreads.delete(threadId);
+  }
+}
+
 function isAlreadyInactiveTurnError(error) {
   const message = safeErrorMessage(error).trim().toLowerCase();
   return message.includes("no active turn to interrupt") || message.includes("turn is not active");
@@ -987,6 +1108,32 @@ function readTurnStatus(value) {
   }
   const turn = value.turn;
   return turn && typeof turn === "object" && typeof turn.status === "string" ? turn.status : undefined;
+}
+
+function isUsageLimitExceededTurn(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const turn = value.turn;
+  if (!turn || typeof turn !== "object") {
+    return false;
+  }
+  if (isUsageLimitExceededError(turn.error)) {
+    return true;
+  }
+  return Array.isArray(turn.items) && turn.items.some((item) => isUsageLimitExceededError(item));
+}
+
+function isUsageLimitExceededError(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  return (
+    value.codexErrorInfo === "usageLimitExceeded" ||
+    value.errorInfo === "usageLimitExceeded" ||
+    isUsageLimitExceededError(value.data) ||
+    isUsageLimitExceededError(value.error)
+  );
 }
 
 function readGoal(value) {

@@ -4,7 +4,7 @@ import { isSeamlessSwitchEnabled } from "../../infrastructure/config/extensionSe
 import { AccountsRepository } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
 import { registerDebugOutput, t } from "../../utils";
-import { CodexHotSwitchRuntime, RuntimeAccountSwitchOutcome } from "../../codex";
+import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
@@ -58,8 +58,11 @@ export class AccountsWorkbench {
 
     const refreshers = {
       ...this.refreshCoordinator.createRefreshView(),
-      switchRuntimeAccount: (accountId: string): Promise<RuntimeAccountSwitchOutcome> =>
-        routeRuntimeAccountSwitch(accountId, this.hotSwitchRuntime, isSeamlessSwitchEnabled())
+      switchRuntimeAccount: (
+        accountId: string,
+        options?: RuntimeAccountSwitchOptions
+      ): Promise<RuntimeAccountSwitchOutcome> =>
+        routeRuntimeAccountSwitch(accountId, this.hotSwitchRuntime, isSeamlessSwitchEnabled(), options)
     };
     await measureStep("registerCommands", () => {
       registerCommands(this.context, this.repo, refreshers, this.hotSwitchRuntime);
@@ -143,7 +146,8 @@ export class AccountsWorkbench {
 export async function routeRuntimeAccountSwitch(
   accountId: string,
   runtime: Pick<CodexHotSwitchRuntime, "isEnabled" | "switchAccount">,
-  seamlessSwitchEnabled: boolean
+  seamlessSwitchEnabled: boolean,
+  options?: RuntimeAccountSwitchOptions
 ): Promise<RuntimeAccountSwitchOutcome> {
   if (!seamlessSwitchEnabled) {
     return { status: "unavailable" };
@@ -155,7 +159,7 @@ export async function routeRuntimeAccountSwitch(
     };
   }
   try {
-    return await runtime.switchAccount(accountId);
+    return options ? await runtime.switchAccount(accountId, options) : await runtime.switchAccount(accountId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn("[codexAccounts] hot switch failed without changing the persisted active account:", message);

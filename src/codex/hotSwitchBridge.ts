@@ -18,6 +18,10 @@ export type HotSwitchStatus = {
   switching: boolean;
   httpTransportForced: boolean;
   transportMode: "http" | "default";
+  recentUsageLimitedThreads: number;
+  observedUsageLimitFailures: number;
+  recoveredUsageLimitedThreads: number;
+  resumedUsageLimitedGoals: number;
   shimPid: number;
   appServerPid: number | null;
 };
@@ -43,6 +47,7 @@ export type HotSwitchAccountParams = {
   planType?: string;
   gracePeriodMs: number;
   longTurnPolicy: HotSwitchLongTurnPolicy;
+  recoverRecentUsageLimitedTurns?: boolean;
 };
 
 export type HotSwitchAccountResult =
