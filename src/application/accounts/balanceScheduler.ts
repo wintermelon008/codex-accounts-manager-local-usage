@@ -2,6 +2,7 @@ import type { CodexAccountRecord, SeamlessQuotaBandSize } from "../../core/types
 
 export const QUOTA_BAND_SIZE = 20;
 export const BALANCE_QUOTA_MAX_AGE_MS = 15 * 60 * 1000;
+export const MINIMUM_BALANCE_CANDIDATE_WEEKLY_PERCENTAGE = 3;
 
 export function getFiveHourQuotaBand(
   percentage: number,
@@ -24,31 +25,43 @@ export function selectBalanceCandidate(params: {
   activeBand: number;
   quotaBandSize?: SeamlessQuotaBandSize;
   minimumHourlyPercentage?: number;
+  emergencyQuota?: "hourly" | "weekly";
   lastSelectedAt: Readonly<Record<string, number | undefined>>;
   now?: number;
 }): CodexAccountRecord | undefined {
   const now = params.now ?? Date.now();
   const active = params.accounts.find((account) => account.id === params.activeAccountId);
-  if (!active || !hasUsableFiveHourQuota(active)) {
+  const weeklyEmergency = params.emergencyQuota === "weekly";
+  if (!active || (weeklyEmergency ? !hasUsableWeeklyQuota(active) : !hasUsableFiveHourQuota(active))) {
     return undefined;
   }
   const activeHourlyPercentage = active.quotaSummary!.hourlyPercentage;
+  const preserveHourlyBalance = !weeklyEmergency;
   return params.accounts
     .filter((account) => {
       const quota = account.quotaSummary;
+      const candidateHasUsableFiveHourQuota = hasUsableFiveHourQuota(account);
+      const candidateCanUseWeeklyEmergency = !quota?.hourlyWindowPresent || candidateHasUsableFiveHourQuota;
       return (
         account.id !== params.activeAccountId &&
         account.balancePoolEnabled === true &&
         !account.quotaError &&
-        hasUsableFiveHourQuota(account) &&
-        getFiveHourQuotaBand(quota!.hourlyPercentage, params.quotaBandSize) >= params.activeBand &&
-        quota!.hourlyPercentage > activeHourlyPercentage &&
-        (params.minimumHourlyPercentage === undefined || quota!.hourlyPercentage > params.minimumHourlyPercentage) &&
+        (weeklyEmergency ? candidateCanUseWeeklyEmergency : candidateHasUsableFiveHourQuota) &&
+        hasUsableWeeklyQuota(account) &&
+        quota!.weeklyPercentage > MINIMUM_BALANCE_CANDIDATE_WEEKLY_PERCENTAGE &&
+        (!preserveHourlyBalance ||
+          getFiveHourQuotaBand(quota!.hourlyPercentage, params.quotaBandSize) >= params.activeBand) &&
+        (!preserveHourlyBalance || quota!.hourlyPercentage > activeHourlyPercentage) &&
+        (params.minimumHourlyPercentage === undefined ||
+          !quota!.hourlyWindowPresent ||
+          (candidateHasUsableFiveHourQuota && quota!.hourlyPercentage > params.minimumHourlyPercentage)) &&
         typeof account.lastQuotaAt === "number" &&
         Math.abs(now - account.lastQuotaAt) <= BALANCE_QUOTA_MAX_AGE_MS
       );
     })
-    .sort((left, right) => compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize))[0];
+    .sort((left, right) =>
+      compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.emergencyQuota)
+    )[0];
 }
 
 export function hasUsableFiveHourQuota(account: CodexAccountRecord): boolean {
@@ -65,14 +78,34 @@ export function hasUsableFiveHourQuota(account: CodexAccountRecord): boolean {
   );
 }
 
+export function hasUsableWeeklyQuota(account: CodexAccountRecord): boolean {
+  const quota = account.quotaSummary;
+  return Boolean(
+    quota?.weeklyWindowPresent &&
+    typeof quota.weeklyPercentage === "number" &&
+    Number.isFinite(quota.weeklyPercentage) &&
+    quota.weeklyPercentage >= 0 &&
+    quota.weeklyPercentage <= 100 &&
+    typeof quota.weeklyWindowMinutes === "number" &&
+    quota.weeklyWindowMinutes >= 1440
+  );
+}
+
 function compareBalanceCandidates(
   left: CodexAccountRecord,
   right: CodexAccountRecord,
   lastSelectedAt: Readonly<Record<string, number | undefined>>,
-  quotaBandSize: SeamlessQuotaBandSize = QUOTA_BAND_SIZE
+  quotaBandSize: SeamlessQuotaBandSize = QUOTA_BAND_SIZE,
+  emergencyQuota?: "hourly" | "weekly"
 ): number {
   const leftQuota = left.quotaSummary!;
   const rightQuota = right.quotaSummary!;
+  if (emergencyQuota === "weekly") {
+    const weeklyPercentageDifference = rightQuota.weeklyPercentage - leftQuota.weeklyPercentage;
+    if (weeklyPercentageDifference !== 0) {
+      return weeklyPercentageDifference;
+    }
+  }
   const bandDifference =
     getFiveHourQuotaBand(rightQuota.hourlyPercentage, quotaBandSize) -
     getFiveHourQuotaBand(leftQuota.hourlyPercentage, quotaBandSize);

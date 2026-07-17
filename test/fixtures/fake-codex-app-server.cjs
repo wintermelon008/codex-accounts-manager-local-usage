@@ -8,6 +8,7 @@ let currentAccountId = "account-a";
 const activeTurns = [];
 const goals = new Map();
 const threadSettings = new Map();
+const subagentThreadIds = new Set();
 let turnSequence = 0;
 let goalSequence = 0;
 let reorderNextTurnStartResponse = false;
@@ -125,6 +126,17 @@ function handleLine(line) {
     case "thread/goal/get":
       respond(message.id, { goal: goals.get(message.params.threadId) || null });
       break;
+    case "thread/read": {
+      const isSubagent = subagentThreadIds.has(message.params.threadId);
+      respond(message.id, {
+        thread: {
+          id: message.params.threadId,
+          parentThreadId: isSubagent ? "parent-thread" : null,
+          source: isSubagent ? { subagent: "test" } : "vscode"
+        }
+      });
+      break;
+    }
     case "thread/goal/set": {
       const previousGoal = goals.get(message.params.threadId);
       goalSequence += 1;
@@ -211,6 +223,21 @@ function handleLine(line) {
       activeTurns.shift();
       respond(message.id, {});
       break;
+    case "test/markSubagent":
+      if (typeof message.params.threadId === "string") {
+        subagentThreadIds.add(message.params.threadId);
+      }
+      respond(message.id, {});
+      break;
+    case "test/replaceActiveTurn": {
+      const activeTurn = activeTurns[0];
+      if (activeTurn) {
+        turnSequence += 1;
+        activeTurn.id = `turn-${turnSequence}`;
+      }
+      respond(message.id, {});
+      break;
+    }
     case "test/reorderNextTurnStartResponse":
       reorderNextTurnStartResponse = true;
       respond(message.id, {});
@@ -224,6 +251,17 @@ function handleLine(line) {
         (turn) => turn.id === message.params.turnId && turn.threadId === message.params.threadId
       );
       if (turnIndex < 0) {
+        const activeTurn = activeTurns.find((turn) => turn.threadId === message.params.threadId);
+        if (activeTurn) {
+          emit({
+            id: message.id,
+            error: {
+              code: -32000,
+              message: `expected active turn id ${message.params.turnId} but found ${activeTurn.id}`
+            }
+          });
+          break;
+        }
         emit({ id: message.id, error: { code: -32000, message: "no active turn to interrupt" } });
         break;
       }

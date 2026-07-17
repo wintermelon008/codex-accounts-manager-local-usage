@@ -28,7 +28,7 @@ import { clearTokenAutomationError } from "../../presentation/workbench/tokenAut
 import { getCommandCopy, getLanguage, getQuotaWarningCopy } from "../../utils";
 import { getDashboardCopy } from "../dashboard/copy";
 import { autoReloadWindowForAccount, handleCodexAppRestartPreference } from "./switchEffects";
-import { getFiveHourQuotaBand, selectBalanceCandidate } from "./balanceScheduler";
+import { getFiveHourQuotaBand, hasUsableWeeklyQuota, selectBalanceCandidate } from "./balanceScheduler";
 
 const AUTO_SWITCH_ENABLED = "autoSwitchEnabled";
 const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
@@ -242,22 +242,34 @@ export async function maybeSeamlessBalanceSwitchForActiveQuota(
 
   const accounts = await repo.listAccounts();
   const active = accounts.find((account) => account.isActive);
+  const activeHasComparableHourlyWindow = active ? hasComparableHourlyWindow(active) : false;
+  const activeHasUsableWeeklyQuota = active ? hasUsableWeeklyQuota(active) : false;
   if (
     !active?.quotaSummary ||
     active.quotaError ||
     active.balancePoolEnabled !== true ||
-    !hasComparableHourlyWindow(active) ||
+    (!activeHasComparableHourlyWindow && !activeHasUsableWeeklyQuota) ||
     accounts.filter((account) => account.balancePoolEnabled === true).length < 2
   ) {
     return false;
   }
 
   const quotaBandSize = normalizeSeamlessQuotaBandSize(config.get<number>(SEAMLESS_QUOTA_BAND_SIZE, 20));
-  const emergencySwitch =
-    config.get<boolean>(SEAMLESS_EMERGENCY_SWITCH_ENABLED, false) &&
+  const emergencyEnabled = config.get<boolean>(SEAMLESS_EMERGENCY_SWITCH_ENABLED, false);
+  const hourlyEmergency =
+    emergencyEnabled &&
+    activeHasComparableHourlyWindow &&
     active.quotaSummary.hourlyPercentage <= SEAMLESS_EMERGENCY_QUOTA_PERCENTAGE;
-  const activeBand = getFiveHourQuotaBand(active.quotaSummary.hourlyPercentage, quotaBandSize);
-  const bandDropped = observeSeamlessQuotaBand(active.id, activeBand, quotaBandSize);
+  const weeklyEmergency =
+    emergencyEnabled &&
+    activeHasUsableWeeklyQuota &&
+    active.quotaSummary.weeklyPercentage <= SEAMLESS_EMERGENCY_QUOTA_PERCENTAGE;
+  const emergencySwitch = hourlyEmergency || weeklyEmergency;
+  const emergencyQuota = weeklyEmergency && !hourlyEmergency ? "weekly" : hourlyEmergency ? "hourly" : undefined;
+  const activeBand = activeHasComparableHourlyWindow
+    ? getFiveHourQuotaBand(active.quotaSummary.hourlyPercentage, quotaBandSize)
+    : 0;
+  const bandDropped = activeHasComparableHourlyWindow && observeSeamlessQuotaBand(active.id, activeBand, quotaBandSize);
   if (!emergencySwitch && !bandDropped) {
     return false;
   }
@@ -268,6 +280,7 @@ export async function maybeSeamlessBalanceSwitchForActiveQuota(
     activeBand,
     quotaBandSize,
     minimumHourlyPercentage: emergencySwitch ? SEAMLESS_EMERGENCY_QUOTA_PERCENTAGE : undefined,
+    emergencyQuota,
     lastSelectedAt: getSeamlessSwitchRuntimeSnapshot().lastSelectedAt ?? {}
   });
   if (!next) {
@@ -283,13 +296,13 @@ export async function maybeSeamlessBalanceSwitchForActiveQuota(
     : view.switchRuntimeAccount?.(next.id))) ?? { status: "unavailable" as const };
   if (runtimeOutcome.status === "deferred") {
     console.info(
-      `[codexAccounts] seamless ${emergencySwitch ? "1% emergency " : "quota-band "}switch deferred with ${runtimeOutcome.activeTurns} active turn(s): ${runtimeOutcome.reason}`
+      `[codexAccounts] seamless ${emergencyQuota ? `${emergencyQuota} 1% emergency ` : "quota-band "}switch deferred with ${runtimeOutcome.activeTurns} active turn(s): ${runtimeOutcome.reason}`
     );
     return false;
   }
   if (runtimeOutcome.status === "failed") {
     console.warn(
-      `[codexAccounts] seamless ${emergencySwitch ? "1% emergency " : "quota-band "}switch failed safely: ${runtimeOutcome.message}`
+      `[codexAccounts] seamless ${emergencyQuota ? `${emergencyQuota} 1% emergency ` : "quota-band "}switch failed safely: ${runtimeOutcome.message}`
     );
     return false;
   }

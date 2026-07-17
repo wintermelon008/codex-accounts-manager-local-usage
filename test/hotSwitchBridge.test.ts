@@ -711,6 +711,152 @@ describe("CodexHotSwitchBridge", () => {
     await messages.next((message) => message.id === "continue-complete");
   }, 15_000);
 
+  it("leaves multi-agent subagent recovery to its parent", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "subagent-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "subagent-initialize");
+    shim.stdin.write(`${JSON.stringify({ method: "initialized", params: {} })}\n`);
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "subagent-original-turn",
+        method: "turn/start",
+        params: { threadId: "subagent-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "subagent-thread"
+    );
+    shim.stdin.write(
+      `${JSON.stringify({ id: "mark-subagent", method: "test/markSubagent", params: { threadId: "subagent-thread" } })}\n`
+    );
+    await messages.next((message) => message.id === "mark-subagent");
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue"
+      })
+    ).resolves.toMatchObject({
+      status: "switched",
+      accountId: "account-b",
+      interruptedTurns: 1,
+      continuedThreads: 0
+    });
+
+    expect(
+      messages.all.some(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "thread/read" &&
+          message.params?.threadId === "subagent-thread"
+      )
+    ).toBe(true);
+    expect(
+      messages.all.some(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "subagent-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).toBe(false);
+  }, 15_000);
+
+  it("resynchronizes a replaced active turn before interrupting and continuing it", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "resync-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "resync-initialize");
+    shim.stdin.write(`${JSON.stringify({ method: "initialized", params: {} })}\n`);
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "resync-original-turn",
+        method: "turn/start",
+        params: { threadId: "resync-thread", input: [] }
+      })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "resync-thread");
+    shim.stdin.write(`${JSON.stringify({ id: "resync-replace", method: "test/replaceActiveTurn", params: {} })}\n`);
+    await messages.next((message) => message.id === "resync-replace");
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue"
+      })
+    ).resolves.toMatchObject({
+      status: "switched",
+      accountId: "account-b",
+      interruptedTurns: 1,
+      continuedThreads: 1
+    });
+
+    const interruptTurnIds = messages.all
+      .filter((message) => message.method === "test/received" && message.params?.method === "turn/interrupt")
+      .map((message) => message.params?.turnId);
+    expect(interruptTurnIds).toEqual(["turn-1", "turn-2"]);
+    await expect(
+      messages.next(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "resync-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).resolves.toMatchObject({ params: { runtimeAccountId: "account-b", inputText: "Continue." } });
+  }, 15_000);
+
   it("continues a recently quota-exhausted ordinary thread after an emergency switch", async () => {
     const root = path.resolve(__dirname, "..");
     shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
