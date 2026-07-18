@@ -8,7 +8,6 @@ import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitc
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
-import { promptForManualHotSwitchConfiguration } from "./hotSwitchSetup";
 import { registerAutoRefreshScheduler, registerTokenRefreshScheduler } from "./schedulerRegistration";
 
 const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -100,8 +99,6 @@ export class AccountsWorkbench {
       void vscode.window.showWarningMessage(
         `Codex seamless-switch runtime could not be configured: ${hotSwitchSetup.error}`
       );
-    } else if (hotSwitchSetup.requiresUserConfiguration) {
-      void promptForManualHotSwitchConfiguration(hotSwitchSetup, "enable");
     } else if (hotSwitchSetup.requiresReload) {
       const reload = "Reload once";
       const later = "Later";

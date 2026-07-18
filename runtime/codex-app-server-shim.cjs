@@ -106,6 +106,10 @@ function handleOfficialLine(line) {
     return;
   }
 
+  if (rewriteThreadListProviderFilter(message)) {
+    line = JSON.stringify(message);
+  }
+
   if (isWorkStartMethod(message.method)) {
     clearRecentUsageLimitedThread(readThreadId(message.params));
   }
@@ -232,6 +236,22 @@ function handleCodexLine(line) {
   }
 
   writeOfficialLine(line);
+}
+
+function rewriteThreadListProviderFilter(message) {
+  const params = message.params;
+  if (
+    !forceHttpTransport ||
+    message.method !== "thread/list" ||
+    !params ||
+    typeof params !== "object" ||
+    Array.isArray(params) ||
+    params.modelProviders !== null
+  ) {
+    return false;
+  }
+  params.modelProviders = [];
+  return true;
 }
 
 function startControlServer() {

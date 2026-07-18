@@ -104,15 +104,16 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 - 屏障期间新的 turn 会排队，原 conversation/thread 保持不变；后续成功切换不需要 reload window
 - 多个会话共享同一 app-server 时，runtime 会容忍 `turn/completed` 与 `turn/start` 响应乱序，并对已经结束的 turn 做安全对账；其他窗口的切换若被 defer，会在安全边界后自动重试收敛
 - runtime 会禁用 Responses WebSocket 复用，确保已有 thread 的下一轮真正使用新账号；代价是可能增加少量 HTTP 建连开销。关闭无感总开关只恢复原切号逻辑，完整恢复官方 transport 需移除 runtime 并 reload
+- runtime 会把官方界面显式限定为“当前 provider”的历史查询扩展为所有 provider，因此安装无感 runtime 前后的本地会话会出现在同一历史列表；它只调整 `thread/list` 请求过滤，不改写会话文件或状态数据库
 - 该功能仍是进程级单账号，不支持给同时运行的不同 turn 分配不同账号
-- 首次安装 runtime 需要运行 `Codex Accounts: Install Experimental Seamless Runtime` 并 reload 一次；Remote-SSH/WSL/Dev Container 会由 manager 生成并复制当前用户的本地 User Setting，无需手工替换发布文档中的固定路径
+- 首次安装 runtime 需要运行 `Codex Accounts: Install Experimental Seamless Runtime` 并 reload 一次；Remote-SSH/WSL/Dev Container 会在远端官方 Codex CLI 旁保存可回滚备份并建立 shim 链接，不再修改本机 VS Code 的 `chatgpt.cliExecutable`
 - 详细启用步骤、分档规则、兼容范围与回滚方式见 [docs/HOT_SWITCH.md](docs/HOT_SWITCH.md)
 
 #### 如何启用与配置
 
 1. 导入至少两个你有权使用的 Codex 账号，并执行一次“刷新全部配额”。
 2. 从命令面板运行 `Codex Accounts: Install Experimental Seamless Runtime`。首次安装后按提示 reload 一次；之后的成功切号不再需要 reload。
-3. Remote-SSH、WSL 或 Dev Container 会生成当前环境对应的 `chatgpt.cliExecutable` 设置。把它粘贴到打开的本地 User Settings JSON，不要复制其他机器的绝对路径，也不要写入 Remote Settings。
+3. 在 Remote-SSH、WSL 或 Dev Container 中，不要设置 `chatgpt.cliExecutable`。它是官方扩展的 application 级开发设置，会跨窗口/设备覆盖并可能让另一台机器无法启动 Codex。安装命令会仅在远端扩展安装目录中备份官方 CLI 并建立可回滚 shim 链接；如曾手工添加该设置，请从每台本地 VS Code 的 User Settings 和 Remote Settings 中删除后再安装。
 4. 在账号 Dashboard 使用每张卡片左下角的开关，将至少两个账号加入无感切号池；也可勾选多个账号后使用批量按钮。普通五小时分档候选必须同时报告有效五小时和周窗口，且周额度高于 `3%`；仅有周窗口的账号不参与普通分档，但可参与周额度 `1%` 紧急切换。
 5. 打开 Dashboard 设置，启用“无感切号（实验性）”和“额度分档无感平衡”，选择所需分档（默认 `1/5 (20%)`），并把配额自动刷新设为 `1 ~ 5` 分钟。
 6. 设置等待时间和普通会话策略：推荐先使用 `defer`；需要在额度耗尽前强制保护时可另行启用“1% 紧急强制切号”，但必须接受自动续接可能重复非幂等工具操作的风险。
@@ -131,7 +132,7 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 }
 ```
 
-`codexAccounts.hotSwitchEnabled`、runtime shim 和 `chatgpt.cliExecutable` 由安装/移除命令管理，不要只手工修改技术开关来安装，也不要把本机生成的 CLI 路径提交到仓库。无感分档不要求同时开启官方“自动切号”或“5 小时配额控制”。
+`codexAccounts.hotSwitchEnabled` 与 runtime shim 由安装/移除命令管理；本地窗口仍会管理 `chatgpt.cliExecutable`，Remote-SSH/WSL/Dev Container 则管理远端官方 CLI 的可回滚 shim 链接。不要只手工修改技术开关来安装，也不要保留跨设备的 `chatgpt.cliExecutable` 路径。无感分档不要求同时开启官方“自动切号”或“5 小时配额控制”。
 
 #### 启用后的效果
 
@@ -142,6 +143,7 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 - 自动刷新发现当前账号的有效五小时剩余额度下降一个已配置档位时，只会从池内选择数据新鲜、档位不低、五小时额度严格更高且周额度高于 `3%` 的账号进行无 reload 切换；当前账号仍是最高额度时保持它继续消耗。修改档位会先建立新基线，不会立即误切。
 - 启用 1% 紧急开关后，首次观测到有效五小时或周额度为 1% 也会触发；活动 turn 会先中断，刚刚因额度耗尽而结束的普通会话会在切号后收到一次带恢复上下文的 `Continue`，持久 Goal 则通过暂停/恢复继续；已经处于 `usageLimited` 的 Goal 会被显式重新激活。周紧急场景会优先选择周额度更高、且周额度高于 `3%` 的候选，避免切入五小时额度高但周额度已耗尽的账号；仅有周窗口的账号也可在此路径切换。终态通知与 `turn/start` 的结构化额度拒绝都会被识别；近期失败记录只保留两分钟，并在同一 thread 开始新工作时清除，不会成为持久停止状态。无合格候选、当前账号仍为最高额度或 runtime 失败时保持旧账号并在后续刷新重试。
 - runtime 会强制下一轮使用新的 HTTP 认证，避免旧 thread 继续复用旧账号 WebSocket。身份校验、runtime 或回滚失败时会 fail closed，保持或恢复旧账号，不把仅写入磁盘误报为成功。
+- Codex 历史列表会同时包含安装 runtime 前以 `openai` 记录的会话和安装后以无感 HTTP provider 记录的会话；打开旧会话时仍按当前无感 provider 恢复，不需要迁移本地历史。
 - Dashboard 和状态栏会显示新的活动账号；底层仍是全局单账号，不是每个 conversation 独立绑定账号。
 - 关闭“无感切号（实验性）”会恢复原有写入账号与 reload 流程但保留 runtime；若要恢复官方默认 transport，运行 `Codex Accounts: Remove Experimental Seamless Runtime` 并按提示 reload 一次。
 

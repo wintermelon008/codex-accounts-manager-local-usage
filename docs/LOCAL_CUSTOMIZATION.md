@@ -1,6 +1,6 @@
 # Local extension customizations
 
-This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.21`.
+This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.23`.
 
 ## Scope
 
@@ -18,6 +18,7 @@ The displayed values are local session observations, not ChatGPT account quota o
 
 - Adds a bundled local CLI shim that proxies the official Codex app-server over stdio; it is not a resident HTTP service.
 - Forces Responses HTTP streaming inside the installed runtime because Codex `0.144.2` caches an authenticated WebSocket per loaded thread. This ensures the next turn on the same thread resolves the newly selected account instead of continuing to bill the old WebSocket identity.
+- Merges the official current-provider `thread/list` view across provider IDs without rewriting local history, so sessions created before and after the HTTP provider was introduced remain visible together while the runtime is installed.
 - Adds an explicit multi-account seamless-switch pool with selectable 20%, 25%, 33%, or 50% bands for valid five-hour remaining quota. A candidate must be strictly higher than the active account during ordinary band balancing and must have a usable weekly window above `3%`; a weekly-only account skips ordinary bands. Its configuration, scheduler state, and fail-closed execution are independent of upstream Auto Switch.
 - Adds an opt-in 1% emergency path for either usable five-hour or weekly quota. It bypasses the normal baseline and grace period, excludes candidates at or below `3%` weekly quota, and uses immediate interrupt-and-Continue semantics while still waiting for all old turns to terminate before changing authentication. A candidate that reports a five-hour window must be above 1%; a weekly-only account can participate in a weekly emergency. A weekly emergency prioritizes weekly quota so a high five-hour value cannot select a weekly-exhausted account. Terminal `error` notifications and structured `turn/start` RPC rejections carrying `usageLimitExceeded`, plus compatible failed-turn payloads, are retained briefly so already-stopped ordinary threads can receive one continuation; persistent Goals are paused/resumed and `usageLimited` Goals are explicitly reactivated after the switch. Newer work and the two-minute TTL suppress stale recovery. Non-sensitive runtime counters expose observed failures and successful ordinary/Goal recoveries for live diagnostics.
 - Gives active turns a configurable 60-second grace period, queues new turn starts, and never changes authentication while an old turn remains active.
@@ -27,7 +28,7 @@ The displayed values are local session observations, not ChatGPT account quota o
 - Keeps a bounded terminal-turn ledger so late `turn/start` responses cannot resurrect completed turns. If app-server reports that a tracked turn ID has been replaced by a newer active turn in the same thread, the shim resynchronizes that exact ID and retries the interrupt once; explicit already-inactive results are also reconciled. It only auto-continues after the replacement turn confirms `interrupted`, and retries deferred cross-window convergence after the safe boundary.
 - Adds a user-facing Seamless Switching master toggle. Turning it off restores the original persisted-account/reload workflow without uninstalling the runtime; the quota-band scheduler, ordinary-turn policy, and Goal recovery remain child settings of this mode.
 - Adds a per-account pool switch at the lower-left of every saved-account card plus explicit Set Pool and Remove from Pool batch actions; a pool with fewer than two members is valid and simply leaves band scheduling inactive.
-- Generates the exact local User `chatgpt.cliExecutable` setting for Remote-SSH, WSL, and Dev Container hosts instead of publishing a user-specific absolute path. The enable/disable prompts copy the value and open User Settings.
+- On Remote-SSH, WSL, and Dev Container hosts, avoids `chatgpt.cliExecutable` entirely. The install command refuses to proceed while that application-scoped setting remains, then saves the remote bundled CLI as a same-directory backup and replaces its path with a reversible link to the manager launcher. This keeps one client machine's local path from overriding Codex on another client connected to the same host.
 - Treats either a successful `initialize` response or the client's `initialized` notification as a usable app-server handshake. If hot switching is enabled but the runtime bridge is not ready, switching fails closed and does not fall back to rewriting persisted auth.
 - Keeps the existing reload behavior only when the experimental feature is disabled. A failed or deferred in-flight transaction leaves the persisted account unchanged instead of writing new auth while a turn is active.
 - Never writes credentials into the shim configuration or logs. Runtime IPC is scoped to the current extension-host PID and local user.
@@ -55,7 +56,7 @@ Changing these values changes presentation only. It never changes saved accounts
 
 ## Update safety
 
-Never patch a Marketplace installation in place. Install the generated VSIX and disable automatic updates for this extension.
+Never edit a Marketplace extension's source or bundle in place. Install the generated VSIX and disable automatic updates for this extension. The remote seamless-runtime command is a deliberately narrow, reversible exception: it renames only the remote bundled Codex executable to a same-directory backup and makes the original executable path a launcher symlink. Removing the runtime restores that backup only if the link still belongs to this manager; it never replaces another tool's link.
 
 ## Installation
 
@@ -77,3 +78,5 @@ Before taking a newer upstream version:
 3. Update the reviewed SHA-256 values, run `npm run verify:customization`, tests, and package a new VSIX.
 
 `npm run package` is intentionally fail-closed. It refuses to package if any changed file falls outside the reviewed list or if any protected file no longer matches its reviewed SHA-256 value.
+
+When a reviewed customization intentionally removes an upstream file, record it in `removedFiles` in `local-customization.json`. The baseline check then requires that file to remain absent; it does not silently accept an unreviewed deletion.

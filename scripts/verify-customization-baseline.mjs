@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
@@ -11,6 +11,7 @@ const customization = JSON.parse(readFileSync(customizationPath, "utf8"));
 const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
 const baseline = customization?.upstream?.commit;
 const protectedFiles = new Set(customization?.protectedFiles ?? []);
+const removedFiles = new Set(customization?.removedFiles ?? []);
 const expectedHashes = customization?.expectedFileSha256 ?? {};
 
 if (customization?.schemaVersion !== 1 || customization?.feature !== "local-enhancements") {
@@ -21,6 +22,11 @@ if (!baseline || typeof baseline !== "string") {
 }
 if (customization?.localBuildVersion !== packageJson.version) {
   fail("local build version does not match package.json");
+}
+for (const file of removedFiles) {
+  if (protectedFiles.has(file)) {
+    fail(`a file cannot be both protected and removed: ${file}`);
+  }
 }
 
 runGit(["rev-parse", "--verify", `${baseline}^{commit}`]);
@@ -33,9 +39,15 @@ const changedFiles = new Set([
 ]);
 changedFiles.delete("local-customization.json");
 
-const unexpected = [...changedFiles].filter((file) => !protectedFiles.has(file)).sort();
+const unexpected = [...changedFiles].filter((file) => !protectedFiles.has(file) && !removedFiles.has(file)).sort();
 if (unexpected.length > 0) {
   fail(`upstream or unreviewed files changed: ${unexpected.join(", ")}`);
+}
+
+for (const file of removedFiles) {
+  if (existsSync(path.join(root, file))) {
+    fail(`reviewed removed file is present: ${file}`);
+  }
 }
 
 for (const file of protectedFiles) {
@@ -49,7 +61,9 @@ for (const file of protectedFiles) {
   }
 }
 
-console.log(`Customization baseline verified for upstream ${customization.upstream.version} (${baseline.slice(0, 12)})`);
+console.log(
+  `Customization baseline verified for upstream ${customization.upstream.version} (${baseline.slice(0, 12)})`
+);
 
 function gitLines(args) {
   return runGit(args)

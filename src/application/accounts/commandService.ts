@@ -9,7 +9,6 @@ import { buildAccountStorageId } from "../../utils/accountIdentity";
 import { extractClaims } from "../../utils/jwt";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
 import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
-import { promptForManualHotSwitchConfiguration } from "../../presentation/workbench/hotSwitchSetup";
 import { getCommandCopy, logNetworkEvent, t } from "../../utils";
 import { openDetailsPanel } from "../../ui";
 import { openQuotaSummaryPanel } from "../../ui/quotaSummary";
@@ -42,10 +41,6 @@ export class AccountsCommandService {
       void vscode.window.showErrorMessage(`Unable to install the Codex seamless-switch runtime: ${result.error}`);
       return;
     }
-    if (result.requiresUserConfiguration) {
-      await promptForManualHotSwitchConfiguration(result, "enable");
-      return;
-    }
     if (result.requiresReload) {
       const choice = await vscode.window.showInformationMessage(
         "The Codex seamless-switch runtime is installed. Reload this window once to activate it.",
@@ -64,10 +59,6 @@ export class AccountsCommandService {
     const result = await this.hotSwitchRuntime.disable();
     if (result.error) {
       void vscode.window.showErrorMessage(`Unable to remove the Codex seamless-switch runtime: ${result.error}`);
-      return;
-    }
-    if (result.requiresUserConfiguration) {
-      await promptForManualHotSwitchConfiguration(result, "disable");
       return;
     }
     if (result.requiresReload) {

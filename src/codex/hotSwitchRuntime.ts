@@ -23,6 +23,7 @@ import {
   HotSwitchRefreshResult,
   HotSwitchStatus
 } from "./hotSwitchBridge";
+import { installRemoteCliOverlay, restoreRemoteCliOverlay } from "./remoteCliOverlay";
 
 const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
 const HOT_SWITCH_GRACE_SECONDS = "hotSwitchGraceSeconds";
@@ -39,8 +40,6 @@ export type HotSwitchSetupResult = {
   enabled: boolean;
   configured: boolean;
   requiresReload: boolean;
-  requiresUserConfiguration: boolean;
-  manualCliSetting?: string;
   shimPath?: string;
   error?: string;
 };
@@ -70,8 +69,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       return {
         enabled: false,
         configured: false,
-        requiresReload: false,
-        requiresUserConfiguration: false
+        requiresReload: false
       };
     }
     return this.configureRuntime();
@@ -91,25 +89,23 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       await getCodexAccountsConfiguration().update(HOT_SWITCH_ENABLED, false, vscode.ConfigurationTarget.Global);
       this.bridge?.dispose();
       this.bridge = undefined;
-      const runtimeShimPath = path.join(this.context.globalStorageUri.fsPath, RUNTIME_DIRECTORY, SHIM_FILE);
       const runtimeLauncherPath = path.join(
         this.context.globalStorageUri.fsPath,
         RUNTIME_DIRECTORY,
         SHIM_LAUNCHER_FILE
       );
-      const chatgptConfig = vscode.workspace.getConfiguration("chatgpt");
-      const currentCliPath = chatgptConfig.get<string | null>("cliExecutable", null);
-      const previousCliPath = this.context.globalState.get<string | null>(PREVIOUS_CLI_SETTING_KEY);
-      const currentlyUsesRuntime = currentCliPath === runtimeLauncherPath || currentCliPath === runtimeShimPath;
       let requiresReload = false;
-      let requiresUserConfiguration = false;
-      let manualCliSetting: string | undefined;
-      if (currentlyUsesRuntime) {
-        const restoredCliPath = previousCliPath === undefined ? null : previousCliPath;
-        if (isRemoteExtensionHost()) {
-          requiresUserConfiguration = true;
-          manualCliSetting = formatCliExecutableUserSetting(restoredCliPath);
-        } else {
+      if (isRemoteExtensionHost()) {
+        const cliPath = await resolveOpenAiCodexCliPath();
+        requiresReload = await restoreRemoteCliOverlay(cliPath, runtimeLauncherPath);
+      } else {
+        const chatgptConfig = vscode.workspace.getConfiguration("chatgpt");
+        const runtimeShimPath = path.join(this.context.globalStorageUri.fsPath, RUNTIME_DIRECTORY, SHIM_FILE);
+        const currentCliPath = chatgptConfig.get<string | null>("cliExecutable", null);
+        const previousCliPath = this.context.globalState.get<string | null>(PREVIOUS_CLI_SETTING_KEY);
+        const currentlyUsesRuntime = currentCliPath === runtimeLauncherPath || currentCliPath === runtimeShimPath;
+        if (currentlyUsesRuntime) {
+          const restoredCliPath = previousCliPath === undefined ? null : previousCliPath;
           await chatgptConfig.update("cliExecutable", restoredCliPath, vscode.ConfigurationTarget.Global);
           requiresReload = true;
         }
@@ -118,16 +114,13 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       return {
         enabled: false,
         configured: false,
-        requiresReload,
-        requiresUserConfiguration,
-        manualCliSetting
+        requiresReload
       };
     } catch (error) {
       return {
         enabled: false,
         configured: false,
         requiresReload: false,
-        requiresUserConfiguration: false,
         error: error instanceof Error ? error.message : String(error)
       };
     }
@@ -213,11 +206,12 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
   }
 
   private async configureRuntime(): Promise<HotSwitchSetupResult> {
+    let installedRemoteOverlay: { cliPath: string; launcherPath: string } | undefined;
     try {
       if (process.platform === "win32") {
         throw new Error("Experimental Codex account hot switch is not yet supported on Windows");
       }
-      const realCliPath = await resolveOpenAiCodexCliPath();
+      const cliPath = await resolveOpenAiCodexCliPath();
       const runtimeDirectory = path.join(this.context.globalStorageUri.fsPath, RUNTIME_DIRECTORY);
       const shimSource = this.context.asAbsolutePath(path.join("runtime", SHIM_FILE));
       const shimDestination = path.join(runtimeDirectory, SHIM_FILE);
@@ -228,18 +222,31 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       await fs.copyFile(shimSource, shimDestination);
       await fs.chmod(shimDestination, 0o700);
       await writePosixLauncher(launcherDestination, process.execPath, shimDestination);
+      const configuredCliPath = vscode.workspace.getConfiguration("chatgpt").get<string | null>("cliExecutable", null);
+      if (isRemoteExtensionHost() && configuredCliPath?.trim()) {
+        throw new Error(
+          "Remove chatgpt.cliExecutable from every local VS Code User Settings JSON before enabling seamless switching on a remote host"
+        );
+      }
+      const remoteOverlay = isRemoteExtensionHost()
+        ? await installRemoteCliOverlay(cliPath, launcherDestination)
+        : undefined;
+      if (remoteOverlay?.installed) {
+        installedRemoteOverlay = remoteOverlay;
+      }
+      const realCliPath = remoteOverlay?.realCliPath ?? cliPath;
       await writeJsonAtomically(shimConfigDestination, { realCliPath, forceHttpTransport: true }, 0o600);
 
-      const chatgptConfig = vscode.workspace.getConfiguration("chatgpt");
-      const currentCliPath = chatgptConfig.get<string | null>("cliExecutable", null);
-      const needsCliConfiguration = currentCliPath !== launcherDestination;
-      const requiresUserConfiguration = needsCliConfiguration && isRemoteExtensionHost();
       let requiresReload = false;
-      if (needsCliConfiguration) {
-        if (this.context.globalState.get<string | null>(PREVIOUS_CLI_SETTING_KEY) === undefined) {
-          await this.context.globalState.update(PREVIOUS_CLI_SETTING_KEY, currentCliPath);
-        }
-        if (!requiresUserConfiguration) {
+      if (isRemoteExtensionHost()) {
+        requiresReload = remoteOverlay?.installed === true;
+      } else {
+        const chatgptConfig = vscode.workspace.getConfiguration("chatgpt");
+        const currentCliPath = chatgptConfig.get<string | null>("cliExecutable", null);
+        if (currentCliPath !== launcherDestination) {
+          if (this.context.globalState.get<string | null>(PREVIOUS_CLI_SETTING_KEY) === undefined) {
+            await this.context.globalState.update(PREVIOUS_CLI_SETTING_KEY, currentCliPath);
+          }
           await chatgptConfig.update("cliExecutable", launcherDestination, vscode.ConfigurationTarget.Global);
           requiresReload = true;
         }
@@ -247,7 +254,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
 
       this.bridge?.dispose();
       this.bridge = undefined;
-      if (!requiresUserConfiguration && !requiresReload) {
+      if (!requiresReload) {
         const candidateBridge = new CodexHotSwitchBridge(
           (request) => this.refreshRuntimeAuth(request),
           (localAccountId) => this.activateLocalAccount(localAccountId)
@@ -269,18 +276,20 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       }
       return {
         enabled: true,
-        configured: !requiresUserConfiguration && !requiresReload,
+        configured: !requiresReload,
         requiresReload,
-        requiresUserConfiguration,
-        manualCliSetting: requiresUserConfiguration ? formatCliExecutableUserSetting(launcherDestination) : undefined,
         shimPath: launcherDestination
       };
     } catch (error) {
+      if (installedRemoteOverlay) {
+        await restoreRemoteCliOverlay(installedRemoteOverlay.cliPath, installedRemoteOverlay.launcherPath).catch(
+          () => undefined
+        );
+      }
       return {
         enabled: true,
         configured: false,
         requiresReload: false,
-        requiresUserConfiguration: false,
         error: error instanceof Error ? error.message : String(error)
       };
     }
@@ -419,10 +428,6 @@ export function getHotSwitchLongTurnPolicy(): HotSwitchLongTurnPolicy {
   return normalizeHotSwitchLongTurnPolicy(
     getCodexAccountsConfiguration().get<string>(HOT_SWITCH_LONG_TURN_POLICY, "defer")
   );
-}
-
-export function formatCliExecutableUserSetting(value: string | null): string {
-  return `"chatgpt.cliExecutable": ${JSON.stringify(value)}`;
 }
 
 function isRemoteExtensionHost(): boolean {

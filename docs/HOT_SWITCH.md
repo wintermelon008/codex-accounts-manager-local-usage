@@ -25,6 +25,8 @@
 
 runtime protocol v2 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。
 
+Codex 会把创建会话时的 provider ID 写入本地 thread 元数据，官方界面的 `thread/list` 默认又只查询当前 provider。无感 runtime 若不处理这层过滤，安装前的 `openai` 会话和安装后的 HTTP provider 会话就会像两套独立历史。shim 只把 `thread/list` 中显式的 `modelProviders: null` 改成协议定义的空数组（所有 provider），保留显式 provider 列表不变；它不修改 rollout、`session_index.jsonl` 或 SQLite。官方界面恢复旧 thread 时会传入当前无感 provider，因此后续 turn 仍使用 HTTP transport。
+
 代价是失去 Responses WebSocket 的跨 turn 复用，可能增加少量建连延迟和连接开销。它只影响通过已安装无感 runtime 启动的 app-server，不会启动常驻 HTTP 调度服务，也不会把 token 发给 Manager 之外的本地服务。
 
 Dashboard 中关闭`无感切号（实验性）`会立即恢复 Manager 原有的账号写入、reload 提示和官方自动切号逻辑，但不会在运行中重启 app-server，因此底层 HTTP transport 会保留。若要连底层 transport 一并恢复为官方默认值，请运行 Remove Experimental Seamless Runtime，并按提示 reload 一次。
@@ -34,7 +36,8 @@ Dashboard 中关闭`无感切号（实验性）`会立即恢复 Manager 原有�
 1. 导入至少两个属于你且允许使用的 ChatGPT/Codex 账号，并刷新全部配额。
 2. 从命令面板运行 `Codex Accounts: Install Experimental Seamless Runtime`：
    - 普通本地窗口会自动配置启动路径，并提示 reload 一次。
-   - Remote-SSH、WSL 和 Dev Container 中，manager 会根据当前远程用户生成准确的 `chatgpt.cliExecutable` JSON。点击 `Copy setting & open User Settings`，把已复制的内容粘贴或替换到打开的本地 User Settings JSON；不要写入 Remote Settings，也不要照抄其他用户机器上的绝对路径。保存后 reload 一次。
+   - Remote-SSH、WSL 和 Dev Container 中，manager 会把远端官方 Codex CLI 重命名为同目录的可回滚备份，并把原路径替换为指向 runtime launcher 的符号链接；reload 一次后生效。它不会写入 `chatgpt.cliExecutable`。
+   - `chatgpt.cliExecutable` 是官方扩展的 application 级开发设置，不能由 Remote Settings 覆盖，并会优先于远端 shim 链接。启用远端 runtime 前，必须从每台连接设备的本地 User Settings 和远端 Remote Settings 中删除该键；否则 manager 会拒绝安装，避免出现跨设备启动失败或假成功。
 3. 打开账号 Dashboard，使用每张账号卡片左下角的开关，将至少两个账号加入无感切号池。也可勾选多个账号后使用“设为无感切号池”或“移出无感切号池”批量操作。
 4. 在 Dashboard 设置中开启：
    - 配额自动刷新，建议 `1 ~ 5` 分钟；
@@ -64,7 +67,7 @@ Dashboard 中关闭`无感切号（实验性）`会立即恢复 Manager 原有�
 
 若要启用你当前测试的普通会话无人值守续接，把 `hotSwitchLongTurnPolicy` 改为 `"interruptAndContinue"`。它会在 60 秒后中断旧 turn，完成切号后在同一 thread 自动发送一次带恢复上下文的 `Continue`；这不是同一 turn 的精确恢复。
 
-不要只手工修改 `codexAccounts.hotSwitchEnabled` 来安装或卸载 runtime；安装和移除都使用命令面板命令，以便管理 runtime，并生成或恢复当前环境对应的 `chatgpt.cliExecutable`。日常临时关闭无感行为只需关闭 Dashboard 的`无感切号（实验性）`总开关，无需 reload。发布说明不应提供 `/home/<固定用户>/...` 一类路径；Remote 用户始终使用 manager 当场复制的值。
+不要只手工修改 `codexAccounts.hotSwitchEnabled` 来安装或卸载 runtime；安装和移除都使用命令面板命令，以便管理 runtime、备份与恢复官方 CLI。日常临时关闭无感行为只需关闭 Dashboard 的`无感切号（实验性）`总开关，无需 reload。发布说明不应要求 Remote 用户填写 `/home/<固定用户>/...` 路径，也不应要求保留 `chatgpt.cliExecutable`。
 
 ## 分档与选号规则
 
@@ -137,7 +140,7 @@ shim 以真实 `turn.id` 跟踪 app-server 中的活动 turn：
 
 只想临时恢复原有切号逻辑时，关闭 Dashboard 的`无感切号（实验性）`总开关即可；runtime 继续作为透明代理运行，下一次切号会走原有账号写入和 reload 提示。
 
-若要完整卸载 runtime，从命令面板运行 `Codex Accounts: Remove Experimental Seamless Runtime`。普通本地窗口会自动恢复安装前的 `chatgpt.cliExecutable`；Remote 环境会复制恢复用 JSON 并打开本地 User Settings。保存后按提示 reload 一次，即可回到官方标准启动路径。
+若要完整卸载 runtime，从命令面板运行 `Codex Accounts: Remove Experimental Seamless Runtime`。普通本地窗口会自动恢复安装前的 `chatgpt.cliExecutable`；Remote 环境只会在当前 CLI 链接仍指向 manager launcher 时恢复同目录备份的官方二进制，绝不覆盖其他工具建立的链接。按提示 reload 一次，即可回到官方标准启动路径。官方 Codex 扩展升级后会使用新安装目录；若无感切号仍启用，manager 会为新目录重新准备 runtime 并再次请求一次 reload。完整卸载也会恢复官方“当前 provider”历史过滤；无感 provider 下的会话仍保存在本地，可通过重新安装 runtime 或 `codex resume --all --include-non-interactive` 访问，本功能不会在卸载时批量改写历史元数据。
 
 ## 开发验证
 
@@ -151,6 +154,6 @@ npm run verify
 npm run package
 ```
 
-`test/hotSwitchBridge.test.ts` 使用假的 app-server 验证多个并发 turn、切换屏障、排队 turn、token refresh 回调、60 秒策略的缩短测试版本、普通 turn 延后/中断/同 thread 续接、当前协议终态 `error` 通知及兼容失败 turn 的额度耗尽恢复与防重复，以及持久 Goal 的暂停、interrupt、断连恢复、切号后自动续跑和 thread-sticky workspace 权限；测试 fixture 不包含真实账号数据。
+`test/hotSwitchBridge.test.ts` 使用假的 app-server 验证跨 provider 历史合并且不覆盖显式 provider 过滤、多个并发 turn、切换屏障、排队 turn、token refresh 回调、60 秒策略的缩短测试版本、普通 turn 延后/中断/同 thread 续接、当前协议终态 `error` 通知及兼容失败 turn 的额度耗尽恢复与防重复，以及持久 Goal 的暂停、interrupt、断连恢复、切号后自动续跑和 thread-sticky workspace 权限；测试 fixture 不包含真实账号数据。
 
 `verify:seamless-auth` 使用两个合成的未签名 JWT 和仅监听 `127.0.0.1` 的临时 HTTP server，不读取任何已导入账号。它以与 runtime 相同的参数布局启动指定 Codex，先确认每次 `account/read` 都报告当前 access token 的 runtime email，再验证同一 thread 在 A→B 登录切换后的两个 Responses 请求分别携带对应的合成认证；验证结束会删除临时 `CODEX_HOME`。升级官方 Codex 后应重新运行此检查。

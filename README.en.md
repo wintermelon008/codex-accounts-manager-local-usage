@@ -79,15 +79,16 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 - Keep the ordinary-turn policy and grace controls visible; when hot switching is enabled but its runtime is not ready, fail closed instead of reporting a persisted-only account change as a successful live switch
 - Queue new turns behind the switch barrier while preserving the existing conversation/thread state
 - Keep one process-wide account active at a time; this does not assign different accounts to simultaneous turns
-- Run `Codex Accounts: Install Experimental Seamless Runtime` and reload once for initial setup; on Remote-SSH, WSL, or Dev Containers the manager generates and copies the current user's local User setting, so release instructions never rely on a hard-coded home path
+- Run `Codex Accounts: Install Experimental Seamless Runtime` and reload once for initial setup; on Remote-SSH, WSL, or Dev Containers the manager keeps a reversible backup beside the remote bundled Codex CLI and links it to the shim instead of changing the local VS Code `chatgpt.cliExecutable` setting
 - The installed runtime disables Responses WebSocket reuse so an existing thread's next turn actually uses the newly selected account. Disabling the Seamless Switching master toggle restores the original switch/reload logic; removing the runtime and reloading also restores the official transport
+- The runtime expands official history requests that explicitly target the current provider to all providers, so local sessions from before and after runtime installation share one history list. It changes only the `thread/list` filter and does not rewrite session files or the state database
 - See [docs/HOT_SWITCH.md](docs/HOT_SWITCH.md) for exact scheduling, compatibility, security, and rollback details
 
 #### Enable and configure
 
 1. Import at least two Codex accounts that you are authorized to use, then run **Refresh All Quotas** once.
 2. Run `Codex Accounts: Install Experimental Seamless Runtime` from the Command Palette. Reload once when prompted after the initial installation; later successful switches do not require reloads.
-3. On Remote-SSH, WSL, or Dev Containers, paste the generated `chatgpt.cliExecutable` entry into the opened local User Settings JSON. Do not copy an absolute path from another machine and do not put it in Remote Settings.
+3. On Remote-SSH, WSL, or Dev Containers, leave `chatgpt.cliExecutable` unset. It is an application-scoped development setting in the official extension and can override Codex across windows/devices. The install command backs up the remote bundled CLI and creates a reversible shim link in the remote extension directory. Remove any manually added value from every local User Settings JSON and from Remote Settings before installing.
 4. Use the switch at the lower-left of each account card to add at least two accounts to the pool, or select several accounts and use the batch action. Ordinary five-hour band candidates need usable 5-hour and weekly windows with more than `3%` weekly quota; a weekly-only account skips ordinary bands but can participate in a 1% weekly emergency switch.
 5. In dashboard settings, enable **Seamless account switching (experimental)** and **Seamless quota-band balancing**, choose a band size (default `1/5 (20%)`), then set automatic quota refresh to `1–5` minutes.
 6. Choose a grace period and ordinary-turn policy. Enable the separate **1% emergency forced switch** only when avoiding quota exhaustion outweighs the risk of repeated non-idempotent effects.
@@ -106,7 +107,7 @@ Example user-facing configuration:
 }
 ```
 
-The install/remove commands manage `codexAccounts.hotSwitchEnabled`, the runtime shim, and `chatgpt.cliExecutable`. Do not install the runtime by changing only the technical flag, and never commit a machine-generated CLI path. Seamless quota-band scheduling does not require upstream **Auto Switch** or **5-hour Quota Control**.
+The install/remove commands manage `codexAccounts.hotSwitchEnabled` and the runtime shim. Local windows still manage `chatgpt.cliExecutable`; Remote-SSH, WSL, and Dev Containers manage a reversible shim link around the remote bundled CLI. Do not install the runtime by changing only the technical flag, and do not retain a cross-device `chatgpt.cliExecutable` path. Seamless quota-band scheduling does not require upstream **Auto Switch** or **5-hour Quota Control**.
 
 #### What to expect
 
@@ -117,6 +118,7 @@ The install/remove commands manage `codexAccounts.hotSwitchEnabled`, the runtime
 - When automatic refresh observes the active account crossing down a configured five-hour quota band, the scheduler selects a fresh, eligible pool account only when its five-hour quota is strictly higher and its weekly quota is above `3%`. If the active account is already the highest, it keeps consuming without a switch. Changing the size establishes a fresh baseline.
 - With the 1% emergency setting enabled, even a first observation at 1% of a usable five-hour or weekly window can trigger. Active turns are interrupted; ordinary threads that just stopped on quota exhaustion receive one recovery-marked `Continue` after switching, while persistent Goals use pause/resume semantics and a `usageLimited` Goal is explicitly reactivated. A weekly emergency prioritizes candidates with higher weekly quota and never selects one at or below `3%` weekly quota, preventing a high five-hour value from selecting a weekly-exhausted account; a weekly-only account can use this path as well. Both terminal notifications and structured `turn/start` quota rejections are recognized. Recent-failure records expire after two minutes and a newer turn on the same thread clears them, so they do not become a persistent stopped state. If no eligible account remains, the old account stays active and a later refresh retries.
 - The runtime forces the next turn to use the new HTTP credentials instead of reusing an old authenticated WebSocket. Identity, runtime, or rollback failures fail closed and keep or restore the previous account rather than reporting a persisted-only change as success.
+- Codex history includes both pre-runtime `openai` sessions and sessions recorded under the seamless HTTP provider. Opening an older thread still resumes it with the current seamless provider, without migrating local history.
 - The dashboard and status bar show the new active account. Authentication is still process-wide; accounts are not bound independently per conversation.
 - Turning off **Seamless account switching (experimental)** restores the original persisted-account/reload workflow while keeping the runtime installed. Run `Codex Accounts: Remove Experimental Seamless Runtime` and reload once to restore the official transport as well.
 
