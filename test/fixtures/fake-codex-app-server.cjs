@@ -40,6 +40,7 @@ function handleLine(line) {
       accountId: message.params && message.params.chatgptAccountId,
       runtimeAccountId: currentAccountId,
       threadId: message.params && message.params.threadId,
+      modelProviders: message.params && message.params.modelProviders,
       goalStatus: message.params && message.params.status,
       turnId: message.params && message.params.turnId,
       inputText:

@@ -17,6 +17,7 @@ type Message = {
     id?: string;
     method?: string;
     threadId?: string;
+    modelProviders?: string[] | null;
     turnId?: string;
     goalStatus?: string;
     inputText?: string;
@@ -96,6 +97,38 @@ describe("CodexHotSwitchBridge", () => {
       managedLocalAccountId: null,
       httpTransportForced: true
     });
+  });
+
+  it("lists history across runtime provider IDs without overriding explicit provider filters", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    const requests = [
+      { id: "history-current", method: "thread/list", params: { cursor: null, modelProviders: null } },
+      { id: "history-all", method: "thread/list", params: { cursor: null, modelProviders: [] } },
+      {
+        id: "history-explicit",
+        method: "thread/list",
+        params: { cursor: null, modelProviders: ["openai"] }
+      },
+      { id: "history-omitted", method: "thread/list", params: { cursor: null } }
+    ];
+    shim.stdin.write(`${requests.map((request) => JSON.stringify(request)).join("\n")}\n`);
+
+    const received = await Promise.all(
+      requests.map((request) =>
+        messages.next((message) => message.method === "test/received" && message.params?.id === request.id)
+      )
+    );
+    expect(received.map((message) => message.params?.modelProviders)).toEqual([[], [], ["openai"], undefined]);
   });
 
   it("is ready after a successful initialize response without an initialized notification", async () => {

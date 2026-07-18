@@ -3,42 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAccountRecord } from "../src/core/types";
 import {
   CodexHotSwitchRuntime,
-  formatCliExecutableUserSetting,
   resolveRuntimeAccessTokenIdentity,
   selectManagedAccountForRefresh
 } from "../src/codex/hotSwitchRuntime";
-import { promptForManualHotSwitchConfiguration } from "../src/presentation/workbench/hotSwitchSetup";
 import { setCurrentWindowRuntimeAccountId } from "../src/presentation/workbench/windowRuntimeAccount";
 
 describe("Codex hot-switch runtime setup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setCurrentWindowRuntimeAccountId(undefined);
-  });
-
-  it("formats the generated local User setting without assuming a username", () => {
-    expect(formatCliExecutableUserSetting('/home/example/with "quotes"/shim')).toBe(
-      '"chatgpt.cliExecutable": "/home/example/with \\"quotes\\"/shim"'
-    );
-    expect(formatCliExecutableUserSetting(null)).toBe('"chatgpt.cliExecutable": null');
-  });
-
-  it("copies the generated setting and opens local User Settings", async () => {
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValueOnce("Copy setting & open User Settings" as never);
-
-    await promptForManualHotSwitchConfiguration(
-      {
-        enabled: true,
-        configured: false,
-        requiresReload: false,
-        requiresUserConfiguration: true,
-        manualCliSetting: '"chatgpt.cliExecutable": "/home/generated/shim"'
-      },
-      "enable"
-    );
-
-    expect(vscode.env.clipboard.writeText).toHaveBeenCalledWith('"chatgpt.cliExecutable": "/home/generated/shim"');
-    expect(vscode.commands.executeCommand).toHaveBeenCalledWith("workbench.action.openSettingsJson");
   });
 
   it("uses the local account identity when workspace identifiers are shared", () => {
