@@ -158,7 +158,10 @@ export function registerSeamlessUsageLimitMonitor(params: {
       event.affectsConfiguration("codexAccounts.hotSwitchEnabled") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchEnabled") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchQuotaBandsEnabled") ||
-      event.affectsConfiguration("codexAccounts.seamlessSwitchEmergencySwitchEnabled")
+      event.affectsConfiguration("codexAccounts.seamlessSwitchEmergencySwitchEnabled") ||
+      event.affectsConfiguration("codexAccounts.seamlessSwitchGroupAVisible") ||
+      event.affectsConfiguration("codexAccounts.seamlessSwitchGroupBVisible") ||
+      event.affectsConfiguration("codexAccounts.seamlessSwitchGroupCVisible")
     ) {
       applySchedule();
     }

@@ -7,9 +7,10 @@ import type {
   DashboardActionPayload,
   DashboardBatchResultFailure,
   DashboardClientMessage,
-  DashboardHostMessage
+  DashboardHostMessage,
+  DashboardActionResultPayload
 } from "../../domain/dashboard/types";
-import type { CodexAccountRecord } from "../../core/types";
+import type { CodexAccountGroup, CodexAccountRecord } from "../../core/types";
 import type { DashboardLanguage } from "../../localization/languages";
 import { AccountsRepository } from "../../storage";
 import { AnnouncementService, type AnnouncementOptions } from "../../services/announcements";
@@ -79,7 +80,11 @@ async function runDashboardAction(
       await vscode.commands.executeCommand("codexAccounts.importCurrentAuth");
       return undefined;
     case "refreshAll":
-      await vscode.commands.executeCommand("codexAccounts.refreshAllQuotas");
+      if (payload?.accountIds) {
+        await vscode.commands.executeCommand("codexAccounts.refreshAllQuotas", { accountIds: payload.accountIds });
+      } else {
+        await vscode.commands.executeCommand("codexAccounts.refreshAllQuotas");
+      }
       return undefined;
     case "refreshAnnouncements":
       await ctx.announcements.forceRefresh(ctx.getAnnouncementOptions());
@@ -129,6 +134,12 @@ async function runDashboardAction(
       return handleRemoveFromBalancePool(ctx.repo, payload, ctx.schedulePublishState, ctx.resolveLanguage());
     case "toggleBalancePool":
       return handleToggleBalancePool(ctx.repo, account, ctx.schedulePublishState);
+    case "hideAccounts":
+      return handleHideAccounts(ctx.repo, payload, ctx.schedulePublishState, ctx.resolveLanguage());
+    case "unhideAccounts":
+      return handleUnhideAccounts(ctx.repo, payload, ctx.schedulePublishState, ctx.resolveLanguage());
+    case "setAccountGroup":
+      return handleSetAccountGroup(ctx.repo, payload, ctx.schedulePublishState, ctx.resolveLanguage());
     case "setAutoSwitchLock":
       return handleAutoSwitchLock(payload, account, ctx.schedulePublishState);
     case "batchRefresh":
@@ -497,13 +508,86 @@ async function handleToggleBalancePool(
   account: CodexAccountRecord | undefined,
   schedulePublishState: () => void
 ): Promise<undefined> {
-  if (!account) {
+  if (!account || account.isHidden) {
     return undefined;
   }
   await repo.setBalancePoolMembership(account.id, account.balancePoolEnabled !== true);
   resetSeamlessSwitchRuntimeState();
   schedulePublishState();
   return undefined;
+}
+
+async function handleHideAccounts(
+  repo: AccountsRepository,
+  payload: DashboardActionPayload | undefined,
+  schedulePublishState: () => void,
+  language: DashboardLanguage
+): Promise<DashboardActionResultPayload | undefined> {
+  const accountIds = [...new Set(payload?.accountIds ?? [])];
+  if (!accountIds.length) {
+    return undefined;
+  }
+  await repo.hideAccounts(accountIds);
+  resetSeamlessSwitchRuntimeState();
+  schedulePublishState();
+  void vscode.window.showInformationMessage(
+    language === "zh" || language === "zh-hant"
+      ? `已隐藏 ${accountIds.length} 个账号，并移出无感切号池`
+      : `${accountIds.length} account(s) were hidden and removed from the seamless-switch pool`
+  );
+  return { affectedAccountIds: accountIds };
+}
+
+async function handleUnhideAccounts(
+  repo: AccountsRepository,
+  payload: DashboardActionPayload | undefined,
+  schedulePublishState: () => void,
+  language: DashboardLanguage
+): Promise<undefined> {
+  const accountIds = [...new Set(payload?.accountIds ?? [])];
+  if (!accountIds.length) {
+    return undefined;
+  }
+  await repo.unhideAccounts(accountIds);
+  resetSeamlessSwitchRuntimeState();
+  schedulePublishState();
+  void vscode.window.showInformationMessage(
+    language === "zh" || language === "zh-hant"
+      ? `已解除隐藏 ${accountIds.length} 个账号，并加入无感切号池`
+      : `${accountIds.length} account(s) were unhidden and added to the seamless-switch pool`
+  );
+  return undefined;
+}
+
+async function handleSetAccountGroup(
+  repo: AccountsRepository,
+  payload: DashboardActionPayload | undefined,
+  schedulePublishState: () => void,
+  language: DashboardLanguage
+): Promise<undefined> {
+  const accountIds = [...new Set(payload?.accountIds ?? [])];
+  if (!accountIds.length) {
+    return undefined;
+  }
+  const accountGroup = payload?.accountGroup;
+  if (accountGroup !== undefined && !isCodexAccountGroup(accountGroup)) {
+    throw new Error("Invalid seamless-switch account group");
+  }
+
+  await repo.setAccountGroup(accountIds, accountGroup);
+  resetSeamlessSwitchRuntimeState();
+  schedulePublishState();
+  const groupLabel = accountGroup ?? (language === "zh" ? "未分组" : language === "zh-hant" ? "未分組" : "Ungrouped");
+  void vscode.window.showInformationMessage(
+    language === "zh" || language === "zh-hant"
+      ? `已将 ${accountIds.length} 个账号设为分组 ${groupLabel}`
+      : `${accountIds.length} account(s) are now in group ${groupLabel}`
+  );
+  return undefined;
+}
+
+function isCodexAccountGroup(value: unknown): value is CodexAccountGroup {
+  return value === "A" || value === "B" || value === "C";
 }
 
 async function handleBatchRefresh(

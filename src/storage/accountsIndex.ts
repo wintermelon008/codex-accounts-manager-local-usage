@@ -12,7 +12,8 @@ export function markActive(index: CodexAccountsIndex, accountId: string): void {
 }
 
 export function syncActiveAccountState(index: CodexAccountsIndex, accountId: string | undefined): boolean {
-  const normalizedAccountId = accountId && index.accounts.some((account) => account.id === accountId) ? accountId : undefined;
+  const normalizedAccountId =
+    accountId && index.accounts.some((account) => account.id === accountId) ? accountId : undefined;
   let changed = index.currentAccountId !== normalizedAccountId;
   index.currentAccountId = normalizedAccountId;
 
@@ -105,6 +106,11 @@ function isValidAccountsIndex(value: unknown): value is CodexAccountsIndex {
       typeof record.email === "string" &&
       typeof record.createdAt === "number" &&
       typeof record.updatedAt === "number" &&
+      (record.isHidden === undefined || typeof record.isHidden === "boolean") &&
+      (record.accountGroup === undefined ||
+        record.accountGroup === "A" ||
+        record.accountGroup === "B" ||
+        record.accountGroup === "C") &&
       (record.balancePoolEnabled === undefined || typeof record.balancePoolEnabled === "boolean") &&
       (record.tags === undefined || (Array.isArray(record.tags) && record.tags.every((tag) => typeof tag === "string")))
     );

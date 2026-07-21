@@ -170,10 +170,13 @@ export function buildAccountRecordDraft(params: {
     userId: params.claims.userId,
     authProvider: params.claims.authProvider,
     planType: params.remoteProfile?.planType ?? params.claims.planType,
-    subscriptionActiveUntil: params.remoteProfile?.subscriptionActiveUntil ?? params.claims.subscriptionActiveUntil ?? params.existing?.subscriptionActiveUntil,
+    subscriptionActiveUntil:
+      params.remoteProfile?.subscriptionActiveUntil ??
+      params.claims.subscriptionActiveUntil ??
+      params.existing?.subscriptionActiveUntil,
     accountId: remoteAccountIdMatchesClaims
-      ? params.remoteProfile?.accountId ?? params.claims.accountId ?? params.tokens.accountId
-      : params.claims.accountId ?? params.tokens.accountId,
+      ? (params.remoteProfile?.accountId ?? params.claims.accountId ?? params.tokens.accountId)
+      : (params.claims.accountId ?? params.tokens.accountId),
     organizationId: params.remoteProfile?.organizationId ?? params.claims.organizationId,
     accountName: resolvedAccountName,
     tags: normalizeAccountTagsForAccount(params.existing),
@@ -187,6 +190,8 @@ export function buildAccountRecordDraft(params: {
     isActive: params.forceActive,
     // New accounts should not silently opt into the status popup.
     showInStatusBar: params.existing?.showInStatusBar ?? false,
+    isHidden: params.existing?.isHidden ?? false,
+    accountGroup: params.existing?.accountGroup,
     balancePoolEnabled: params.existing?.balancePoolEnabled ?? false,
     dismissedHealthIssueKey: params.existing?.dismissedHealthIssueKey,
     lastQuotaAt: params.existing?.lastQuotaAt,
@@ -199,7 +204,10 @@ export function buildAccountRecordDraft(params: {
 
 export function applyRemoteProfileToAccount(params: {
   account: CodexAccountRecord;
-  claims: Pick<DecodedAuthClaims, "accountId" | "email" | "organizationId" | "planType" | "subscriptionActiveUntil" | "userId">;
+  claims: Pick<
+    DecodedAuthClaims,
+    "accountId" | "email" | "organizationId" | "planType" | "subscriptionActiveUntil" | "userId"
+  >;
   remoteProfile?: RemoteAccountProfileLike;
   planType?: string;
   allowAccountIdRepair?: boolean;
@@ -209,7 +217,10 @@ export function applyRemoteProfileToAccount(params: {
     return false;
   }
 
-  const repairedName = sanitizeWorkspaceName(params.remoteProfile?.accountName, params.planType ?? params.account.planType);
+  const repairedName = sanitizeWorkspaceName(
+    params.remoteProfile?.accountName,
+    params.planType ?? params.account.planType
+  );
   if (repairedName) {
     params.account.accountName = repairedName;
   }
@@ -222,7 +233,8 @@ export function applyRemoteProfileToAccount(params: {
     params.claims.subscriptionActiveUntil ??
     params.account.subscriptionActiveUntil;
   params.account.accountId = params.remoteProfile?.accountId ?? claimsAccountId ?? params.account.accountId;
-  params.account.organizationId = params.remoteProfile?.organizationId ?? params.claims.organizationId ?? params.account.organizationId;
+  params.account.organizationId =
+    params.remoteProfile?.organizationId ?? params.claims.organizationId ?? params.account.organizationId;
   params.account.accountStructure = resolveAccountStructure(
     params.remoteProfile?.accountStructure,
     params.account.accountStructure,

@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.27",
+  "version": "0.1.16-local.30",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -174,6 +174,21 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "When seamless quota balancing is enabled and an active 5-hour or long-term quota reaches 1% or lower, bypass the normal band-drop baseline and grace period, interrupt active turns, and recover interrupted or recently usage-limited threads. If a verified Free account reaches its 5-hour floor, first choose the fresh eligible Free pool account with the highest 5-hour quota and safe long-term quota; if none exists, use the normal mixed safe selector. Runtime usage-limit detection reads only bounded scalar status. This emergency behavior can repeat non-idempotent external side effects."
+        },
+        "codexAccounts.seamlessSwitchGroupAVisible": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show account group A in the Dashboard and allow its non-hidden accounts to be selected by Seamless Switching. Ungrouped non-hidden accounts always remain visible and eligible."
+        },
+        "codexAccounts.seamlessSwitchGroupBVisible": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show account group B in the Dashboard and allow its non-hidden accounts to be selected by Seamless Switching. Ungrouped non-hidden accounts always remain visible and eligible."
+        },
+        "codexAccounts.seamlessSwitchGroupCVisible": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show account group C in the Dashboard and allow its non-hidden accounts to be selected by Seamless Switching. Ungrouped non-hidden accounts always remain visible and eligible."
         },
         "codexAccounts.balanceByQuotaBandsEnabled": {
           "type": "boolean",

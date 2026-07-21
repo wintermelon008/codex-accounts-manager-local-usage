@@ -50,6 +50,9 @@ const QUOTA_WARNING_THRESHOLD = "quotaWarningThreshold";
 const SEAMLESS_QUOTA_BAND_SIZE = "seamlessSwitchQuotaBandSize";
 const SEAMLESS_RESERVE_THRESHOLD = "seamlessSwitchReserveThreshold";
 const SEAMLESS_EMERGENCY_SWITCH_ENABLED = "seamlessSwitchEmergencySwitchEnabled";
+const SEAMLESS_SWITCH_GROUP_A_VISIBLE = "seamlessSwitchGroupAVisible";
+const SEAMLESS_SWITCH_GROUP_B_VISIBLE = "seamlessSwitchGroupBVisible";
+const SEAMLESS_SWITCH_GROUP_C_VISIBLE = "seamlessSwitchGroupCVisible";
 const SEAMLESS_SWITCH_LEASE_MS = 2 * 60 * 1000;
 const MAX_WARNINGS_PER_CYCLE = 3;
 const quotaWarningCounts = new Map<string, number>();
@@ -295,11 +298,18 @@ async function runSeamlessBalanceSwitchForActiveQuota(
 
   const now = Date.now();
   const activeCapability = active ? getBalanceQuotaCapability(active, now) : "unknown";
+  // A disabled group only removes potential targets. Keep the currently active
+  // account in this one decision so it can safely rotate out after reaching its
+  // existing band/emergency condition instead of being forced away immediately.
+  const scopedAccounts = active
+    ? accounts.filter((account) => account.id === active.id || isAccountVisibleToSeamlessSwitch(account, config))
+    : accounts;
   if (
     !active?.quotaSummary ||
+    active.isHidden ||
     active.balancePoolEnabled !== true ||
     activeCapability === "unknown" ||
-    accounts.filter((account) => account.balancePoolEnabled === true).length < 2
+    scopedAccounts.filter((account) => account.balancePoolEnabled === true && !account.isHidden).length < 2
   ) {
     return false;
   }
@@ -311,7 +321,7 @@ async function runSeamlessBalanceSwitchForActiveQuota(
 
   try {
     return await executeSeamlessBalanceSwitch({
-      accounts,
+      accounts: scopedAccounts,
       active,
       activeCapability,
       config,
@@ -321,6 +331,23 @@ async function runSeamlessBalanceSwitchForActiveQuota(
     });
   } finally {
     await lease.release();
+  }
+}
+
+function isAccountVisibleToSeamlessSwitch(account: CodexAccountRecord, config: vscode.WorkspaceConfiguration): boolean {
+  if (account.isHidden) {
+    return false;
+  }
+
+  switch (account.accountGroup) {
+    case "A":
+      return config.get<boolean>(SEAMLESS_SWITCH_GROUP_A_VISIBLE, true);
+    case "B":
+      return config.get<boolean>(SEAMLESS_SWITCH_GROUP_B_VISIBLE, true);
+    case "C":
+      return config.get<boolean>(SEAMLESS_SWITCH_GROUP_C_VISIBLE, true);
+    default:
+      return true;
   }
 }
 
@@ -383,7 +410,9 @@ async function executeSeamlessBalanceSwitch(params: {
   // second-best Free candidate whose five-hour view may already be obsolete.
   const normalSelectionAccounts =
     hourlyEmergency && activeIsFreeWindowed
-      ? accounts.filter((account) => account.id === active.id || !isFreePlanType(account.planType))
+      ? accounts.filter(
+          (account) => !account.isHidden && (account.id === active.id || !isFreePlanType(account.planType))
+        )
       : accounts;
   const next =
     freeExhaustionCandidate ??
@@ -497,7 +526,7 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
   const hourlyQuotaControlEnabled = config.get<boolean>(HOURLY_QUOTA_CONTROL_ENABLED, false);
   const accounts = await repo.listAccounts();
   const active = accounts.find((account) => account.isActive);
-  if (!active?.quotaSummary || active.quotaError) {
+  if (!active?.quotaSummary || active.quotaError || active.isHidden) {
     return false;
   }
   if (isAutoSwitchLocked(active.id)) {
@@ -519,6 +548,7 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
     .filter(
       (account) =>
         !account.isActive &&
+        !account.isHidden &&
         !!account.quotaSummary &&
         !account.quotaError &&
         (!activeHourlyTriggered ||

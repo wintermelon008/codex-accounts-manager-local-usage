@@ -27,6 +27,13 @@ export function useDashboardModals(params: {
         return;
       case "dashboard:action-result":
         params.dispatch({ type: "resolve-action", requestId: message.requestId });
+        if (
+          message.action === "hideAccounts" &&
+          message.status === "completed" &&
+          message.payload?.affectedAccountIds?.length
+        ) {
+          params.dispatch({ type: "deselect-accounts", accountIds: message.payload.affectedAccountIds });
+        }
         if (accountModal.applyActionResult(message)) {
           return;
         }

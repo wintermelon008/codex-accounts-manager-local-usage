@@ -40,7 +40,7 @@ export function selectBalanceCandidate(params: {
 }): CodexAccountRecord | undefined {
   const now = params.now ?? Date.now();
   const active = params.accounts.find((account) => account.id === params.activeAccountId);
-  if (!active) {
+  if (!active || active.isHidden) {
     return undefined;
   }
 
@@ -53,6 +53,7 @@ export function selectBalanceCandidate(params: {
   const candidates = params.accounts.filter(
     (account) =>
       account.id !== params.activeAccountId &&
+      !account.isHidden &&
       account.balancePoolEnabled === true &&
       getBalanceQuotaCapability(account, now) !== "unknown" &&
       account.quotaSummary!.weeklyPercentage > reserveThreshold
@@ -133,7 +134,7 @@ export function selectFreeExhaustionCandidate(params: {
 }): CodexAccountRecord | undefined {
   const now = params.now ?? Date.now();
   const active = params.accounts.find((account) => account.id === params.activeAccountId);
-  if (!active || !isVerifiedFreeWindowedAccount(active, now)) {
+  if (!active || active.isHidden || !isVerifiedFreeWindowedAccount(active, now)) {
     return undefined;
   }
 
@@ -142,6 +143,7 @@ export function selectFreeExhaustionCandidate(params: {
     .filter(
       (account) =>
         account.id !== active.id &&
+        !account.isHidden &&
         account.balancePoolEnabled === true &&
         isVerifiedFreeWindowedAccount(account, now) &&
         hasFreshFreeExhaustionQuota(account, now) &&

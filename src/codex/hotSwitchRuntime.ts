@@ -156,6 +156,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     if (!account || !tokens?.accessToken) {
       throw new Error("The selected account has no usable Codex credentials");
     }
+    if (account.isHidden) {
+      throw new Error("The selected account is hidden. Unhide it before switching to it.");
+    }
     if (needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
       tokens = await this.refreshAccountTokens(account, tokens);
     }

@@ -27,6 +27,8 @@ export type CodexAuthMode = "chatgpt" | "oauth";
 
 export type SeamlessQuotaBandSize = 20 | 25 | 33 | 50;
 export type SeamlessReserveThreshold = 1 | 2 | 3;
+/** 账号面板与无感切号使用的可见分组。 */
+export type CodexAccountGroup = "A" | "B" | "C";
 
 /**
  * 配额摘要信息
@@ -176,6 +178,10 @@ export interface CodexAccountRecord {
   accountStructure?: string;
   /** 是否为当前激活账号 */
   isActive: boolean;
+  /** 是否在账号面板中隐藏，并排除所有账号切换候选 */
+  isHidden?: boolean;
+  /** 账号所属的无感切号显示分组；未设置时固定显示且始终参与无感候选范围 */
+  accountGroup?: CodexAccountGroup;
   /** 是否在状态栏显示 */
   showInStatusBar?: boolean;
   /** 是否参与五小时额度分档平衡 */

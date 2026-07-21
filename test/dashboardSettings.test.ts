@@ -190,6 +190,23 @@ describe("handleDashboardSettingUpdate", () => {
     );
   });
 
+  it("defaults all seamless groups to visible and persists an individual group filter", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((key: string, fallback: unknown) => (key === "seamlessSwitchGroupBVisible" ? false : fallback)),
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+    } as never);
+
+    const settings = new ExtensionSettingsStore().getDashboardSettings();
+    expect(settings.seamlessSwitchGroupAVisible).toBe(true);
+    expect(settings.seamlessSwitchGroupBVisible).toBe(false);
+    expect(settings.seamlessSwitchGroupCVisible).toBe(true);
+
+    await expect(handleDashboardSettingUpdate("seamlessSwitchGroupCVisible", false)).resolves.toBe(true);
+    expect(update).toHaveBeenCalledWith("seamlessSwitchGroupCVisible", false, vscode.ConfigurationTarget.Global);
+  });
+
   it("migrates the installed runtime flag to the seamless behavior switch until explicitly configured", () => {
     const inspect = vi.fn((key: string) => ({ key: `codexAccounts.${key}`, defaultValue: false }));
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({

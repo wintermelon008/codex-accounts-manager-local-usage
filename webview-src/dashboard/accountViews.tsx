@@ -72,6 +72,9 @@ export function BatchSelectionBar(props: {
   resyncPending: boolean;
   removePending: boolean;
   sharePending: boolean;
+  hidePending: boolean;
+  unhidePending: boolean;
+  groupPending: boolean;
   onRefresh: () => void;
   onResync: () => void;
   onRemove: () => void;
@@ -80,6 +83,9 @@ export function BatchSelectionBar(props: {
   onRemoveTags: () => void;
   onSetBalancePool: () => void;
   onRemoveFromBalancePool: () => void;
+  onHide: () => void;
+  onUnhide: () => void;
+  onSetAccountGroup: (accountGroup: "A" | "B" | "C" | undefined) => void;
 }) {
   return (
     <div class="batch-bar">
@@ -103,6 +109,38 @@ export function BatchSelectionBar(props: {
             : props.lang === "zh-hant"
               ? "移出無感切換池"
               : "Remove from Seamless Pool"}
+        </ActionButton>
+        <ActionButton
+          class="toolbar-btn"
+          pending={props.hidePending}
+          disabled={props.unhidePending}
+          onClick={props.onHide}
+        >
+          {props.lang === "zh" ? "隐藏账号" : props.lang === "zh-hant" ? "隱藏帳號" : "Hide Accounts"}
+        </ActionButton>
+        <ActionButton
+          class="toolbar-btn"
+          pending={props.unhidePending}
+          disabled={props.hidePending}
+          onClick={props.onUnhide}
+        >
+          {props.lang === "zh" ? "解除隐藏" : props.lang === "zh-hant" ? "解除隱藏" : "Unhide Accounts"}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" pending={props.groupPending} onClick={() => props.onSetAccountGroup("A")}>
+          {props.lang === "zh" ? "分组 A" : props.lang === "zh-hant" ? "分組 A" : "Group A"}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" pending={props.groupPending} onClick={() => props.onSetAccountGroup("B")}>
+          {props.lang === "zh" ? "分组 B" : props.lang === "zh-hant" ? "分組 B" : "Group B"}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" pending={props.groupPending} onClick={() => props.onSetAccountGroup("C")}>
+          {props.lang === "zh" ? "分组 C" : props.lang === "zh-hant" ? "分組 C" : "Group C"}
+        </ActionButton>
+        <ActionButton
+          class="toolbar-btn"
+          pending={props.groupPending}
+          onClick={() => props.onSetAccountGroup(undefined)}
+        >
+          {props.lang === "zh" ? "移出分组" : props.lang === "zh-hant" ? "移出分組" : "Remove Group"}
         </ActionButton>
         <ActionButton class="toolbar-btn" pending={props.refreshPending} onClick={props.onRefresh}>
           {props.copy.batchRefreshBtn}

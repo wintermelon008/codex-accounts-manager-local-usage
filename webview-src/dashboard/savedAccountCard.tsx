@@ -65,17 +65,23 @@ export function SavedAccountCard(props: {
   const emailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const backEmailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const selectionLabel = props.selected ? copy.deselectAccount : copy.selectAccount;
-  const poolToggleLabel = account.balancePoolEnabled
+  const poolToggleLabel = account.isHidden
     ? props.lang === "zh"
-      ? "移出无感切号池"
+      ? "隐藏账号不参与无感切号"
       : props.lang === "zh-hant"
-        ? "移出無感切換池"
-        : "Remove from seamless-switch pool"
-    : props.lang === "zh"
-      ? "加入无感切号池"
-      : props.lang === "zh-hant"
-        ? "加入無感切換池"
-        : "Add to seamless-switch pool";
+        ? "隱藏帳號不參與無感切換"
+        : "Hidden accounts do not participate in seamless switching"
+    : account.balancePoolEnabled
+      ? props.lang === "zh"
+        ? "移出无感切号池"
+        : props.lang === "zh-hant"
+          ? "移出無感切換池"
+          : "Remove from seamless-switch pool"
+      : props.lang === "zh"
+        ? "加入无感切号池"
+        : props.lang === "zh-hant"
+          ? "加入無感切換池"
+          : "Add to seamless-switch pool";
   const showReauthorizeButton = account.healthKind === "reauthorize" && !account.dismissedHealth;
   const [flipped, setFlipped] = useState(false);
   const showResyncButton = account.healthKind !== "reauthorize";
@@ -91,6 +97,7 @@ export function SavedAccountCard(props: {
       account.healthKind === "quota");
   const cardStateClass = [
     account.isActive ? "active" : "",
+    account.isHidden ? "is-hidden-account" : "",
     props.busy ? "is-busy" : "",
     props.selected ? "selected" : "",
     hasErrorHealth ? "health-error" : ""
@@ -183,6 +190,16 @@ export function SavedAccountCard(props: {
               </h3>
               <div class="saved-meta">
                 <span class="pill plan">{account.planTypeLabel}</span>
+                {account.isHidden ? (
+                  <span class="pill hidden">
+                    {props.lang === "zh" ? "已隐藏" : props.lang === "zh-hant" ? "已隱藏" : "Hidden"}
+                  </span>
+                ) : null}
+                {account.accountGroup ? (
+                  <span class={`pill account-group group-${account.accountGroup.toLowerCase()}`}>
+                    {resolveAccountGroupLabel(account.accountGroup, props.lang)}
+                  </span>
+                ) : null}
                 {account.isActive ? <span class="pill active">{copy.primaryAccount}</span> : null}
                 {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
                 {account.balancePoolEnabled ? (
@@ -223,11 +240,11 @@ export function SavedAccountCard(props: {
           <div class="saved-card-divider"></div>
           <div class="saved-actions" onClick={stopFlip}>
             <button
-              class={`saved-control saved-status-toggle saved-pool-toggle ${account.balancePoolEnabled ? "is-checked" : ""} ${props.poolTogglePending ? "is-pending" : ""}`}
+              class={`saved-control saved-status-toggle saved-pool-toggle ${account.balancePoolEnabled ? "is-checked" : ""} ${props.poolTogglePending ? "is-pending" : ""} ${account.isHidden ? "disabled" : ""}`}
               type="button"
               aria-label={poolToggleLabel}
               aria-pressed={account.balancePoolEnabled}
-              disabled={props.busy}
+              disabled={props.busy || account.isHidden}
               onClick={() => onAction("toggleBalancePool", account.id)}
             >
               <span class="saved-status-toggle-indicator" aria-hidden="true">
@@ -272,7 +289,7 @@ export function SavedAccountCard(props: {
               iconOnly
               label={copy.switchBtn}
               pending={props.switchPending}
-              disabled={props.busy}
+              disabled={props.busy || account.isHidden}
               onClick={() => onAction("switch", account.id)}
             />
             <ActionButton
@@ -379,6 +396,16 @@ function resolveBackStatus(account: DashboardAccountViewModel, lang: DashboardSt
 
 function resolveNoTags(lang: DashboardState["lang"]): string {
   return lang === "zh" ? "暂无标签" : lang === "zh-hant" ? "暫無標籤" : "No tags";
+}
+
+function resolveAccountGroupLabel(group: "A" | "B" | "C", lang: DashboardState["lang"]): string {
+  if (lang === "zh") {
+    return `分组 ${group}`;
+  }
+  if (lang === "zh-hant") {
+    return `分組 ${group}`;
+  }
+  return `Group ${group}`;
 }
 
 function resolveBackHint(lang: DashboardState["lang"]): string {

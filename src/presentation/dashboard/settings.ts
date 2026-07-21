@@ -36,6 +36,9 @@ export async function handleDashboardSettingUpdate(
     case "seamlessSwitchEnabled":
     case "seamlessSwitchQuotaBandsEnabled":
     case "seamlessSwitchEmergencySwitchEnabled":
+    case "seamlessSwitchGroupAVisible":
+    case "seamlessSwitchGroupBVisible":
+    case "seamlessSwitchGroupCVisible":
     case "hourlyQuotaControlEnabled":
     case "autoSwitchReloadWindowEnabled":
     case "backgroundTokenRefreshEnabled":
@@ -44,7 +47,13 @@ export async function handleDashboardSettingUpdate(
     case "localUsageShowEquivalentPrice":
       if (typeof value === "boolean") {
         await updateDashboardConfiguration(config, key, value);
-        if (key === "seamlessSwitchEnabled" || key === "seamlessSwitchQuotaBandsEnabled") {
+        if (
+          key === "seamlessSwitchEnabled" ||
+          key === "seamlessSwitchQuotaBandsEnabled" ||
+          key === "seamlessSwitchGroupAVisible" ||
+          key === "seamlessSwitchGroupBVisible" ||
+          key === "seamlessSwitchGroupCVisible"
+        ) {
           resetSeamlessSwitchRuntimeState();
         }
         updated = true;

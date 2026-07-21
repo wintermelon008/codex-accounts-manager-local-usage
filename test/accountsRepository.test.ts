@@ -1227,4 +1227,69 @@ describe("AccountsRepository token persistence", () => {
     firstHost.dispose();
     secondHost.dispose();
   });
+
+  it("hides accounts by removing them from the seamless pool and preserves their group when unhidden", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [
+          {
+            id: "account-1",
+            email: "dev@example.com",
+            isActive: false,
+            balancePoolEnabled: true,
+            createdAt: 1,
+            updatedAt: 1
+          },
+          {
+            id: "account-2",
+            email: "other@example.com",
+            isActive: true,
+            balancePoolEnabled: true,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+
+    const repo = new AccountsRepository(context);
+    await repo.setAccountGroup(["account-1"], "B");
+    await repo.hideAccounts(["account-1"]);
+
+    expect(await repo.getAccount("account-1")).toMatchObject({
+      isHidden: true,
+      balancePoolEnabled: false,
+      accountGroup: "B"
+    });
+    await expect(repo.switchAccount("account-1")).rejects.toThrow("Hidden accounts cannot be activated");
+    expect((await repo.setBalancePoolMembership("account-1", true)).balancePoolEnabled).toBe(false);
+
+    await repo.unhideAccounts(["account-1"]);
+
+    expect(await repo.getAccount("account-1")).toMatchObject({
+      isHidden: false,
+      balancePoolEnabled: true,
+      accountGroup: "B"
+    });
+    await repo.setAccountGroup(["account-1"], undefined);
+    expect((await repo.getAccount("account-1"))?.accountGroup).toBeUndefined();
+    repo.dispose();
+  });
 });

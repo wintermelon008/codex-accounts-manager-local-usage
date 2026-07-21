@@ -35,6 +35,54 @@ html[data-theme="auto"] body.vscode-light .panel {
   gap: 12px;
   margin-bottom: 12px;
 }
+.saved-accounts-header-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.account-group-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-surface);
+}
+.account-group-filter {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.account-group-filter:hover,
+.account-group-filter:focus-visible {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+}
+.account-group-filter.is-active {
+  border-color: rgba(56, 139, 253, 0.42);
+  background: rgba(56, 139, 253, 0.18);
+  color: var(--accent-blue);
+}
+.saved-accounts-hidden-empty {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px dashed rgba(163, 113, 247, 0.46);
+  border-radius: 10px;
+  color: #c4b5fd;
+  background: rgba(163, 113, 247, 0.08);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .header-title {
   font-weight: 800;
   letter-spacing: 0.01em;
@@ -496,6 +544,26 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   color: var(--accent-blue);
   border: 1px solid var(--border-accent);
 }
+.pill.hidden {
+  background: rgba(163, 113, 247, 0.17);
+  color: #c4b5fd;
+  border: 1px solid rgba(163, 113, 247, 0.42);
+}
+.pill.account-group.group-a {
+  background: rgba(56, 139, 253, 0.15);
+  color: var(--accent-blue);
+  border: 1px solid rgba(56, 139, 253, 0.32);
+}
+.pill.account-group.group-b {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--accent-green);
+  border: 1px solid rgba(63, 185, 80, 0.3);
+}
+.pill.account-group.group-c {
+  background: rgba(225, 138, 59, 0.16);
+  color: var(--accent-orange);
+  border: 1px solid rgba(225, 138, 59, 0.34);
+}
 .pill.ok {
   background: rgba(63, 185, 80, 0.15);
   color: var(--accent-green);
@@ -847,7 +915,8 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   box-shadow: var(--shadow-glow-blue);
 }
 .saved-card-container:hover .saved-card.active,
-.saved-card-container:hover .saved-card.health-error {
+.saved-card-container:hover .saved-card.health-error,
+.saved-card-container:hover .saved-card.is-hidden-account {
   border-color: var(--saved-card-selected-border);
   box-shadow:
     0 0 12px rgba(var(--saved-card-glow-rgb), 0.09),
@@ -862,7 +931,9 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
 .saved-card.active:hover,
 .saved-card.active:focus-within,
 .saved-card.health-error:hover,
-.saved-card.health-error:focus-within {
+.saved-card.health-error:focus-within,
+.saved-card.is-hidden-account:hover,
+.saved-card.is-hidden-account:focus-within {
   border-color: var(--saved-card-selected-border);
   box-shadow:
     0 0 12px rgba(var(--saved-card-glow-rgb), 0.09),
@@ -893,8 +964,22 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
     0 0 9px rgba(248, 81, 73, 0.07),
     inset 0 0 12px rgba(248, 81, 73, 0.018);
 }
+.saved-card.is-hidden-account {
+  --saved-card-glow-rgb: 163, 113, 247;
+  --saved-card-glow-opacity: 1;
+  --saved-card-glow-edge: 0.06;
+  --saved-card-glow-mid: 0.026;
+  --saved-card-glow-inner: 0.008;
+  --saved-card-selected-border: #a371f7;
+  border-color: #a371f7;
+  background: linear-gradient(145deg, rgba(163, 113, 247, 0.12), var(--bg-surface));
+  box-shadow:
+    0 0 9px rgba(163, 113, 247, 0.08),
+    inset 0 0 12px rgba(163, 113, 247, 0.024);
+}
 .saved-card.active::before,
-.saved-card.health-error::before {
+.saved-card.health-error::before,
+.saved-card.is-hidden-account::before {
   opacity: var(--saved-card-glow-opacity);
 }
 .saved-card.selected {
@@ -916,6 +1001,9 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
 }
 .saved-card.health-error.selected {
   border-color: #f85149;
+}
+.saved-card.is-hidden-account.selected {
+  border-color: #a371f7;
 }
 .saved-card.is-busy {
   box-shadow:
@@ -960,6 +1048,17 @@ html[data-theme="auto"] body.vscode-light .saved-card.health-error {
   box-shadow:
     0 0 12px rgba(220, 38, 38, 0.07),
     inset 0 0 16px rgba(220, 38, 38, 0.024);
+}
+html[data-theme="light"] .saved-card.is-hidden-account,
+html[data-theme="auto"] body.vscode-light .saved-card.is-hidden-account {
+  --saved-card-glow-edge: 0.09;
+  --saved-card-glow-mid: 0.038;
+  --saved-card-glow-inner: 0.01;
+  border-color: #7c3aed;
+  background: linear-gradient(145deg, rgba(124, 58, 237, 0.08), var(--bg-surface));
+  box-shadow:
+    0 0 12px rgba(124, 58, 237, 0.07),
+    inset 0 0 16px rgba(124, 58, 237, 0.024);
 }
 html[data-theme="light"] .saved-card-container:hover .saved-card.active,
 html[data-theme="auto"] body.vscode-light .saved-card-container:hover .saved-card.active {
@@ -1134,6 +1233,30 @@ html[data-theme="auto"] body.vscode-light .pill.plan {
   border-color: var(--border-accent);
   background: rgba(9, 105, 218, 0.08);
   color: var(--accent-blue);
+}
+html[data-theme="light"] .pill.hidden,
+html[data-theme="auto"] body.vscode-light .pill.hidden {
+  border-color: rgba(109, 40, 217, 0.26);
+  background: rgba(109, 40, 217, 0.1);
+  color: #6d28d9;
+}
+html[data-theme="light"] .pill.account-group.group-a,
+html[data-theme="auto"] body.vscode-light .pill.account-group.group-a {
+  border-color: rgba(9, 105, 218, 0.24);
+  background: rgba(9, 105, 218, 0.08);
+  color: #0969da;
+}
+html[data-theme="light"] .pill.account-group.group-b,
+html[data-theme="auto"] body.vscode-light .pill.account-group.group-b {
+  border-color: rgba(31, 138, 76, 0.22);
+  background: rgba(31, 138, 76, 0.1);
+  color: #17633a;
+}
+html[data-theme="light"] .pill.account-group.group-c,
+html[data-theme="auto"] body.vscode-light .pill.account-group.group-c {
+  border-color: rgba(183, 121, 31, 0.22);
+  background: rgba(183, 121, 31, 0.1);
+  color: #83540f;
 }
 html[data-theme="light"] .pill.warning,
 html[data-theme="auto"] body.vscode-light .pill.warning {

@@ -4,6 +4,7 @@ import type {
   CodexImportPreviewSummary,
   CodexImportResultSummary,
   CodexIndexHealthSummary,
+  CodexAccountGroup,
   SeamlessQuotaBandSize,
   SeamlessReserveThreshold
 } from "../../core/types";
@@ -22,6 +23,9 @@ export type DashboardSettingKey =
   | "seamlessSwitchQuotaBandSize"
   | "seamlessSwitchReserveThreshold"
   | "seamlessSwitchEmergencySwitchEnabled"
+  | "seamlessSwitchGroupAVisible"
+  | "seamlessSwitchGroupBVisible"
+  | "seamlessSwitchGroupCVisible"
   | "hotSwitchGraceSeconds"
   | "hotSwitchLongTurnPolicy"
   | "hourlyQuotaControlEnabled"
@@ -51,6 +55,9 @@ export interface DashboardSettings {
   seamlessSwitchQuotaBandSize: SeamlessQuotaBandSize;
   seamlessSwitchReserveThreshold: SeamlessReserveThreshold;
   seamlessSwitchEmergencySwitchEnabled: boolean;
+  seamlessSwitchGroupAVisible: boolean;
+  seamlessSwitchGroupBVisible: boolean;
+  seamlessSwitchGroupCVisible: boolean;
   hotSwitchGraceSeconds: number;
   hotSwitchLongTurnPolicy: "defer" | "interrupt" | "interruptAndContinue";
   hourlyQuotaControlEnabled: boolean;
@@ -381,6 +388,8 @@ export interface DashboardAccountViewModel {
   accountId?: string;
   organizationId?: string;
   isActive: boolean;
+  isHidden: boolean;
+  accountGroup?: CodexAccountGroup;
   isCurrentWindowAccount: boolean;
   balancePoolEnabled: boolean;
   showInStatusBar: boolean;
@@ -523,6 +532,9 @@ export type DashboardActionName =
   | "setBalancePool"
   | "removeFromBalancePool"
   | "toggleBalancePool"
+  | "hideAccounts"
+  | "unhideAccounts"
+  | "setAccountGroup"
   | "setAutoSwitchLock"
   | "batchRefresh"
   | "batchResyncProfile"
@@ -557,6 +569,7 @@ export interface DashboardActionPayload {
   issueKey?: string;
   recoveryMode?: boolean;
   tags?: string[];
+  accountGroup?: CodexAccountGroup;
   mode?: "set" | "add" | "remove";
   lockMinutes?: number;
   announcementId?: string;
@@ -564,6 +577,7 @@ export interface DashboardActionPayload {
 }
 
 export interface DashboardActionResultPayload {
+  affectedAccountIds?: string[];
   sharedJson?: string;
   oauthSession?: DashboardOAuthSessionDescriptor;
   importPreview?: CodexImportPreviewSummary;

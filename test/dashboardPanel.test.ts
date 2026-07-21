@@ -19,6 +19,8 @@ import {
   getDashboardLocalUsageRefreshDelay,
   publishDashboardSnapshot
 } from "../src/presentation/dashboard/panel";
+import { getLowWeeklyQuotaAccountIds } from "../webview-src/dashboard/helpers";
+import { createInitialState, reducer } from "../webview-src/dashboard/state";
 
 const localUsage = {
   status: "ready" as const,
@@ -62,6 +64,9 @@ function createState(): DashboardState {
       seamlessSwitchQuotaBandSize: 20,
       seamlessSwitchReserveThreshold: 3,
       seamlessSwitchEmergencySwitchEnabled: false,
+      seamlessSwitchGroupAVisible: true,
+      seamlessSwitchGroupBVisible: true,
+      seamlessSwitchGroupCVisible: true,
       hotSwitchGraceSeconds: 60,
       hotSwitchLongTurnPolicy: "defer",
       hourlyQuotaControlEnabled: false,
@@ -116,6 +121,45 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | "ti
     })
   ]);
 }
+
+describe("Dashboard account selection", () => {
+  it("only targets visible, non-hidden accounts whose weekly quota is below 3%", () => {
+    const accounts = [
+      {
+        id: "below-threshold",
+        isHidden: false,
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 2.99, visible: true }]
+      },
+      {
+        id: "at-threshold",
+        isHidden: false,
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 3, visible: true }]
+      },
+      {
+        id: "hidden-low-quota",
+        isHidden: true,
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 1, visible: true }]
+      },
+      {
+        id: "no-weekly-window",
+        isHidden: false,
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 1, visible: false }]
+      }
+    ] as DashboardState["accounts"];
+
+    expect(getLowWeeklyQuotaAccountIds(accounts)).toEqual(["below-threshold"]);
+  });
+
+  it("deselects only accounts that were actually hidden", () => {
+    let state = createInitialState();
+    state = reducer(state, { type: "toggle-select", accountId: "hidden-account" });
+    state = reducer(state, { type: "toggle-select", accountId: "still-selected" });
+
+    const nextState = reducer(state, { type: "deselect-accounts", accountIds: ["hidden-account"] });
+
+    expect(nextState.selectedAccountIds).toEqual(["still-selected"]);
+  });
+});
 
 describe("publishDashboardSnapshot", () => {
   it("includes the sanitized local usage snapshot without delaying the dashboard", async () => {

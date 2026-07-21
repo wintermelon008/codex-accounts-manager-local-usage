@@ -1,11 +1,22 @@
 import { render } from "preact";
 import { useEffect, useReducer, useState } from "preact/hooks";
 import packageJson from "../../package.json";
-import type { DashboardAccountViewModel } from "../../src/domain/dashboard/types";
+import type { CodexAccountGroup } from "../../src/core/types";
+import type {
+  DashboardAccountViewModel,
+  DashboardSettingKey,
+  DashboardSettings
+} from "../../src/domain/dashboard/types";
 import { AnnouncementCenter } from "./announcementCenter";
-import { BatchSelectionBar, OverviewSection, RecoveryPanel } from "./components";
+import { ActionButton, BatchSelectionBar, OverviewSection, RecoveryPanel } from "./components";
 import { postMessageToHost } from "./host";
-import { formatSavedAccountsSummary, normalizeThresholds, resolveLockMinutes, resolveOverviewAccount } from "./helpers";
+import {
+  formatSavedAccountsSummary,
+  getLowWeeklyQuotaAccountIds,
+  normalizeThresholds,
+  resolveLockMinutes,
+  resolveOverviewAccount
+} from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
 import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon } from "./icons";
 import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
@@ -15,11 +26,33 @@ import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
 
 const GITHUB_PROJECT_URL = "https://github.com/wannanbigpig/codex-tools";
+const ACCOUNT_GROUPS: readonly CodexAccountGroup[] = ["A", "B", "C"];
+
+type SeamlessSwitchGroupVisibilityKey = Extract<
+  DashboardSettingKey,
+  "seamlessSwitchGroupAVisible" | "seamlessSwitchGroupBVisible" | "seamlessSwitchGroupCVisible"
+>;
+
+function getAccountGroupVisibilityKey(group: CodexAccountGroup): SeamlessSwitchGroupVisibilityKey {
+  switch (group) {
+    case "A":
+      return "seamlessSwitchGroupAVisible";
+    case "B":
+      return "seamlessSwitchGroupBVisible";
+    case "C":
+      return "seamlessSwitchGroupCVisible";
+  }
+}
+
+function isAccountInVisibleGroup(account: DashboardAccountViewModel, settings: DashboardSettings): boolean {
+  return account.accountGroup == null || settings[getAccountGroupVisibilityKey(account.accountGroup)];
+}
 
 function App() {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
+  const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
   const { patchSettings, sendAction, sendSetting, isActionPending, hasGlobalPendingAction } = useDashboardActions(
     state,
     dispatch
@@ -66,6 +99,16 @@ function App() {
 
   const activeAccount = snapshot.accounts.find((account) => account.isActive);
   const overviewAccount = resolveOverviewAccount(snapshot.accounts);
+  const hiddenAccountCount = snapshot.accounts.filter((account) => account.isHidden).length;
+  const displayedAccounts = snapshot.accounts.filter(
+    (account) => isAccountInVisibleGroup(account, snapshot.settings) && (showHiddenAccounts || !account.isHidden)
+  );
+  const lowWeeklyQuotaAccountIds = getLowWeeklyQuotaAccountIds(displayedAccounts);
+  const hiddenAccountsToggleLabel = resolveHiddenAccountsToggleLabel(
+    snapshot.lang,
+    showHiddenAccounts,
+    hiddenAccountCount
+  );
 
   const handleAutoRefreshToggle = (enabled: boolean): void => {
     const nextMinutes = enabled ? state.lastEnabledAutoRefreshMinutes || 15 : 0;
@@ -104,6 +147,13 @@ function App() {
     sendSetting("quotaGreenThreshold", thresholds.green);
   };
 
+  const handleAccountGroupVisibilityToggle = (group: CodexAccountGroup): void => {
+    const key = getAccountGroupVisibilityKey(group);
+    const nextVisible = !snapshot.settings[key];
+    patchSettings({ [key]: nextVisible });
+    sendSetting(key, nextVisible);
+  };
+
   const selectedAccountIds = new Set(state.selectedAccountIds);
   const selectedCount = state.selectedAccountIds.length;
   const isAccountBusy = (accountId: string): boolean =>
@@ -125,6 +175,9 @@ function App() {
   const batchTagsPending = state.pendingActions.some(
     (request) => request.action === "updateTags" && request.accountId == null
   );
+  const hideAccountsPending = isActionPending("hideAccounts");
+  const unhideAccountsPending = isActionPending("unhideAccounts");
+  const setAccountGroupPending = isActionPending("setAccountGroup");
   const invalidAccountCount = snapshot.accounts.filter(
     (account) =>
       !account.dismissedHealth &&
@@ -316,7 +369,9 @@ function App() {
             onToggleAutoSwitchLock={handleAutoSwitchLock}
             onAddAccount={modals.openAddAccountModal}
             onImportCurrent={() => sendAction("importCurrent")}
-            onRefreshAll={() => sendAction("refreshAll")}
+            onRefreshAll={() =>
+              sendAction("refreshAll", undefined, { accountIds: displayedAccounts.map((account) => account.id) })
+            }
           />
         </section>
         {snapshot.accounts.length > 0 ? (
@@ -336,33 +391,99 @@ function App() {
                 </div>
                 <div class="header-sub">{snapshot.copy.savedAccountsSub}</div>
               </div>
-              {selectedCount > 0 ? (
-                <BatchSelectionBar
-                  copy={snapshot.copy}
-                  lang={snapshot.lang}
-                  selectedCount={selectedCount}
-                  refreshPending={batchRefreshPending}
-                  resyncPending={batchResyncPending}
-                  removePending={batchRemovePending}
-                  sharePending={sharePending}
-                  tagsPending={batchTagsPending}
-                  onRefresh={() => sendAction("batchRefresh", undefined, { accountIds: state.selectedAccountIds })}
-                  onResync={() => sendAction("batchResyncProfile", undefined, { accountIds: state.selectedAccountIds })}
-                  onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
-                  onShare={handleShareTokens}
-                  onAddTags={() => handleBatchTagMutation("add")}
-                  onRemoveTags={() => handleBatchTagMutation("remove")}
-                  onSetBalancePool={() =>
-                    sendAction("setBalancePool", undefined, { accountIds: state.selectedAccountIds })
+              <div class="saved-accounts-header-actions">
+                <div class="account-group-filters" aria-label={resolveAccountGroupFiltersLabel(snapshot.lang)}>
+                  {ACCOUNT_GROUPS.map((group) => {
+                    const key = getAccountGroupVisibilityKey(group);
+                    const visible = snapshot.settings[key];
+                    const label = resolveAccountGroupVisibilityLabel(snapshot.lang, group, visible);
+                    return (
+                      <button
+                        key={group}
+                        class={`account-group-filter ${visible ? "is-active" : ""}`}
+                        type="button"
+                        title={label}
+                        aria-label={label}
+                        aria-pressed={visible}
+                        onClick={() => handleAccountGroupVisibilityToggle(group)}
+                      >
+                        {group}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  id="hiddenAccountsToggleButton"
+                  class={`settings-btn action-btn icon-only ${showHiddenAccounts ? "is-active" : ""}`}
+                  type="button"
+                  title={hiddenAccountsToggleLabel}
+                  aria-label={hiddenAccountsToggleLabel}
+                  aria-pressed={showHiddenAccounts}
+                  disabled={hiddenAccountCount === 0}
+                  onClick={() => setShowHiddenAccounts((visible) => !visible)}
+                >
+                  <span class="button-face">
+                    <span class="button-icon">{showHiddenAccounts ? <EyeOffIcon /> : <EyeIcon />}</span>
+                  </span>
+                  <span class="button-tip" aria-hidden="true">
+                    {hiddenAccountsToggleLabel}
+                  </span>
+                </button>
+                <ActionButton
+                  class="toolbar-btn"
+                  pending={hideAccountsPending}
+                  disabled={
+                    lowWeeklyQuotaAccountIds.length === 0 ||
+                    unhideAccountsPending ||
+                    hasGlobalPendingAction ||
+                    snapshot.indexHealth.status === "corrupted_unrecoverable"
                   }
-                  onRemoveFromBalancePool={() =>
-                    sendAction("removeFromBalancePool", undefined, { accountIds: state.selectedAccountIds })
+                  onClick={() =>
+                    sendAction("hideAccounts", undefined, {
+                      accountIds: lowWeeklyQuotaAccountIds
+                    })
                   }
-                />
-              ) : null}
+                >
+                  {resolveHideLowWeeklyQuotaLabel(snapshot.lang, lowWeeklyQuotaAccountIds.length)}
+                </ActionButton>
+                {selectedCount > 0 ? (
+                  <BatchSelectionBar
+                    copy={snapshot.copy}
+                    lang={snapshot.lang}
+                    selectedCount={selectedCount}
+                    refreshPending={batchRefreshPending}
+                    resyncPending={batchResyncPending}
+                    removePending={batchRemovePending}
+                    sharePending={sharePending}
+                    tagsPending={batchTagsPending}
+                    hidePending={hideAccountsPending}
+                    unhidePending={unhideAccountsPending}
+                    groupPending={setAccountGroupPending}
+                    onRefresh={() => sendAction("batchRefresh", undefined, { accountIds: state.selectedAccountIds })}
+                    onResync={() =>
+                      sendAction("batchResyncProfile", undefined, { accountIds: state.selectedAccountIds })
+                    }
+                    onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
+                    onShare={handleShareTokens}
+                    onAddTags={() => handleBatchTagMutation("add")}
+                    onRemoveTags={() => handleBatchTagMutation("remove")}
+                    onSetBalancePool={() =>
+                      sendAction("setBalancePool", undefined, { accountIds: state.selectedAccountIds })
+                    }
+                    onRemoveFromBalancePool={() =>
+                      sendAction("removeFromBalancePool", undefined, { accountIds: state.selectedAccountIds })
+                    }
+                    onHide={() => sendAction("hideAccounts", undefined, { accountIds: state.selectedAccountIds })}
+                    onUnhide={() => sendAction("unhideAccounts", undefined, { accountIds: state.selectedAccountIds })}
+                    onSetAccountGroup={(accountGroup) =>
+                      sendAction("setAccountGroup", undefined, { accountIds: state.selectedAccountIds, accountGroup })
+                    }
+                  />
+                ) : null}
+              </div>
             </div>
             <div class="accounts-grid">
-              {snapshot.accounts.map((account) => (
+              {displayedAccounts.map((account) => (
                 <SavedAccountCard
                   key={account.id}
                   account={account}
@@ -390,6 +511,13 @@ function App() {
                 />
               ))}
             </div>
+            {displayedAccounts.length === 0 ? (
+              <div class="saved-accounts-hidden-empty">
+                {hiddenAccountCount > 0 && !showHiddenAccounts
+                  ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
+                  : resolveAccountGroupEmptyLabel(snapshot.lang)}
+              </div>
+            ) : null}
           </section>
         ) : null}
         <LocalUsageSection
@@ -499,6 +627,66 @@ function resolveAboutTitle(lang: string): string {
     return "關於";
   }
   return "About";
+}
+
+function resolveHiddenAccountsToggleLabel(lang: string, visible: boolean, count: number): string {
+  if (lang === "zh") {
+    return visible ? `隐藏已隐藏账号（${count}）` : `显示隐藏账号（${count}）`;
+  }
+  if (lang === "zh-hant") {
+    return visible ? `隱藏已隱藏帳號（${count}）` : `顯示隱藏帳號（${count}）`;
+  }
+  return visible ? `Hide hidden accounts (${count})` : `Show hidden accounts (${count})`;
+}
+
+function resolveHiddenAccountsEmptyLabel(lang: string): string {
+  if (lang === "zh") {
+    return "所有账号均已隐藏。使用右上角眼睛按钮显示它们。";
+  }
+  if (lang === "zh-hant") {
+    return "所有帳號均已隱藏。使用右上角眼睛按鈕顯示它們。";
+  }
+  return "All accounts are hidden. Use the eye button above to show them.";
+}
+
+function resolveHideLowWeeklyQuotaLabel(lang: string, count: number): string {
+  if (lang === "zh") {
+    return `隐藏周额度 <3%（${count}）`;
+  }
+  if (lang === "zh-hant") {
+    return `隱藏週額度 <3%（${count}）`;
+  }
+  return `Hide weekly <3% (${count})`;
+}
+
+function resolveAccountGroupFiltersLabel(lang: string): string {
+  if (lang === "zh") {
+    return "账号分组筛选";
+  }
+  if (lang === "zh-hant") {
+    return "帳號分組篩選";
+  }
+  return "Account group filters";
+}
+
+function resolveAccountGroupVisibilityLabel(lang: string, group: CodexAccountGroup, visible: boolean): string {
+  if (lang === "zh") {
+    return visible ? `隐藏分组 ${group}` : `显示分组 ${group}`;
+  }
+  if (lang === "zh-hant") {
+    return visible ? `隱藏分組 ${group}` : `顯示分組 ${group}`;
+  }
+  return visible ? `Hide group ${group}` : `Show group ${group}`;
+}
+
+function resolveAccountGroupEmptyLabel(lang: string): string {
+  if (lang === "zh") {
+    return "当前筛选未显示任何账号。未分组的未隐藏账号始终显示。";
+  }
+  if (lang === "zh-hant") {
+    return "目前篩選沒有顯示帳號。未分組且未隱藏的帳號會一律顯示。";
+  }
+  return "No accounts match the current group filters. Ungrouped, non-hidden accounts always remain visible.";
 }
 
 render(<App />, document.getElementById("app")!);

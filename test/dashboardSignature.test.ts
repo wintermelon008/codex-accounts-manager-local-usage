@@ -5,6 +5,8 @@ import type { DashboardState } from "../src/domain/dashboard/types";
 function createState(overrides?: {
   resetCreditsAvailable?: number;
   resetCreditsNextExpiresAt?: number;
+  isHidden?: boolean;
+  accountGroup?: "A" | "B" | "C";
 }): DashboardState {
   return {
     lang: "zh",
@@ -25,6 +27,9 @@ function createState(overrides?: {
       seamlessSwitchQuotaBandSize: 20,
       seamlessSwitchReserveThreshold: 3,
       seamlessSwitchEmergencySwitchEnabled: false,
+      seamlessSwitchGroupAVisible: true,
+      seamlessSwitchGroupBVisible: true,
+      seamlessSwitchGroupCVisible: true,
       hotSwitchGraceSeconds: 60,
       hotSwitchLongTurnPolicy: "defer",
       hourlyQuotaControlEnabled: false,
@@ -61,6 +66,8 @@ function createState(overrides?: {
         tags: [],
         planTypeLabel: "Plus",
         isActive: true,
+        isHidden: overrides?.isHidden ?? false,
+        accountGroup: overrides?.accountGroup,
         balancePoolEnabled: false,
         showInStatusBar: false,
         healthKind: "healthy",
@@ -81,6 +88,24 @@ describe("buildDashboardStateSignature", () => {
     );
 
     expect(after).not.toBe(before);
+  });
+
+  it("changes when an account is hidden or unhidden", () => {
+    expect(buildDashboardStateSignature(createState({ isHidden: true }))).not.toBe(
+      buildDashboardStateSignature(createState({ isHidden: false }))
+    );
+  });
+
+  it("changes when an account group or its visible-group setting changes", () => {
+    const base = createState();
+    const grouped = createState({ accountGroup: "A" });
+    const groupFilterChanged: DashboardState = {
+      ...base,
+      settings: { ...base.settings, seamlessSwitchGroupAVisible: false }
+    };
+
+    expect(buildDashboardStateSignature(grouped)).not.toBe(buildDashboardStateSignature(base));
+    expect(buildDashboardStateSignature(groupFilterChanged)).not.toBe(buildDashboardStateSignature(base));
   });
 
   it("changes when local usage settings or the cached aggregate changes", () => {
