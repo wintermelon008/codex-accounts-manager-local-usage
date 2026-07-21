@@ -23,6 +23,7 @@ function createState(overrides?: {
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: false,
       seamlessSwitchQuotaBandSize: 20,
+      seamlessSwitchReserveThreshold: 3,
       seamlessSwitchEmergencySwitchEnabled: false,
       hotSwitchGraceSeconds: 60,
       hotSwitchLongTurnPolicy: "defer",
@@ -185,6 +186,16 @@ describe("buildDashboardStateSignature", () => {
     const baseSignature = buildDashboardStateSignature(base);
     expect(buildDashboardStateSignature(settingChanged)).not.toBe(baseSignature);
     expect(buildDashboardStateSignature(poolChanged)).not.toBe(baseSignature);
+  });
+
+  it("changes when the seamless reserve threshold changes", () => {
+    const base = createState();
+    const changed: DashboardState = {
+      ...base,
+      settings: { ...base.settings, seamlessSwitchReserveThreshold: 1 }
+    };
+
+    expect(buildDashboardStateSignature(changed)).not.toBe(buildDashboardStateSignature(base));
   });
 
   it("changes when the quota-band size or emergency switch changes", () => {

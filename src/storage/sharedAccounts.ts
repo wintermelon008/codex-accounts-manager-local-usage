@@ -68,7 +68,7 @@ export function restoreSharedTokens(entry: SharedCodexAccountJson): CodexTokens 
   };
 }
 
-export function normalizeAccountTags(tags: unknown, fallback?: string[] | null | undefined): string[] | undefined {
+export function normalizeAccountTags(tags: unknown, fallback?: string[] | null): string[] | undefined {
   const source = Array.isArray(tags) ? tags : Array.isArray(fallback) ? fallback : [];
   const normalized = Array.from(
     new Map(

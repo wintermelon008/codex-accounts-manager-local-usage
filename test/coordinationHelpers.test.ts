@@ -1,6 +1,15 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createAccountsRepositoryState } from "../src/storage/accountsRepositoryState";
-import { assertWriteAllowed, markPendingSave, readPendingOrCachedIndex } from "../src/storage/accountsWriteCoordinator";
+import {
+  assertWriteAllowed,
+  markPendingSave,
+  mergeAccountsIndexChanges,
+  readPendingOrCachedIndex,
+  tryAcquireSharedFileLease
+} from "../src/storage/accountsWriteCoordinator";
 import { ErrorCode, StorageError } from "../src/core/errors";
 import { parseSharedJsonInput, toImportActionPayload } from "../src/presentation/dashboard/actionUtils";
 import {
@@ -42,6 +51,73 @@ describe("accountsWriteCoordinator helpers", () => {
 
     expect(() => assertWriteAllowed(state)).toThrowError(StorageError);
     expect(() => assertWriteAllowed(state)).toThrow(/Restore accounts before writing again/);
+  });
+
+  it("three-way merges independent account field changes from two hosts", () => {
+    const base = {
+      currentAccountId: "a",
+      accounts: [
+        {
+          id: "a",
+          email: "a@example.com",
+          accountName: "Base",
+          tags: ["base"],
+          balancePoolEnabled: false,
+          isActive: true,
+          createdAt: 1,
+          updatedAt: 1
+        }
+      ]
+    };
+    const local = structuredClone(base);
+    local.accounts[0]!.tags = ["local"];
+    local.accounts[0]!.updatedAt = 3;
+    const latest = structuredClone(base);
+    latest.accounts[0]!.accountName = "External";
+    latest.accounts[0]!.balancePoolEnabled = true;
+    latest.accounts[0]!.quotaSummary = {
+      hourlyPercentage: 50,
+      hourlyWindowPresent: true,
+      hourlyWindowMinutes: 300,
+      weeklyPercentage: 80,
+      weeklyWindowPresent: true,
+      weeklyWindowMinutes: 10_080,
+      codeReviewPercentage: 0
+    };
+    latest.accounts[0]!.updatedAt = 2;
+
+    const merged = mergeAccountsIndexChanges(base, local, latest);
+
+    expect(merged.accounts[0]).toMatchObject({
+      accountName: "External",
+      balancePoolEnabled: true,
+      tags: ["local"],
+      quotaSummary: { hourlyPercentage: 50, weeklyPercentage: 80 },
+      updatedAt: 3
+    });
+  });
+
+  it("uses an exclusive expiring filesystem lease", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "codex-accounts-lease-test-"));
+    const lockPath = path.join(directory, "shared.lease");
+    try {
+      const first = await tryAcquireSharedFileLease(lockPath, 1_000);
+      expect(first).toBeDefined();
+      await expect(tryAcquireSharedFileLease(lockPath, 1_000)).resolves.toBeUndefined();
+
+      await first?.release();
+      const second = await tryAcquireSharedFileLease(lockPath, 1_000);
+      expect(second).toBeDefined();
+      await second?.release();
+
+      await fs.mkdir(lockPath);
+      await fs.writeFile(path.join(lockPath, "owner.json"), JSON.stringify({ expiresAt: 0 }), "utf8");
+      const afterExpiry = await tryAcquireSharedFileLease(lockPath, 1_000, 100);
+      expect(afterExpiry).toBeDefined();
+      await afterExpiry?.release();
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

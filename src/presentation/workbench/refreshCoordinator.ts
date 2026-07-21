@@ -14,6 +14,7 @@ import { getTokenAutomationSnapshot } from "./tokenAutomationState";
 import { promptWindowReloadForAccount } from "../../application/accounts/switchEffects";
 
 const EXTERNAL_RUNTIME_RETRY_DELAY_MS = 1_000;
+export const EXTERNAL_STATE_POLL_INTERVAL_MS = 2_000;
 
 type RefreshView = {
   refresh: () => void;
@@ -26,6 +27,7 @@ type RefreshView = {
 
 export class WorkbenchRefreshCoordinator {
   private lastObservedAuthIdentity?: string;
+  private lastExternalStateRevision?: string;
   private lastRefreshSignature?: string;
   private refreshTimer: NodeJS.Timeout | undefined;
 
@@ -37,6 +39,9 @@ export class WorkbenchRefreshCoordinator {
 
   async initializeObservedAuthIdentity(): Promise<void> {
     this.lastObservedAuthIdentity = await this.readObservedAuthIdentity();
+    this.lastExternalStateRevision = await this.repo
+      .getExternalStateRevision([getAuthJsonPath()])
+      .catch(() => undefined);
     setCurrentWindowRuntimeAccountId(this.lastObservedAuthIdentity);
   }
 
@@ -98,6 +103,7 @@ export class WorkbenchRefreshCoordinator {
 
     let syncTimer: NodeJS.Timeout | undefined;
     let syncInFlight = false;
+    let pollInFlight = false;
     let disposed = false;
     let promptVisible = false;
 
@@ -116,6 +122,7 @@ export class WorkbenchRefreshCoordinator {
           return;
         }
         syncInFlight = true;
+        this.repo.invalidateExternalStateCaches();
         void this.syncActiveAccountFromExternalChange(
           view,
           () => {
@@ -144,6 +151,32 @@ export class WorkbenchRefreshCoordinator {
     watcher.onDidCreate(() => scheduleSync(), null, this.context.subscriptions);
     watcher.onDidDelete(() => scheduleSync(), null, this.context.subscriptions);
 
+    const pollExternalState = async (): Promise<void> => {
+      if (disposed || pollInFlight) {
+        return;
+      }
+      pollInFlight = true;
+      try {
+        const nextRevision = await this.repo.getExternalStateRevision([authPath]);
+        if (this.lastExternalStateRevision === undefined) {
+          this.lastExternalStateRevision = nextRevision;
+          return;
+        }
+        if (nextRevision !== this.lastExternalStateRevision) {
+          this.lastExternalStateRevision = nextRevision;
+          scheduleSync(0);
+        }
+      } catch (error) {
+        console.warn("[codexAccounts] external state polling failed:", getErrorMessage(error));
+      } finally {
+        pollInFlight = false;
+      }
+    };
+    const pollTimer = setInterval(() => {
+      void pollExternalState();
+    }, EXTERNAL_STATE_POLL_INTERVAL_MS);
+    void pollExternalState();
+
     return {
       dispose: (): void => {
         disposed = true;
@@ -151,6 +184,7 @@ export class WorkbenchRefreshCoordinator {
         if (syncTimer) {
           clearTimeout(syncTimer);
         }
+        clearInterval(pollTimer);
       }
     };
   }
@@ -204,6 +238,7 @@ export class WorkbenchRefreshCoordinator {
     const nextObservedIdentity = await this.readObservedAuthIdentity();
     this.lastObservedAuthIdentity = nextObservedIdentity;
 
+    await this.repo.syncFromAideckMirror();
     await this.repo.syncActiveAccountFromAuthFile();
     view.refresh();
 

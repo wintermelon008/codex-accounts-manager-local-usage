@@ -71,10 +71,16 @@ export function acknowledgeSeamlessQuotaBand(
 
 export function recordSeamlessSelection(
   accountId: string,
-  currentBand: number,
+  currentBand: number | undefined,
   quotaBandSize: SeamlessQuotaBandSize = 20
 ): void {
-  state.hourlyBands = { ...(state.hourlyBands ?? {}), [accountId]: currentBand };
+  if (currentBand !== undefined) {
+    state.hourlyBands = { ...(state.hourlyBands ?? {}), [accountId]: currentBand };
+  } else {
+    const hourlyBands = { ...(state.hourlyBands ?? {}) };
+    delete hourlyBands[accountId];
+    state.hourlyBands = hourlyBands;
+  }
   state.lastSelectedAt = { ...(state.lastSelectedAt ?? {}), [accountId]: Date.now() };
   state.quotaBandSize = quotaBandSize;
   persist();

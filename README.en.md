@@ -54,9 +54,10 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 
 ### Cross-Window Sync
 
-- Watch global `auth.json` changes
-- Automatically sync the active account when another VS Code window switches accounts
-- Prompt the current window to reload when an external account switch is detected
+- Detect shared account revisions through file watching plus a two-second stat fallback, including Remote-SSH hosts where watcher events can be delayed or dropped
+- Merge account-index and token updates atomically under short shared leases so concurrent Mac/Windows/remote extension hosts do not overwrite one another
+- Deduplicate background quota and token sweeps with expiring shared leases while keeping manual refresh available
+- Converge every live app-server to the selected account at its next safe switching boundary; only the original workflow prompts for reload when Seamless Switching is off
 
 ### Codex App Integration
 
@@ -70,8 +71,10 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 - Upstream `Auto Switch` keeps its original thresholds, candidate selection, and reload behavior. All local additions—configurable quota bands, the account pool, no-reload execution, and conversation recovery—live under the separate `Seamless account switching (experimental)` group
 - A separate Seamless Switching master toggle restores the original persisted-account and reload workflow when off without uninstalling the runtime, so turning it back on does not require reinstalling the shim
 - Seamless quota-band scheduling does not depend on upstream `Auto Switch` or `5-hour quota control`; while enabled it uses its own fail-closed path and never falls back to a persisted-only account change
-- Use the switch at the lower-left of each account card to control its five-hour seamless-switch pool membership, or update several accounts with the batch actions. A pool with at least two members supports `1/5 (20%)`, `1/4 (25%)`, `1/3 (33%)`, or `1/2 (50%)` bands when the active account has a usable 5-hour window and candidates also have usable 5-hour and weekly windows with more than `3%` weekly quota
-- Optionally enable the 1% emergency switch. At 1% or lower of a usable 5-hour or weekly window it bypasses the initial baseline and grace period, interrupts active turns, and switches only to a safe pool account above `3%` weekly quota. A weekly emergency prioritizes weekly quota; a candidate that reports a 5-hour window must also be above 1%, while a weekly-only account can participate in this path. If a turn already stopped with structured `usageLimitExceeded`, including a structured `turn/start` RPC rejection, the runtime also recovers that recent thread after switching. It is off by default because non-idempotent effects can repeat
+- Use the switch at the lower-left of each account card to control pool membership, or update several accounts with the batch actions. Ordinary scheduling classifies accounts by capability: `windowed` has usable five-hour and long-term windows, `reserve` explicitly has no five-hour window but has a usable long-term window, and `unknown` is excluded because data is missing, stale, or erroneous. Plan labels such as Free or Plus are never used to guess ordinary capability
+- A verified Free account with a usable five-hour window never participates in ordinary `20%/25%/33%/50%` bands or the `1%/2%/3%` reserve threshold. It moves only at 1% or a runtime hard-stop signal when Free exhaustion protection is enabled
+- Choose `1/5 (20%)`, `1/4 (25%)`, `1/3 (33%)`, or `1/2 (50%)` bands and a `1%`, `2%`, or `3%` reserve threshold (default `3%`). The scheduler rotates eligible windowed accounts first; only after all of them reach the threshold does it select the reserve account with the most long-term quota. A reserve account stays active until its long-term quota reaches the threshold, then selection starts with recovered windowed accounts before another reserve account
+- Optionally enable **1% exhaustion protection (Free first)**. At 1% or lower of a usable five-hour or long-term window it bypasses the initial baseline and grace period, interrupts active turns, and auto-continues. When a verified Free account reaches its five-hour floor, it first chooses the fresh Free pool member with the highest five-hour quota and long-term quota above the reserve threshold; if none is eligible, it returns to normal mixed safe selection. A structured `usageLimitExceeded`, including a `turn/start` RPC rejection, is detected through bounded runtime scalars without loading conversation content or history. It is off by default because non-idempotent effects can repeat
 - When the active account drops a band, give running Codex turns a 60-second natural-completion grace period before hot-switching the same app-server
 - Pause active persisted Goals, interrupt an old Goal turn that outlives the grace period, and resume the Goal after switching while preserving the thread's workspace, sandbox, and approval settings
 - For ordinary turns, choose between deferring the switch, interrupting for manual continuation, or an experimental same-thread automatic `Continue`; automatic continuation cannot guarantee exactly-once non-idempotent external effects
@@ -82,6 +85,8 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 - Run `Codex Accounts: Install Experimental Seamless Runtime` and reload once for initial setup; on Remote-SSH, WSL, or Dev Containers the manager keeps a reversible backup beside the remote bundled Codex CLI and links it to the shim instead of changing the local VS Code `chatgpt.cliExecutable` setting
 - The installed runtime disables Responses WebSocket reuse so an existing thread's next turn actually uses the newly selected account. Disabling the Seamless Switching master toggle restores the original switch/reload logic; removing the runtime and reloading also restores the official transport
 - The runtime expands official history requests that explicitly target the current provider to all providers, so local sessions from before and after runtime installation share one history list. It changes only the `thread/list` filter and does not rewrite session files or the state database
+- After all managed accounts have been removed, the first seamless switch to a newly imported account uses the currently valid `auth.json` as an in-memory rollback snapshot and validates it against the live app-server identity. A failed switch restores that identity without requiring the master toggle to be disabled first
+- Local usage analytics advance a cumulative high-water mark per rollout, ignore repeated or stale `token_count` reports, and treat parent history copied into spawned subagents only as an initial baseline. They adopt a newer shared cache by `calculatedAt`, and the dashboard refreshes at `nextRefreshAt`; the cache contains aggregate statistics only, never conversation text, account identifiers, credentials, or session paths
 - See [docs/HOT_SWITCH.md](docs/HOT_SWITCH.md) for exact scheduling, compatibility, security, and rollback details
 
 #### Enable and configure
@@ -89,9 +94,9 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 1. Import at least two Codex accounts that you are authorized to use, then run **Refresh All Quotas** once.
 2. Run `Codex Accounts: Install Experimental Seamless Runtime` from the Command Palette. Reload once when prompted after the initial installation; later successful switches do not require reloads.
 3. On Remote-SSH, WSL, or Dev Containers, leave `chatgpt.cliExecutable` unset. It is an application-scoped development setting in the official extension and can override Codex across windows/devices. The install command backs up the remote bundled CLI and creates a reversible shim link in the remote extension directory. Remove any manually added value from every local User Settings JSON and from Remote Settings before installing.
-4. Use the switch at the lower-left of each account card to add at least two accounts to the pool, or select several accounts and use the batch action. Ordinary five-hour band candidates need usable 5-hour and weekly windows with more than `3%` weekly quota; a weekly-only account skips ordinary bands but can participate in a 1% weekly emergency switch.
-5. In dashboard settings, enable **Seamless account switching (experimental)** and **Seamless quota-band balancing**, choose a band size (default `1/5 (20%)`), then set automatic quota refresh to `1–5` minutes.
-6. Choose a grace period and ordinary-turn policy. Enable the separate **1% emergency forced switch** only when avoiding quota exhaustion outweighs the risk of repeated non-idempotent effects.
+4. Use the switch at the lower-left of each account card to add at least two accounts to the pool, or select several accounts and use the batch action. Every automatic candidate needs a fresh, usable long-term window; an account with a five-hour window is treated as windowed, one that explicitly has no five-hour window is treated as reserve, and missing/stale/error data is excluded.
+5. In dashboard settings, enable **Seamless account switching (experimental)** and **Seamless quota-band balancing**, choose a band size (default `1/5 (20%)`) and reserve threshold (`1%`, `2%`, or `3%`; default `3%`), then set automatic quota refresh to `1` minute.
+6. Choose a grace period and ordinary-turn policy. Enable **1% exhaustion protection (Free first)** only when preventing a Free five-hour hard stop outweighs the risk of repeated non-idempotent effects.
 
 Example user-facing configuration:
 
@@ -100,8 +105,9 @@ Example user-facing configuration:
   "codexAccounts.seamlessSwitchEnabled": true,
   "codexAccounts.seamlessSwitchQuotaBandsEnabled": true,
   "codexAccounts.seamlessSwitchQuotaBandSize": 20,
+  "codexAccounts.seamlessSwitchReserveThreshold": 3,
   "codexAccounts.seamlessSwitchEmergencySwitchEnabled": false,
-  "codexAccounts.autoRefreshMinutes": 5,
+  "codexAccounts.autoRefreshMinutes": 1,
   "codexAccounts.hotSwitchGraceSeconds": 60,
   "codexAccounts.hotSwitchLongTurnPolicy": "defer"
 }
@@ -115,8 +121,9 @@ The install/remove commands manage `codexAccounts.hotSwitchEnabled` and the runt
 - A running turn first receives the configured natural-completion grace period. `defer` safely postpones an ordinary-turn switch; `interruptAndContinue` interrupts the old turn and starts one recovery-marked `Continue` in the same thread after switching.
 - Multi-agent subagents do not receive a shim-injected `Continue`, so Codex's parent-agent orchestration remains responsible for their follow-up work.
 - An active Goal is paused first. If its turn outlives the grace period, the runtime can interrupt it and then restore the same Goal, workspace, sandbox, and approval state after switching.
-- When automatic refresh observes the active account crossing down a configured five-hour quota band, the scheduler selects a fresh, eligible pool account only when its five-hour quota is strictly higher and its weekly quota is above `3%`. If the active account is already the highest, it keeps consuming without a switch. Changing the size establishes a fresh baseline.
-- With the 1% emergency setting enabled, even a first observation at 1% of a usable five-hour or weekly window can trigger. Active turns are interrupted; ordinary threads that just stopped on quota exhaustion receive one recovery-marked `Continue` after switching, while persistent Goals use pause/resume semantics and a `usageLimited` Goal is explicitly reactivated. A weekly emergency prioritizes candidates with higher weekly quota and never selects one at or below `3%` weekly quota, preventing a high five-hour value from selecting a weekly-exhausted account; a weekly-only account can use this path as well. Both terminal notifications and structured `turn/start` quota rejections are recognized. Recent-failure records expire after two minutes and a newer turn on the same thread clears them, so they do not become a persistent stopped state. If no eligible account remains, the old account stays active and a later refresh retries.
+- When automatic refresh observes a windowed account crossing down a configured five-hour band, the scheduler first selects a fresh windowed account whose five-hour quota is strictly higher and whose long-term quota is above the reserve threshold. It uses the highest-long-term-quota reserve account only after all usable windowed accounts reach the threshold. If the active account remains the best candidate, it keeps consuming; changing the band size establishes a fresh baseline.
+- A reserve account remains active while its long-term quota is above the reserve threshold. At the threshold, the scheduler first tries any recovered windowed account above it, otherwise the reserve account with the most remaining long-term quota. Manual switching is unaffected by this automatic ordering.
+- With **1% exhaustion protection (Free first)** enabled, even a first observation at 1% of a usable five-hour or long-term window can trigger. Active turns are interrupted; ordinary threads that just stopped on quota exhaustion receive one recovery-marked `Continue` after switching, while persistent Goals use pause/resume semantics and a `usageLimited` Goal is explicitly reactivated. A verified Free account at its five-hour floor first selects a Free pool peer with fresh (at most two-minute-old) quota, the highest five-hour percentage, and long-term quota above the reserve threshold; if none remains, normal mixed selection applies. Both terminal notifications and structured `turn/start` quota rejections are recognized through a fixed-size runtime status poll. Recent-failure records expire after two minutes and a newer turn on the same thread clears them, so they do not become a persistent stopped state. If no eligible account remains, the old account stays active and a later refresh retries.
 - The runtime forces the next turn to use the new HTTP credentials instead of reusing an old authenticated WebSocket. Identity, runtime, or rollback failures fail closed and keep or restore the previous account rather than reporting a persisted-only change as success.
 - Codex history includes both pre-runtime `openai` sessions and sessions recorded under the seamless HTTP provider. Opening an older thread still resumes it with the current seamless provider, without migrating local history.
 - The dashboard and status bar show the new active account. Authentication is still process-wide; accounts are not bound independently per conversation.
@@ -180,9 +187,14 @@ You can change these directly from the settings button in the top-right corner o
   - When enabled, set separate thresholds for `5-hour` and `weekly` quota
   - After refresh, the extension can switch to another saved account when the active one hits a threshold
   - The 5-hour threshold only applies while `5-hour Quota Control` is enabled; the weekly threshold remains independent
-  - Optional quota-band balancing supports 20%, 25%, 33%, and 50% bands and requires at least two enabled account-card pool switches
-  - An optional 1% emergency switch interrupts active turns and recovers recently quota-exhausted threads on an eligible account
-  - Use a `1 ~ 5` minute automatic refresh interval so every candidate has fresh quota data
+- `Seamless account switching (experimental)`
+  - Its master toggle restores the original account-switch/reload workflow when off while retaining an installed runtime
+  - Independent quota-band balancing supports 20%, 25%, 33%, and 50% bands without enabling upstream automatic switching or 5-hour quota control
+  - A 1%, 2%, or 3% reserve threshold keeps windowed accounts first, then selects the reserve account with the most long-term quota
+  - Ordinary capability comes only from fresh quota windows; only the optional Free hard-stop path also verifies a Free plan label; missing, stale, or erroneous data is excluded from automatic selection
+  - Optional **1% exhaustion protection (Free first)** sends a Free five-hour hard stop to the safe Free pool peer with the most five-hour quota, then falls back to mixed selection and recovers recently quota-exhausted threads
+  - Each account card and the batch actions can add or remove accounts from the pool
+  - Configure the safe grace period and ordinary-turn recovery policy, and use a `1` minute automatic refresh interval with Free exhaustion protection so candidates remain fresh
 - `Codex App Launch Path`
   - Optional custom desktop app path
   - Leave empty to use auto-detection

@@ -14,7 +14,11 @@ vi.mock("../src/presentation/dashboard/resetCreditsBackfill", () => ({
   backfillMissingResetCreditExpiries: backfillMissingResetCreditExpiriesMock
 }));
 
-import { publishDashboardSnapshot } from "../src/presentation/dashboard/panel";
+import {
+  DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS,
+  getDashboardLocalUsageRefreshDelay,
+  publishDashboardSnapshot
+} from "../src/presentation/dashboard/panel";
 
 const localUsage = {
   status: "ready" as const,
@@ -56,6 +60,7 @@ function createState(): DashboardState {
       seamlessSwitchEnabled: false,
       seamlessSwitchQuotaBandsEnabled: false,
       seamlessSwitchQuotaBandSize: 20,
+      seamlessSwitchReserveThreshold: 3,
       seamlessSwitchEmergencySwitchEnabled: false,
       hotSwitchGraceSeconds: 60,
       hotSwitchLongTurnPolicy: "defer",
@@ -120,6 +125,7 @@ describe("publishDashboardSnapshot", () => {
     const usageAnalytics = {
       getSnapshot: vi.fn(async () => localUsage)
     };
+    const scheduleLocalUsageRefresh = vi.fn();
 
     await publishDashboardSnapshot({
       repo: {} as never,
@@ -129,6 +135,7 @@ describe("publishDashboardSnapshot", () => {
       setPanelTitle: vi.fn(),
       postMessage: vi.fn(async () => true),
       schedulePublishState: vi.fn(),
+      scheduleLocalUsageRefresh,
       usageAnalytics: usageAnalytics as never
     });
 
@@ -140,6 +147,12 @@ describe("publishDashboardSnapshot", () => {
       state.announcements,
       localUsage
     );
+    expect(scheduleLocalUsageRefresh).toHaveBeenCalledWith(localUsage.nextRefreshAt);
+  });
+
+  it("uses the aggregate deadline for active refreshes and throttles overdue retries", () => {
+    expect(getDashboardLocalUsageRefreshDelay(20_000, 15_000)).toBe(5_000);
+    expect(getDashboardLocalUsageRefreshDelay(14_999, 15_000)).toBe(DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS);
   });
 
   it("publishes the current snapshot without waiting for reset credits backfill", async () => {

@@ -103,6 +103,11 @@ describe("extension manifest configuration", () => {
       default: 20,
       enum: [20, 25, 33, 50]
     });
+    expect(properties?.["codexAccounts.seamlessSwitchReserveThreshold"]).toMatchObject({
+      type: "number",
+      default: 3,
+      enum: [1, 2, 3]
+    });
     expect(properties?.["codexAccounts.seamlessSwitchEmergencySwitchEnabled"]).toMatchObject({
       type: "boolean",
       default: false

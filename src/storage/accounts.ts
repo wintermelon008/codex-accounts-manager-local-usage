@@ -38,7 +38,7 @@ import {
   previewSharedAccountsImportEntries,
   toSharedEntries
 } from "./sharedAccountsImport";
-import { countAvailableBackups, isFileNotFoundError, readIndexSnapshot } from "./accountsPersistence";
+import { countAvailableBackups, isFileNotFoundError, readIndexSnapshot, readPathRevision } from "./accountsPersistence";
 import {
   isIndexHealthError,
   markUnrecoverableIndex,
@@ -56,7 +56,9 @@ import {
   markRecoveryPending,
   persistIndexSyncWithBackups,
   persistIndexWithBackups,
-  readPendingOrCachedIndex
+  readPendingOrCachedIndex,
+  SharedFileLease,
+  tryAcquireSharedFileLease
 } from "./accountsWriteCoordinator";
 import { readAuthFile, writeAuthFile } from "../codex";
 import { needsRefresh, refreshTokens, TOKEN_REFRESH_SKEW_SECONDS } from "../auth/oauth";
@@ -88,6 +90,9 @@ import { getQuotaIssueKind } from "../utils/quotaIssue";
 import { AccountError, StorageError, createError, ErrorCode } from "../core/errors";
 import {
   AideckMirrorTokenSnapshot,
+  clearAideckCodexAccountTombstone,
+  getAideckCodexAccountRevision,
+  getAideckCodexStorageRevision,
   listAideckCodexSharedAccounts,
   mirrorAideckCodexAccount,
   mirrorAideckCurrentAccount,
@@ -115,6 +120,7 @@ const TOKEN_CACHE_TTL_MS = 30_000;
 type TokenCacheEntry = {
   tokens: CodexTokens | undefined;
   cachedAt: number;
+  mirrorRevision?: string;
 };
 
 export class AccountsRepository {
@@ -210,8 +216,8 @@ export class AccountsRepository {
       return;
     }
     this.disposed = true;
-    disposeWriteCoordinator(this.state, (index) => {
-      this.persistIndexSync(index);
+    disposeWriteCoordinator(this.state, (index, baseIndex) => {
+      return this.persistIndexSync(index, baseIndex);
     });
   }
 
@@ -256,6 +262,30 @@ export class AccountsRepository {
       ...this.state.indexHealth,
       availableBackups: await countAvailableBackups(this.indexPath, INDEX_BACKUP_COUNT)
     };
+  }
+
+  async getExternalStateRevision(extraPaths: readonly string[] = []): Promise<string> {
+    const revisions = await Promise.all([
+      readPathRevision(this.indexPath),
+      getAideckCodexStorageRevision(),
+      ...extraPaths.map((filePath) => readPathRevision(filePath))
+    ]);
+    return revisions.join("|");
+  }
+
+  invalidateExternalStateCaches(): void {
+    if (!this.state.pendingSave) {
+      this.state.cache = null;
+    }
+    this.invalidateTokenCache();
+  }
+
+  async tryAcquireSchedulerLease(name: string, leaseMs: number): Promise<SharedFileLease | undefined> {
+    const safeName = name.trim().replace(/[^a-zA-Z0-9._-]/g, "_") || "scheduler";
+    return tryAcquireSharedFileLease(
+      path.join(this.context.globalStorageUri.fsPath, `.codex-accounts-${safeName}.lease`),
+      leaseMs
+    );
   }
 
   async restoreIndexFromLatestBackup(): Promise<CodexAccountsRestoreResult> {
@@ -337,16 +367,22 @@ export class AccountsRepository {
    */
   async getTokens(accountId: string, options: { syncExternal?: boolean } = {}): Promise<CodexTokens | undefined> {
     try {
-      // 内存缓存命中直接返回，避免 Dashboard 刷新时重复读 Keychain
+      const syncExternal = options.syncExternal !== false;
+      const mirrorRevision = syncExternal ? await getAideckCodexAccountRevision(accountId) : undefined;
+      // 内存缓存命中时仍核对共享镜像 revision，避免另一宿主的新 token 被 30s TTL 遮蔽。
       const cached = this.tokenCache.get(accountId);
-      if (cached && Date.now() - cached.cachedAt < TOKEN_CACHE_TTL_MS) {
+      if (
+        cached &&
+        Date.now() - cached.cachedAt < TOKEN_CACHE_TTL_MS &&
+        (!syncExternal || cached.mirrorRevision === mirrorRevision)
+      ) {
         return cached.tokens;
       }
 
       const storedTokens = await this.secretStore.getTokens(accountId);
-      this.tokenCache.set(accountId, { tokens: storedTokens, cachedAt: Date.now() });
+      this.tokenCache.set(accountId, { tokens: storedTokens, cachedAt: Date.now(), mirrorRevision });
 
-      if (options.syncExternal === false) {
+      if (!syncExternal) {
         return storedTokens;
       }
 
@@ -365,9 +401,14 @@ export class AccountsRepository {
 
       if (!storedTokens || shouldSyncTokensFromAuthFile(storedTokens, mergedTokens)) {
         await this.secretStore.setTokens(accountId, mergedTokens);
-        this.invalidateTokenCache();
         clearQuotaCacheForAccount(accountId);
       }
+
+      this.tokenCache.set(accountId, {
+        tokens: mergedTokens,
+        cachedAt: Date.now(),
+        mirrorRevision: await getAideckCodexAccountRevision(accountId)
+      });
 
       return mergedTokens;
     } catch (cause) {
@@ -600,6 +641,7 @@ export class AccountsRepository {
     };
     await this.secretStore.setTokens(id, storedTokens);
     this.invalidateTokenCache();
+    await clearAideckCodexAccountTombstone(id);
     await mirrorAideckCodexAccount(account, storedTokens);
     if (account.isActive) {
       await mirrorAideckCurrentAccount(id);
@@ -1250,14 +1292,15 @@ export class AccountsRepository {
   }
 
   private async flushPendingSave(): Promise<void> {
-    await flushPendingSave(this.state, async (index) => this.persistIndex(index));
+    await flushPendingSave(this.state, async (index, baseIndex) => this.persistIndex(index, baseIndex));
   }
 
-  private async persistIndex(index: CodexAccountsIndex): Promise<void> {
-    await persistIndexWithBackups({
+  private async persistIndex(index: CodexAccountsIndex, baseIndex: CodexAccountsIndex): Promise<CodexAccountsIndex> {
+    return persistIndexWithBackups({
       state: this.state,
       indexPath: this.indexPath,
       index,
+      baseIndex,
       tempSuffix: INDEX_TEMP_SUFFIX,
       backupCount: INDEX_BACKUP_COUNT
     });
@@ -1266,11 +1309,12 @@ export class AccountsRepository {
   /**
    * 持久化索引到文件 (同步模式，用于 dispose 时)
    */
-  private persistIndexSync(index: CodexAccountsIndex): void {
-    persistIndexSyncWithBackups({
+  private persistIndexSync(index: CodexAccountsIndex, baseIndex: CodexAccountsIndex): CodexAccountsIndex {
+    return persistIndexSyncWithBackups({
       state: this.state,
       indexPath: this.indexPath,
       index,
+      baseIndex,
       tempSuffix: INDEX_TEMP_SUFFIX,
       backupCount: INDEX_BACKUP_COUNT
     });

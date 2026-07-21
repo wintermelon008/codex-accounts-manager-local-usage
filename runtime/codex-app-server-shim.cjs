@@ -16,7 +16,7 @@ const CONFIG_PATH = path.join(__dirname, "codex-app-server-shim.json");
 const MAX_TERMINAL_TURN_IDS = 2_048;
 const MAX_RECENT_USAGE_LIMITED_THREADS = 2_048;
 const RECENT_USAGE_LIMITED_THREAD_TTL_MS = 2 * 60 * 1000;
-const RUNTIME_PROTOCOL_VERSION = 2;
+const RUNTIME_PROTOCOL_VERSION = 3;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
 const SEAMLESS_HTTP_PROVIDER_CONFIG =
   `model_providers.${SEAMLESS_HTTP_PROVIDER_ID}={ name="OpenAI", wire_api="responses", ` +
@@ -485,9 +485,15 @@ async function drainPendingSwitch() {
     }
     if (localAccountActivationAttempted) {
       try {
-        await sendControlRequest("account/activate", {
-          localAccountId: request.params.previousLocalAccountId
-        });
+        if (request.params.previousLocalAccountId) {
+          await sendControlRequest("account/activate", {
+            localAccountId: request.params.previousLocalAccountId
+          });
+        } else {
+          await sendControlRequest("account/restore-unmanaged", {
+            rollbackContextId: request.params.rollbackContextId
+          });
+        }
       } catch (rollbackError) {
         message = `${message}; local account rollback failed: ${safeErrorMessage(rollbackError)}`;
       }
@@ -769,11 +775,18 @@ function recoverPausedGoals(request) {
 }
 
 async function restorePreviousAccount(request) {
-  const credentials = await sendControlRequest("auth/refresh", {
-    previousAccountId: request.params.previousAccountId,
-    localAccountId: request.params.previousLocalAccountId,
-    expectedEmail: request.params.previousExpectedEmail
-  });
+  const snapshotRollback = typeof request.params.previousAccessToken === "string";
+  const credentials = snapshotRollback
+    ? {
+        accessToken: request.params.previousAccessToken,
+        chatgptAccountId: request.params.previousAccountId,
+        chatgptPlanType: request.params.previousPlanType || null
+      }
+    : await sendControlRequest("auth/refresh", {
+        previousAccountId: request.params.previousAccountId,
+        localAccountId: request.params.previousLocalAccountId,
+        expectedEmail: request.params.previousExpectedEmail
+      });
   if (!isValidRefreshResult(credentials) || credentials.chatgptAccountId !== request.params.previousAccountId) {
     throw new Error("The account manager returned invalid rollback credentials");
   }
@@ -791,11 +804,14 @@ async function restorePreviousAccount(request) {
   if (normalizeEmail(actualEmail) !== normalizeEmail(request.params.previousExpectedEmail)) {
     throw new Error("The app-server reported a different account after hot-switch rollback");
   }
-  activeManagedAccount = {
-    accountId: request.params.previousAccountId,
-    localAccountId: request.params.previousLocalAccountId,
-    expectedEmail: request.params.previousExpectedEmail
-  };
+  externalAuthActive = true;
+  activeManagedAccount = snapshotRollback
+    ? undefined
+    : {
+        accountId: request.params.previousAccountId,
+        localAccountId: request.params.previousLocalAccountId,
+        expectedEmail: request.params.previousExpectedEmail
+      };
 }
 
 async function handleAuthRefreshRequest(message) {
@@ -1009,6 +1025,17 @@ function getControlSocketPath(extensionHostPid) {
 }
 
 function isValidSwitchParams(params) {
+  const managedRollback =
+    typeof params?.previousLocalAccountId === "string" &&
+    params.previousLocalAccountId.length > 0 &&
+    params.previousAccessToken === undefined &&
+    params.rollbackContextId === undefined;
+  const snapshotRollback =
+    (params?.previousLocalAccountId === undefined || params.previousLocalAccountId === null) &&
+    typeof params?.previousAccessToken === "string" &&
+    params.previousAccessToken.length > 0 &&
+    typeof params.rollbackContextId === "string" &&
+    params.rollbackContextId.length > 0;
   return Boolean(
     params &&
     typeof params.accessToken === "string" &&
@@ -1019,10 +1046,12 @@ function isValidSwitchParams(params) {
     params.localAccountId.length > 0 &&
     typeof params.previousAccountId === "string" &&
     params.previousAccountId.length > 0 &&
-    typeof params.previousLocalAccountId === "string" &&
-    params.previousLocalAccountId.length > 0 &&
+    (managedRollback || snapshotRollback) &&
     typeof params.previousExpectedEmail === "string" &&
     params.previousExpectedEmail.length > 0 &&
+    (params.previousPlanType === undefined ||
+      params.previousPlanType === null ||
+      typeof params.previousPlanType === "string") &&
     typeof params.expectedEmail === "string" &&
     params.expectedEmail.length > 0 &&
     (params.planType === undefined || params.planType === null || typeof params.planType === "string") &&

@@ -1,6 +1,6 @@
 import * as childProcess from "node:child_process";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexHotSwitchBridge,
   getHotSwitchSocketPath,
@@ -73,7 +73,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 2,
+      runtimeProtocolVersion: 3,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -212,6 +212,69 @@ describe("CodexHotSwitchBridge", () => {
       .filter((message) => message.method === "test/received" && message.params?.method === "account/login/start")
       .map((message) => message.params?.accountId);
     expect(loginAccountIds).toEqual(["account-b", "account-a"]);
+  }, 15_000);
+
+  it("rolls back from an in-memory auth snapshot when the previous account is no longer managed", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "snapshot-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "snapshot-initialize");
+    shim.stdin.write(`${JSON.stringify({ method: "initialized", params: {} })}\n`);
+
+    const refreshAuth = vi.fn();
+    const activations: string[] = [];
+    const restoredContexts: string[] = [];
+    bridge = new CodexHotSwitchBridge(
+      refreshAuth,
+      async (localAccountId) => {
+        activations.push(localAccountId);
+        throw new Error("local commit failed");
+      },
+      async (rollbackContextId) => {
+        restoredContexts.push(rollbackContextId);
+      }
+    );
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousExpectedEmail: "a@example.invalid",
+        previousAccessToken: "snapshot-access-token-a",
+        previousPlanType: "plus",
+        rollbackContextId: "snapshot-context-a",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 25,
+        longTurnPolicy: "defer"
+      })
+    ).rejects.toThrow("local commit failed");
+    expect(refreshAuth).not.toHaveBeenCalled();
+    expect(activations).toEqual(["local-b"]);
+    expect(restoredContexts).toEqual(["snapshot-context-a"]);
+    const loginAccountIds = messages.all
+      .filter((message) => message.method === "test/received" && message.params?.method === "account/login/start")
+      .map((message) => message.params?.accountId);
+    expect(loginAccountIds).toEqual(["account-b", "account-a"]);
+    await expect(bridge.getIdentity()).resolves.toMatchObject({
+      accountType: "chatgpt",
+      email: "a@example.invalid",
+      externalAuthActive: true,
+      managedAccountId: null,
+      managedLocalAccountId: null
+    });
   }, 15_000);
 
   it("waits for active turns and queues new turns behind the account switch barrier", async () => {

@@ -21,6 +21,7 @@ import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
 
 const DASHBOARD_VIEW_TYPE = "codexQuotaSummary";
+export const DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS = 1_000;
 
 let dashboardPanelController: DashboardPanelController | undefined;
 
@@ -32,6 +33,7 @@ type PublishDashboardSnapshotParams = {
   setPanelTitle: (title: string) => void;
   postMessage: (message: DashboardHostMessage) => Thenable<boolean>;
   schedulePublishState: () => void;
+  scheduleLocalUsageRefresh?: (nextRefreshAt: number) => void;
   usageAnalytics?: LocalUsageAnalyticsService;
   lastPublishedStateSignature?: string;
   force?: boolean;
@@ -39,6 +41,9 @@ type PublishDashboardSnapshotParams = {
 
 export async function publishDashboardSnapshot(params: PublishDashboardSnapshotParams): Promise<string | undefined> {
   const localUsage = await params.usageAnalytics?.getSnapshot(() => params.schedulePublishState());
+  if (localUsage?.nextRefreshAt != null) {
+    params.scheduleLocalUsageRefresh?.(localUsage.nextRefreshAt);
+  }
   const state = await buildDashboardState(
     params.repo,
     params.settingsStore,
@@ -46,7 +51,9 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
     params.announcementsState,
     localUsage
   );
-  void backfillMissingResetCreditExpiries(params.repo, state.accounts, params.schedulePublishState).catch(() => undefined);
+  void backfillMissingResetCreditExpiries(params.repo, state.accounts, params.schedulePublishState).catch(
+    () => undefined
+  );
 
   params.setPanelTitle(state.panelTitle);
   const signature = buildDashboardStateSignature(state);
@@ -69,6 +76,7 @@ class DashboardPanelController {
   private configWatcher: vscode.Disposable | undefined;
   private webviewReady = false;
   private publishTimer: NodeJS.Timeout | undefined;
+  private localUsageRefreshTimer: NodeJS.Timeout | undefined;
   private lastPublishedStateSignature: string | undefined;
   private usageAnalytics: LocalUsageAnalyticsService | undefined;
   private usageAnalyticsCompatibility: Promise<boolean> | undefined;
@@ -101,6 +109,10 @@ class DashboardPanelController {
         if (this.publishTimer) {
           clearTimeout(this.publishTimer);
           this.publishTimer = undefined;
+        }
+        if (this.localUsageRefreshTimer) {
+          clearTimeout(this.localUsageRefreshTimer);
+          this.localUsageRefreshTimer = undefined;
         }
         this.oauth.dispose();
         this.configWatcher?.dispose();
@@ -181,6 +193,21 @@ class DashboardPanelController {
     }, delayMs);
   }
 
+  private scheduleLocalUsageRefresh(nextRefreshAt: number): void {
+    if (!this.panel) {
+      return;
+    }
+
+    if (this.localUsageRefreshTimer) {
+      clearTimeout(this.localUsageRefreshTimer);
+    }
+
+    this.localUsageRefreshTimer = setTimeout(() => {
+      this.localUsageRefreshTimer = undefined;
+      this.schedulePublishState();
+    }, getDashboardLocalUsageRefreshDelay(nextRefreshAt));
+  }
+
   private async publishState(force = false): Promise<void> {
     if (!this.panel || !this.webviewReady) {
       return;
@@ -201,6 +228,7 @@ class DashboardPanelController {
       },
       postMessage: (message) => this.panel!.webview.postMessage(message),
       schedulePublishState: () => this.schedulePublishState(),
+      scheduleLocalUsageRefresh: (nextRefreshAt) => this.scheduleLocalUsageRefresh(nextRefreshAt),
       usageAnalytics: await this.getUsageAnalytics(),
       lastPublishedStateSignature: this.lastPublishedStateSignature,
       force
@@ -292,6 +320,10 @@ class DashboardPanelController {
     });
     return this.usageAnalytics;
   }
+}
+
+export function getDashboardLocalUsageRefreshDelay(nextRefreshAt: number, now = Date.now()): number {
+  return Math.max(DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS, nextRefreshAt - now);
 }
 
 export function openQuotaSummaryPanel(context: vscode.ExtensionContext, repo: AccountsRepository): void {

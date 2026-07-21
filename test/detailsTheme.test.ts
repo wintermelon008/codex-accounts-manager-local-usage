@@ -54,25 +54,29 @@ describe("details theme", () => {
 describe("details subscription display", () => {
   it("formats subscription expiry with remaining days", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-27T00:00:00Z"));
+    try {
+      vi.setSystemTime(new Date("2026-04-27T00:00:00Z"));
 
-    const expirySeconds = Math.floor(new Date("2026-05-02T00:00:00Z").getTime() / 1000);
-    const display = resolveSubscriptionDisplay(
-      {
-        id: "a",
-        email: "a@example.com",
-        isActive: true,
-        createdAt: 1,
-        updatedAt: 1,
-        subscriptionActiveUntil: String(expirySeconds)
-      },
-      undefined,
-      getDashboardCopy("zh"),
-      "zh"
-    );
+      const expirySeconds = Math.floor(new Date("2026-05-02T00:00:00Z").getTime() / 1000);
+      const display = resolveSubscriptionDisplay(
+        {
+          id: "a",
+          email: "a@example.com",
+          isActive: true,
+          createdAt: 1,
+          updatedAt: 1,
+          subscriptionActiveUntil: String(expirySeconds)
+        },
+        undefined,
+        getDashboardCopy("zh"),
+        "zh"
+      );
 
-    expect(display.text).toContain("5 天");
-    expect(display.title).toBe(display.text);
-    expect(display.color).toBe("#f59e0b");
+      expect(display.text).toContain("5 天");
+      expect(display.title).toBe(display.text);
+      expect(display.color).toBe("#f59e0b");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

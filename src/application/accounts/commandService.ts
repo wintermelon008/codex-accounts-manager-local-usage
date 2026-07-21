@@ -8,7 +8,10 @@ import { AccountsRepository } from "../../storage";
 import { buildAccountStorageId } from "../../utils/accountIdentity";
 import { extractClaims } from "../../utils/jwt";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
-import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
+import {
+  clearCurrentWindowRuntimeAccountIfMatches,
+  needsWindowReloadForAccount
+} from "../../presentation/workbench/windowRuntimeAccount";
 import { getCommandCopy, logNetworkEvent, t } from "../../utils";
 import { openDetailsPanel } from "../../ui";
 import { openQuotaSummaryPanel } from "../../ui/quotaSummary";
@@ -332,6 +335,7 @@ export class AccountsCommandService {
     }
 
     await this.repo.removeAccount(account.id);
+    clearCurrentWindowRuntimeAccountIfMatches(account.id);
     this.view.refresh();
   }
 

@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { DashboardLocalUsageRange, DashboardSettings, DashboardThemeOption } from "../../domain/dashboard/types";
-import type { SeamlessQuotaBandSize } from "../../core/types";
+import type { SeamlessQuotaBandSize, SeamlessReserveThreshold } from "../../core/types";
 import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } from "../../localization/languages";
 import { normalizeQuotaColorThresholds } from "../../utils";
 
@@ -31,6 +31,9 @@ export class ExtensionSettingsStore {
       seamlessSwitchQuotaBandsEnabled: isSeamlessSwitchQuotaBandsEnabled(config),
       seamlessSwitchQuotaBandSize: normalizeSeamlessQuotaBandSize(
         config.get<number>("seamlessSwitchQuotaBandSize", 20)
+      ),
+      seamlessSwitchReserveThreshold: normalizeSeamlessReserveThreshold(
+        config.get<number>("seamlessSwitchReserveThreshold", 3)
       ),
       seamlessSwitchEmergencySwitchEnabled: config.get<boolean>("seamlessSwitchEmergencySwitchEnabled", false),
       hotSwitchGraceSeconds: normalizeHotSwitchGraceSeconds(config.get<number>("hotSwitchGraceSeconds", 60)),
@@ -121,6 +124,10 @@ export function normalizeHotSwitchGraceSeconds(value: number): number {
 
 export function normalizeSeamlessQuotaBandSize(value: unknown): SeamlessQuotaBandSize {
   return value === 25 || value === 33 || value === 50 ? value : 20;
+}
+
+export function normalizeSeamlessReserveThreshold(value: unknown): SeamlessReserveThreshold {
+  return value === 1 || value === 2 ? value : 3;
 }
 
 export function normalizeHotSwitchLongTurnPolicy(

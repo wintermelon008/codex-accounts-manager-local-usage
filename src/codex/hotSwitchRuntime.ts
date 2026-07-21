@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { needsRefresh, refreshTokens } from "../auth/oauth";
 import type { CodexAccountRecord, CodexTokens } from "../core/types";
-import { decodeJwtPayload } from "../utils/jwt";
+import { decodeJwtPayload, extractClaims } from "../utils/jwt";
 import {
   getCodexAccountsConfiguration,
   normalizeHotSwitchGraceSeconds,
@@ -23,6 +24,7 @@ import {
   HotSwitchRefreshResult,
   HotSwitchStatus
 } from "./hotSwitchBridge";
+import { readAuthFile, writeAuthFile } from "./authFile";
 import { installRemoteCliOverlay, restoreRemoteCliOverlay } from "./remoteCliOverlay";
 
 const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
@@ -57,6 +59,7 @@ export type RuntimeAccountSwitchOptions = {
 
 export class CodexHotSwitchRuntime implements vscode.Disposable {
   private bridge: CodexHotSwitchBridge | undefined;
+  private readonly unmanagedRollbackSnapshots = new Map<string, CodexTokens>();
   private disposed = false;
 
   constructor(
@@ -171,29 +174,42 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     ) {
       previousTokens = await this.refreshAccountTokens(previousAccount, previousTokens);
     }
-    const previousRemoteAccountId = previousAccount?.accountId ?? previousTokens?.accountId;
-    if (!previousLocalAccountId || !previousRemoteAccountId) {
-      throw new Error("The current Codex runtime account cannot be identified for safe rollback");
-    }
-    if (!previousAccount || !previousTokens?.accessToken) {
-      throw new Error("The current Codex runtime account credentials cannot be identified for safe rollback");
-    }
-    const previousRuntimeIdentity = resolveRuntimeAccessTokenIdentity(previousAccount, previousTokens.accessToken);
-
-    const result = await this.bridge.switchAccount({
+    const baseParams = {
       accessToken: tokens.accessToken,
       accountId: remoteAccountId,
       localAccountId: account.id,
-      previousAccountId: previousRemoteAccountId,
-      previousLocalAccountId,
-      previousExpectedEmail: previousRuntimeIdentity.email,
       expectedEmail: runtimeIdentity.email,
       planType: account.planType,
       gracePeriodMs: options.gracePeriodMs ?? getHotSwitchGraceSeconds() * 1_000,
       longTurnPolicy: options.longTurnPolicy ?? getHotSwitchLongTurnPolicy(),
       recoverRecentUsageLimitedTurns: options.recoverRecentUsageLimitedTurns
-    });
-    return result;
+    };
+    const previousRemoteAccountId = previousAccount?.accountId ?? previousTokens?.accountId;
+    if (previousLocalAccountId && previousRemoteAccountId && previousAccount && previousTokens?.accessToken) {
+      const previousRuntimeIdentity = resolveRuntimeAccessTokenIdentity(previousAccount, previousTokens.accessToken);
+      return this.bridge.switchAccount({
+        ...baseParams,
+        previousAccountId: previousRemoteAccountId,
+        previousLocalAccountId,
+        previousExpectedEmail: previousRuntimeIdentity.email
+      });
+    }
+
+    const snapshot = await this.captureUnmanagedRollbackSnapshot();
+    const rollbackContextId = randomUUID();
+    this.unmanagedRollbackSnapshots.set(rollbackContextId, snapshot.tokens);
+    try {
+      return await this.bridge.switchAccount({
+        ...baseParams,
+        previousAccountId: snapshot.accountId,
+        previousExpectedEmail: snapshot.email,
+        previousAccessToken: snapshot.tokens.accessToken,
+        previousPlanType: snapshot.planType,
+        rollbackContextId
+      });
+    } finally {
+      this.unmanagedRollbackSnapshots.delete(rollbackContextId);
+    }
   }
 
   dispose(): void {
@@ -257,13 +273,14 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       if (!requiresReload) {
         const candidateBridge = new CodexHotSwitchBridge(
           (request) => this.refreshRuntimeAuth(request),
-          (localAccountId) => this.activateLocalAccount(localAccountId)
+          (localAccountId) => this.activateLocalAccount(localAccountId),
+          (rollbackContextId) => this.restoreUnmanagedAccount(rollbackContextId)
         );
         if (isOpenAiCodexExtensionActive()) {
           try {
             const status = await candidateBridge.getStatus();
             requiresReload =
-              !status.ready || status.runtimeProtocolVersion !== 2 || status.httpTransportForced !== true;
+              !status.ready || status.runtimeProtocolVersion !== 3 || status.httpTransportForced !== true;
           } catch {
             requiresReload = true;
           }
@@ -325,6 +342,71 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
   private async activateLocalAccount(localAccountId: string): Promise<void> {
     await this.repo.switchAccount(localAccountId);
     setCurrentWindowRuntimeAccountId(localAccountId);
+  }
+
+  private async captureUnmanagedRollbackSnapshot(): Promise<{
+    tokens: CodexTokens;
+    accountId: string;
+    email: string;
+    planType: string | null;
+  }> {
+    const auth = await readAuthFile();
+    if (!auth?.tokens?.id_token || !auth.tokens.access_token) {
+      throw new Error("The current Codex auth.json has no usable OAuth credentials for safe rollback");
+    }
+
+    let tokens: CodexTokens = {
+      idToken: auth.tokens.id_token,
+      accessToken: auth.tokens.access_token,
+      refreshToken: auth.tokens.refresh_token,
+      accountId: auth.tokens.account_id
+    };
+    if (needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
+      if (!tokens.refreshToken) {
+        throw new Error("The current Codex auth.json token expires too soon and has no refresh token for rollback");
+      }
+      const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
+      tokens = {
+        ...refreshed,
+        accountId: refreshed.accountId ?? tokens.accountId
+      };
+      await writeAuthFile(tokens);
+    }
+
+    const claims = extractClaims(tokens.idToken, tokens.accessToken);
+    const email = claims.email?.trim();
+    const accountId = tokens.accountId ?? claims.accountId;
+    if (!email || !accountId) {
+      throw new Error("The current Codex auth.json identity cannot be identified for safe rollback");
+    }
+
+    const liveIdentity = await this.getIdentity();
+    if (liveIdentity.accountType !== "chatgpt" || !liveIdentity.email) {
+      throw new Error("The current Codex runtime has no ChatGPT identity for safe rollback");
+    }
+    if (normalizeEmail(liveIdentity.email) !== normalizeEmail(email)) {
+      throw new Error("The current Codex runtime identity differs from auth.json; refusing an unsafe switch");
+    }
+    if (liveIdentity.managedAccountId && liveIdentity.managedAccountId !== accountId) {
+      throw new Error("The current Codex runtime workspace differs from auth.json; refusing an unsafe switch");
+    }
+
+    return {
+      tokens,
+      accountId,
+      email,
+      planType: liveIdentity.planType ?? claims.planType ?? null
+    };
+  }
+
+  private async restoreUnmanagedAccount(rollbackContextId: string): Promise<void> {
+    const tokens = this.unmanagedRollbackSnapshots.get(rollbackContextId);
+    if (!tokens) {
+      throw new Error("The unmanaged Codex rollback snapshot is no longer available");
+    }
+    await writeAuthFile(tokens);
+    await this.repo.syncActiveAccountFromAuthFile();
+    setCurrentWindowRuntimeAccountId(undefined);
   }
 
   private async refreshAccountTokens(account: CodexAccountRecord, tokens: CodexTokens): Promise<CodexTokens> {

@@ -9,7 +9,8 @@ import {
   normalizeHotSwitchGraceSeconds,
   normalizeHotSwitchLongTurnPolicy,
   normalizeLocalUsageRange,
-  normalizeSeamlessQuotaBandSize
+  normalizeSeamlessQuotaBandSize,
+  normalizeSeamlessReserveThreshold
 } from "../../infrastructure/config/extensionSettings";
 import { isDashboardLanguageOption } from "../../localization/languages";
 import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchState";
@@ -53,6 +54,12 @@ export async function handleDashboardSettingUpdate(
       if (typeof value === "number") {
         await updateDashboardConfiguration(config, key, normalizeSeamlessQuotaBandSize(value));
         resetSeamlessSwitchRuntimeState();
+        updated = true;
+      }
+      break;
+    case "seamlessSwitchReserveThreshold":
+      if (typeof value === "number") {
+        await updateDashboardConfiguration(config, key, normalizeSeamlessReserveThreshold(value));
         updated = true;
       }
       break;
