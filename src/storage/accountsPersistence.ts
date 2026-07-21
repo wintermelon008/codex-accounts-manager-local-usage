@@ -1,7 +1,13 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import { CodexAccountsIndex } from "../core/types";
-import { countAvailableBackupsSync, getBackupPath, parseAccountsIndex, readCurrentIndexForBackupSync } from "./accountsIndex";
+import {
+  countAvailableBackupsSync,
+  getBackupPath,
+  parseAccountsIndex,
+  readCurrentIndexForBackupSync
+} from "./accountsIndex";
 
 export async function readIndexSnapshot(filePath: string): Promise<CodexAccountsIndex> {
   const raw = await fs.readFile(filePath, "utf8");
@@ -70,18 +76,44 @@ export async function writeIndexAtomically(
   tempSuffix: string
 ): Promise<void> {
   const serialized = JSON.stringify(index, null, 2);
-  parseAccountsIndex(serialized, `${indexPath}${tempSuffix}`);
-  const tempPath = `${indexPath}${tempSuffix}`;
+  const tempPath = buildUniqueTempPath(indexPath, tempSuffix);
+  parseAccountsIndex(serialized, tempPath);
   await fs.writeFile(tempPath, serialized, "utf8");
-  await fs.rename(tempPath, indexPath);
+  try {
+    await fs.rename(tempPath, indexPath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export function writeIndexAtomicallySync(indexPath: string, index: CodexAccountsIndex, tempSuffix: string): void {
   const serialized = JSON.stringify(index, null, 2);
-  parseAccountsIndex(serialized, `${indexPath}${tempSuffix}`);
-  const tempPath = `${indexPath}${tempSuffix}`;
+  const tempPath = buildUniqueTempPath(indexPath, tempSuffix);
+  parseAccountsIndex(serialized, tempPath);
   fsSync.writeFileSync(tempPath, serialized, "utf8");
-  fsSync.renameSync(tempPath, indexPath);
+  try {
+    fsSync.renameSync(tempPath, indexPath);
+  } catch (error) {
+    try {
+      fsSync.rmSync(tempPath, { force: true });
+    } catch {
+      // Best-effort cleanup; preserve the original rename error.
+    }
+    throw error;
+  }
+}
+
+export async function readPathRevision(filePath: string): Promise<string> {
+  try {
+    const stats = await fs.stat(filePath);
+    return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
+  } catch (error) {
+    if (isFileNotFoundError(error)) {
+      return "missing";
+    }
+    throw error;
+  }
 }
 
 export function countAvailableBackupsSyncSafe(indexPath: string, backupCount: number): number {
@@ -90,10 +122,7 @@ export function countAvailableBackupsSyncSafe(indexPath: string, backupCount: nu
 
 export function isFileNotFoundError(error: unknown): boolean {
   return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: string }).code === "ENOENT"
+    typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "ENOENT"
   );
 }
 
@@ -108,4 +137,8 @@ async function readCurrentIndexForBackup(indexPath: string): Promise<string | un
     }
     return undefined;
   }
+}
+
+function buildUniqueTempPath(indexPath: string, tempSuffix: string): string {
+  return `${indexPath}${tempSuffix}.${process.pid}.${randomUUID()}`;
 }

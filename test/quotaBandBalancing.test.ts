@@ -2,14 +2,20 @@ import { describe, expect, it } from "vitest";
 import {
   BALANCE_QUOTA_MAX_AGE_MS,
   didQuotaBandDrop,
+  FREE_EXHAUSTION_QUOTA_MAX_AGE_MS,
+  getBalanceQuotaCapability,
   getFiveHourQuotaBand,
-  selectBalanceCandidate
+  isFreePlanType,
+  selectBalanceCandidate,
+  selectFreeExhaustionCandidate
 } from "../src/application/accounts/balanceScheduler";
 import type { CodexAccountRecord } from "../src/core/types";
 import {
   acknowledgeSeamlessQuotaBand,
+  getSeamlessSwitchRuntimeSnapshot,
   initSeamlessSwitchRuntimeState,
   observeSeamlessQuotaBand,
+  recordSeamlessSelection,
   resetSeamlessSwitchRuntimeState
 } from "../src/presentation/workbench/seamlessSwitchState";
 
@@ -140,6 +146,136 @@ describe("5-hour quota band balancing", () => {
     ).toBeUndefined();
   });
 
+  it("classifies fresh quota by actual windows instead of plan labels", () => {
+    const now = 10_000_000;
+    const windowedPlus = account("windowed-plus", 80, now);
+    windowedPlus.planType = "plus";
+    const reserveFree = reserveAccount("reserve-free", 90, now);
+    reserveFree.planType = "free";
+    const stale = account("stale", 100, now - BALANCE_QUOTA_MAX_AGE_MS - 1);
+    const failed = account("failed", 100, now);
+    failed.quotaError = { message: "refresh failed", timestamp: now };
+    const ambiguous = reserveAccount("ambiguous", 100, now);
+    ambiguous.quotaSummary!.hourlyWindowPresent = undefined;
+
+    expect(getBalanceQuotaCapability(windowedPlus, now)).toBe("windowed");
+    expect(getBalanceQuotaCapability(reserveFree, now)).toBe("reserve");
+    expect(getBalanceQuotaCapability(stale, now)).toBe("unknown");
+    expect(getBalanceQuotaCapability(failed, now)).toBe("unknown");
+    expect(getBalanceQuotaCapability(ambiguous, now)).toBe("unknown");
+  });
+
+  it("prefers a recovered windowed account and uses reserve only after all windowed accounts reach the floor", () => {
+    const now = 10_000_000;
+    const active = account("active", 2, now);
+    const recovered = account("recovered", 10, now);
+    const reserve = reserveAccount("reserve", 90, now);
+    const params = {
+      accounts: [active, recovered, reserve],
+      activeAccountId: active.id,
+      activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
+      reserveThreshold: 3 as const,
+      lastSelectedAt: {},
+      now
+    };
+
+    expect(selectBalanceCandidate(params)?.id).toBe("recovered");
+    recovered.quotaSummary!.hourlyPercentage = 2;
+    expect(selectBalanceCandidate(params)?.id).toBe("reserve");
+  });
+
+  it("leaves a depleted reserve for recovered windowed quota before choosing the strongest reserve", () => {
+    const now = 10_000_000;
+    const active = reserveAccount("active", 3, now);
+    const recovered = account("recovered", 20, now);
+    const lowerReserve = reserveAccount("reserve-low", 60, now);
+    const strongerReserve = reserveAccount("reserve-high", 90, now);
+    const params = {
+      accounts: [active, lowerReserve, strongerReserve, recovered],
+      activeAccountId: active.id,
+      activeBand: 0,
+      reserveThreshold: 3 as const,
+      lastSelectedAt: {},
+      now
+    };
+
+    expect(selectBalanceCandidate(params)?.id).toBe("recovered");
+    recovered.quotaSummary!.hourlyPercentage = 2;
+    expect(selectBalanceCandidate(params)?.id).toBe("reserve-high");
+  });
+
+  it("preserves the explicit 1% emergency fallback after preferring a safe reserve", () => {
+    const now = 10_000_000;
+    const active = account("active", 1, now);
+    active.quotaSummary!.weeklyPercentage = 1;
+    const emergencyFallback = account("fallback", 2, now);
+    const reserve = reserveAccount("reserve", 90, now);
+    const params = {
+      accounts: [active, emergencyFallback, reserve],
+      activeAccountId: active.id,
+      activeBand: 1,
+      reserveThreshold: 3 as const,
+      minimumHourlyPercentage: 1,
+      emergencyQuota: "weekly" as const,
+      lastSelectedAt: {},
+      now
+    };
+
+    expect(selectBalanceCandidate(params)?.id).toBe("reserve");
+    expect(selectBalanceCandidate({ ...params, accounts: [active, emergencyFallback] })?.id).toBe("fallback");
+  });
+
+  it("prioritizes the highest fresh same-Free five-hour quota at the 1% hard-stop floor", () => {
+    const now = 10_000_000;
+    const active = account("active", 1, now);
+    active.planType = "free";
+    const lowerFree = account("free-low", 22, now);
+    lowerFree.planType = "free";
+    const higherFree = account("free-high", 84, now);
+    higherFree.planType = "chatgpt_free_plan";
+    const reserve = reserveAccount("reserve", 100, now);
+    reserve.planType = "plus";
+
+    expect(
+      selectFreeExhaustionCandidate({
+        accounts: [active, lowerFree, reserve, higherFree],
+        activeAccountId: active.id,
+        reserveThreshold: 3,
+        lastSelectedAt: {},
+        now
+      })?.id
+    ).toBe("free-high");
+    expect(isFreePlanType("ChatGPT Free Plan")).toBe(true);
+  });
+
+  it("keeps Free hard-stop candidates fresh and above both safety floors", () => {
+    const now = 10_000_000;
+    const active = account("active", 1, now);
+    active.planType = "free";
+    const eligible = account("eligible", 25, now);
+    eligible.planType = "free";
+    eligible.quotaSummary!.weeklyPercentage = 4;
+    const depleted = account("depleted", 1, now);
+    depleted.planType = "free";
+    const weeklyDepleted = account("weekly-depleted", 100, now);
+    weeklyDepleted.planType = "free";
+    weeklyDepleted.quotaSummary!.weeklyPercentage = 3;
+    const stale = account("stale", 100, now - FREE_EXHAUSTION_QUOTA_MAX_AGE_MS - 1);
+    stale.planType = "free";
+    const plus = account("plus", 100, now);
+    plus.planType = "plus";
+
+    expect(
+      selectFreeExhaustionCandidate({
+        accounts: [active, depleted, weeklyDepleted, stale, plus, eligible],
+        activeAccountId: active.id,
+        reserveThreshold: 3,
+        lastSelectedAt: {},
+        now
+      })?.id
+    ).toBe("eligible");
+  });
+
   it("keeps a dropped band pending until a candidate switch is acknowledged", () => {
     initSeamlessSwitchRuntimeState({
       globalState: {
@@ -169,6 +305,21 @@ describe("5-hour quota band balancing", () => {
     expect(observeSeamlessQuotaBand("active", 4, 20)).toBe(true);
     expect(observeSeamlessQuotaBand("active", 4, 25)).toBe(false);
   });
+
+  it("clears a stale hourly band when a selected account is currently reserve-only", () => {
+    initSeamlessSwitchRuntimeState({
+      globalState: {
+        get: () => undefined,
+        update: async () => undefined
+      }
+    } as never);
+
+    recordSeamlessSelection("reserve", 4);
+    expect(getSeamlessSwitchRuntimeSnapshot().hourlyBands?.["reserve"]).toBe(4);
+    recordSeamlessSelection("reserve", undefined);
+    expect(getSeamlessSwitchRuntimeSnapshot().hourlyBands?.["reserve"]).toBeUndefined();
+    expect(getSeamlessSwitchRuntimeSnapshot().lastSelectedAt?.["reserve"]).toBeTypeOf("number");
+  });
 });
 
 function account(
@@ -196,4 +347,12 @@ function account(
     createdAt: 1,
     updatedAt: 1
   };
+}
+
+function reserveAccount(id: string, weeklyPercentage: number, lastQuotaAt: number): CodexAccountRecord {
+  const result = account(id, 0, lastQuotaAt);
+  result.quotaSummary!.hourlyWindowPresent = false;
+  result.quotaSummary!.hourlyWindowMinutes = undefined;
+  result.quotaSummary!.weeklyPercentage = weeklyPercentage;
+  return result;
 }

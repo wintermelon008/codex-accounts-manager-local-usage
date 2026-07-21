@@ -1,16 +1,28 @@
 import * as vscode from "vscode";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readAuthFile, writeAuthFile } from "../src/codex/authFile";
 import type { CodexAccountRecord } from "../src/core/types";
 import {
   CodexHotSwitchRuntime,
   resolveRuntimeAccessTokenIdentity,
   selectManagedAccountForRefresh
 } from "../src/codex/hotSwitchRuntime";
-import { setCurrentWindowRuntimeAccountId } from "../src/presentation/workbench/windowRuntimeAccount";
+import {
+  clearCurrentWindowRuntimeAccountIfMatches,
+  getCurrentWindowRuntimeAccountId,
+  setCurrentWindowRuntimeAccountId
+} from "../src/presentation/workbench/windowRuntimeAccount";
+
+vi.mock("../src/codex/authFile", () => ({
+  readAuthFile: vi.fn(),
+  writeAuthFile: vi.fn()
+}));
 
 describe("Codex hot-switch runtime setup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(readAuthFile).mockResolvedValue(undefined);
+    vi.mocked(writeAuthFile).mockResolvedValue(undefined);
     setCurrentWindowRuntimeAccountId(undefined);
   });
 
@@ -178,6 +190,114 @@ describe("Codex hot-switch runtime setup", () => {
         recoverRecentUsageLimitedTurns: true
       })
     );
+  });
+
+  it("uses a validated auth.json snapshot when the previous managed account was deleted", async () => {
+    const enabledConfiguration = {
+      get: (key: string, defaultValue?: unknown) => (key === "hotSwitchEnabled" ? true : defaultValue),
+      update: vi.fn(),
+      inspect: vi.fn()
+    } as unknown as vscode.WorkspaceConfiguration;
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(enabledConfiguration);
+
+    const previousIdToken = createUnsignedJwt({
+      exp: Math.floor(Date.now() / 1_000) + 3_600,
+      email: "previous@example.invalid",
+      "https://api.openai.com/auth": {
+        chatgpt_user_id: "previous-user",
+        chatgpt_account_id: "workspace-previous",
+        chatgpt_plan_type: "free"
+      }
+    });
+    const previousAccessToken = createUnsignedJwt({
+      exp: Math.floor(Date.now() / 1_000) + 3_600,
+      "https://api.openai.com/auth": {
+        chatgpt_user_id: "previous-user",
+        chatgpt_account_id: "workspace-previous"
+      },
+      "https://api.openai.com/profile": { email: "previous@example.invalid" }
+    });
+    vi.mocked(readAuthFile).mockResolvedValue({
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: previousIdToken,
+        access_token: previousAccessToken,
+        refresh_token: "previous-refresh-token",
+        account_id: "workspace-previous"
+      }
+    });
+
+    const targetAccount: CodexAccountRecord = {
+      id: "local-target",
+      email: "target@example.invalid",
+      userId: "target-user",
+      accountId: "workspace-target",
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const targetTokens = {
+      idToken: "unused-target-id",
+      accessToken: createUnsignedJwt({
+        exp: Math.floor(Date.now() / 1_000) + 3_600,
+        "https://api.openai.com/auth": { chatgpt_user_id: "target-user" },
+        "https://api.openai.com/profile": { email: "target@example.invalid" }
+      }),
+      accountId: "workspace-target"
+    };
+    const switchAccount = vi.fn().mockResolvedValue({
+      status: "switched",
+      accountId: "workspace-target",
+      email: "target@example.invalid",
+      activeTurns: 0,
+      interruptedTurns: 0,
+      continuedThreads: 0
+    });
+    const runtime = new CodexHotSwitchRuntime(
+      {} as vscode.ExtensionContext,
+      {
+        getAccount: vi.fn(async (id: string) => (id === targetAccount.id ? targetAccount : undefined)),
+        getTokens: vi.fn(async (id: string) => (id === targetAccount.id ? targetTokens : undefined))
+      } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+    (
+      runtime as unknown as { bridge: { getIdentity: () => Promise<unknown>; switchAccount: typeof switchAccount } }
+    ).bridge = {
+      getIdentity: vi.fn().mockResolvedValue({
+        accountType: "chatgpt",
+        email: "previous@example.invalid",
+        planType: "free",
+        externalAuthActive: true,
+        managedAccountId: "workspace-previous",
+        managedLocalAccountId: "deleted-local",
+        httpTransportForced: true
+      }),
+      switchAccount
+    };
+    setCurrentWindowRuntimeAccountId("deleted-local");
+
+    await expect(runtime.switchAccount(targetAccount.id)).resolves.toMatchObject({ status: "switched" });
+    expect(switchAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localAccountId: targetAccount.id,
+        previousAccountId: "workspace-previous",
+        previousExpectedEmail: "previous@example.invalid",
+        previousAccessToken,
+        previousPlanType: "free",
+        rollbackContextId: expect.any(String)
+      })
+    );
+    expect(switchAccount.mock.calls[0]?.[0]).not.toHaveProperty("previousLocalAccountId");
+    expect(writeAuthFile).not.toHaveBeenCalled();
+  });
+
+  it("clears only the deleted account from the window runtime baseline", () => {
+    setCurrentWindowRuntimeAccountId("local-a");
+
+    expect(clearCurrentWindowRuntimeAccountIfMatches("local-b")).toBe(false);
+    expect(getCurrentWindowRuntimeAccountId()).toBe("local-a");
+    expect(clearCurrentWindowRuntimeAccountIfMatches("local-a")).toBe(true);
+    expect(getCurrentWindowRuntimeAccountId()).toBeUndefined();
   });
 
   it("fails closed when hot switching is enabled but the runtime bridge is not ready", async () => {

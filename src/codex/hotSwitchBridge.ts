@@ -36,19 +36,34 @@ export type HotSwitchIdentity = {
   httpTransportForced: boolean;
 };
 
+type HotSwitchManagedRollbackParams = {
+  previousAccountId: string;
+  previousLocalAccountId: string;
+  previousExpectedEmail: string;
+  previousAccessToken?: never;
+  previousPlanType?: never;
+  rollbackContextId?: never;
+};
+
+type HotSwitchSnapshotRollbackParams = {
+  previousAccountId: string;
+  previousLocalAccountId?: never;
+  previousExpectedEmail: string;
+  previousAccessToken: string;
+  previousPlanType?: string | null;
+  rollbackContextId: string;
+};
+
 export type HotSwitchAccountParams = {
   accessToken: string;
   accountId: string;
   localAccountId: string;
-  previousAccountId: string;
-  previousLocalAccountId: string;
-  previousExpectedEmail: string;
   expectedEmail: string;
   planType?: string;
   gracePeriodMs: number;
   longTurnPolicy: HotSwitchLongTurnPolicy;
   recoverRecentUsageLimitedTurns?: boolean;
-};
+} & (HotSwitchManagedRollbackParams | HotSwitchSnapshotRollbackParams);
 
 export type HotSwitchAccountResult =
   | {
@@ -106,7 +121,9 @@ export class CodexHotSwitchBridge {
 
   constructor(
     private readonly refreshAuth: (request: HotSwitchRefreshRequest) => Promise<HotSwitchRefreshResult>,
-    private readonly activateLocalAccount: (localAccountId: string) => Promise<void> = async () => undefined,
+    private readonly activateLocalAccount: (localAccountId: string) => Promise<void> = () => Promise.resolve(),
+    private readonly restoreUnmanagedAccount: (rollbackContextId: string) => Promise<void> = () =>
+      Promise.reject(new Error("Unmanaged Codex account rollback is not configured")),
     private readonly extensionHostPid = process.pid
   ) {}
 
@@ -282,6 +299,28 @@ export class CodexHotSwitchBridge {
             error: {
               code: -32002,
               message: error instanceof Error ? error.message : "Unable to activate the managed account"
+            }
+          })
+      );
+      return;
+    }
+
+    if (message.method === "account/restore-unmanaged") {
+      const rollbackContextId =
+        typeof message.params?.["rollbackContextId"] === "string" ? message.params["rollbackContextId"] : undefined;
+      if (!rollbackContextId) {
+        this.writeResponse(socket, message.id, {
+          error: { code: -32602, message: "Missing rollback context identifier" }
+        });
+        return;
+      }
+      void this.restoreUnmanagedAccount(rollbackContextId).then(
+        () => this.writeResponse(socket, message.id!, { result: {} }),
+        (error: unknown) =>
+          this.writeResponse(socket, message.id!, {
+            error: {
+              code: -32003,
+              message: error instanceof Error ? error.message : "Unable to restore the unmanaged Codex account"
             }
           })
       );

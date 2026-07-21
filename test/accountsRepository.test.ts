@@ -19,6 +19,10 @@ vi.mock("../src/codex", async (importOriginal) => {
   };
 });
 
+vi.mock("../src/services/profile", () => ({
+  fetchRemoteAccountProfile: vi.fn().mockResolvedValue(undefined)
+}));
+
 import { AccountsRepository } from "../src/storage";
 import { mirrorAideckCodexAccount } from "../src/storage/aideckCodexStorage";
 import { buildAccountStorageId } from "../src/utils/accountIdentity";
@@ -303,6 +307,68 @@ describe("AccountsRepository token persistence", () => {
     repo.dispose();
   });
 
+  it("does not let the token TTL hide a mirror update from another host", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const storageId = buildAccountStorageId("dev@example.com", "acct_123", undefined);
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [
+          {
+            id: storageId,
+            email: "dev@example.com",
+            accountId: "acct_123",
+            isActive: false,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+    const originalTokens = createTokens("acct_123");
+    originalTokens.refreshToken = "original-refresh-token";
+    await context.secrets.store(`codex.account.${storageId}`, JSON.stringify(originalTokens));
+
+    const repo = new AccountsRepository(context);
+    expect((await repo.getTokens(storageId))?.refreshToken).toBe("original-refresh-token");
+
+    const externalTokens = createTokens("acct_123");
+    externalTokens.refreshToken = "external-refresh-token";
+    await writeAideckAccountJson(storageId, {
+      id: storageId,
+      email: "dev@example.com",
+      account_id: "acct_123",
+      tokens: {
+        id_token: externalTokens.idToken,
+        access_token: externalTokens.accessToken,
+        refresh_token: externalTokens.refreshToken,
+        account_id: externalTokens.accountId
+      }
+    });
+
+    expect((await repo.getTokens(storageId))?.refreshToken).toBe("external-refresh-token");
+    expect(JSON.parse(secrets.get(`codex.account.${storageId}`) ?? "{}")).toMatchObject({
+      refreshToken: "external-refresh-token"
+    });
+
+    repo.dispose();
+  });
+
   it("imports missing accounts from Aideck mirror on init", async () => {
     const secrets = new Map<string, string>();
     const context = {
@@ -405,7 +471,9 @@ describe("AccountsRepository token persistence", () => {
     );
     await context.secrets.store(
       `codex.account.${storageId}`,
-      JSON.stringify(createTokens("acct_shared", "dev@example.com", { organizationId: "org_team", userId: "user_same" }))
+      JSON.stringify(
+        createTokens("acct_shared", "dev@example.com", { organizationId: "org_team", userId: "user_same" })
+      )
     );
 
     const externalTokens = createTokens("acct_shared", "dev@example.com", {
@@ -627,9 +695,24 @@ describe("AccountsRepository token persistence", () => {
       `${storageId}.json`
     );
     await expect(fs.readFile(accountFile, "utf8")).rejects.toThrow();
+    await mirrorAideckCodexAccount(
+      {
+        id: storageId,
+        email: "aideck@example.com",
+        accountId: "acct_aideck",
+        isActive: false,
+        createdAt: 1,
+        updatedAt: Date.now()
+      },
+      aideckTokens
+    );
+    await expect(fs.readFile(accountFile, "utf8")).rejects.toThrow();
 
     const aideckIndex = JSON.parse(
-      await fs.readFile(path.join(process.env.AIDECK_DATA_DIR as string, "accounts", "codex", "accounts-index.json"), "utf8")
+      await fs.readFile(
+        path.join(process.env.AIDECK_DATA_DIR as string, "accounts", "codex", "accounts-index.json"),
+        "utf8"
+      )
     );
     expect(aideckIndex.accounts).not.toContainEqual(expect.objectContaining({ id: storageId }));
 
@@ -641,6 +724,9 @@ describe("AccountsRepository token persistence", () => {
     await reloaded.init();
 
     expect(await reloaded.getAccount(storageId)).toBeUndefined();
+
+    await reloaded.upsertFromTokens(aideckTokens);
+    await expect(fs.readFile(accountFile, "utf8")).resolves.toContain("aideck@example.com");
 
     reloaded.dispose();
   });
@@ -814,7 +900,7 @@ describe("AccountsRepository token persistence", () => {
     repo.dispose();
   });
 
-  it("preserves existing Aideck workspace metadata and quota when codex-tools mirrors tokens", async () => {
+  it("preserves Aideck workspace metadata while replacing an older quota snapshot", async () => {
     const secrets = new Map<string, string>();
     const context = {
       globalStorageUri: {
@@ -870,8 +956,10 @@ describe("AccountsRepository token persistence", () => {
         updated_at: 123
       },
       tokens: {
-        id_token: createTokens("acct_123", "dev@example.com", { organizationId: "org_team", userId: "user_same" }).idToken,
-        access_token: createTokens("acct_123", "dev@example.com", { organizationId: "org_team", userId: "user_same" }).accessToken,
+        id_token: createTokens("acct_123", "dev@example.com", { organizationId: "org_team", userId: "user_same" })
+          .idToken,
+        access_token: createTokens("acct_123", "dev@example.com", { organizationId: "org_team", userId: "user_same" })
+          .accessToken,
         refresh_token: "old-aideck-refresh",
         account_id: "acct_123"
       }
@@ -917,8 +1005,8 @@ describe("AccountsRepository token persistence", () => {
     expect(aideckAccount.subscription_active_until).toBe("1900000000");
     expect(aideckAccount.account_name).toBe("Aideck Team Workspace");
     expect(aideckAccount.account_structure).toBe("organization");
-    expect(aideckAccount.quota.hourly_percentage).toBe(12);
-    expect(aideckAccount.quota.weekly_percentage).toBe(34);
+    expect(aideckAccount.quota.hourly_percentage).toBe(91);
+    expect(aideckAccount.quota.weekly_percentage).toBe(64);
 
     repo.dispose();
   });
@@ -1081,4 +1169,62 @@ describe("AccountsRepository token persistence", () => {
     repo.dispose();
   });
 
+  it("merges concurrent writes from two extension hosts instead of overwriting unrelated fields", async () => {
+    const secrets = new Map<string, string>();
+    const createContext = () =>
+      ({
+        globalStorageUri: {
+          fsPath: tempDir
+        },
+        secrets: {
+          get: vi.fn(async (key: string) => secrets.get(key)),
+          store: vi.fn(async (key: string, value: string) => {
+            secrets.set(key, value);
+          }),
+          delete: vi.fn(async (key: string) => {
+            secrets.delete(key);
+          })
+        }
+      }) as unknown as vscode.ExtensionContext;
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [
+          {
+            id: "account-1",
+            email: "dev@example.com",
+            tags: ["base"],
+            balancePoolEnabled: false,
+            isActive: false,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+
+    const firstHost = new AccountsRepository(createContext());
+    const secondHost = new AccountsRepository(createContext());
+    await Promise.all([firstHost.listAccounts(), secondHost.listAccounts()]);
+    await Promise.all([
+      firstHost.setBalancePoolMembership("account-1", true),
+      secondHost.setAccountTags("account-1", ["ops"])
+    ]);
+
+    await vi.waitFor(
+      async () => {
+        const index = JSON.parse(await fs.readFile(path.join(tempDir, "accounts-index.json"), "utf8"));
+        expect(index.accounts[0]).toMatchObject({
+          id: "account-1",
+          balancePoolEnabled: true,
+          tags: ["ops"]
+        });
+      },
+      { timeout: 3_000, interval: 25 }
+    );
+
+    firstHost.dispose();
+    secondHost.dispose();
+  });
 });

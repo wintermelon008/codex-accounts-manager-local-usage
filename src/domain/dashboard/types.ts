@@ -4,7 +4,8 @@ import type {
   CodexImportPreviewSummary,
   CodexImportResultSummary,
   CodexIndexHealthSummary,
-  SeamlessQuotaBandSize
+  SeamlessQuotaBandSize,
+  SeamlessReserveThreshold
 } from "../../core/types";
 
 export type DashboardSettingKey =
@@ -19,6 +20,7 @@ export type DashboardSettingKey =
   | "seamlessSwitchEnabled"
   | "seamlessSwitchQuotaBandsEnabled"
   | "seamlessSwitchQuotaBandSize"
+  | "seamlessSwitchReserveThreshold"
   | "seamlessSwitchEmergencySwitchEnabled"
   | "hotSwitchGraceSeconds"
   | "hotSwitchLongTurnPolicy"
@@ -47,6 +49,7 @@ export interface DashboardSettings {
   seamlessSwitchEnabled: boolean;
   seamlessSwitchQuotaBandsEnabled: boolean;
   seamlessSwitchQuotaBandSize: SeamlessQuotaBandSize;
+  seamlessSwitchReserveThreshold: SeamlessReserveThreshold;
   seamlessSwitchEmergencySwitchEnabled: boolean;
   hotSwitchGraceSeconds: number;
   hotSwitchLongTurnPolicy: "defer" | "interrupt" | "interruptAndContinue";

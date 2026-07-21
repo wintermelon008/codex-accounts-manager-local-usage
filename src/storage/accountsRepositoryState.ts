@@ -9,6 +9,7 @@ export interface AccountsRepositoryState {
   cache: CacheEntry<CodexAccountsIndex> | null;
   saveDebounceTimer: NodeJS.Timeout | null;
   pendingSave: CodexAccountsIndex | null;
+  pendingSaveBase: CodexAccountsIndex | null;
   persistChain: Promise<void>;
   isDirty: boolean;
   indexHealth: CodexIndexHealthSummary;
@@ -19,6 +20,7 @@ export function createAccountsRepositoryState(): AccountsRepositoryState {
     cache: null,
     saveDebounceTimer: null,
     pendingSave: null,
+    pendingSaveBase: null,
     persistChain: Promise.resolve(),
     isDirty: false,
     indexHealth: {

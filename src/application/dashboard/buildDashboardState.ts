@@ -192,11 +192,8 @@ function buildMetrics(
   copy: DashboardState["copy"]
 ): DashboardMetricViewModel[] {
   const quota = account.quotaSummary;
-  const isFree = account.planType?.trim().toLowerCase() === "free";
-  const metrics: DashboardMetricViewModel[] = [];
-
-  if (!isFree) {
-    metrics.push({
+  const metrics: DashboardMetricViewModel[] = [
+    {
       key: "hourly",
       label: copy.hourlyLabel,
       percentage: quota?.hourlyPercentage,
@@ -204,8 +201,8 @@ function buildMetrics(
       requestsLeft: quota?.hourlyRequestsLeft,
       requestsLimit: quota?.hourlyRequestsLimit,
       visible: quota ? Boolean(quota.hourlyWindowPresent) : true
-    });
-  }
+    }
+  ];
 
   metrics.push({
     key: "weekly",

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createReadStream, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,15 +12,24 @@ import type {
   DashboardLocalUsageTokenTotals,
   DashboardLocalUsageViewModel
 } from "../domain/dashboard/types";
+import { tryAcquireSharedFileLease } from "../storage/accountsWriteCoordinator";
 
 export const LOCAL_USAGE_CACHE_TTL_MS = 15 * 60 * 1000;
 export const LOCAL_USAGE_PERIOD_DAYS = 14;
 export const LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT = 8;
+export const LOCAL_USAGE_SCAN_LEASE_MS = 60 * 1000;
 
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
-const CACHE_FILE_NAME = "local-usage-analytics-v3.json";
-const CACHE_SCHEMA_VERSION = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const CACHE_FILE_NAME = "local-usage-analytics-v4.json";
+export const LOCAL_USAGE_SCAN_LEASE_FILE_NAME = `${CACHE_FILE_NAME}.scan-lease`;
+const CACHE_SCHEMA_VERSION = 4;
 const UNKNOWN_MODEL = "unknown";
+const PEER_REFRESH_WAIT_MS = 2_000;
+const PEER_REFRESH_POLL_MS = 50;
+const LOCAL_USAGE_EVENT_MARKER =
+  /"type"\s*:\s*"(?:session_meta|turn_context|token_count|inter_agent_communication_metadata)"/;
+const DATE_KEY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 
 type LocalUsageScanInput = {
   sessionsPath: string;
@@ -46,15 +56,29 @@ type LocalUsageCache = {
 
 type MutableTotals = DashboardLocalUsageTokenTotals;
 
+type CumulativeTokenUsage = {
+  totals: MutableTotals;
+  hasCompleteComponents: boolean;
+};
+
+type TokenUsageHighWater = {
+  totals: MutableTotals;
+  hasCompleteComponents: boolean;
+};
+
+type TokenUsageAdvance = {
+  highWater: TokenUsageHighWater;
+  delta?: MutableTotals;
+};
+
 /**
  * Reads only token-count metadata from local Codex session JSONL files. Raw
  * conversation text, credentials, account identifiers, and session paths are
  * deliberately excluded from the returned view model and persisted cache.
  */
 export class LocalUsageAnalyticsService {
-  private cacheLoaded = false;
-  private cacheLoadPromise: Promise<void> | undefined;
   private refreshPromise: Promise<void> | undefined;
+  private readonly refreshCallbacks = new Set<() => void>();
   private snapshot: DashboardLocalUsageViewModel | undefined;
   private readonly sessionsPath: string;
   private readonly periodDays: number;
@@ -71,7 +95,7 @@ export class LocalUsageAnalyticsService {
   }
 
   async getSnapshot(onRefreshed?: () => void): Promise<DashboardLocalUsageViewModel> {
-    await this.loadCache();
+    await this.syncSnapshotFromCache();
 
     if (!this.snapshot) {
       this.startRefresh(onRefreshed);
@@ -89,71 +113,132 @@ export class LocalUsageAnalyticsService {
     };
   }
 
-  private async loadCache(): Promise<void> {
-    if (this.cacheLoaded) {
-      return;
-    }
-
-    this.cacheLoadPromise ??= this.readCache().finally(() => {
-      this.cacheLoaded = true;
-    });
-    await this.cacheLoadPromise;
-  }
-
-  private async readCache(): Promise<void> {
+  private async syncSnapshotFromCache(): Promise<boolean> {
     try {
       const raw = await fs.readFile(this.cachePath(), "utf8");
       const cache = parseCache(raw);
-      if (cache?.snapshot.periodDays === this.periodDays) {
-        this.snapshot = cache.snapshot;
+      if (cache?.snapshot.periodDays !== this.periodDays) {
+        return false;
       }
+
+      const cachedCalculatedAt = cache.snapshot.calculatedAt ?? Number.NEGATIVE_INFINITY;
+      const currentCalculatedAt = this.snapshot?.calculatedAt ?? Number.NEGATIVE_INFINITY;
+      if (this.snapshot && cachedCalculatedAt <= currentCalculatedAt) {
+        return false;
+      }
+
+      this.snapshot = {
+        ...cache.snapshot,
+        isRefreshing: false
+      };
+      return true;
     } catch (error) {
       if (!isErrorCode(error, "ENOENT")) {
         console.warn("[codexAccounts] local usage cache ignored", error);
       }
+      return false;
     }
   }
 
   private startRefresh(onRefreshed?: () => void): void {
+    if (onRefreshed) {
+      this.refreshCallbacks.add(onRefreshed);
+    }
     if (this.refreshPromise) {
       return;
     }
 
-    this.refreshPromise = this.refresh()
-      .catch(async (error: unknown) => {
+    this.refreshPromise = this.refreshWithLease()
+      .catch((error: unknown) => {
         console.warn("[codexAccounts] local usage scan failed", error);
-        if (!this.snapshot) {
-          this.snapshot = {
-            ...createEmptySnapshot("unavailable", this.periodDays, this.timeZone, this.now()),
-            calculatedAt: this.now(),
-            nextRefreshAt: this.now() + LOCAL_USAGE_CACHE_TTL_MS
-          };
-          await this.writeCache(this.snapshot).catch(() => undefined);
-        }
       })
       .finally(() => {
         this.refreshPromise = undefined;
-        onRefreshed?.();
+        const callbacks = [...this.refreshCallbacks];
+        this.refreshCallbacks.clear();
+        for (const callback of callbacks) {
+          callback();
+        }
       });
   }
 
-  private async refresh(): Promise<void> {
-    const snapshot = await this.scanner({
+  private async refreshWithLease(): Promise<void> {
+    const previousCalculatedAt = this.snapshot?.calculatedAt;
+    const lease = await tryAcquireSharedFileLease(this.scanLeasePath(), LOCAL_USAGE_SCAN_LEASE_MS);
+    if (!lease) {
+      await this.waitForPeerRefresh(previousCalculatedAt);
+      return;
+    }
+
+    try {
+      await this.syncSnapshotFromCache();
+      if (this.snapshot && isSnapshotFresh(this.snapshot, this.now())) {
+        return;
+      }
+
+      await this.scanAndPersist();
+    } catch (error) {
+      await this.persistUnavailableSnapshotIfEmpty();
+      throw error;
+    } finally {
+      await lease.release();
+    }
+  }
+
+  private async scanAndPersist(): Promise<void> {
+    const scanned = await this.scanner({
       sessionsPath: this.sessionsPath,
       periodDays: this.periodDays,
       timeZone: this.timeZone,
       now: this.now()
     });
-    this.snapshot = {
-      ...snapshot,
+    const snapshot: DashboardLocalUsageViewModel = {
+      ...scanned,
       isRefreshing: false
     };
-    await this.writeCache(this.snapshot);
+
+    await this.syncSnapshotFromCache();
+    if (
+      (this.snapshot?.calculatedAt ?? Number.NEGATIVE_INFINITY) > (snapshot.calculatedAt ?? Number.NEGATIVE_INFINITY)
+    ) {
+      return;
+    }
+
+    await this.writeCache(snapshot);
+    this.snapshot = snapshot;
+  }
+
+  private async persistUnavailableSnapshotIfEmpty(): Promise<void> {
+    if (this.snapshot) {
+      return;
+    }
+
+    const calculatedAt = this.now();
+    this.snapshot = {
+      ...createEmptySnapshot("unavailable", this.periodDays, this.timeZone, calculatedAt),
+      calculatedAt,
+      nextRefreshAt: calculatedAt + LOCAL_USAGE_CACHE_TTL_MS
+    };
+    await this.writeCache(this.snapshot).catch(() => undefined);
+  }
+
+  private async waitForPeerRefresh(previousCalculatedAt: number | undefined): Promise<void> {
+    const deadline = Date.now() + PEER_REFRESH_WAIT_MS;
+    do {
+      await delay(PEER_REFRESH_POLL_MS);
+      const adopted = await this.syncSnapshotFromCache();
+      if (
+        adopted &&
+        (this.snapshot?.calculatedAt ?? Number.NEGATIVE_INFINITY) > (previousCalculatedAt ?? Number.NEGATIVE_INFINITY)
+      ) {
+        return;
+      }
+    } while (Date.now() < deadline);
   }
 
   private async writeCache(snapshot: DashboardLocalUsageViewModel): Promise<void> {
     const cachePath = this.cachePath();
-    const tempPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+    const tempPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
     const value: LocalUsageCache = {
       schemaVersion: CACHE_SCHEMA_VERSION,
       snapshot
@@ -171,6 +256,10 @@ export class LocalUsageAnalyticsService {
 
   private cachePath(): string {
     return path.join(this.options.globalStoragePath, CACHE_FILE_NAME);
+  }
+
+  private scanLeasePath(): string {
+    return path.join(this.options.globalStoragePath, LOCAL_USAGE_SCAN_LEASE_FILE_NAME);
   }
 }
 
@@ -190,10 +279,16 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
   const total = empty.total;
   let eventCount = 0;
 
-  const files = await findJsonlFiles(input.sessionsPath);
+  // mtime must be at least as recent as the newest record in a session file.
+  // Keep one extra day for timezone and daylight-saving boundaries.
+  const oldestRelevantMtime = input.now - (Math.max(1, Math.floor(input.periodDays)) + 1) * DAY_MS;
+  const files = await findJsonlFiles(input.sessionsPath, oldestRelevantMtime);
   for (const file of files) {
     let currentModel = UNKNOWN_MODEL;
     let fileHasUsage = false;
+    let firstSessionMetaSeen = false;
+    let shouldCountUsage = true;
+    let usageHighWater: TokenUsageHighWater | undefined;
 
     try {
       const lines = readline.createInterface({
@@ -202,6 +297,12 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
       });
 
       for await (const line of lines) {
+        // Conversation and tool-output records dominate session bytes. Avoid
+        // allocating parsed object graphs unless the line can affect usage.
+        if (!LOCAL_USAGE_EVENT_MARKER.test(line)) {
+          continue;
+        }
+
         const event = parseRecord(line);
         if (!event) {
           continue;
@@ -209,6 +310,21 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
 
         const payload = asRecord(event["payload"]);
         if (!payload) {
+          continue;
+        }
+
+        if (event["type"] === "session_meta") {
+          if (!firstSessionMetaSeen) {
+            firstSessionMetaSeen = true;
+            shouldCountUsage = !isSpawnedSubagentSession(payload);
+          }
+          continue;
+        }
+
+        if (event["type"] === "inter_agent_communication_metadata") {
+          if (payload["trigger_turn"] === true) {
+            shouldCountUsage = true;
+          }
           continue;
         }
 
@@ -224,18 +340,20 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
           continue;
         }
 
+        const advanced = advanceTokenUsageHighWater(payload, usageHighWater);
+        usageHighWater = advanced?.highWater ?? usageHighWater;
+        const usage = advanced?.delta;
+        if (!usage || !shouldCountUsage) {
+          continue;
+        }
+
         const timestamp = timestampFromEvent(event["timestamp"]);
-        if (timestamp == null) {
+        if (timestamp == null || timestamp > input.now) {
           continue;
         }
 
         const date = dateKey(timestamp, input.timeZone);
         if (!allowedDates.has(date)) {
-          continue;
-        }
-
-        const usage = readLastTokenUsage(payload);
-        if (!usage) {
           continue;
         }
 
@@ -254,10 +372,13 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
         day.eventCount += 1;
 
         const threeHourBucketStartAt = threeHourBucketStart(timestamp, input.now);
-        const threeHourBucket =
-          threeHourBucketStartAt == null ? undefined : byThreeHour.get(threeHourBucketStartAt);
+        const threeHourBucket = threeHourBucketStartAt == null ? undefined : byThreeHour.get(threeHourBucketStartAt);
         if (threeHourBucket) {
-          const threeHourModelBucket = getOrCreateThreeHourModelBucket(byThreeHourAndModel, threeHourBucket.startAt, model);
+          const threeHourModelBucket = getOrCreateThreeHourModelBucket(
+            byThreeHourAndModel,
+            threeHourBucket.startAt,
+            model
+          );
           addTotals(threeHourBucket, usage);
           addTotals(threeHourModelBucket, usage);
           threeHourBucket.eventCount += 1;
@@ -303,6 +424,9 @@ export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promis
 }
 
 export function isSnapshotFresh(snapshot: DashboardLocalUsageViewModel, now: number): boolean {
+  if (snapshot.nextRefreshAt != null) {
+    return now < snapshot.nextRefreshAt;
+  }
   return snapshot.calculatedAt != null && now - snapshot.calculatedAt < LOCAL_USAGE_CACHE_TTL_MS;
 }
 
@@ -419,6 +543,99 @@ function getOrCreateThreeHourModelBucket(
   return created;
 }
 
+function isSpawnedSubagentSession(payload: Record<string, unknown>): boolean {
+  const source = asRecord(payload["source"]);
+  const subagent = asRecord(source?.["subagent"]);
+  return Boolean(asRecord(subagent?.["thread_spawn"]));
+}
+
+function advanceTokenUsageHighWater(
+  payload: Record<string, unknown>,
+  previous: TokenUsageHighWater | undefined
+): TokenUsageAdvance | undefined {
+  const cumulative = readCumulativeTokenUsage(payload);
+  const last = readLastTokenUsage(payload);
+
+  if (!cumulative) {
+    if (!last) {
+      return undefined;
+    }
+    return {
+      highWater: {
+        totals: addTokenTotals(previous?.totals ?? emptyTotals(), last),
+        hasCompleteComponents: previous?.hasCompleteComponents ?? true
+      },
+      delta: last
+    };
+  }
+
+  const previousTotalTokens = previous?.totals.totalTokens ?? 0;
+  if (cumulative.totals.totalTokens <= previousTotalTokens) {
+    return previous ? { highWater: previous } : undefined;
+  }
+
+  const totalTokensDelta = cumulative.totals.totalTokens - previousTotalTokens;
+  let delta: MutableTotals | undefined;
+  if (cumulative.hasCompleteComponents && (!previous || previous.hasCompleteComponents)) {
+    delta = subtractTokenTotals(cumulative.totals, previous?.totals ?? emptyTotals());
+  }
+  if (!delta && last?.totalTokens === totalTokensDelta) {
+    delta = last;
+  }
+
+  let highWater: TokenUsageHighWater;
+  if (cumulative.hasCompleteComponents) {
+    highWater = {
+      totals: cumulative.totals,
+      hasCompleteComponents: true
+    };
+  } else if (last?.totalTokens === totalTokensDelta && (!previous || previous.hasCompleteComponents)) {
+    highWater = {
+      totals: addTokenTotals(previous?.totals ?? emptyTotals(), last),
+      hasCompleteComponents: true
+    };
+  } else {
+    highWater = {
+      totals: {
+        ...emptyTotals(),
+        totalTokens: cumulative.totals.totalTokens
+      },
+      hasCompleteComponents: false
+    };
+  }
+
+  return { highWater, delta };
+}
+
+function readCumulativeTokenUsage(payload: Record<string, unknown>): CumulativeTokenUsage | undefined {
+  const info = asRecord(payload["info"]);
+  const usage = asRecord(info?.["total_token_usage"]);
+  if (!usage) {
+    return undefined;
+  }
+
+  const totalTokens = readOptionalNonNegativeInteger(usage["total_tokens"]);
+  if (totalTokens == null) {
+    return undefined;
+  }
+
+  const inputTokens = readOptionalNonNegativeInteger(usage["input_tokens"]);
+  const cachedInputTokens = readOptionalNonNegativeInteger(usage["cached_input_tokens"]);
+  const outputTokens = readOptionalNonNegativeInteger(usage["output_tokens"]);
+  const reasoningOutputTokens = readOptionalNonNegativeInteger(usage["reasoning_output_tokens"]);
+  return {
+    totals: {
+      inputTokens: inputTokens ?? 0,
+      cachedInputTokens: cachedInputTokens ?? 0,
+      outputTokens: outputTokens ?? 0,
+      reasoningOutputTokens: reasoningOutputTokens ?? 0,
+      totalTokens
+    },
+    hasCompleteComponents:
+      inputTokens != null && cachedInputTokens != null && outputTokens != null && reasoningOutputTokens != null
+  };
+}
+
 function readLastTokenUsage(payload: Record<string, unknown>): DashboardLocalUsageTokenTotals | undefined {
   const info = asRecord(payload["info"]);
   const usage = asRecord(info?.["last_token_usage"]);
@@ -433,6 +650,44 @@ function readLastTokenUsage(payload: Record<string, unknown>): DashboardLocalUsa
     reasoningOutputTokens: readNonNegativeInteger(usage["reasoning_output_tokens"]),
     totalTokens: readNonNegativeInteger(usage["total_tokens"])
   };
+}
+
+function addTokenTotals(left: MutableTotals, right: MutableTotals): MutableTotals {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    reasoningOutputTokens: left.reasoningOutputTokens + right.reasoningOutputTokens,
+    totalTokens: left.totalTokens + right.totalTokens
+  };
+}
+
+function subtractTokenTotals(current: MutableTotals, previous: MutableTotals): MutableTotals | undefined {
+  const delta: MutableTotals = {
+    inputTokens: current.inputTokens - previous.inputTokens,
+    cachedInputTokens: current.cachedInputTokens - previous.cachedInputTokens,
+    outputTokens: current.outputTokens - previous.outputTokens,
+    reasoningOutputTokens: current.reasoningOutputTokens - previous.reasoningOutputTokens,
+    totalTokens: current.totalTokens - previous.totalTokens
+  };
+  if (
+    delta.inputTokens < 0 ||
+    delta.cachedInputTokens < 0 ||
+    delta.outputTokens < 0 ||
+    delta.reasoningOutputTokens < 0 ||
+    delta.totalTokens <= 0 ||
+    delta.cachedInputTokens > delta.inputTokens ||
+    delta.reasoningOutputTokens > delta.outputTokens ||
+    delta.inputTokens + delta.outputTokens !== delta.totalTokens
+  ) {
+    return undefined;
+  }
+  return delta;
+}
+
+function readOptionalNonNegativeInteger(value: unknown): number | undefined {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.floor(numeric) : undefined;
 }
 
 function readNonNegativeInteger(value: unknown): number {
@@ -496,16 +751,29 @@ function recentDateKeys(now: number, periodDays: number, timeZone: string): stri
 }
 
 function dateKey(timestamp: number, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date(timestamp));
-  const values = new Map(parts.map((part) => [part.type, part.value]));
-  const year = values.get("year");
-  const month = values.get("month");
-  const day = values.get("day");
+  let formatter = DATE_KEY_FORMATTERS.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+    DATE_KEY_FORMATTERS.set(timeZone, formatter);
+  }
+
+  let year: string | undefined;
+  let month: string | undefined;
+  let day: string | undefined;
+  for (const part of formatter.formatToParts(new Date(timestamp))) {
+    if (part.type === "year") {
+      year = part.value;
+    } else if (part.type === "month") {
+      month = part.value;
+    } else if (part.type === "day") {
+      day = part.value;
+    }
+  }
   if (!year || !month || !day) {
     throw new Error("Unable to resolve local usage date");
   }
@@ -524,13 +792,13 @@ function shiftDateKey(date: string, deltaDays: number): string {
   return shifted.toISOString().slice(0, 10);
 }
 
-async function findJsonlFiles(root: string): Promise<string[]> {
+async function findJsonlFiles(root: string, oldestRelevantMtime: number): Promise<string[]> {
   const files: string[] = [];
-  await visit(root, files);
+  await visit(root, files, oldestRelevantMtime);
   return files;
 }
 
-async function visit(directory: string, files: string[]): Promise<void> {
+async function visit(directory: string, files: string[], oldestRelevantMtime: number): Promise<void> {
   let entries;
   try {
     entries = await fs.readdir(directory, { withFileTypes: true });
@@ -544,9 +812,17 @@ async function visit(directory: string, files: string[]): Promise<void> {
   for (const entry of entries) {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      await visit(fullPath, files);
+      await visit(fullPath, files, oldestRelevantMtime);
     } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-      files.push(fullPath);
+      try {
+        if ((await fs.stat(fullPath)).mtimeMs >= oldestRelevantMtime) {
+          files.push(fullPath);
+        }
+      } catch (error) {
+        if (!isErrorCode(error, "ENOENT")) {
+          throw error;
+        }
+      }
     }
   }
 }
@@ -640,17 +916,22 @@ function isUsageThreeHour(value: unknown): value is DashboardLocalUsageThreeHour
   const candidate = asRecord(value);
   return Boolean(
     candidate &&
-      isFiniteNumber(candidate["startAt"]) &&
-      isFiniteNumber(candidate["endAt"]) &&
-      candidate["endAt"] > candidate["startAt"] &&
-      isFiniteNumber(candidate["eventCount"]) &&
-      isTokenTotals(candidate)
+    isFiniteNumber(candidate["startAt"]) &&
+    isFiniteNumber(candidate["endAt"]) &&
+    candidate["endAt"] > candidate["startAt"] &&
+    isFiniteNumber(candidate["eventCount"]) &&
+    isTokenTotals(candidate)
   );
 }
 
 function isUsageThreeHourModel(value: unknown): value is DashboardLocalUsageThreeHourModelViewModel {
   const candidate = asRecord(value);
-  return Boolean(candidate && isFiniteNumber(candidate["startAt"]) && typeof candidate["model"] === "string" && isTokenTotals(candidate));
+  return Boolean(
+    candidate &&
+    isFiniteNumber(candidate["startAt"]) &&
+    typeof candidate["model"] === "string" &&
+    isTokenTotals(candidate)
+  );
 }
 
 function isTokenTotals(value: unknown): value is DashboardLocalUsageTokenTotals {
@@ -671,4 +952,8 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isErrorCode(error: unknown, code: string): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === code);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

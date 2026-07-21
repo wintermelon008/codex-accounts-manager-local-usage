@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { maybeSeamlessBalanceSwitchForActiveQuota } from "../../application/accounts/quota";
 import { registerCommands } from "../../commands";
 import { isSeamlessSwitchEnabled } from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
@@ -8,7 +9,11 @@ import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitc
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
-import { registerAutoRefreshScheduler, registerTokenRefreshScheduler } from "./schedulerRegistration";
+import {
+  registerAutoRefreshScheduler,
+  registerSeamlessUsageLimitMonitor,
+  registerTokenRefreshScheduler
+} from "./schedulerRegistration";
 
 const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
@@ -75,6 +80,19 @@ export class AccountsWorkbench {
           context: this.context,
           repo: this.repo,
           onRefresh: refreshers.refresh
+        })
+      );
+    });
+    await measureStep("registerSeamlessUsageLimitMonitor", () => {
+      this.context.subscriptions.push(
+        registerSeamlessUsageLimitMonitor({
+          context: this.context,
+          runtime: this.hotSwitchRuntime,
+          onUsageLimitExceeded: (activeAccountId) =>
+            maybeSeamlessBalanceSwitchForActiveQuota(this.repo, refreshers, {
+              trigger: "runtimeUsageLimit",
+              activeAccountId
+            })
         })
       );
     });

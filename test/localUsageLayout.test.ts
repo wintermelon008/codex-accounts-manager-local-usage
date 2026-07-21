@@ -82,7 +82,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(settings).toContain("1/4 (25%)");
     expect(settings).toContain("1/3 (33%)");
     expect(settings).toContain("1/2 (50%)");
-    expect(settings).toContain("1% 紧急强制切号");
+    expect(settings).toContain("1% 耗尽保护（Free 优先）");
     expect(settings).toContain('patchAndSend("seamlessSwitchEnabled"');
     expect(settings).toContain('patchAndSend("seamlessSwitchQuotaBandsEnabled"');
     expect(settings).toContain('patchAndSend("seamlessSwitchQuotaBandSize"');

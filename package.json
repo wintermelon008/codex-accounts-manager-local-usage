@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.23",
+  "version": "0.1.16-local.27",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -160,10 +160,20 @@
           "default": 20,
           "markdownDescription": "Quota band granularity used by seamless balancing. Changing it establishes a fresh baseline and does not immediately switch accounts."
         },
+        "codexAccounts.seamlessSwitchReserveThreshold": {
+          "type": "number",
+          "enum": [
+            1,
+            2,
+            3
+          ],
+          "default": 3,
+          "markdownDescription": "Reserve transition threshold used only by Seamless Switching. Accounts with a fresh 5-hour window stay preferred; when every safe windowed pool account is at or below this percentage, balancing may use the reserve account with the strongest long-term quota. A reserve account stays active until its long-term quota reaches this threshold."
+        },
         "codexAccounts.seamlessSwitchEmergencySwitchEnabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "When seamless quota balancing is enabled and the active 5-hour quota reaches 1% or lower, bypass the normal band-drop baseline and grace period, interrupt active turns, switch to a pool account above 1%, and recover both interrupted turns and recently usage-limited threads. This emergency behavior can repeat non-idempotent external side effects."
+          "markdownDescription": "When seamless quota balancing is enabled and an active 5-hour or long-term quota reaches 1% or lower, bypass the normal band-drop baseline and grace period, interrupt active turns, and recover interrupted or recently usage-limited threads. If a verified Free account reaches its 5-hour floor, first choose the fresh eligible Free pool account with the highest 5-hour quota and safe long-term quota; if none exists, use the normal mixed safe selector. Runtime usage-limit detection reads only bounded scalar status. This emergency behavior can repeat non-idempotent external side effects."
         },
         "codexAccounts.balanceByQuotaBandsEnabled": {
           "type": "boolean",
@@ -337,12 +347,15 @@
     "@types/vscode": "^1.96.0",
     "@typescript-eslint/eslint-plugin": "^8.61.0",
     "@typescript-eslint/parser": "^8.61.0",
-    "@vscode/vsce": "^3.2.1",
-    "eslint": "^10.5.0",
+    "@vscode/vsce": "2.32.0",
+    "eslint": "^8.57.1",
     "preact": "^10.29.0",
     "prettier": "^3.2.5",
     "typescript": "^5.7.2",
     "vite": "^6.4.1",
     "vitest": "^4.1.1"
+  },
+  "overrides": {
+    "cheerio": "1.0.0"
   }
 }
