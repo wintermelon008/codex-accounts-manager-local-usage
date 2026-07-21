@@ -155,4 +155,113 @@ describe("executeDashboardActionMessage", () => {
     expect(schedulePublishState).toHaveBeenCalledOnce();
     expect(result.status).toBe("completed");
   });
+
+  it("hides selected accounts and resets the seamless-switch runtime state", async () => {
+    const hideAccounts = vi.fn().mockResolvedValue([]);
+    const schedulePublishState = vi.fn();
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: { hideAccounts } as unknown as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState,
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "hideAccounts",
+        requestId: "req-hide-accounts",
+        payload: { accountIds: ["account-1", "account-2"] }
+      }
+    );
+
+    expect(hideAccounts).toHaveBeenCalledWith(["account-1", "account-2"]);
+    expect(schedulePublishState).toHaveBeenCalledOnce();
+    expect(result.status).toBe("completed");
+    expect(result.payload).toEqual({ affectedAccountIds: ["account-1", "account-2"] });
+  });
+
+  it("unhides selected accounts and restores their seamless-switch pool membership", async () => {
+    const unhideAccounts = vi.fn().mockResolvedValue([]);
+    const schedulePublishState = vi.fn();
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: { unhideAccounts } as unknown as DashboardActionContext["repo"],
+        resolveLanguage: () => "en",
+        schedulePublishState,
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "en" })
+      },
+      {
+        type: "dashboard:action",
+        action: "unhideAccounts",
+        requestId: "req-unhide-accounts",
+        payload: { accountIds: ["account-1"] }
+      }
+    );
+
+    expect(unhideAccounts).toHaveBeenCalledWith(["account-1"]);
+    expect(schedulePublishState).toHaveBeenCalledOnce();
+    expect(result.status).toBe("completed");
+  });
+
+  it("sets a selected account group and resets seamless scheduling", async () => {
+    const setAccountGroup = vi.fn().mockResolvedValue([]);
+    const schedulePublishState = vi.fn();
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: { setAccountGroup } as unknown as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState,
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "setAccountGroup",
+        requestId: "req-set-group",
+        payload: { accountIds: ["account-1", "account-2"], accountGroup: "C" }
+      }
+    );
+
+    expect(setAccountGroup).toHaveBeenCalledWith(["account-1", "account-2"], "C");
+    expect(schedulePublishState).toHaveBeenCalledOnce();
+    expect(result.status).toBe("completed");
+  });
+
+  it("passes the Dashboard-visible account ids to one-click quota refresh", async () => {
+    const executeCommandMock = vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: {} as DashboardActionContext["repo"],
+        resolveLanguage: () => "en",
+        schedulePublishState: vi.fn(),
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "en" })
+      },
+      {
+        type: "dashboard:action",
+        action: "refreshAll",
+        requestId: "req-visible-refresh",
+        payload: { accountIds: ["visible-account"] }
+      }
+    );
+
+    expect(executeCommandMock).toHaveBeenCalledWith("codexAccounts.refreshAllQuotas", {
+      accountIds: ["visible-account"]
+    });
+    expect(result.status).toBe("completed");
+  });
 });

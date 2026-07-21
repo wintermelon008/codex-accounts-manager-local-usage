@@ -326,6 +326,34 @@ describe("refreshSingleQuota token automation state", () => {
     expect(repo.switchAccount).not.toHaveBeenCalledWith(sameEmailButLowerQuota.id);
   });
 
+  it("does not select a hidden account for the original auto-switch flow", async () => {
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: vi.fn((key: string, defaultValue?: unknown) => {
+        const values: Record<string, unknown> = {
+          autoSwitchEnabled: true,
+          autoSwitchHourlyThreshold: 20,
+          autoSwitchWeeklyThreshold: 20
+        };
+        return values[key] ?? defaultValue;
+      }),
+      update: vi.fn()
+    } as never);
+    const active = createAccount("active", true, 100, 5);
+    const hidden = createAccount("hidden", false, 100, 100);
+    hidden.isHidden = true;
+    const visible = createAccount("visible", false, 100, 80);
+    const repo = {
+      listAccounts: vi.fn(async () => [active, hidden, visible]),
+      switchAccount: vi.fn(async () => undefined)
+    };
+
+    await expect(maybeAutoSwitchForActiveQuota(repo as unknown as AccountsRepository, { refresh: vi.fn() })).resolves.toBe(
+      true
+    );
+    expect(repo.switchAccount).toHaveBeenCalledWith(visible.id);
+    expect(repo.switchAccount).not.toHaveBeenCalledWith(hidden.id);
+  });
+
   it("does not auto-switch for an hourly-only threshold when hourly quota control is disabled", async () => {
     vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
       get: vi.fn((key: string, defaultValue?: unknown) => {

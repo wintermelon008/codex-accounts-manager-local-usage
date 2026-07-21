@@ -216,6 +216,10 @@ export class AccountsCommandService {
       void vscode.window.showInformationMessage(copy.alreadyActive(formatAccountToastLabel(account)));
       return;
     }
+    if (account.isHidden) {
+      void vscode.window.showWarningMessage("This account is hidden. Unhide it before switching to it.");
+      return;
+    }
 
     const runtimeOutcome = await this.withProgress<RuntimeAccountSwitchOutcome>(
       copy.progressSwitch(account.email),
@@ -261,9 +265,14 @@ export class AccountsCommandService {
     await refreshSingleQuota(this.repo, this.view, account.id);
   }
 
-  async refreshAllQuotas(options?: { silent?: boolean; forceRefresh?: boolean }): Promise<void> {
+  async refreshAllQuotas(options?: { silent?: boolean; forceRefresh?: boolean; accountIds?: string[] }): Promise<void> {
     const copy = getCommandCopy();
-    const accounts = await this.repo.listAccounts();
+    const allAccounts = await this.repo.listAccounts();
+    const requestedAccountIds = options?.accountIds;
+    const requestedAccountIdSet = requestedAccountIds ? new Set(requestedAccountIds) : undefined;
+    const accounts = requestedAccountIdSet
+      ? allAccounts.filter((account) => requestedAccountIdSet.has(account.id))
+      : allAccounts;
     let success = 0;
     let failed = 0;
     const refreshAll = async (progress?: vscode.Progress<{ message?: string; increment?: number }>) => {
@@ -304,9 +313,11 @@ export class AccountsCommandService {
     }
 
     this.view.refresh();
-    const switched = await maybeSwitchForActiveQuota(this.repo, this.view);
-    if (!switched) {
-      await maybeWarnForActiveQuota(this.repo);
+    if (accounts.length > 0) {
+      const switched = await maybeSwitchForActiveQuota(this.repo, this.view);
+      if (!switched) {
+        await maybeWarnForActiveQuota(this.repo);
+      }
     }
     if (!options?.silent) {
       const message = failed > 0 ? copy.refreshAllSummary(success, failed) : copy.refreshedCount(success);
@@ -479,10 +490,15 @@ export class AccountsCommandService {
       void vscode.window.showInformationMessage(getCommandCopy().noAccounts);
       return undefined;
     }
+    const visibleAccounts = accounts.filter((account) => !account.isHidden);
+    if (!visibleAccounts.length) {
+      void vscode.window.showInformationMessage("All managed accounts are hidden. Unhide an account before switching.");
+      return undefined;
+    }
 
     const _t = t();
     const selected = await vscode.window.showQuickPick(
-      accounts.map((account) => ({
+      visibleAccounts.map((account) => ({
         label: account.email,
         description: buildSwitchPickerDescription(account, _t("account.current")),
         detail: buildSwitchPickerDetail(account, _t("quota.hourly"), _t("quota.weekly")),

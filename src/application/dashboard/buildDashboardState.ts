@@ -97,8 +97,7 @@ export function sortDashboardAccounts<T extends Pick<CodexAccountRecord, "id" | 
     (a, b) =>
       Number(b.id === currentWindowAccountId) - Number(a.id === currentWindowAccountId) ||
       Number(b.isActive) - Number(a.isActive) ||
-      (accountViewStateById?.get(b.id)?.healthPriority ?? 0) -
-        (accountViewStateById?.get(a.id)?.healthPriority ?? 0) ||
+      (accountViewStateById?.get(b.id)?.healthPriority ?? 0) - (accountViewStateById?.get(a.id)?.healthPriority ?? 0) ||
       b.createdAt - a.createdAt ||
       a.email.localeCompare(b.email)
   );
@@ -112,7 +111,7 @@ function mapAccount(
         health: ReturnType<typeof resolveAccountHealth>;
         dismissedHealth: boolean;
         automationState: ReturnType<typeof getAccountAutomationState>;
-    }
+      }
     | undefined,
   extraSelectedCount: number,
   lang: DashboardState["lang"],
@@ -161,6 +160,8 @@ function mapAccount(
     accountId: account.accountId,
     organizationId: account.organizationId,
     isActive: account.isActive,
+    isHidden: Boolean(account.isHidden),
+    accountGroup: account.accountGroup,
     isCurrentWindowAccount: account.id === currentWindowAccountId,
     balancePoolEnabled: Boolean(account.balancePoolEnabled),
     showInStatusBar: Boolean(account.showInStatusBar),
@@ -182,15 +183,13 @@ function mapAccount(
     lastQuotaAt: account.lastQuotaAt,
     resetCreditsAvailable,
     resetCreditsNextExpiresAt,
-    autoSwitchLockedUntil: autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
+    autoSwitchLockedUntil:
+      autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
     metrics: buildMetrics(account, copy)
   };
 }
 
-function buildMetrics(
-  account: CodexAccountRecord,
-  copy: DashboardState["copy"]
-): DashboardMetricViewModel[] {
+function buildMetrics(account: CodexAccountRecord, copy: DashboardState["copy"]): DashboardMetricViewModel[] {
   const quota = account.quotaSummary;
   const metrics: DashboardMetricViewModel[] = [
     {
@@ -295,7 +294,8 @@ export function resolveSubscriptionDisplay(
   const dateText = formatSubscriptionDate(new Date(timestampMs));
   const days = Math.max(0, Math.ceil(diffMs / 86_400_000));
   const dayUnit = lang === "zh-hant" || lang === "zh" ? "天" : "d";
-  const text = lang === "zh" || lang === "zh-hant" ? `${dateText}（${days} ${dayUnit}）` : `${dateText} (${days}${dayUnit})`;
+  const text =
+    lang === "zh" || lang === "zh-hant" ? `${dateText}（${days} ${dayUnit}）` : `${dateText} (${days}${dayUnit})`;
   const color = diffMs <= 3 * 86_400_000 ? "#ef4444" : diffMs <= 10 * 86_400_000 ? "#f59e0b" : "var(--accent-green)";
 
   return {
@@ -343,7 +343,11 @@ function formatCreditsText(credits: CodexCreditsSummary | undefined, lang: Dashb
   }
 
   const zh = lang === "zh" || lang === "zh-hant";
-  const value = credits.unlimited ? (zh ? "无限" : "Unlimited") : credits.balance || (credits.hasCredits ? (zh ? "可用" : "Available") : "0");
+  const value = credits.unlimited
+    ? zh
+      ? "无限"
+      : "Unlimited"
+    : credits.balance || (credits.hasCredits ? (zh ? "可用" : "Available") : "0");
   const label = zh ? "剩余额度" : "Credits left";
   return `${label}: ${value}`;
 }
@@ -435,7 +439,17 @@ function normalizeSubscriptionValue(value: unknown): string | undefined {
   }
   if (typeof value === "object" && !Array.isArray(value)) {
     const record = value as Record<string, unknown>;
-    for (const key of ["value", "timestamp", "ts", "seconds", "sec", "unix", "epoch", "epoch_seconds", "epochSeconds"]) {
+    for (const key of [
+      "value",
+      "timestamp",
+      "ts",
+      "seconds",
+      "sec",
+      "unix",
+      "epoch",
+      "epoch_seconds",
+      "epochSeconds"
+    ]) {
       const normalized = normalizeSubscriptionValue(record[key]);
       if (normalized) {
         return normalized;

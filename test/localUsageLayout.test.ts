@@ -101,6 +101,21 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).toContain('sendAction("removeFromBalancePool"');
   });
 
+  it("exposes A/B/C account grouping and limits one-click refresh to the visible account ids", () => {
+    const accountViews = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/accountViews.tsx"), "utf8");
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+
+    expect(accountViews).toContain('onSetAccountGroup("A")');
+    expect(accountViews).toContain('onSetAccountGroup("B")');
+    expect(accountViews).toContain('onSetAccountGroup("C")');
+    expect(accountViews).toContain("Remove Group");
+    expect(main).toContain("ACCOUNT_GROUPS");
+    expect(main).toContain("isAccountInVisibleGroup");
+    expect(main).toContain(
+      'sendAction("refreshAll", undefined, { accountIds: displayedAccounts.map((account) => account.id) })'
+    );
+  });
+
   it("exposes a per-account seamless-switch pool toggle at the left of the card action row", () => {
     const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
     const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
@@ -113,5 +128,25 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(actions).toContain('onAction("toggleBalancePool", account.id)');
     expect(stylesheet).toContain(".saved-pool-toggle");
     expect(stylesheet).toContain("margin-right: auto");
+  });
+
+  it("supports hiding selected accounts and filtering them from the saved-account grid", () => {
+    const accountViews = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/accountViews.tsx"), "utf8");
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+    const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
+    const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
+
+    expect(accountViews).toContain("隐藏账号");
+    expect(accountViews).toContain("解除隐藏");
+    expect(accountViews).toContain("onHide");
+    expect(accountViews).toContain("onUnhide");
+    expect(main).toContain('sendAction("hideAccounts"');
+    expect(main).toContain('sendAction("unhideAccounts"');
+    expect(main).toContain("hiddenAccountsToggleButton");
+    expect(main).toContain("displayedAccounts.map");
+    expect(card).toContain("is-hidden-account");
+    expect(card).toContain("已隐藏");
+    expect(stylesheet).toContain(".saved-card.is-hidden-account");
+    expect(stylesheet).toContain(".pill.hidden");
   });
 });

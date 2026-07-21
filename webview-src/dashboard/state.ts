@@ -25,6 +25,7 @@ export type AppAction =
   | { type: "settings-patch"; patch: Partial<DashboardSettings> }
   | { type: "tick"; now: number }
   | { type: "toggle-select"; accountId: string }
+  | { type: "deselect-accounts"; accountIds: string[] }
   | { type: "request-action"; request: PendingActionRequest }
   | { type: "resolve-action"; requestId: string };
 
@@ -62,6 +63,13 @@ export function reducer(state: AppState, action: AppAction): AppState {
           ? state.selectedAccountIds.filter((accountId) => accountId !== action.accountId)
           : [...state.selectedAccountIds, action.accountId]
       };
+    case "deselect-accounts": {
+      const accountIds = new Set(action.accountIds);
+      return {
+        ...state,
+        selectedAccountIds: state.selectedAccountIds.filter((accountId) => !accountIds.has(accountId))
+      };
+    }
     case "open-settings":
       return {
         ...state,

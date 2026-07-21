@@ -36,6 +36,9 @@ export class ExtensionSettingsStore {
         config.get<number>("seamlessSwitchReserveThreshold", 3)
       ),
       seamlessSwitchEmergencySwitchEnabled: config.get<boolean>("seamlessSwitchEmergencySwitchEnabled", false),
+      seamlessSwitchGroupAVisible: config.get<boolean>("seamlessSwitchGroupAVisible", true),
+      seamlessSwitchGroupBVisible: config.get<boolean>("seamlessSwitchGroupBVisible", true),
+      seamlessSwitchGroupCVisible: config.get<boolean>("seamlessSwitchGroupCVisible", true),
       hotSwitchGraceSeconds: normalizeHotSwitchGraceSeconds(config.get<number>("hotSwitchGraceSeconds", 60)),
       hotSwitchLongTurnPolicy: normalizeHotSwitchLongTurnPolicy(config.get<string>("hotSwitchLongTurnPolicy", "defer")),
       hourlyQuotaControlEnabled: config.get<boolean>("hourlyQuotaControlEnabled", false),

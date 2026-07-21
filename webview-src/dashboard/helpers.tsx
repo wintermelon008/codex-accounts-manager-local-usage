@@ -4,6 +4,25 @@ import { formatResetRelativeTime } from "../../src/utils/resetTime";
 
 type SensitiveKind = "email" | "id" | "name";
 
+export const LOW_WEEKLY_QUOTA_HIDE_THRESHOLD = 3;
+
+/**
+ * Finds non-hidden accounts whose reported weekly window is below the bulk-hide threshold.
+ * The caller supplies the current display scope, so group filters remain respected.
+ */
+export function getLowWeeklyQuotaAccountIds(accounts: DashboardAccountViewModel[]): string[] {
+  return accounts.flatMap((account) => {
+    const weeklyMetric = account.metrics.find((metric) => metric.key === "weekly");
+    const isBelowThreshold =
+      weeklyMetric?.visible === true &&
+      typeof weeklyMetric.percentage === "number" &&
+      Number.isFinite(weeklyMetric.percentage) &&
+      weeklyMetric.percentage < LOW_WEEKLY_QUOTA_HIDE_THRESHOLD;
+
+    return !account.isHidden && isBelowThreshold ? [account.id] : [];
+  });
+}
+
 export function createShareFileName(): string {
   const now = new Date();
   const year = String(now.getFullYear());

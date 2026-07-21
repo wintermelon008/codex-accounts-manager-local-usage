@@ -71,6 +71,35 @@ describe("5-hour quota band balancing", () => {
     ).toBeUndefined();
   });
 
+  it("never selects hidden accounts and does not switch away from a hidden active account", () => {
+    const now = 10_000_000;
+    const active = account("active", 59, now);
+    const hidden = account("hidden", 100, now);
+    hidden.isHidden = true;
+    const visible = account("visible", 80, now);
+
+    expect(
+      selectBalanceCandidate({
+        accounts: [active, hidden, visible],
+        activeAccountId: active.id,
+        activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
+        lastSelectedAt: {},
+        now
+      })?.id
+    ).toBe("visible");
+
+    active.isHidden = true;
+    expect(
+      selectBalanceCandidate({
+        accounts: [active, visible],
+        activeAccountId: active.id,
+        activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
+        lastSelectedAt: {},
+        now
+      })
+    ).toBeUndefined();
+  });
+
   it("uses the configured band size and can exclude emergency-depleted candidates", () => {
     const now = 10_000_000;
     const active = account("active", 25, now);

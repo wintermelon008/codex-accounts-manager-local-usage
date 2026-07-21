@@ -69,6 +69,35 @@ describe("seamless 5-hour quota-band switching", () => {
     );
   });
 
+  it("only selects targets from currently visible groups while allowing a disabled-group source to rotate out", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchGroupAVisible: false,
+      seamlessSwitchGroupBVisible: true,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 100);
+    active.accountGroup = "A";
+    const hiddenGroupCandidate = account("group-a", false, 99);
+    hiddenGroupCandidate.accountGroup = "A";
+    const visibleGroupCandidate = account("group-b", false, 90);
+    visibleGroupCandidate.accountGroup = "B";
+    const repo = repository(active, hiddenGroupCandidate, visibleGroupCandidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(visibleGroupCandidate));
+    const view = { refresh: vi.fn(), switchRuntimeAccount };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    active.quotaSummary!.hourlyPercentage = 80;
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      true
+    );
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(visibleGroupCandidate.id);
+  });
+
   it("does not rotate a verified Free account on ordinary bands or the reserve threshold", async () => {
     configure({
       seamlessSwitchEnabled: true,

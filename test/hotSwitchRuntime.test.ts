@@ -192,6 +192,35 @@ describe("Codex hot-switch runtime setup", () => {
     );
   });
 
+  it("rejects a hidden account before sending a runtime switch request", async () => {
+    const enabledConfiguration = {
+      get: (key: string, defaultValue?: unknown) => (key === "hotSwitchEnabled" ? true : defaultValue),
+      update: vi.fn(),
+      inspect: vi.fn()
+    } as unknown as vscode.WorkspaceConfiguration;
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(enabledConfiguration);
+    const switchAccount = vi.fn();
+    const runtime = new CodexHotSwitchRuntime(
+      {} as vscode.ExtensionContext,
+      {
+        getAccount: vi.fn(async () => ({
+          id: "hidden",
+          email: "hidden@example.invalid",
+          accountId: "workspace-hidden",
+          isActive: false,
+          isHidden: true,
+          createdAt: 1,
+          updatedAt: 1
+        })),
+        getTokens: vi.fn(async () => ({ idToken: "id", accessToken: "access", accountId: "workspace-hidden" }))
+      } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+    (runtime as unknown as { bridge: { switchAccount: typeof switchAccount } }).bridge = { switchAccount };
+
+    await expect(runtime.switchAccount("hidden")).rejects.toThrow("selected account is hidden");
+    expect(switchAccount).not.toHaveBeenCalled();
+  });
+
   it("uses a validated auth.json snapshot when the previous managed account was deleted", async () => {
     const enabledConfiguration = {
       get: (key: string, defaultValue?: unknown) => (key === "hotSwitchEnabled" ? true : defaultValue),

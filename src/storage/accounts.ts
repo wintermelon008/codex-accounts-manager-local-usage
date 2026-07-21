@@ -65,6 +65,7 @@ import { needsRefresh, refreshTokens, TOKEN_REFRESH_SKEW_SECONDS } from "../auth
 import { createKeyedMutex } from "../utils/concurrency";
 import {
   CodexAccountRecord,
+  CodexAccountGroup,
   CodexAccountsIndex,
   CodexAccountsRestoreResult,
   CodexImportPreviewSummary,
@@ -471,7 +472,6 @@ export class AccountsRepository {
     if (!account) {
       throw createError.accountNotFound(accountId);
     }
-
     const tokens = await this.getTokens(accountId);
     if (!tokens) {
       throw new AccountError(`Tokens missing for account ${account.email}`, {
@@ -813,6 +813,11 @@ export class AccountsRepository {
     if (!account) {
       throw createError.accountNotFound(accountId);
     }
+    if (account.isHidden && !account.isActive) {
+      throw new AccountError("Hidden accounts cannot be activated. Unhide the account first.", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
+    }
 
     const tokens = await this.getTokens(accountId);
     if (!tokens) {
@@ -894,10 +899,16 @@ export class AccountsRepository {
         accountIds.find((id) => !index.accounts.some((account) => account.id === id)) ?? ""
       );
     }
+    const eligibleAccounts = selectedAccounts.filter((account) => !account.isHidden);
+    if (eligibleAccounts.length < 2) {
+      throw new AccountError("Select at least two non-hidden accounts for the seamless-switch pool.", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
+    }
 
     let changed = false;
     for (const account of index.accounts) {
-      const enabled = selectedIds.has(account.id);
+      const enabled = selectedIds.has(account.id) && !account.isHidden;
       if (Boolean(account.balancePoolEnabled) !== enabled) {
         account.balancePoolEnabled = enabled;
         account.updatedAt = Date.now();
@@ -907,7 +918,7 @@ export class AccountsRepository {
     if (changed) {
       this.writeIndex(index);
     }
-    return selectedAccounts.map((account) => ({ ...account, balancePoolEnabled: true }));
+    return selectedAccounts.map((account) => ({ ...account, balancePoolEnabled: !account.isHidden }));
   }
 
   async setBalancePoolMembership(accountId: string, enabled: boolean): Promise<CodexAccountRecord> {
@@ -916,12 +927,13 @@ export class AccountsRepository {
     if (!account) {
       throw createError.accountNotFound(accountId);
     }
-    if (Boolean(account.balancePoolEnabled) !== enabled) {
-      account.balancePoolEnabled = enabled;
+    const nextEnabled = enabled && !account.isHidden;
+    if (Boolean(account.balancePoolEnabled) !== nextEnabled) {
+      account.balancePoolEnabled = nextEnabled;
       account.updatedAt = Date.now();
       this.writeIndex(index);
     }
-    return { ...account, balancePoolEnabled: enabled };
+    return { ...account, balancePoolEnabled: nextEnabled };
   }
 
   async removeFromBalancePool(accountIds: string[]): Promise<CodexAccountRecord[]> {
@@ -946,6 +958,95 @@ export class AccountsRepository {
       this.writeIndex(index);
     }
     return selectedAccounts.map((account) => ({ ...account, balancePoolEnabled: false }));
+  }
+
+  /**
+   * 设置账号所属的无感切号显示分组。未分组账号始终保留在面板和无感候选范围内。
+   */
+  async setAccountGroup(
+    accountIds: string[],
+    accountGroup: CodexAccountGroup | undefined
+  ): Promise<CodexAccountRecord[]> {
+    const index = await this.readIndex();
+    const selectedIds = new Set(accountIds);
+    const selectedAccounts = index.accounts.filter((account) => selectedIds.has(account.id));
+    if (selectedAccounts.length !== selectedIds.size) {
+      throw createError.accountNotFound(
+        accountIds.find((id) => !index.accounts.some((account) => account.id === id)) ?? ""
+      );
+    }
+
+    const updatedAt = Date.now();
+    let changed = false;
+    for (const account of selectedAccounts) {
+      if (account.accountGroup !== accountGroup) {
+        account.accountGroup = accountGroup;
+        account.updatedAt = updatedAt;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.writeIndex(index);
+    }
+    return selectedAccounts.map((account) => ({ ...account, accountGroup }));
+  }
+
+  /**
+   * 隐藏账号。隐藏账号不会参与任何自动或手动切换，并会立即移出无感切号池。
+   */
+  async hideAccounts(accountIds: string[]): Promise<CodexAccountRecord[]> {
+    const index = await this.readIndex();
+    const selectedIds = new Set(accountIds);
+    const selectedAccounts = index.accounts.filter((account) => selectedIds.has(account.id));
+    if (selectedAccounts.length !== selectedIds.size) {
+      throw createError.accountNotFound(
+        accountIds.find((id) => !index.accounts.some((account) => account.id === id)) ?? ""
+      );
+    }
+
+    const updatedAt = Date.now();
+    let changed = false;
+    for (const account of selectedAccounts) {
+      if (!account.isHidden || account.balancePoolEnabled === true) {
+        account.isHidden = true;
+        account.balancePoolEnabled = false;
+        account.updatedAt = updatedAt;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.writeIndex(index);
+    }
+    return selectedAccounts.map((account) => ({ ...account, isHidden: true, balancePoolEnabled: false }));
+  }
+
+  /**
+   * 解除账号隐藏，并重新加入无感切号池。
+   */
+  async unhideAccounts(accountIds: string[]): Promise<CodexAccountRecord[]> {
+    const index = await this.readIndex();
+    const selectedIds = new Set(accountIds);
+    const selectedAccounts = index.accounts.filter((account) => selectedIds.has(account.id));
+    if (selectedAccounts.length !== selectedIds.size) {
+      throw createError.accountNotFound(
+        accountIds.find((id) => !index.accounts.some((account) => account.id === id)) ?? ""
+      );
+    }
+
+    const updatedAt = Date.now();
+    let changed = false;
+    for (const account of selectedAccounts) {
+      if (account.isHidden || account.balancePoolEnabled !== true) {
+        account.isHidden = false;
+        account.balancePoolEnabled = true;
+        account.updatedAt = updatedAt;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.writeIndex(index);
+    }
+    return selectedAccounts.map((account) => ({ ...account, isHidden: false, balancePoolEnabled: true }));
   }
 
   /**

@@ -112,6 +112,18 @@ describe("extension manifest configuration", () => {
       type: "boolean",
       default: false
     });
+    expect(properties?.["codexAccounts.seamlessSwitchGroupAVisible"]).toMatchObject({
+      type: "boolean",
+      default: true
+    });
+    expect(properties?.["codexAccounts.seamlessSwitchGroupBVisible"]).toMatchObject({
+      type: "boolean",
+      default: true
+    });
+    expect(properties?.["codexAccounts.seamlessSwitchGroupCVisible"]).toMatchObject({
+      type: "boolean",
+      default: true
+    });
     expect(properties?.["codexAccounts.balanceByQuotaBandsEnabled"]).toMatchObject({
       type: "boolean",
       default: false
