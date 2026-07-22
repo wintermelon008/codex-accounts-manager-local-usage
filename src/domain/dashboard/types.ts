@@ -199,6 +199,7 @@ export interface DashboardCopy {
   localUsageDaily: string;
   localUsageThreeHour: string;
   localUsageUpdated: string;
+  localUsageRefreshBtn: string;
   localUsageRefreshing: string;
   localUsageLoading: string;
   localUsageUnavailable: string;
@@ -558,6 +559,7 @@ export type DashboardActionName =
   | "batchResyncProfile"
   | "batchRemove"
   | "refreshView"
+  | "refreshLocalUsage"
   | "reloadPrompt"
   | "reauthorize"
   | "resyncProfile"

@@ -208,6 +208,7 @@ function App() {
   const hideAccountsPending = isActionPending("hideAccounts");
   const unhideAccountsPending = isActionPending("unhideAccounts");
   const setAccountGroupPending = isActionPending("setAccountGroup");
+  const localUsageRefreshPending = isActionPending("refreshLocalUsage");
   const invalidAccountCount = snapshot.accounts.filter(
     (account) =>
       !account.dismissedHealth &&
@@ -602,6 +603,8 @@ function App() {
           usage={snapshot.localUsage}
           copy={snapshot.copy}
           settings={snapshot.settings}
+          refreshPending={localUsageRefreshPending}
+          onRefresh={() => sendAction("refreshLocalUsage")}
           onRangeChange={(range) => {
             sendSetting("localUsageDefaultRange", range);
           }}

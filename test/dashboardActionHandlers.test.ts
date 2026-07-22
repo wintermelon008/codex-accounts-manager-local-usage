@@ -44,6 +44,31 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
+  it("runs a forced local usage aggregation from the Dashboard action", async () => {
+    const refreshLocalUsage = vi.fn().mockResolvedValue(undefined);
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: {} as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState: vi.fn(),
+        publishState: vi.fn(),
+        refreshLocalUsage,
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "refreshLocalUsage",
+        requestId: "req-local-usage-refresh"
+      }
+    );
+
+    expect(refreshLocalUsage).toHaveBeenCalledOnce();
+    expect(result.status).toBe("completed");
+  });
+
   it("waits for quota refresh after consuming a reset credit", async () => {
     vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Reset Rate Limit" as never);
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined);

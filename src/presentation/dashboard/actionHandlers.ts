@@ -28,6 +28,7 @@ export type DashboardActionContext = {
   resolveLanguage: () => DashboardLanguage;
   schedulePublishState: () => void;
   publishState: (force?: boolean) => Promise<void>;
+  refreshLocalUsage?: () => Promise<void>;
   oauth: DashboardOAuthCoordinator;
   announcements: AnnouncementService;
   getAnnouncementOptions: () => AnnouncementOptions;
@@ -125,6 +126,9 @@ async function runDashboardAction(
       return ctx.oauth.completeSession(payload?.oauthSessionId, payload?.callbackUrl, translate);
     case "refreshView":
       await ctx.publishState(true);
+      return undefined;
+    case "refreshLocalUsage":
+      await ctx.refreshLocalUsage?.();
       return undefined;
     case "updateTags":
       return handleUpdateTags(ctx.repo, ctx.resolveLanguage, ctx.schedulePublishState, payload, account, translate);

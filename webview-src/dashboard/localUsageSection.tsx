@@ -12,11 +12,14 @@ import {
   LOCAL_USAGE_RANGE_OPTIONS,
   type LocalUsagePriceEstimate
 } from "./localUsageInsights";
+import { ActionButton } from "./primitives";
 
 export function LocalUsageSection(props: {
   usage?: DashboardLocalUsageViewModel;
   copy: DashboardCopy;
   settings: DashboardSettings;
+  refreshPending: boolean;
+  onRefresh: () => void;
   onRangeChange: (range: DashboardLocalUsageRange) => void;
 }) {
   const { usage, copy, settings } = props;
@@ -46,7 +49,17 @@ export function LocalUsageSection(props: {
     <section class="section local-usage-section">
       <div class="header local-usage-header">
         <div>
-          <div class="header-title">{copy.localUsageTitle}</div>
+          <div class="local-usage-title-row">
+            <div class="header-title">{copy.localUsageTitle}</div>
+            <ActionButton
+              class="toolbar-btn local-usage-refresh-btn"
+              pending={props.refreshPending}
+              disabled={usage.isRefreshing || props.refreshPending}
+              onClick={props.onRefresh}
+            >
+              {copy.localUsageRefreshBtn}
+            </ActionButton>
+          </div>
           <div class="header-sub">{subtitle}</div>
         </div>
         {freshness ? (
@@ -262,19 +275,14 @@ function formatCompactUsd(value: number): string {
 function formatThreeHourRange(startAt: number, endAt: number): string {
   const start = new Date(startAt);
   const end = new Date(endAt);
-  const dateFormatter = new Intl.DateTimeFormat(undefined, { month: "2-digit", day: "2-digit" });
   const timeFormatter = new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false
   });
-  const startDate = dateFormatter.format(start);
-  const endDate = dateFormatter.format(end);
   const startTime = timeFormatter.format(start);
   const endTime = timeFormatter.format(end);
-  return startDate === endDate
-    ? `${startDate} ${startTime}–${endTime}`
-    : `${startDate} ${startTime}–${endDate} ${endTime}`;
+  return `${startTime}–${endTime === "00:00" ? "24:00" : endTime}`;
 }
 
 function formatTimestamp(timestamp: number): string {

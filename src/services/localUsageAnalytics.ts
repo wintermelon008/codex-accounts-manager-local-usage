@@ -18,14 +18,14 @@ export const LOCAL_USAGE_CACHE_TTL_MS = 15 * 60 * 1000;
 export const LOCAL_USAGE_PERIOD_DAYS = 14;
 export const LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT = 8;
 export const LOCAL_USAGE_SCAN_LEASE_MS = 60 * 1000;
+export const ACCOUNT_TOKEN_USAGE_RETENTION_DAYS = 31;
 
-const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const CACHE_FILE_NAME = "local-usage-analytics-v4.json";
+const CACHE_FILE_NAME = "local-usage-analytics-v5.json";
 export const ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME = "account-token-usage-v1.json";
 export const ACCOUNT_USAGE_ATTRIBUTION_DIRECTORY_NAME = "account-usage-attribution";
 export const LOCAL_USAGE_SCAN_LEASE_FILE_NAME = `${CACHE_FILE_NAME}.scan-lease`;
-const CACHE_SCHEMA_VERSION = 4;
+const CACHE_SCHEMA_VERSION = 5;
 const ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION = 1;
 const UNKNOWN_MODEL = "unknown";
 const PEER_REFRESH_WAIT_MS = 2_000;
@@ -33,10 +33,21 @@ const PEER_REFRESH_POLL_MS = 50;
 const MAX_USAGE_ATTRIBUTION_JOURNAL_BYTES = 2 * 1024 * 1024;
 const MAX_USAGE_ATTRIBUTION_LINE_BYTES = 1_024;
 const MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH = 256;
-const RESET_TIME_MATCH_TOLERANCE_SECONDS = 5;
+// Codex can report the same quota reset boundary a few seconds apart across
+// adjacent token events. A real five-hour or long-term quota reset is much
+// farther away, so keep one minute of room for that observation jitter.
+const ACCOUNT_USAGE_RESET_DRIFT_TOLERANCE_SECONDS = 60;
 const LOCAL_USAGE_EVENT_MARKER =
   /"type"\s*:\s*"(?:session_meta|turn_context|token_count|inter_agent_communication_metadata)"/;
-const DATE_KEY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+const ZONED_DATE_TIME_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+type ZonedDateTimeParts = {
+  date: string;
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+};
 
 export type LocalUsageScanInput = {
   sessionsPath: string;
@@ -167,11 +178,20 @@ export class LocalUsageAnalyticsService {
     return (await this.getSnapshots(onRefreshed)).localUsage;
   }
 
+  /**
+   * Forces one fresh local token scan, bypassing the normal 15-minute cache
+   * window while preserving the shared cross-host scan lease.
+   */
+  async refresh(onRefreshed?: () => void): Promise<void> {
+    await this.syncSnapshotsFromCache();
+    await this.startRefresh(onRefreshed, true);
+  }
+
   async getSnapshots(onRefreshed?: () => void): Promise<LocalUsageSnapshots> {
     await this.syncSnapshotsFromCache();
 
     if (!this.snapshot) {
-      this.startRefresh(onRefreshed);
+      void this.startRefresh(onRefreshed);
       const now = this.now();
       return {
         localUsage: createEmptySnapshot("loading", this.periodDays, this.timeZone, now),
@@ -188,7 +208,7 @@ export class LocalUsageAnalyticsService {
       };
     }
 
-    this.startRefresh(onRefreshed);
+    void this.startRefresh(onRefreshed);
     return {
       localUsage: {
         ...this.snapshot,
@@ -259,15 +279,15 @@ export class LocalUsageAnalyticsService {
     }
   }
 
-  private startRefresh(onRefreshed?: () => void): void {
+  private startRefresh(onRefreshed?: () => void, force = false): Promise<void> {
     if (onRefreshed) {
       this.refreshCallbacks.add(onRefreshed);
     }
     if (this.refreshPromise) {
-      return;
+      return this.refreshPromise;
     }
 
-    this.refreshPromise = this.refreshWithLease()
+    this.refreshPromise = this.refreshWithLease(force)
       .catch((error: unknown) => {
         console.warn("[codexAccounts] local usage scan failed", error);
       })
@@ -279,9 +299,10 @@ export class LocalUsageAnalyticsService {
           callback();
         }
       });
+    return this.refreshPromise;
   }
 
-  private async refreshWithLease(): Promise<void> {
+  private async refreshWithLease(force = false): Promise<void> {
     const previousCalculatedAt = this.snapshot?.calculatedAt;
     const lease = await tryAcquireSharedFileLease(this.scanLeasePath(), LOCAL_USAGE_SCAN_LEASE_MS);
     if (!lease) {
@@ -291,7 +312,7 @@ export class LocalUsageAnalyticsService {
 
     try {
       await this.syncSnapshotsFromCache();
-      if (this.snapshot && isSnapshotFresh(this.snapshot, this.now())) {
+      if (!force && this.snapshot && isSnapshotFresh(this.snapshot, this.now())) {
         return;
       }
 
@@ -343,7 +364,7 @@ export class LocalUsageAnalyticsService {
     this.snapshot = {
       ...createEmptySnapshot("unavailable", this.periodDays, this.timeZone, calculatedAt),
       calculatedAt,
-      nextRefreshAt: calculatedAt + LOCAL_USAGE_CACHE_TTL_MS
+      nextRefreshAt: nextLocalUsageRefreshAt(calculatedAt, this.timeZone)
     };
     this.accountTokenUsage = createEmptyAccountTokenUsageSnapshot("unavailable", calculatedAt);
     await this.writeCache(this.snapshot).catch(() => undefined);
@@ -430,10 +451,12 @@ async function scanLocalUsageSessionsInternal(
   attribution: UsageAttributionIndex
 ): Promise<LocalUsageSnapshots> {
   const empty = createEmptySnapshot("unavailable", input.periodDays, input.timeZone, input.now);
+  const localNow = zonedDateTimeParts(input.now, input.timeZone);
   const accountUsageWindows = new Map<string, Map<string, AccountTokenUsageWindow>>();
+  const tracksAccountUsage = attribution.recordCount > 0;
   if (!(await isDirectory(input.sessionsPath))) {
     return {
-      localUsage: withRefreshWindow(empty, input.now),
+      localUsage: withRefreshWindow(empty, input.now, input.timeZone),
       accountTokenUsage: createAccountTokenUsageSnapshot(
         attribution.recordCount > 0 ? "ready" : "unavailable",
         accountUsageWindows,
@@ -443,10 +466,13 @@ async function scanLocalUsageSessionsInternal(
   }
 
   const allowedDates = new Set(recentDateKeys(input.now, input.periodDays, input.timeZone));
+  const oldestAccountUsageTimestamp = tracksAccountUsage
+    ? input.now - ACCOUNT_TOKEN_USAGE_RETENTION_DAYS * DAY_MS
+    : Number.POSITIVE_INFINITY;
   const byDate = new Map(empty.byDay.map((row) => [row.date, row]));
   const byModel = new Map<string, DashboardLocalUsageModelViewModel>();
   const byDayAndModel = new Map<string, DashboardLocalUsageDayModelViewModel>();
-  const byThreeHour = new Map(empty.byThreeHour.map((row) => [row.startAt, row]));
+  const byThreeHour = empty.byThreeHour;
   const byThreeHourAndModel = new Map<string, DashboardLocalUsageThreeHourModelViewModel>();
   const sourceFiles = new Set<string>();
   const total = empty.total;
@@ -454,12 +480,15 @@ async function scanLocalUsageSessionsInternal(
   let attributedEventCount = 0;
 
   // mtime must be at least as recent as the newest record in a session file.
-  // Keep one extra day for timezone and daylight-saving boundaries.
-  const oldestRelevantMtime = input.now - (Math.max(1, Math.floor(input.periodDays)) + 1) * DAY_MS;
+  // Account quota windows can be longer than the 14-day local dashboard, so
+  // retain the known 30-day long-term window plus one day for boundaries.
+  const oldestRelevantMtime =
+    input.now -
+    (Math.max(1, Math.floor(input.periodDays), tracksAccountUsage ? ACCOUNT_TOKEN_USAGE_RETENTION_DAYS : 0) + 1) * DAY_MS;
   const files = await findJsonlFiles(input.sessionsPath, oldestRelevantMtime);
   for (const file of files) {
     let currentModel = UNKNOWN_MODEL;
-    let fileHasUsage = false;
+    let fileHasLocalUsage = false;
     let firstSessionMetaSeen = false;
     let shouldCountUsage = true;
     let usageHighWater: TokenUsageHighWater | undefined;
@@ -530,23 +559,30 @@ async function scanLocalUsageSessionsInternal(
           continue;
         }
 
-        const date = dateKey(timestamp, input.timeZone);
-        if (!allowedDates.has(date)) {
+        const localTimestamp = zonedDateTimeParts(timestamp, input.timeZone);
+        const date = localTimestamp.date;
+        const includesLocalUsage = allowedDates.has(date);
+        const includesAccountUsage = tracksAccountUsage && timestamp >= oldestAccountUsageTimestamp;
+        if (!includesLocalUsage && !includesAccountUsage) {
+          continue;
+        }
+
+        if (includesAccountUsage) {
+          const attributionRecord = findUsageAttribution(sessionThreadIds, timestamp, attribution.byThread);
+          const quotaWindows = readTokenUsageQuotaWindows(payload);
+          if (attributionRecord && quotaWindows.length > 0) {
+            addAccountTokenUsage(accountUsageWindows, attributionRecord.a, quotaWindows, usage, timestamp);
+            attributedEventCount += 1;
+          }
+        }
+
+        if (!includesLocalUsage) {
           continue;
         }
 
         const day = byDate.get(date);
         if (!day) {
           continue;
-        }
-
-        const attributionRecord = findUsageAttribution(sessionThreadIds, timestamp, attribution.byThread);
-        if (attributionRecord) {
-          const quotaWindows = readTokenUsageQuotaWindows(payload);
-          if (quotaWindows.length > 0) {
-            addAccountTokenUsage(accountUsageWindows, attributionRecord.a, quotaWindows, usage, timestamp);
-            attributedEventCount += 1;
-          }
         }
 
         const model = currentModel || UNKNOWN_MODEL;
@@ -558,8 +594,8 @@ async function scanLocalUsageSessionsInternal(
         addTotals(dayModelBucket, usage);
         day.eventCount += 1;
 
-        const threeHourBucketStartAt = threeHourBucketStart(timestamp, input.now);
-        const threeHourBucket = threeHourBucketStartAt == null ? undefined : byThreeHour.get(threeHourBucketStartAt);
+        const threeHourBucket =
+          localTimestamp.date === localNow.date ? byThreeHour[Math.floor(localTimestamp.hour / 3)] : undefined;
         if (threeHourBucket) {
           const threeHourModelBucket = getOrCreateThreeHourModelBucket(
             byThreeHourAndModel,
@@ -572,7 +608,7 @@ async function scanLocalUsageSessionsInternal(
         }
 
         eventCount += 1;
-        fileHasUsage = true;
+        fileHasLocalUsage = true;
       }
     } catch (error) {
       // Session files can rotate while Codex is running. Ignore only this file
@@ -581,7 +617,7 @@ async function scanLocalUsageSessionsInternal(
       continue;
     }
 
-    if (fileHasUsage) {
+    if (fileHasLocalUsage) {
       sourceFiles.add(file);
     }
   }
@@ -601,12 +637,13 @@ async function scanLocalUsageSessionsInternal(
       byDayAndModel: [...byDayAndModel.values()].sort(
         (a, b) => a.date.localeCompare(b.date) || b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)
       ),
-      byThreeHour: [...byThreeHour.values()].sort((a, b) => a.startAt - b.startAt),
+      byThreeHour: [...byThreeHour],
       byThreeHourAndModel: [...byThreeHourAndModel.values()].sort(
         (a, b) => a.startAt - b.startAt || b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)
       )
     },
-    input.now
+    input.now,
+    input.timeZone
   );
   return {
     localUsage,
@@ -634,15 +671,29 @@ export function findAccountTokenUsageWindow(
   if (!snapshot || resetAt == null || !Number.isFinite(resetAt)) {
     return undefined;
   }
-  return snapshot.windowsByAccount[accountId]?.reduce<AccountTokenUsageWindow | undefined>((latest, candidate) => {
-    if (
-      candidate.window !== window ||
-      Math.abs(candidate.resetAt - Math.floor(resetAt)) > RESET_TIME_MATCH_TOLERANCE_SECONDS
-    ) {
-      return latest;
-    }
-    return !latest || candidate.lastObservedAt > latest.lastObservedAt ? candidate : latest;
-  }, undefined);
+  const targetResetAt = Math.floor(resetAt);
+  const matchingWindows = snapshot.windowsByAccount[accountId]?.filter(
+    (candidate) =>
+      candidate.window === window &&
+      Math.abs(candidate.resetAt - targetResetAt) <= ACCOUNT_USAGE_RESET_DRIFT_TOLERANCE_SECONDS
+  );
+  if (!matchingWindows || matchingWindows.length === 0) {
+    return undefined;
+  }
+
+  const aggregate: AccountTokenUsageWindow = {
+    window,
+    resetAt: targetResetAt,
+    eventCount: 0,
+    lastObservedAt: 0,
+    ...emptyTotals()
+  };
+  for (const candidate of matchingWindows) {
+    addTotals(aggregate, candidate);
+    aggregate.eventCount += candidate.eventCount;
+    aggregate.lastObservedAt = Math.max(aggregate.lastObservedAt, candidate.lastObservedAt);
+  }
+  return aggregate;
 }
 
 function defaultSessionsPath(): string {
@@ -670,16 +721,20 @@ function createEmptySnapshot(
     })),
     byModel: [],
     byDayAndModel: [],
-    byThreeHour: recentThreeHourBuckets(now),
+    byThreeHour: currentDayThreeHourBuckets(now, timeZone),
     byThreeHourAndModel: []
   };
 }
 
-function withRefreshWindow(snapshot: DashboardLocalUsageViewModel, calculatedAt: number): DashboardLocalUsageViewModel {
+function withRefreshWindow(
+  snapshot: DashboardLocalUsageViewModel,
+  calculatedAt: number,
+  timeZone: string
+): DashboardLocalUsageViewModel {
   return {
     ...snapshot,
     calculatedAt,
-    nextRefreshAt: calculatedAt + LOCAL_USAGE_CACHE_TTL_MS
+    nextRefreshAt: nextLocalUsageRefreshAt(calculatedAt, timeZone)
   };
 }
 
@@ -1263,30 +1318,37 @@ function timestampFromEvent(value: unknown): number | undefined {
   return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
-function recentThreeHourBuckets(now: number): DashboardLocalUsageThreeHourViewModel[] {
-  const earliestStartAt = now - LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT * THREE_HOURS_MS;
-  return Array.from({ length: LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT }, (_, index) => {
-    const startAt = earliestStartAt + index * THREE_HOURS_MS;
+function currentDayThreeHourBuckets(now: number, timeZone: string): DashboardLocalUsageThreeHourViewModel[] {
+  const localNow = zonedDateTimeParts(now, timeZone);
+  const count = Math.min(LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT, Math.floor(localNow.hour / 3) + 1);
+  return Array.from({ length: count }, (_, index) => {
+    const startHour = index * 3;
+    const isLastBucket = index === LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT - 1;
+    const endDate = isLastBucket ? shiftLocalDate(localNow, 1) : localNow;
+    const endHour = isLastBucket ? 0 : startHour + 3;
     return {
-      startAt,
-      endAt: startAt + THREE_HOURS_MS,
+      startAt: localDateTimeToTimestamp(
+        { year: localNow.year, month: localNow.month, day: localNow.day, hour: startHour },
+        timeZone
+      ),
+      endAt: localDateTimeToTimestamp(
+        { year: endDate.year, month: endDate.month, day: endDate.day, hour: endHour },
+        timeZone
+      ),
       eventCount: 0,
       ...emptyTotals()
     };
   });
 }
 
-function threeHourBucketStart(timestamp: number, now: number): number | undefined {
-  const earliestStartAt = now - LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT * THREE_HOURS_MS;
-  if (timestamp < earliestStartAt || timestamp > now) {
-    return undefined;
-  }
+function nextLocalUsageRefreshAt(calculatedAt: number, timeZone: string): number {
+  return Math.min(calculatedAt + LOCAL_USAGE_CACHE_TTL_MS, nextLocalDayStartAt(calculatedAt, timeZone));
+}
 
-  const index = Math.min(
-    LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT - 1,
-    Math.floor((timestamp - earliestStartAt) / THREE_HOURS_MS)
-  );
-  return earliestStartAt + index * THREE_HOURS_MS;
+function nextLocalDayStartAt(timestamp: number, timeZone: string): number {
+  const local = zonedDateTimeParts(timestamp, timeZone);
+  const nextDate = shiftLocalDate(local, 1);
+  return localDateTimeToTimestamp({ year: nextDate.year, month: nextDate.month, day: nextDate.day, hour: 0 }, timeZone);
 }
 
 function recentDateKeys(now: number, periodDays: number, timeZone: string): string[] {
@@ -1296,20 +1358,27 @@ function recentDateKeys(now: number, periodDays: number, timeZone: string): stri
 }
 
 function dateKey(timestamp: number, timeZone: string): string {
-  let formatter = DATE_KEY_FORMATTERS.get(timeZone);
+  return zonedDateTimeParts(timestamp, timeZone).date;
+}
+
+function zonedDateTimeParts(timestamp: number, timeZone: string): ZonedDateTimeParts {
+  let formatter = ZONED_DATE_TIME_FORMATTERS.get(timeZone);
   if (!formatter) {
-    formatter = new Intl.DateTimeFormat("en-CA", {
+    formatter = new Intl.DateTimeFormat("en-US", {
       timeZone,
       year: "numeric",
       month: "2-digit",
-      day: "2-digit"
+      day: "2-digit",
+      hour: "2-digit",
+      hourCycle: "h23"
     });
-    DATE_KEY_FORMATTERS.set(timeZone, formatter);
+    ZONED_DATE_TIME_FORMATTERS.set(timeZone, formatter);
   }
 
   let year: string | undefined;
   let month: string | undefined;
   let day: string | undefined;
+  let hour: string | undefined;
   for (const part of formatter.formatToParts(new Date(timestamp))) {
     if (part.type === "year") {
       year = part.value;
@@ -1317,12 +1386,54 @@ function dateKey(timestamp: number, timeZone: string): string {
       month = part.value;
     } else if (part.type === "day") {
       day = part.value;
+    } else if (part.type === "hour") {
+      hour = part.value;
     }
   }
-  if (!year || !month || !day) {
+  if (!year || !month || !day || !hour) {
     throw new Error("Unable to resolve local usage date");
   }
-  return `${year}-${month}-${day}`;
+  const yearNumber = Number(year);
+  const monthNumber = Number(month);
+  const dayNumber = Number(day);
+  const hourNumber = Number(hour) % 24;
+  if (![yearNumber, monthNumber, dayNumber, hourNumber].every(Number.isFinite)) {
+    throw new Error("Unable to resolve local usage date");
+  }
+  return {
+    date: `${year}-${month}-${day}`,
+    year: yearNumber,
+    month: monthNumber,
+    day: dayNumber,
+    hour: hourNumber
+  };
+}
+
+function shiftLocalDate(dateTime: ZonedDateTimeParts, days: number): Pick<ZonedDateTimeParts, "year" | "month" | "day"> {
+  const shifted = new Date(Date.UTC(dateTime.year, dateTime.month - 1, dateTime.day + days));
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate()
+  };
+}
+
+function localDateTimeToTimestamp(
+  target: Pick<ZonedDateTimeParts, "year" | "month" | "day" | "hour">,
+  timeZone: string
+): number {
+  let timestamp = Date.UTC(target.year, target.month - 1, target.day, target.hour);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const actual = zonedDateTimeParts(timestamp, timeZone);
+    const adjustment =
+      Date.UTC(target.year, target.month - 1, target.day, target.hour) -
+      Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour);
+    if (adjustment === 0) {
+      return timestamp;
+    }
+    timestamp += adjustment;
+  }
+  return timestamp;
 }
 
 function shiftDateKey(date: string, deltaDays: number): string {

@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.34",
+  "version": "0.1.16-local.36",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -80,7 +80,7 @@
             "14d"
           ],
           "default": "7d",
-          "markdownDescription": "Default range for the local Codex usage dashboard. `24h` renders eight 3-hour rows. Changing the range only filters the cached local aggregate and does not trigger an additional scan."
+          "markdownDescription": "Default range for the local Codex usage dashboard. `24h` means the current local calendar day, with fixed 00:00-based 3-hour rows shown only after each row begins. Changing the range only filters the cached local aggregate and does not trigger an additional scan."
         },
         "codexAccounts.localUsageShowEquivalentPrice": {
           "type": "boolean",
