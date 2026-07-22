@@ -4,6 +4,7 @@ This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6f
 
 ## Scope
 
+- Adds an opt-in local Feishu text-import inbox. It is disabled by default, so an unchanged deployment does not create directories, poll files, import credentials, or add network activity. When explicitly enabled on a target host, the extension consumes only a private local queue, writes credentials through VS Code SecretStorage, refreshes quota through the existing Manager path, and enables the seamless pool only for fresh eligible accounts. The command bot remains limited to Feishu and local queue writes; the inbox never binds behavior to a host address or endpoint.
 - Adds a read-only local Codex token summary below Saved Accounts. The dashboard and Settings window offer `24h`, `7d`, and `14d` views. The `24h` setting is displayed as **Today**: fixed local-time `00:00–03:00` buckets through the current bucket are shown, and future buckets are omitted.
 - Aggregates model, daily, three-hour, input, output, cached-input, and total-token metadata from `$CODEX_HOME/sessions` (default `~/.codex/sessions`).
 - Does not read or send session text, account identities, auth data, or raw paths to the Dashboard Webview.

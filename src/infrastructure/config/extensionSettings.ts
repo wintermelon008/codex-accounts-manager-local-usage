@@ -151,6 +151,15 @@ export function isBackgroundTokenRefreshEnabled(): boolean {
   return getCodexAccountsConfiguration().get<boolean>("backgroundTokenRefreshEnabled", true);
 }
 
+/**
+ * The local Feishu-import inbox is intentionally opt-in.  A stock extension
+ * installation must not create a watched directory or start importing files
+ * merely because another machine happens to use the same build.
+ */
+export function isLocalImportInboxEnabled(): boolean {
+  return getCodexAccountsConfiguration().get<boolean>("localImportInboxEnabled", false);
+}
+
 export function normalizeAutoSwitchThreshold(value: number): number {
   if (!Number.isFinite(value)) {
     return 20;
