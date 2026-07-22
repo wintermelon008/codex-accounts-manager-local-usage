@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import * as http from "node:http";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -25,6 +26,8 @@ type Message = {
     inputText?: string;
     recoveryMetadata?: string;
     recoveryContext?: string;
+    statusCode?: number;
+    hasAdapterToken?: boolean;
     cwd?: string;
     runtimeWorkspaceRoots?: string[];
     approvalPolicy?: string;
@@ -75,7 +78,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 4,
+      runtimeProtocolVersion: 5,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -87,6 +90,7 @@ describe("CodexHotSwitchBridge", () => {
       params: {
         args: expect.arrayContaining([
           'model_provider="codex-accounts-seamless-http"',
+          expect.stringContaining("model_providers.codex-accounts-sub2api="),
           expect.stringContaining("supports_websockets=false")
         ])
       }
@@ -108,6 +112,218 @@ describe("CodexHotSwitchBridge", () => {
     ).resolves.toEqual({ active: true, localAccountId: "local-a" });
   });
 
+  it("keeps the real Sub2API key in memory and forwards it only through the loopback adapter", async () => {
+    const root = path.resolve(__dirname, "..");
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-sub2api-runtime-"));
+    const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
+    const diagnosticPath = path.join(runtimeDirectory, "sub2api-gateway-last-failure.json");
+    const upstreamRequests: Array<{ authorization?: string; method?: string; url?: string }> = [];
+    const shimStderr: string[] = [];
+    let failNextResponse = false;
+    let upstreamClosed = false;
+    const upstream = http.createServer((request, response) => {
+      upstreamRequests.push({ authorization: request.headers.authorization, method: request.method, url: request.url });
+      if (request.url === "/v1/responses") {
+        request.resume();
+        if (failNextResponse) {
+          failNextResponse = false;
+          response.writeHead(502, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: { message: "upstream failure" } }));
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write("event: response.completed\n");
+        response.end(
+          'data: {"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":2}}}}\n\n'
+        );
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [] }));
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("Test upstream did not receive a TCP port");
+    }
+
+    try {
+      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      const gatewayBaseUrl = `http://127.0.0.1:${upstreamAddress.port}/v1`;
+      await writeFile(
+        path.join(runtimeDirectory, "codex-app-server-shim.json"),
+        JSON.stringify({
+          realCliPath: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+          forceHttpTransport: true,
+          sub2apiGateway: {
+            displayName: "Sub2API Gateway",
+            baseUrl: gatewayBaseUrl,
+            model: "gateway-test-model"
+          }
+        }),
+        "utf8"
+      );
+      const runtimeConfigText = await readFile(path.join(runtimeDirectory, "codex-app-server-shim.json"), "utf8");
+      expect(runtimeConfigText).not.toContain("real-sub2api-key");
+
+      shim = childProcess.spawn(shimPath, ["app-server"], {
+        cwd: root,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      shim.stderr.on("data", (chunk) => shimStderr.push(String(chunk)));
+      const messages = createMessageCollector(shim.stdout);
+      shim.stdin.write(`${JSON.stringify({ id: "gateway-initialize", method: "initialize", params: {} })}\n`);
+      await messages.next((message) => message.id === "gateway-initialize");
+
+      bridge = new CodexHotSwitchBridge(async () => ({
+        accessToken: "unused-token",
+        chatgptAccountId: "account-a",
+        chatgptPlanType: "plus"
+      }));
+      await waitForSocket(getHotSwitchSocketPath(process.pid));
+      await expect(bridge.getStatus()).resolves.toMatchObject({
+        sub2apiGatewayActive: true,
+        providerKind: "sub2api"
+      });
+      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({ active: true, ready: false });
+      await expect(messages.next((message) => message.method === "test/runtimeArgs")).resolves.toMatchObject({
+        params: {
+          hasLoopbackNoProxyBypass: true,
+          args: expect.arrayContaining([
+            'model_provider="codex-accounts-seamless-http"',
+            'model="gateway-test-model"',
+            expect.stringContaining("model_providers.codex-accounts-sub2api="),
+            expect.stringContaining('base_url="http://127.0.0.1:')
+          ])
+        }
+      });
+
+      shim.stdin.write(`${JSON.stringify({ id: "gateway-probe-before", method: "test/probeGateway", params: {} })}\n`);
+      const delayedGatewayProbe = messages.next(
+        (message) => message.method === "test/gatewayProbe" && message.params?.statusCode === 200
+      );
+      await waitFor(() => shimStderr.join("").includes("Sub2API Gateway request is waiting for credential: method=GET path=/v1/models"));
+      expect(upstreamRequests).toEqual([]);
+
+      await expect(bridge.configureSub2ApiGatewayCredential("real-sub2api-key")).resolves.toMatchObject({
+        active: true,
+        ready: true
+      });
+      await expect(delayedGatewayProbe).resolves.toMatchObject({ params: { hasAdapterToken: true } });
+      expect(upstreamRequests).toEqual([
+        { authorization: "Bearer real-sub2api-key", method: "GET", url: "/v1/models" }
+      ]);
+      await waitFor(() => shimStderr.join("").includes("Sub2API Gateway credential configured"));
+      const credentialLogText = shimStderr.join("");
+      expect(credentialLogText).not.toContain("real-sub2api-key");
+      expect(credentialLogText).not.toContain('"input"');
+      shim.stdin.write(
+        `${JSON.stringify({ id: "gateway-response-probe", method: "test/probeGatewayResponse", params: {} })}\n`
+      );
+      await expect(
+        messages.next((message) => message.method === "test/gatewayResponseProbe" && message.params?.statusCode === 200)
+      ).resolves.toMatchObject({ params: { hasAdapterToken: true } });
+      expect(upstreamRequests).toEqual([
+        { authorization: "Bearer real-sub2api-key", method: "GET", url: "/v1/models" },
+        { authorization: "Bearer real-sub2api-key", method: "POST", url: "/v1/responses" }
+      ]);
+      failNextResponse = true;
+      shim.stdin.write(
+        `${JSON.stringify({ id: "gateway-failing-response-probe", method: "test/probeGatewayResponse", params: {} })}\n`
+      );
+      await expect(
+        messages.next((message) => message.method === "test/gatewayResponseProbe" && message.params?.statusCode === 502)
+      ).resolves.toMatchObject({ params: { hasAdapterToken: true } });
+      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({
+        requestCount: 3,
+        successfulRequestCount: 2,
+        failedRequestCount: 1,
+        lastFailureOrigin: "sub2api",
+        lastFailureStatusCode: 502,
+        inputTokens: 11,
+        outputTokens: 7,
+        cachedInputTokens: 3,
+        reasoningTokens: 2,
+        totalTokens: 18
+      });
+      const upstreamDiagnosticText = await readFile(diagnosticPath, "utf8");
+      expect(JSON.parse(upstreamDiagnosticText)).toMatchObject({
+        schema: "codex-accounts-sub2api-gateway-diagnostic/v1",
+        origin: "sub2api",
+        statusCode: 502,
+        upstreamStatusCode: 502,
+        request: {
+          method: "POST",
+          path: "/v1/responses",
+          contentLength: expect.any(Number)
+        }
+      });
+      expect(upstreamDiagnosticText).not.toContain("real-sub2api-key");
+      expect(upstreamDiagnosticText).not.toContain('"input"');
+      await waitFor(() => shimStderr.join("").includes("Sub2API Gateway forwarding failed: origin=sub2api status=502"));
+      const upstreamLogText = shimStderr.join("");
+      expect(upstreamLogText).toContain("upstreamStatus=502 method=POST path=/v1/responses");
+      expect(upstreamLogText).not.toContain("real-sub2api-key");
+      expect(upstreamLogText).not.toContain('"input"');
+
+      (upstream as http.Server & { closeAllConnections?: () => void }).closeAllConnections?.();
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          upstreamClosed = true;
+          resolve();
+        });
+      });
+      const previousResponseProbeCount = messages.all.filter((message) => message.method === "test/gatewayResponseProbe").length;
+      shim.stdin.write(
+        `${JSON.stringify({ id: "gateway-connection-refused-probe", method: "test/probeGatewayResponse", params: {} })}\n`
+      );
+      await waitFor(
+        () => messages.all.filter((message) => message.method === "test/gatewayResponseProbe").length > previousResponseProbeCount
+      );
+      expect(messages.all.filter((message) => message.method === "test/gatewayResponseProbe").at(-1)).toMatchObject({
+        params: { statusCode: 502, hasAdapterToken: true }
+      });
+      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({
+        requestCount: 4,
+        successfulRequestCount: 2,
+        failedRequestCount: 2,
+        lastFailureOrigin: "adapter",
+        lastFailureStatusCode: 502,
+        lastFailureTransportCode: expect.stringMatching(/^[A-Z][A-Z0-9_]+$/u),
+        lastFailureRequestMethod: "POST",
+        lastFailureRequestPath: "/v1/responses"
+      });
+      const adapterDiagnosticText = await readFile(diagnosticPath, "utf8");
+      expect(JSON.parse(adapterDiagnosticText)).toMatchObject({
+        schema: "codex-accounts-sub2api-gateway-diagnostic/v1",
+        origin: "adapter",
+        statusCode: 502,
+        transportCode: expect.stringMatching(/^[A-Z][A-Z0-9_]+$/u),
+        request: { method: "POST", path: "/v1/responses" }
+      });
+      expect(adapterDiagnosticText).not.toContain("real-sub2api-key");
+      expect(adapterDiagnosticText).not.toContain('"input"');
+      await waitFor(() => shimStderr.join("").includes("Sub2API Gateway forwarding failed: origin=adapter status=502"));
+      expect(shimStderr.join("")).toMatch(
+        /Sub2API Gateway forwarding failed: origin=adapter status=502 transport=[A-Z][A-Z0-9_]+ method=POST path=\/v1\/responses/u
+      );
+    } finally {
+      bridge?.dispose();
+      bridge = undefined;
+      shim?.kill("SIGTERM");
+      shim = undefined;
+      if (!upstreamClosed) {
+        await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      }
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("writes only compact thread-to-local-account attribution records", async () => {
     const root = path.resolve(__dirname, "..");
     const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-runtime-attribution-"));
@@ -118,7 +334,11 @@ describe("CodexHotSwitchBridge", () => {
       await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
       await writeFile(
         path.join(runtimeDirectory, "codex-app-server-shim.json"),
-        JSON.stringify({ realCliPath: fakeCliPath, forceHttpTransport: true, usageAttributionDirectory: attributionDirectory }),
+        JSON.stringify({
+          realCliPath: fakeCliPath,
+          forceHttpTransport: true,
+          usageAttributionDirectory: attributionDirectory
+        }),
         "utf8"
       );
       shim = childProcess.spawn(shimPath, ["app-server"], {

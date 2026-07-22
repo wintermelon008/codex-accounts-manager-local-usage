@@ -21,6 +21,7 @@ import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchStat
 import { promptForTags } from "../tagEditor";
 import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from "./actionUtils";
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
+import { getSub2ApiGatewayController } from "../../local/sub2apiGateway/registry";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -130,6 +131,30 @@ async function runDashboardAction(
     case "refreshLocalUsage":
       await ctx.refreshLocalUsage?.();
       return undefined;
+    case "sub2apiGatewayActivate":
+      await requireSub2ApiGatewayController().activate();
+      ctx.schedulePublishState();
+      return undefined;
+    case "sub2apiGatewayDeactivate":
+      await requireSub2ApiGatewayController().deactivate();
+      ctx.schedulePublishState();
+      return undefined;
+    case "sub2apiGatewayRefresh":
+      await requireSub2ApiGatewayController().refresh();
+      ctx.schedulePublishState();
+      return undefined;
+    case "sub2apiGatewayConfigureCredential":
+      await requireSub2ApiGatewayController().configureCredential();
+      ctx.schedulePublishState();
+      return undefined;
+    case "sub2apiGatewayConfigureObserverCredential":
+      await requireSub2ApiGatewayController().configureObserverCredential();
+      ctx.schedulePublishState();
+      return undefined;
+    case "sub2apiGatewayOpenConfig":
+      await requireSub2ApiGatewayController().openConfiguration();
+      ctx.schedulePublishState();
+      return undefined;
     case "updateTags":
       return handleUpdateTags(ctx.repo, ctx.resolveLanguage, ctx.schedulePublishState, payload, account, translate);
     case "setBalancePool":
@@ -205,6 +230,14 @@ async function runDashboardAction(
     default:
       return undefined;
   }
+}
+
+function requireSub2ApiGatewayController() {
+  const gateway = getSub2ApiGatewayController();
+  if (!gateway) {
+    throw new Error("The local Sub2API Gateway feature is disabled");
+  }
+  return gateway;
 }
 
 async function handleShareTokens(

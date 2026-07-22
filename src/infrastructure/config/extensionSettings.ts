@@ -160,6 +160,19 @@ export function isLocalImportInboxEnabled(): boolean {
   return getCodexAccountsConfiguration().get<boolean>("localImportInboxEnabled", false);
 }
 
+/**
+ * The local Sub2API Gateway is intentionally separate from saved OAuth
+ * accounts.  When this flag is off, callers must not read its config file,
+ * resolve credentials, start an adapter, or perform Gateway health checks.
+ */
+export function isSub2ApiGatewayEnabled(): boolean {
+  return getCodexAccountsConfiguration().get<boolean>("sub2apiGatewayEnabled", false);
+}
+
+export function getSub2ApiGatewayConfigFile(): string {
+  return getCodexAccountsConfiguration().get<string>("sub2apiGatewayConfigFile", "sub2api-gateway.json");
+}
+
 export function normalizeAutoSwitchThreshold(value: number): number {
   if (!Number.isFinite(value)) {
     return 20;

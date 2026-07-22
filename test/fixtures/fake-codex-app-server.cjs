@@ -2,6 +2,8 @@
 
 "use strict";
 
+const http = require("node:http");
+
 let buffer = "";
 let currentEmail = "a@example.invalid";
 let currentAccountId = "account-a";
@@ -14,7 +16,13 @@ let goalSequence = 0;
 let reorderNextTurnStartResponse = false;
 let failNextTurnStartWithUsageLimit = false;
 
-emit({ method: "test/runtimeArgs", params: { args: process.argv.slice(2) } });
+emit({
+  method: "test/runtimeArgs",
+  params: {
+    args: process.argv.slice(2),
+    hasLoopbackNoProxyBypass: hasLoopbackNoProxyBypass()
+  }
+});
 
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -247,6 +255,12 @@ function handleLine(line) {
       failNextTurnStartWithUsageLimit = true;
       respond(message.id, {});
       break;
+    case "test/probeGateway":
+      void probeGateway(message);
+      break;
+    case "test/probeGatewayResponse":
+      void probeGatewayResponse(message);
+      break;
     case "turn/interrupt": {
       const turnIndex = activeTurns.findIndex(
         (turn) => turn.id === message.params.turnId && turn.threadId === message.params.threadId
@@ -308,6 +322,88 @@ function handleLine(line) {
       respond(message.id, {});
       break;
   }
+}
+
+function hasLoopbackNoProxyBypass() {
+  const entries = [process.env.NO_PROXY, process.env.no_proxy]
+    .filter((value) => typeof value === "string")
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim().toLowerCase());
+  return ["127.0.0.1", "localhost", "::1"].every((host) => entries.includes(host));
+}
+
+function probeGateway(message) {
+  const providerConfig = process.argv.find((arg) => typeof arg === "string" && arg.includes("base_url="));
+  const baseUrl = providerConfig && /base_url="([^"\\]+)"/u.exec(providerConfig)?.[1];
+  const envKey = providerConfig && /env_key="([^"\\]+)"/u.exec(providerConfig)?.[1];
+  const adapterToken = envKey ? process.env[envKey] : undefined;
+  if (!baseUrl || !adapterToken) {
+    emit({ method: "test/gatewayProbe", params: { statusCode: 0, hasAdapterToken: false } });
+    respond(message.id, {});
+    return;
+  }
+  const target = new URL("models", `${baseUrl.replace(/\/+$/u, "")}/`);
+  const client = target.protocol === "https:" ? require("node:https") : http;
+  const request = client.request(
+    target,
+    { method: "GET", headers: { authorization: `Bearer ${adapterToken}` } },
+    (response) => {
+      response.resume();
+      response.on("end", () => {
+        emit({
+          method: "test/gatewayProbe",
+          params: { statusCode: response.statusCode || 0, hasAdapterToken: true }
+        });
+        respond(message.id, {});
+      });
+    }
+  );
+  request.on("error", () => {
+    emit({ method: "test/gatewayProbe", params: { statusCode: 0, hasAdapterToken: true } });
+    respond(message.id, {});
+  });
+  request.end();
+}
+
+function probeGatewayResponse(message) {
+  const providerConfig = process.argv.find((arg) => typeof arg === "string" && arg.includes("base_url="));
+  const baseUrl = providerConfig && /base_url="([^"\\]+)"/u.exec(providerConfig)?.[1];
+  const envKey = providerConfig && /env_key="([^"\\]+)"/u.exec(providerConfig)?.[1];
+  const adapterToken = envKey ? process.env[envKey] : undefined;
+  if (!baseUrl || !adapterToken) {
+    emit({ method: "test/gatewayResponseProbe", params: { statusCode: 0, hasAdapterToken: false } });
+    respond(message.id, {});
+    return;
+  }
+  const target = new URL("responses", `${baseUrl.replace(/\/+$/u, "")}/`);
+  const client = target.protocol === "https:" ? require("node:https") : http;
+  const body = JSON.stringify({ model: "gateway-test-model", input: "test", stream: true });
+  const request = client.request(
+    target,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${adapterToken}`,
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body)
+      }
+    },
+    (response) => {
+      response.resume();
+      response.on("end", () => {
+        emit({
+          method: "test/gatewayResponseProbe",
+          params: { statusCode: response.statusCode || 0, hasAdapterToken: true }
+        });
+        respond(message.id, {});
+      });
+    }
+  );
+  request.on("error", () => {
+    emit({ method: "test/gatewayResponseProbe", params: { statusCode: 0, hasAdapterToken: true } });
+    respond(message.id, {});
+  });
+  request.end(body);
 }
 
 function respond(id, result) {

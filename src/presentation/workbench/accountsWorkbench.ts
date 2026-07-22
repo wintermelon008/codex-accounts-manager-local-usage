@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 import { maybeSeamlessBalanceSwitchForActiveQuota } from "../../application/accounts/quota";
 import { registerCommands } from "../../commands";
-import { isLocalImportInboxEnabled, isSeamlessSwitchEnabled } from "../../infrastructure/config/extensionSettings";
+import {
+  isLocalImportInboxEnabled,
+  isSeamlessSwitchEnabled,
+  isSub2ApiGatewayEnabled
+} from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
 import { registerDebugOutput, t } from "../../utils";
@@ -9,6 +13,9 @@ import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitc
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
 import { LocalImportInbox } from "./localImportInbox";
+import { Sub2ApiGatewayController } from "../../local/sub2apiGateway/controller";
+import { setSub2ApiGatewayController } from "../../local/sub2apiGateway/registry";
+import { refreshQuotaSummaryPanel } from "../dashboard/panel";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
 import {
   registerAutoRefreshScheduler,
@@ -25,6 +32,7 @@ export class AccountsWorkbench {
   private readonly refreshCoordinator: WorkbenchRefreshCoordinator;
   private readonly hotSwitchRuntime: CodexHotSwitchRuntime;
   private readonly localImportInbox: LocalImportInbox | undefined;
+  private sub2apiGateway: Sub2ApiGatewayController | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.repo = new AccountsRepository(context);
@@ -69,6 +77,17 @@ export class AccountsWorkbench {
     if (this.localImportInbox) {
       this.context.subscriptions.push(this.localImportInbox);
     }
+    await measureStep("sub2apiGateway.initialize", () => this.updateSub2ApiGatewayFeature());
+    this.context.subscriptions.push(
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (
+          event.affectsConfiguration("codexAccounts.sub2apiGatewayEnabled") ||
+          event.affectsConfiguration("codexAccounts.sub2apiGatewayConfigFile")
+        ) {
+          void this.updateSub2ApiGatewayFeature();
+        }
+      })
+    );
 
     const refreshers = {
       ...this.refreshCoordinator.createRefreshView(),
@@ -156,7 +175,35 @@ export class AccountsWorkbench {
     this.refreshCoordinator.dispose();
     this.hotSwitchRuntime.dispose();
     this.localImportInbox?.dispose();
+    this.sub2apiGateway?.dispose();
+    this.sub2apiGateway = undefined;
+    setSub2ApiGatewayController(undefined);
     this.repo.dispose();
+  }
+
+  private async updateSub2ApiGatewayFeature(): Promise<void> {
+    if (!isSub2ApiGatewayEnabled()) {
+      const previous = this.sub2apiGateway;
+      this.sub2apiGateway = undefined;
+      setSub2ApiGatewayController(undefined);
+      if (previous) {
+        await previous.disableFeature();
+      }
+      await refreshQuotaSummaryPanel();
+      return;
+    }
+
+    const previous = this.sub2apiGateway;
+    if (previous) {
+      previous.dispose();
+    }
+    const gateway = new Sub2ApiGatewayController(this.context, this.hotSwitchRuntime, () => {
+      void refreshQuotaSummaryPanel();
+    });
+    this.sub2apiGateway = gateway;
+    setSub2ApiGatewayController(gateway);
+    await gateway.initialize();
+    await refreshQuotaSummaryPanel();
   }
 
   private async notifyIndexHealth(): Promise<void> {

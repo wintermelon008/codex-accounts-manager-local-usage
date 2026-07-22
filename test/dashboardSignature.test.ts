@@ -210,6 +210,69 @@ describe("buildDashboardStateSignature", () => {
     expect(buildDashboardStateSignature(usageChanged)).not.toBe(baseSignature);
   });
 
+  it("changes when the optional Sub2API Gateway status or usage changes", () => {
+    const base = createState();
+    const ready: DashboardState = {
+      ...base,
+      sub2apiGateway: {
+        displayName: "Sub2API Gateway",
+        configFile: "sub2api-gateway.json",
+        credentialPresent: true,
+        isActive: false,
+        status: "ready",
+        statusMessage: "Ready",
+        usage: {
+          requestCount: 0,
+          successfulRequestCount: 0,
+          failedRequestCount: 0,
+          today: {
+            date: "2026-07-22",
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedInputTokens: 0,
+            reasoningTokens: 0,
+            totalTokens: 0
+          },
+          windows: {
+            fiveHour: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 0 },
+            sevenDay: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 0 }
+          }
+        },
+        inventory: {
+          configured: false,
+          credentialPresent: false,
+          status: "not_configured"
+        }
+      }
+    };
+    const usedMore: DashboardState = {
+      ...ready,
+      sub2apiGateway: {
+        ...ready.sub2apiGateway!,
+        usage: {
+          requestCount: 1,
+          successfulRequestCount: 1,
+          failedRequestCount: 0,
+          today: {
+            date: "2026-07-22",
+            inputTokens: 2,
+            outputTokens: 3,
+            cachedInputTokens: 1,
+            reasoningTokens: 0,
+            totalTokens: 5
+          },
+          windows: {
+            fiveHour: { inputTokens: 2, outputTokens: 3, cachedInputTokens: 1, reasoningTokens: 0, totalTokens: 5 },
+            sevenDay: { inputTokens: 2, outputTokens: 3, cachedInputTokens: 1, reasoningTokens: 0, totalTokens: 5 }
+          }
+        }
+      }
+    };
+
+    expect(buildDashboardStateSignature(ready)).not.toBe(buildDashboardStateSignature(base));
+    expect(buildDashboardStateSignature(usedMore)).not.toBe(buildDashboardStateSignature(ready));
+  });
+
   it("changes when quota-band balancing or pool membership changes", () => {
     const base = createState();
     const settingChanged: DashboardState = {
