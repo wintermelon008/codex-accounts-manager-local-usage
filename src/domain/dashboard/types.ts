@@ -9,6 +9,12 @@ import type {
   SeamlessReserveThreshold
 } from "../../core/types";
 
+/**
+ * Keep the Dashboard's rendered account surface bounded. This limit is also
+ * used by the automatic quota refresh scheduler for its visible first page.
+ */
+export const DASHBOARD_ACCOUNTS_PAGE_SIZE = 50;
+
 export type DashboardSettingKey =
   | "dashboardTheme"
   | "localUsageDefaultRange"
@@ -408,8 +414,20 @@ export interface DashboardAccountViewModel {
   lastQuotaAt?: number;
   resetCreditsAvailable?: number;
   resetCreditsNextExpiresAt?: number;
+  tokenUsage?: DashboardAccountTokenUsageViewModel;
   autoSwitchLockedUntil?: number;
   metrics: DashboardMetricViewModel[];
+}
+
+/**
+ * Tokens observed for one Manager-attributed quota window. These are local
+ * Codex token counters, not a conversion of the service's quota percentage.
+ */
+export interface DashboardAccountTokenUsageViewModel extends DashboardLocalUsageTokenTotals {
+  window: "hourly" | "weekly";
+  resetAt: number;
+  calculatedAt?: number;
+  status: "loading" | "tracking" | "waiting";
 }
 
 export interface DashboardTokenAutomationViewModel {
@@ -570,6 +588,7 @@ export interface DashboardActionPayload {
   recoveryMode?: boolean;
   tags?: string[];
   accountGroup?: CodexAccountGroup;
+  clearAccountGroup?: boolean;
   mode?: "set" | "add" | "remove";
   lockMinutes?: number;
   announcementId?: string;

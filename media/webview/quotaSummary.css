@@ -806,6 +806,40 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   justify-content: start;
   align-items: start;
 }
+.saved-accounts-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+.account-page-btn {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.account-page-btn:hover:not(:disabled),
+.account-page-btn:focus-visible:not(:disabled) {
+  border-color: var(--border-accent);
+  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-surface));
+}
+.account-page-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.account-page-status {
+  min-width: 128px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
 .saved-card-container {
   --saved-card-min-height: 340px;
   perspective: 1200px;
@@ -1679,6 +1713,15 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
   font-size: 12px;
   line-height: 1.35;
   padding-top: 4px;
+}
+.saved-token-usage-line {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  padding-top: 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .saved-api-usage-panel {
   display: flex;

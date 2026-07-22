@@ -6,6 +6,7 @@ import {
 } from "../src/presentation/workbench/refreshCoordinator";
 import type { HotSwitchStatus } from "../src/codex";
 import {
+  getAutomaticQuotaRefreshAccountIds,
   registerAutoRefreshScheduler,
   registerSeamlessUsageLimitMonitor,
   SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS,
@@ -160,7 +161,9 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
     const release = vi.fn().mockResolvedValue(undefined);
     const repo = {
-      listAccounts: vi.fn().mockResolvedValue([{ id: "a" }]),
+      listAccounts: vi.fn().mockResolvedValue([
+        { id: "a", email: "a@example.invalid", isActive: true, createdAt: 1, updatedAt: 1 }
+      ]),
       tryAcquireSchedulerLease: vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce({ release })
     };
     const registration = registerAutoRefreshScheduler({
@@ -176,13 +179,52 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(vscode.commands.executeCommand).toHaveBeenCalledWith("codexAccounts.refreshAllQuotas", {
         silent: true,
-        forceRefresh: true
+        forceRefresh: true,
+        accountIds: ["a"]
       });
       expect(release).toHaveBeenCalledOnce();
     } finally {
       registration.dispose();
       vi.useRealTimers();
     }
+  });
+
+  it("limits automatic quota refresh to the first visible Dashboard page", () => {
+    const accounts = [
+      { id: "active", email: "active@example.invalid", isActive: true, createdAt: 1, updatedAt: 1 },
+      { id: "hidden", email: "hidden@example.invalid", isActive: false, isHidden: true, createdAt: 200, updatedAt: 1 },
+      {
+        id: "group-a",
+        email: "group-a@example.invalid",
+        isActive: false,
+        accountGroup: "A" as const,
+        createdAt: 199,
+        updatedAt: 1
+      },
+      ...Array.from({ length: 51 }, (_, index) => ({
+        id: `visible-${index + 1}`,
+        email: `visible-${index + 1}@example.invalid`,
+        isActive: false,
+        createdAt: index + 2,
+        updatedAt: 1
+      }))
+    ];
+
+    const accountIds = getAutomaticQuotaRefreshAccountIds(
+      accounts,
+      configuration({
+        seamlessSwitchGroupAVisible: false,
+        seamlessSwitchGroupBVisible: true,
+        seamlessSwitchGroupCVisible: true
+      })
+    );
+
+    expect(accountIds).toHaveLength(50);
+    expect(accountIds[0]).toBe("active");
+    expect(accountIds).not.toContain("hidden");
+    expect(accountIds).not.toContain("group-a");
+    expect(accountIds).toContain("visible-51");
+    expect(accountIds).not.toContain("visible-1");
   });
 
   it("reacts to a new runtime usage-limit failure with only bounded scalar polling", async () => {

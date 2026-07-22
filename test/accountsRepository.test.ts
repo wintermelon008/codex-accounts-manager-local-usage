@@ -1288,7 +1288,14 @@ describe("AccountsRepository token persistence", () => {
       balancePoolEnabled: true,
       accountGroup: "B"
     });
-    await repo.setAccountGroup(["account-1"], undefined);
+
+    await repo.hideAccounts(["account-1"]);
+    await repo.unhideAccounts(["account-1"], { clearAccountGroup: true });
+
+    expect(await repo.getAccount("account-1")).toMatchObject({
+      isHidden: false,
+      balancePoolEnabled: true
+    });
     expect((await repo.getAccount("account-1"))?.accountGroup).toBeUndefined();
     repo.dispose();
   });

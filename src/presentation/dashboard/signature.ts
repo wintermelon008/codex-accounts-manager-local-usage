@@ -22,6 +22,19 @@ export function buildDashboardStateSignature(state: DashboardState): string {
         account.lastQuotaAt ?? 0,
         account.resetCreditsAvailable ?? "",
         account.resetCreditsNextExpiresAt ?? "",
+        account.tokenUsage
+          ? [
+              account.tokenUsage.status,
+              account.tokenUsage.window,
+              account.tokenUsage.resetAt,
+              account.tokenUsage.calculatedAt ?? "",
+              account.tokenUsage.inputTokens,
+              account.tokenUsage.cachedInputTokens,
+              account.tokenUsage.outputTokens,
+              account.tokenUsage.reasoningOutputTokens,
+              account.tokenUsage.totalTokens
+            ].join(",")
+          : "",
         account.healthKind,
         account.dismissedHealth ? "1" : "0",
         account.lastTokenCheckAt ?? "",

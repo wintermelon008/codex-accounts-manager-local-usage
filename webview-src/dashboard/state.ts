@@ -26,6 +26,7 @@ export type AppAction =
   | { type: "tick"; now: number }
   | { type: "toggle-select"; accountId: string }
   | { type: "deselect-accounts"; accountIds: string[] }
+  | { type: "reconcile-selection-scope"; visibleAccountIds: string[] }
   | { type: "request-action"; request: PendingActionRequest }
   | { type: "resolve-action"; requestId: string };
 
@@ -69,6 +70,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
         ...state,
         selectedAccountIds: state.selectedAccountIds.filter((accountId) => !accountIds.has(accountId))
       };
+    }
+    case "reconcile-selection-scope": {
+      const visibleAccountIds = new Set(action.visibleAccountIds);
+      const selectedAccountIds = state.selectedAccountIds.filter((accountId) => visibleAccountIds.has(accountId));
+      return selectedAccountIds.length === state.selectedAccountIds.length
+        ? state
+        : {
+            ...state,
+            selectedAccountIds
+          };
     }
     case "open-settings":
       return {

@@ -1022,8 +1022,12 @@ export class AccountsRepository {
 
   /**
    * 解除账号隐藏，并重新加入无感切号池。
+   * 特定的恢复操作可在同一次索引写入中清空账号分组。
    */
-  async unhideAccounts(accountIds: string[]): Promise<CodexAccountRecord[]> {
+  async unhideAccounts(
+    accountIds: string[],
+    options: { clearAccountGroup?: boolean } = {}
+  ): Promise<CodexAccountRecord[]> {
     const index = await this.readIndex();
     const selectedIds = new Set(accountIds);
     const selectedAccounts = index.accounts.filter((account) => selectedIds.has(account.id));
@@ -1036,9 +1040,13 @@ export class AccountsRepository {
     const updatedAt = Date.now();
     let changed = false;
     for (const account of selectedAccounts) {
-      if (account.isHidden || account.balancePoolEnabled !== true) {
+      const shouldClearAccountGroup = options.clearAccountGroup === true && account.accountGroup !== undefined;
+      if (account.isHidden || account.balancePoolEnabled !== true || shouldClearAccountGroup) {
         account.isHidden = false;
         account.balancePoolEnabled = true;
+        if (options.clearAccountGroup === true) {
+          account.accountGroup = undefined;
+        }
         account.updatedAt = updatedAt;
         changed = true;
       }
@@ -1046,7 +1054,12 @@ export class AccountsRepository {
     if (changed) {
       this.writeIndex(index);
     }
-    return selectedAccounts.map((account) => ({ ...account, isHidden: false, balancePoolEnabled: true }));
+    return selectedAccounts.map((account) => ({
+      ...account,
+      isHidden: false,
+      balancePoolEnabled: true,
+      accountGroup: options.clearAccountGroup === true ? undefined : account.accountGroup
+    }));
   }
 
   /**

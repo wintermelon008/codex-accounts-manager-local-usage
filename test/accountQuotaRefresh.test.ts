@@ -33,6 +33,7 @@ import {
   maybeWarnForAccount,
   refreshSingleQuota
 } from "../src/application/accounts/quota";
+import { AccountsCommandService } from "../src/application/accounts/commandService";
 import { setCurrentWindowRuntimeAccountId } from "../src/presentation/workbench/windowRuntimeAccount";
 
 type QuotaRefreshRepo = Pick<
@@ -267,6 +268,38 @@ describe("refreshSingleQuota token automation state", () => {
 
     expect(fetchResetCreditsMock).toHaveBeenCalledWith(tokens.accessToken, "acct-2");
     expect(repo.updateResetCreditsSnapshot).toHaveBeenCalledWith(account.id, 0, undefined);
+  });
+
+  it("coalesces a silent bounded refresh into one Dashboard update", async () => {
+    const updatedAccount: CodexAccountRecord = {
+      ...account,
+      accountId: "acct-batch",
+      quotaSummary: {
+        hourlyPercentage: 80,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 90,
+        weeklyWindowPresent: true,
+        resetCreditsAvailable: 1
+      }
+    };
+    const repo = {
+      listAccounts: vi.fn(async () => [account]),
+      getAccount: vi.fn(async () => account),
+      getTokens: vi.fn(async () => tokens),
+      updateQuota: vi.fn(async () => updatedAccount),
+      refreshSubscriptionState: vi.fn(async () => undefined),
+      updateResetCreditsSnapshot: vi.fn(async () => undefined)
+    };
+    const view = { refresh: vi.fn() };
+    refreshQuotaMock.mockResolvedValue({ quota: updatedAccount.quotaSummary, updatedTokens: tokens });
+    fetchResetCreditsMock.mockResolvedValue({ availableCount: 1, credits: [], nextExpiresAt: undefined });
+
+    const service = new AccountsCommandService({} as never, repo as AccountsRepository, view, {} as never);
+    await service.refreshAllQuotas({ silent: true, forceRefresh: true, accountIds: [account.id] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(view.refresh).toHaveBeenCalledOnce();
   });
 
   it("auto-switches to the candidate with the best matching remaining quota", async () => {

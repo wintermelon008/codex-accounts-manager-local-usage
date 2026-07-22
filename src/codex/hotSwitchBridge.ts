@@ -97,6 +97,17 @@ export type HotSwitchRefreshRequest = {
   expectedEmail?: string;
 };
 
+export type HotSwitchUsageAttributionParams = {
+  localAccountId: string;
+  accountId: string;
+  expectedEmail: string;
+};
+
+export type HotSwitchUsageAttributionResult = {
+  active: boolean;
+  localAccountId: string;
+};
+
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -133,6 +144,10 @@ export class CodexHotSwitchBridge {
 
   async getIdentity(): Promise<HotSwitchIdentity> {
     return this.request<HotSwitchIdentity>("runtime/identity", {}, REQUEST_TIMEOUT_MS);
+  }
+
+  async activateUsageAttribution(params: HotSwitchUsageAttributionParams): Promise<HotSwitchUsageAttributionResult> {
+    return this.request<HotSwitchUsageAttributionResult>("runtime/usage/activate", params, REQUEST_TIMEOUT_MS);
   }
 
   async switchAccount(params: HotSwitchAccountParams): Promise<HotSwitchAccountResult> {

@@ -16,7 +16,10 @@ const CONFIG_PATH = path.join(__dirname, "codex-app-server-shim.json");
 const MAX_TERMINAL_TURN_IDS = 2_048;
 const MAX_RECENT_USAGE_LIMITED_THREADS = 2_048;
 const RECENT_USAGE_LIMITED_THREAD_TTL_MS = 2 * 60 * 1000;
-const RUNTIME_PROTOCOL_VERSION = 3;
+const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
+const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
+const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
+const RUNTIME_PROTOCOL_VERSION = 4;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
 const SEAMLESS_HTTP_PROVIDER_CONFIG =
   `model_providers.${SEAMLESS_HTTP_PROVIDER_ID}={ name="OpenAI", wire_api="responses", ` +
@@ -25,6 +28,7 @@ const SEAMLESS_HTTP_PROVIDER_CONFIG =
 const runtimeConfig = process.env.CODEX_ACCOUNTS_REAL_CLI ? {} : readRuntimeConfig();
 const realCliPath = process.env.CODEX_ACCOUNTS_REAL_CLI || runtimeConfig.realCliPath;
 const forceHttpTransport = runtimeConfig.forceHttpTransport !== false;
+const usageAttributionDirectory = resolveUsageAttributionDirectory(runtimeConfig);
 
 if (!realCliPath || !path.isAbsolute(realCliPath)) {
   failStartup("The real Codex CLI path is missing from the hot-switch runtime configuration");
@@ -51,6 +55,7 @@ let recoveredUsageLimitedThreads = 0;
 let resumedUsageLimitedGoals = 0;
 let externalAuthActive = false;
 let activeManagedAccount;
+let usageAttributionAccount;
 let pendingSwitch;
 let internalSequence = 0;
 let controlSequence = 0;
@@ -66,6 +71,10 @@ const terminalTurnIds = new Set();
 const recentUsageLimitedThreads = new Map();
 const initializeRequests = new Set();
 const controlSockets = new Set();
+const lastUsageAttributionByThread = new Map();
+let pendingUsageAttributionRecords = [];
+let usageAttributionFlushTimer;
+let usageAttributionWriteFailureReported = false;
 
 child.on("error", (error) => {
   safeLog(`failed to start the real Codex CLI: ${safeErrorMessage(error)}`);
@@ -86,6 +95,7 @@ if (process.argv.includes("app-server")) {
 
 child.on("exit", (code, signal) => {
   childExited = true;
+  flushUsageAttributionRecords();
   rejectPendingRequests(new Error("Codex app-server exited"));
   closeControlServer();
   process.exitCode = typeof code === "number" ? code : signal ? 1 : 0;
@@ -98,6 +108,10 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     }
   });
 }
+
+process.on("exit", () => {
+  flushUsageAttributionRecords();
+});
 
 function handleOfficialLine(line) {
   const message = parseJson(line);
@@ -355,6 +369,14 @@ function handleControlLine(socket, line) {
     return;
   }
 
+  if (message.method === "runtime/usage/activate") {
+    void activateUsageAttribution(message.params).then(
+      (result) => sendControlResult(socket, message.id, result),
+      (error) => sendControlError(socket, message.id, safeErrorMessage(error))
+    );
+    return;
+  }
+
   if (message.method === "runtime/switch") {
     queueRuntimeSwitch(socket, message.id, message.params);
     return;
@@ -462,6 +484,7 @@ async function drainPendingSwitch() {
       localAccountId: request.params.localAccountId,
       expectedEmail: request.params.expectedEmail
     };
+    usageAttributionAccount = activeManagedAccount;
     const resumedPausedGoalThreadIds = await resumePausedGoals(request);
     await resumeRecentUsageLimitedGoals(request, resumedPausedGoalThreadIds);
     const continuedThreads = await startRecoveryTurns(request);
@@ -812,6 +835,7 @@ async function restorePreviousAccount(request) {
         localAccountId: request.params.previousLocalAccountId,
         expectedEmail: request.params.previousExpectedEmail
       };
+  usageAttributionAccount = activeManagedAccount;
 }
 
 async function handleAuthRefreshRequest(message) {
@@ -921,6 +945,30 @@ async function readRuntimeIdentity() {
     managedLocalAccountId: activeManagedAccount ? activeManagedAccount.localAccountId : null,
     httpTransportForced: forceHttpTransport
   };
+}
+
+async function activateUsageAttribution(params) {
+  if (!isValidUsageAttributionParams(params)) {
+    throw new Error("Invalid usage attribution parameters");
+  }
+
+  if (activeManagedAccount && activeManagedAccount.accountId !== params.accountId) {
+    throw new Error("The requested usage attribution account differs from the active managed account");
+  }
+
+  const accountResult = await sendInternalRequest("account/read", { refreshToken: false });
+  const account = accountResult && typeof accountResult.account === "object" ? accountResult.account : null;
+  const actualEmail = account && account.type === "chatgpt" && typeof account.email === "string" ? account.email : null;
+  if (!actualEmail || normalizeEmail(actualEmail) !== normalizeEmail(params.expectedEmail)) {
+    throw new Error("The app-server reported a different account for usage attribution");
+  }
+
+  usageAttributionAccount = {
+    accountId: params.accountId,
+    localAccountId: params.localAccountId,
+    expectedEmail: params.expectedEmail
+  };
+  return { active: true, localAccountId: usageAttributionAccount.localAccountId };
 }
 
 function sendControlResult(socket, id, result) {
@@ -1077,6 +1125,22 @@ function isValidRefreshResult(result) {
   );
 }
 
+function isValidUsageAttributionParams(params) {
+  return Boolean(
+    params &&
+      typeof params === "object" &&
+      typeof params.localAccountId === "string" &&
+      params.localAccountId.length > 0 &&
+      params.localAccountId.length <= 256 &&
+      typeof params.accountId === "string" &&
+      params.accountId.length > 0 &&
+      params.accountId.length <= 256 &&
+      typeof params.expectedEmail === "string" &&
+      params.expectedEmail.length > 0 &&
+      params.expectedEmail.length <= 320
+  );
+}
+
 function requestIdKey(id) {
   return `${typeof id}:${String(id)}`;
 }
@@ -1112,6 +1176,80 @@ function rememberActiveTurn(turnId, threadId) {
     }
   }
   activeTurns.set(turnId, threadId);
+  recordUsageAttribution(threadId);
+}
+
+function recordUsageAttribution(threadId) {
+  if (!usageAttributionDirectory || typeof threadId !== "string" || threadId.length === 0 || threadId.length > 256) {
+    return;
+  }
+  const localAccountId = usageAttributionAccount?.localAccountId;
+  if (typeof localAccountId !== "string" || localAccountId.length === 0 || localAccountId.length > 256) {
+    return;
+  }
+  if (lastUsageAttributionByThread.get(threadId) === localAccountId) {
+    return;
+  }
+
+  lastUsageAttributionByThread.delete(threadId);
+  lastUsageAttributionByThread.set(threadId, localAccountId);
+  while (lastUsageAttributionByThread.size > MAX_USAGE_ATTRIBUTION_THREADS) {
+    const oldestThreadId = lastUsageAttributionByThread.keys().next().value;
+    if (oldestThreadId === undefined) {
+      break;
+    }
+    lastUsageAttributionByThread.delete(oldestThreadId);
+  }
+
+  pendingUsageAttributionRecords.push({ v: 1, t: Date.now(), th: threadId, a: localAccountId });
+  if (pendingUsageAttributionRecords.length >= MAX_USAGE_ATTRIBUTION_BATCH_SIZE) {
+    flushUsageAttributionRecords();
+    return;
+  }
+  if (!usageAttributionFlushTimer) {
+    usageAttributionFlushTimer = setTimeout(() => {
+      usageAttributionFlushTimer = undefined;
+      flushUsageAttributionRecords();
+    }, USAGE_ATTRIBUTION_FLUSH_DELAY_MS);
+    usageAttributionFlushTimer.unref?.();
+  }
+}
+
+function flushUsageAttributionRecords() {
+  if (usageAttributionFlushTimer) {
+    clearTimeout(usageAttributionFlushTimer);
+    usageAttributionFlushTimer = undefined;
+  }
+  if (!usageAttributionDirectory || pendingUsageAttributionRecords.length === 0) {
+    return;
+  }
+
+  const records = pendingUsageAttributionRecords;
+  pendingUsageAttributionRecords = [];
+  try {
+    fs.mkdirSync(usageAttributionDirectory, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(usageAttributionDirectory, 0o700);
+    } catch {
+      // Best effort on filesystems that do not expose POSIX modes.
+    }
+    const journalPath = path.join(usageAttributionDirectory, `${process.pid}.jsonl`);
+    fs.appendFileSync(journalPath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, {
+      encoding: "utf8",
+      mode: 0o600
+    });
+    try {
+      fs.chmodSync(journalPath, 0o600);
+    } catch {
+      // Best effort on filesystems that do not expose POSIX modes.
+    }
+    usageAttributionWriteFailureReported = false;
+  } catch (error) {
+    if (!usageAttributionWriteFailureReported) {
+      usageAttributionWriteFailureReported = true;
+      safeLog(`unable to persist usage attribution: ${safeErrorMessage(error)}`);
+    }
+  }
 }
 
 function rememberTerminalTurnId(turnId) {
@@ -1302,6 +1440,11 @@ function readRuntimeConfig() {
   } catch (error) {
     failStartup(`Unable to read hot-switch runtime configuration: ${safeErrorMessage(error)}`);
   }
+}
+
+function resolveUsageAttributionDirectory(config) {
+  const configured = config && typeof config.usageAttributionDirectory === "string" ? config.usageAttributionDirectory.trim() : "";
+  return configured && path.isAbsolute(configured) ? configured : undefined;
 }
 
 function safeLog(message) {

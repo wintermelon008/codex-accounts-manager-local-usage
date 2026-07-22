@@ -4,10 +4,13 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DashboardLocalUsageViewModel } from "../src/domain/dashboard/types";
 import {
+  ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME,
   LOCAL_USAGE_CACHE_TTL_MS,
   LOCAL_USAGE_SCAN_LEASE_FILE_NAME,
   LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT,
   LocalUsageAnalyticsService,
+  findAccountTokenUsageWindow,
+  scanLocalUsageAndAccountTokenUsage,
   scanLocalUsageSessions
 } from "../src/services/localUsageAnalytics";
 import type { LocalUsageScanner } from "../src/services/localUsageAnalytics";
@@ -339,6 +342,128 @@ describe("scanLocalUsageSessions", () => {
     expect(result.eventCount).toBe(1);
     expect(parseSpy).toHaveBeenCalledTimes(2);
   });
+
+  it("assigns token deltas to the latest Manager-attributed account and quota window", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const attributionDirectory = path.join(root, "usage-attribution");
+    await writeSession(sessionsPath, "2026/07/14/attributed.jsonl", [
+      { type: "session_meta", payload: { id: "thread-a", session_id: "thread-a" } },
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:00:00.000Z",
+        {
+          inputTokens: 70,
+          cachedInputTokens: 20,
+          outputTokens: 30,
+          reasoningOutputTokens: 4,
+          totalTokens: 100
+        },
+        undefined,
+        {
+          primary: { resets_at: 1_800_000_000 },
+          secondary: { resets_at: 1_800_604_800 }
+        }
+      ),
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:01:00.000Z",
+        {
+          inputTokens: 105,
+          cachedInputTokens: 30,
+          outputTokens: 45,
+          reasoningOutputTokens: 6,
+          totalTokens: 150
+        },
+        {
+          inputTokens: 35,
+          cachedInputTokens: 10,
+          outputTokens: 15,
+          reasoningOutputTokens: 2,
+          totalTokens: 50
+        },
+        {
+          primary: { resets_at: 1_800_001_000 },
+          secondary: { resets_at: 1_800_605_000 }
+        }
+      )
+    ]);
+    await writeUsageAttribution(attributionDirectory, [
+      { v: 1, t: Date.parse("2026-07-14T00:59:00.000Z"), th: "thread-a", a: "local-account-a" },
+      { v: 1, t: Date.parse("2026-07-14T01:00:30.000Z"), th: "thread-a", a: "local-account-b" }
+    ]);
+
+    const result = await scanLocalUsageAndAccountTokenUsage({
+      sessionsPath,
+      usageAttributionDirectory: attributionDirectory,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.localUsage.total.totalTokens).toBe(150);
+    expect(result.accountTokenUsage.status).toBe("ready");
+    expect(result.accountTokenUsage.windowsByAccount["local-account-a"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ window: "hourly", resetAt: 1_800_000_000, totalTokens: 100 }),
+        expect.objectContaining({ window: "weekly", resetAt: 1_800_604_800, totalTokens: 100 })
+      ])
+    );
+    expect(result.accountTokenUsage.windowsByAccount["local-account-b"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ window: "hourly", resetAt: 1_800_001_000, totalTokens: 50 }),
+        expect.objectContaining({ window: "weekly", resetAt: 1_800_605_000, totalTokens: 50 })
+      ])
+    );
+    expect(
+      findAccountTokenUsageWindow(result.accountTokenUsage, "local-account-b", "hourly", 1_800_001_000)
+    ).toMatchObject({ totalTokens: 50 });
+    expect(
+      findAccountTokenUsageWindow(result.accountTokenUsage, "local-account-b", "hourly", 1_800_001_600)
+    ).toBeUndefined();
+  });
+
+  it("treats a lone long primary quota window as the long-term account window", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const attributionDirectory = path.join(root, "usage-attribution");
+    await writeSession(sessionsPath, "2026/07/14/long-window.jsonl", [
+      { type: "session_meta", payload: { id: "thread-long-window" } },
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:00:00.000Z",
+        {
+          inputTokens: 70,
+          cachedInputTokens: 20,
+          outputTokens: 30,
+          reasoningOutputTokens: 4,
+          totalTokens: 100
+        },
+        undefined,
+        {
+          primary: {
+            resets_at: 1_800_604_800,
+            window_minutes: 43_200
+          }
+        }
+      )
+    ]);
+    await writeUsageAttribution(attributionDirectory, [
+      { v: 1, t: Date.parse("2026-07-14T00:59:00.000Z"), th: "thread-long-window", a: "local-account-plus" }
+    ]);
+
+    const result = await scanLocalUsageAndAccountTokenUsage({
+      sessionsPath,
+      usageAttributionDirectory: attributionDirectory,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.accountTokenUsage.windowsByAccount["local-account-plus"]).toEqual([
+      expect.objectContaining({ window: "weekly", resetAt: 1_800_604_800, totalTokens: 100 })
+    ]);
+    expect(
+      findAccountTokenUsageWindow(result.accountTokenUsage, "local-account-plus", "weekly", 1_800_604_800)
+    ).toMatchObject({ totalTokens: 100 });
+  });
 });
 
 describe("LocalUsageAnalyticsService", () => {
@@ -498,15 +623,19 @@ describe("LocalUsageAnalyticsService", () => {
     expect((await recovery.getSnapshot()).total.totalTokens).toBe(300);
   });
 
-  it("persists only aggregate usage fields without session content or identifiers", async () => {
+  it("persists sanitized aggregate and account-window caches without session content or thread identifiers", async () => {
     const root = await createTempDirectory();
     const sessionsPath = path.join(root, "sessions");
     const storagePath = path.join(root, "storage");
+    const attributionDirectory = path.join(root, "usage-attribution");
     const secretMessage = "private-conversation-marker";
     const secretAccountId = "account-sensitive-marker";
     const secretCredential = "credential-sensitive-marker";
     const secretPathMarker = "private-session-path-marker";
+    const secretThreadId = "private-thread-marker";
+    const localAccountId = "local-account-marker";
     await writeSession(sessionsPath, `2026/07/14/${secretPathMarker}.jsonl`, [
+      { type: "session_meta", payload: { id: secretThreadId, session_id: secretThreadId } },
       {
         type: "event_msg",
         timestamp: "2026-07-14T01:00:00.000Z",
@@ -520,6 +649,10 @@ describe("LocalUsageAnalyticsService", () => {
           type: "token_count",
           account_id: secretAccountId,
           access_token: secretCredential,
+          rate_limits: {
+            primary: { resets_at: 1_800_000_000 },
+            secondary: { resets_at: 1_800_604_800 }
+          },
           info: {
             last_token_usage: {
               input_tokens: 10,
@@ -532,11 +665,15 @@ describe("LocalUsageAnalyticsService", () => {
         }
       }
     ]);
+    await writeUsageAttribution(attributionDirectory, [
+      { v: 1, t: Date.parse("2026-07-14T01:00:00.000Z"), th: secretThreadId, a: localAccountId }
+    ]);
     const service = new LocalUsageAnalyticsService({
       globalStoragePath: storagePath,
       sessionsPath,
       timeZone: TIME_ZONE,
-      now: () => NOW
+      now: () => NOW,
+      usageAttributionDirectory: attributionDirectory
     });
     const refreshed = waitForRefresh();
     await service.getSnapshot(refreshed.resolve);
@@ -548,6 +685,17 @@ describe("LocalUsageAnalyticsService", () => {
     expect(persisted).not.toContain(secretAccountId);
     expect(persisted).not.toContain(secretCredential);
     expect(persisted).not.toContain(secretPathMarker);
+    expect(persisted).not.toContain(secretThreadId);
+    expect(persisted).not.toContain(localAccountId);
+
+    const accountWindowCache = await readFile(path.join(storagePath, ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME), "utf8");
+    expect(accountWindowCache).toContain(localAccountId);
+    expect(accountWindowCache).toContain('"totalTokens":13');
+    expect(accountWindowCache).not.toContain(secretMessage);
+    expect(accountWindowCache).not.toContain(secretAccountId);
+    expect(accountWindowCache).not.toContain(secretCredential);
+    expect(accountWindowCache).not.toContain(secretPathMarker);
+    expect(accountWindowCache).not.toContain(secretThreadId);
   });
 });
 
@@ -596,6 +744,13 @@ async function writeSession(sessionsPath: string, relativePath: string, records:
   return filePath;
 }
 
+async function writeUsageAttribution(directory: string, records: unknown[]): Promise<string> {
+  await mkdir(directory, { recursive: true });
+  const filePath = path.join(directory, "test.jsonl");
+  await writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8");
+  return filePath;
+}
+
 function tokenCountEvent(timestamp: string, totalTokens: number): unknown {
   return {
     type: "event_msg",
@@ -626,13 +781,15 @@ type TestTokenTotals = {
 function cumulativeTokenCountEvent(
   timestamp: string,
   cumulative: TestTokenTotals,
-  last: TestTokenTotals = cumulative
+  last: TestTokenTotals = cumulative,
+  rateLimits?: unknown
 ): unknown {
   return {
     type: "event_msg",
     timestamp,
     payload: {
       type: "token_count",
+      ...(rateLimits ? { rate_limits: rateLimits } : {}),
       info: {
         total_token_usage: {
           input_tokens: cumulative.inputTokens,

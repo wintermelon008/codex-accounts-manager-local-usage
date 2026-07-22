@@ -5,7 +5,8 @@ import type { CodexAccountRecord } from "../src/core/types";
 import {
   CodexHotSwitchRuntime,
   resolveRuntimeAccessTokenIdentity,
-  selectManagedAccountForRefresh
+  selectManagedAccountForRefresh,
+  selectManagedAccountForUsageAttribution
 } from "../src/codex/hotSwitchRuntime";
 import {
   clearCurrentWindowRuntimeAccountIfMatches,
@@ -63,6 +64,33 @@ describe("Codex hot-switch runtime setup", () => {
         expectedEmail: "second@example.invalid"
       }).id
     ).toBe("local-a");
+  });
+
+  it("only enables startup usage attribution for an unambiguous runtime identity", () => {
+    const accounts = [
+      { id: "local-a", email: "same@example.invalid", isActive: true },
+      { id: "local-b", email: "same@example.invalid", isActive: false },
+      { id: "local-c", email: "other@example.invalid", isActive: false }
+    ] as CodexAccountRecord[];
+
+    expect(
+      selectManagedAccountForUsageAttribution(accounts, {
+        email: "same@example.invalid",
+        managedLocalAccountId: "local-b"
+      })?.id
+    ).toBe("local-b");
+    expect(
+      selectManagedAccountForUsageAttribution(accounts, {
+        email: "same@example.invalid",
+        managedLocalAccountId: null
+      })?.id
+    ).toBe("local-a");
+    expect(
+      selectManagedAccountForUsageAttribution(accounts, {
+        email: "missing@example.invalid",
+        managedLocalAccountId: null
+      })
+    ).toBeUndefined();
   });
 
   it("uses the access-token email for app-server identity when a stable user has an email alias", () => {
