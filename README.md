@@ -117,8 +117,8 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 - runtime 会禁用 Responses WebSocket 复用，确保已有 thread 的下一轮真正使用新账号；代价是可能增加少量 HTTP 建连开销。关闭无感总开关只恢复原切号逻辑，完整恢复官方 transport 需移除 runtime 并 reload
 - runtime 会把官方界面显式限定为“当前 provider”的历史查询扩展为所有 provider，因此安装无感 runtime 前后的本地会话会出现在同一历史列表；它只调整 `thread/list` 请求过滤，不改写会话文件或状态数据库
 - 删除全部受管账号后首次切换到新导入账号时，Manager 会从当前有效 `auth.json` 建立只驻留于内存的回滚快照，并用 live app-server 身份校验；切换失败会恢复旧身份，无需先关闭无感切号
-- 本地用量按每个 rollout 的累计高水位计算，忽略重复/过期 `token_count`，并把 spawned subagent 复制的父会话历史仅作为初始基线；聚合缓存会采用其他宿主写入的更新 `calculatedAt`，Dashboard 在 `nextRefreshAt` 主动刷新，缓存仍只保存统计值，不保存会话正文、账号标识、凭据或会话路径
-- 已安装的无感 runtime 会在受管 turn 开始时批量写入极小的本地归因记录；它只含不透明的本地账号 ID、thread ID 与时间，不含提示词、会话正文、邮箱、远端账号 ID 或凭据。账号卡片会复用原有的 15 分钟会话扫描，把既有 `token_count` 元数据聚合到当前五小时（无五小时窗口时为长期/周）额度窗口；若 runtime 只返回一个 `primary` 窗口，则按实际 `window_minutes` 判断其属于短期还是长期，不会把 Plus 等长周期额度误当成五小时窗口。没有逐 token IPC、额外网络请求或第二次正文扫描。统计只从首次受管 turn 起生效，不回填历史；额度 reset 时间变化后旧桶立即不再匹配，卡片显示 0 并等待新受管 turn。
+- 本地用量按每个 rollout 的累计高水位计算，忽略重复/过期 `token_count`，并把 spawned subagent 复制的父会话历史仅作为初始基线；“今日”视图从本地时区当天 `00:00` 起按固定 `3` 小时分档，仅显示已开始的时段，避免刷新时间改变分桶。标题行的“刷新用量”可立即触发一次汇总；聚合缓存会采用其他宿主写入的更新 `calculatedAt`，Dashboard 在 `nextRefreshAt` 主动刷新，缓存仍只保存统计值，不保存会话正文、账号标识、凭据或会话路径
+- 已安装的无感 runtime 会在受管 turn 开始时批量写入极小的本地归因记录；它只含不透明的本地账号 ID、thread ID 与时间，不含提示词、会话正文、邮箱、远端账号 ID 或凭据。账号卡片会复用原有的 15 分钟会话扫描，把既有 `token_count` 元数据聚合到当前五小时（无五小时窗口时为长期/周）额度窗口；即使本机用量面板只保留 14 天，账号窗口仍会检查最长 31 天的受管元数据。相同额度周期中 `reset_at` 的一分钟内采样漂移会合并到当前 reset 边界，因此切号后只会增加对应账号；真正的额度 reset 时间变化后旧桶立即不再匹配，卡片显示 0 并等待新受管 turn。若 runtime 只返回一个 `primary` 窗口，则按实际 `window_minutes` 判断其属于短期还是长期，不会把 Plus 等长周期额度误当成五小时窗口。没有逐 token IPC、额外网络请求或第二次正文扫描。统计只从首次受管 turn 起生效，不回填历史。
 - 该功能仍是进程级单账号，不支持给同时运行的不同 turn 分配不同账号
 - 首次安装 runtime 需要运行 `Codex Accounts: Install Experimental Seamless Runtime` 并 reload 一次；Remote-SSH/WSL/Dev Container 会在远端官方 Codex CLI 旁保存可回滚备份并建立 shim 链接，不再修改本机 VS Code 的 `chatgpt.cliExecutable`
 - 详细启用步骤、分档规则、兼容范围与回滚方式见 [docs/HOT_SWITCH.md](docs/HOT_SWITCH.md)

@@ -45,6 +45,7 @@ describe("local usage dashboard placement and responsive guards", () => {
   it("keeps price between total and input, and exposes range controls in the dashboard and settings", () => {
     const section = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/localUsageSection.tsx"), "utf8");
     const settings = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/settingsOverlay.tsx"), "utf8");
+    const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
     const cards = section.slice(
       section.indexOf('<div class="local-usage-cards">'),
       section.indexOf('<div class="local-usage-layout">')
@@ -55,12 +56,17 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(section).toContain("<RangeSelector");
     expect(section).toContain("formatTokenAndPrice");
     expect(section).toContain("formatThreeHourRange");
+    expect(section).toContain("local-usage-title-row");
+    expect(section).toContain("copy.localUsageRefreshBtn");
     expect(section).toContain('const visibleModels = range.byModel.filter((row) => row.model !== "unknown")');
     expect(section).toContain("`${tokenText} (${formatCompactUsd(price.amountUsd)})`");
     expect(section).not.toContain('unpricedTokens > 0 ? "+"');
     expect(settings).toContain("localUsageDefaultRange");
     expect(settings).not.toContain("localUsageDefaultRangeDays");
     expect(settings).toContain("localUsageShowEquivalentPrice");
+    expect(stylesheet).toContain(".local-usage-refresh-btn");
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+    expect(main).toContain('sendAction("refreshLocalUsage")');
   });
 
   it("presents seamless switching separately from the auto-switch trigger", () => {
@@ -110,7 +116,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(accountViews).toContain('onSetAccountGroup("C")');
     expect(accountViews).toContain("Remove Group");
     expect(main).toContain("ACCOUNT_GROUPS");
-    expect(main).toContain("isAccountInVisibleGroup");
+    expect(main).toContain("getDashboardVisibleAccounts");
     expect(main).toContain(
       'sendAction("refreshAll", undefined, { accountIds: pageAccounts.map((account) => account.id) })'
     );

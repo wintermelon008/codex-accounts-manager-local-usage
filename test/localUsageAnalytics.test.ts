@@ -7,9 +7,9 @@ import {
   ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME,
   LOCAL_USAGE_CACHE_TTL_MS,
   LOCAL_USAGE_SCAN_LEASE_FILE_NAME,
-  LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT,
   LocalUsageAnalyticsService,
   findAccountTokenUsageWindow,
+  isSnapshotFresh,
   scanLocalUsageAndAccountTokenUsage,
   scanLocalUsageSessions
 } from "../src/services/localUsageAnalytics";
@@ -96,7 +96,23 @@ describe("scanLocalUsageSessions", () => {
       expect.objectContaining({ date: "2026-07-13", model: "gpt-5.6-sol", totalTokens: 140 }),
       expect.objectContaining({ date: "2026-07-14", model: "gpt-5.6-luna", totalTokens: 70 })
     ]);
-    expect(result.byThreeHour).toHaveLength(LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT);
+    expect(result.byThreeHour).toHaveLength(7);
+    expect(result.byThreeHour[0]).toMatchObject({
+      startAt: Date.parse("2026-07-13T16:00:00.000Z"),
+      endAt: Date.parse("2026-07-13T19:00:00.000Z")
+    });
+    expect(result.byThreeHour[3]).toMatchObject({
+      startAt: Date.parse("2026-07-14T01:00:00.000Z"),
+      endAt: Date.parse("2026-07-14T04:00:00.000Z"),
+      totalTokens: 70
+    });
+    expect(result.byThreeHour[6]).toMatchObject({
+      startAt: Date.parse("2026-07-14T10:00:00.000Z"),
+      endAt: Date.parse("2026-07-14T13:00:00.000Z")
+    });
+    expect(result.byThreeHour.some((bucket) => bucket.startAt === Date.parse("2026-07-14T13:00:00.000Z"))).toBe(
+      false
+    );
     expect(result.byThreeHour.reduce((sum, bucket) => sum + bucket.totalTokens, 0)).toBe(70);
     expect(result.byThreeHour.reduce((sum, bucket) => sum + bucket.eventCount, 0)).toBe(1);
     expect(result.byThreeHourAndModel).toEqual([expect.objectContaining({ model: "gpt-5.6-luna", totalTokens: 70 })]);
@@ -196,6 +212,22 @@ describe("scanLocalUsageSessions", () => {
       reasoningOutputTokens: 2,
       totalTokens: 50
     });
+  });
+
+  it("expires the current-day aggregate at the next local midnight", async () => {
+    const root = await createTempDirectory();
+    const beforeMidnight = Date.parse("2026-07-14T15:59:00.000Z");
+    const result = await scanLocalUsageSessions({
+      sessionsPath: path.join(root, "sessions"),
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: beforeMidnight
+    });
+
+    const midnight = Date.parse("2026-07-14T16:00:00.000Z");
+    expect(result.nextRefreshAt).toBe(midnight);
+    expect(isSnapshotFresh(result, midnight - 1)).toBe(true);
+    expect(isSnapshotFresh(result, midnight)).toBe(false);
   });
 
   it("does not count inherited history copied into a spawned subagent rollout", async () => {
@@ -464,6 +496,76 @@ describe("scanLocalUsageSessions", () => {
       findAccountTokenUsageWindow(result.accountTokenUsage, "local-account-plus", "weekly", 1_800_604_800)
     ).toMatchObject({ totalTokens: 100 });
   });
+
+  it("keeps the full current account quota window despite local-range trimming and reset timestamp jitter", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const attributionDirectory = path.join(root, "usage-attribution");
+    const now = Date.parse("2026-07-31T12:00:00.000Z");
+    const resetAt = 1_900_000_000;
+    await writeSession(sessionsPath, "2026/07/31/long-window-history.jsonl", [
+      { type: "session_meta", payload: { id: "thread-long-window-history" } },
+      cumulativeTokenCountEvent(
+        "2026-07-01T12:00:00.000Z",
+        {
+          inputTokens: 70,
+          cachedInputTokens: 20,
+          outputTokens: 30,
+          reasoningOutputTokens: 4,
+          totalTokens: 100
+        },
+        undefined,
+        {
+          primary: { resets_at: resetAt - 18, window_minutes: 43_200 }
+        }
+      ),
+      cumulativeTokenCountEvent(
+        "2026-07-31T01:00:00.000Z",
+        {
+          inputTokens: 105,
+          cachedInputTokens: 30,
+          outputTokens: 45,
+          reasoningOutputTokens: 6,
+          totalTokens: 150
+        },
+        {
+          inputTokens: 35,
+          cachedInputTokens: 10,
+          outputTokens: 15,
+          reasoningOutputTokens: 2,
+          totalTokens: 50
+        },
+        {
+          primary: { resets_at: resetAt + 1, window_minutes: 43_200 }
+        }
+      )
+    ]);
+    await writeUsageAttribution(attributionDirectory, [
+      { v: 1, t: Date.parse("2026-07-01T11:59:00.000Z"), th: "thread-long-window-history", a: "local-account" }
+    ]);
+
+    const result = await scanLocalUsageAndAccountTokenUsage({
+      sessionsPath,
+      usageAttributionDirectory: attributionDirectory,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now
+    });
+
+    expect(result.localUsage.total.totalTokens).toBe(50);
+    expect(
+      findAccountTokenUsageWindow(result.accountTokenUsage, "local-account", "weekly", resetAt)
+    ).toMatchObject({
+      resetAt,
+      inputTokens: 105,
+      cachedInputTokens: 30,
+      outputTokens: 45,
+      reasoningOutputTokens: 6,
+      totalTokens: 150,
+      eventCount: 2
+    });
+    expect(findAccountTokenUsageWindow(result.accountTokenUsage, "local-account", "weekly", resetAt + 62)).toBeUndefined();
+  });
 });
 
 describe("LocalUsageAnalyticsService", () => {
@@ -492,7 +594,7 @@ describe("LocalUsageAnalyticsService", () => {
     const firstCached = await service.getSnapshot();
     expect(firstCached.total.totalTokens).toBe(100);
     expect(scanner).toHaveBeenCalledTimes(1);
-    await expect(readFile(path.join(storagePath, "local-usage-analytics-v4.json"), "utf8")).resolves.toContain(
+    await expect(readFile(path.join(storagePath, "local-usage-analytics-v5.json"), "utf8")).resolves.toContain(
       '"totalTokens":100'
     );
 
@@ -519,6 +621,33 @@ describe("LocalUsageAnalyticsService", () => {
       })
     });
     expect((await restored.getSnapshot()).total.totalTokens).toBe(200);
+  });
+
+  it("forces a fresh scan when local usage is manually refreshed inside the cache window", async () => {
+    const root = await createTempDirectory();
+    const storagePath = path.join(root, "storage");
+    let scanCount = 0;
+    const scanner: LocalUsageScanner = vi.fn(async ({ periodDays, now: scannedAt }) => {
+      scanCount += 1;
+      return readySnapshot(periodDays, scannedAt, scanCount * 100);
+    });
+    const service = new LocalUsageAnalyticsService({
+      globalStoragePath: storagePath,
+      sessionsPath: path.join(root, "sessions"),
+      timeZone: TIME_ZONE,
+      now: () => NOW,
+      scanner
+    });
+
+    const initialRefresh = waitForRefresh();
+    await service.getSnapshot(initialRefresh.resolve);
+    await initialRefresh.promise;
+    expect(scanner).toHaveBeenCalledTimes(1);
+
+    await service.refresh();
+
+    expect(scanner).toHaveBeenCalledTimes(2);
+    expect((await service.getSnapshot()).total.totalTokens).toBe(200);
   });
 
   it("adopts a newer shared cache snapshot after its first in-memory load", async () => {
@@ -679,7 +808,7 @@ describe("LocalUsageAnalyticsService", () => {
     await service.getSnapshot(refreshed.resolve);
     await refreshed.promise;
 
-    const persisted = await readFile(path.join(storagePath, "local-usage-analytics-v4.json"), "utf8");
+    const persisted = await readFile(path.join(storagePath, "local-usage-analytics-v5.json"), "utf8");
     expect(persisted).toContain('"totalTokens":13');
     expect(persisted).not.toContain(secretMessage);
     expect(persisted).not.toContain(secretAccountId);

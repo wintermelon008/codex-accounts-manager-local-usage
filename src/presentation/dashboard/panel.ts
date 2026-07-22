@@ -253,6 +253,7 @@ class DashboardPanelController {
         resolveLanguage: () => this.settingsStore.resolveLanguage(),
         schedulePublishState: () => this.schedulePublishState(),
         publishState: async (force = false) => this.publishState(force),
+        refreshLocalUsage: async () => this.refreshLocalUsage(),
         oauth: this.oauth,
         announcements: this.announcements,
         getAnnouncementOptions: () => this.getAnnouncementOptions()
@@ -298,6 +299,16 @@ class DashboardPanelController {
     if (updated) {
       this.schedulePublishState();
     }
+  }
+
+  private async refreshLocalUsage(): Promise<void> {
+    const usageAnalytics = await this.getUsageAnalytics();
+    if (!usageAnalytics) {
+      return;
+    }
+
+    await usageAnalytics.refresh(() => this.schedulePublishState());
+    await this.publishState(true);
   }
 
   private async pickCodexAppPath(): Promise<void> {

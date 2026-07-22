@@ -23,19 +23,19 @@ describe("deriveLocalUsageRange", () => {
     expect(range.byModel.some((row) => row.model === "gpt-5.5")).toBe(false);
   });
 
-  it("uses eight 3-hour rows and the matching model aggregate for the 24-hour view", () => {
+  it("uses the available fixed 3-hour rows and the matching model aggregate for the 24-hour view", () => {
     const range = deriveLocalUsageRange(usageSnapshot(), "24h");
 
     expect(range.range).toBe("24h");
-    expect(range.bars).toHaveLength(8);
+    expect(range.bars).toHaveLength(7);
     expect(range.eventCount).toBe(2);
     expect(range.total.totalTokens).toBe(1_100_050);
     expect(range.byModel).toEqual([
       expect.objectContaining({ model: "gpt-5.6-terra", totalTokens: 1_100_000 }),
       expect.objectContaining({ model: "unknown", totalTokens: 50 })
     ]);
-    expect(range.bars[6]?.price).toMatchObject({ pricedTokens: 1_100_000, unpricedTokens: 0 });
-    expect(range.bars[7]?.price).toMatchObject({ pricedTokens: 0, unpricedTokens: 50 });
+    expect(range.bars[5]?.price).toMatchObject({ pricedTokens: 1_100_000, unpricedTokens: 0 });
+    expect(range.bars[6]?.price).toMatchObject({ pricedTokens: 0, unpricedTokens: 50 });
   });
 });
 
@@ -78,12 +78,12 @@ function usageSnapshot(): DashboardLocalUsageViewModel {
   });
   const startAt = 1_784_000_000_000;
   const threeHourMs = 3 * 60 * 60 * 1000;
-  const byThreeHour: DashboardLocalUsageThreeHourViewModel[] = Array.from({ length: 8 }, (_, index) => {
+  const byThreeHour: DashboardLocalUsageThreeHourViewModel[] = Array.from({ length: 7 }, (_, index) => {
     const bucketStartAt = startAt + index * threeHourMs;
-    if (index === 6) {
+    if (index === 5) {
       return threeHourUsage(bucketStartAt, 1, 1_100_000);
     }
-    if (index === 7) {
+    if (index === 6) {
       return threeHourUsage(bucketStartAt, 1, 50);
     }
     return threeHourUsage(bucketStartAt, 0, 0);
@@ -108,7 +108,7 @@ function usageSnapshot(): DashboardLocalUsageViewModel {
     byThreeHour,
     byThreeHourAndModel: [
       {
-        startAt: byThreeHour[6]!.startAt,
+        startAt: byThreeHour[5]!.startAt,
         ...modelUsage("gpt-5.6-terra", {
           inputTokens: 1_000_000,
           cachedInputTokens: 200_000,
@@ -117,7 +117,7 @@ function usageSnapshot(): DashboardLocalUsageViewModel {
         })
       },
       {
-        startAt: byThreeHour[7]!.startAt,
+        startAt: byThreeHour[6]!.startAt,
         ...modelUsage("unknown", { inputTokens: 40, outputTokens: 10, totalTokens: 50 })
       }
     ]

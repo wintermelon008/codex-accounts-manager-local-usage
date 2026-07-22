@@ -3891,6 +3891,20 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
 .local-usage-header {
   align-items: center;
 }
+.local-usage-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.local-usage-refresh-btn {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 4px 9px;
+  border-radius: 9px;
+  font-size: 11px;
+}
 .local-usage-freshness {
   max-width: 280px;
   color: var(--text-muted);
@@ -4259,6 +4273,9 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
   .local-usage-freshness {
     max-width: none;
     text-align: left;
+  }
+  .local-usage-title-row {
+    width: 100%;
   }
   .local-usage-panel-head {
     align-items: flex-start;

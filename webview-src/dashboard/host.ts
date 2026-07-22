@@ -37,6 +37,8 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
   switch (action) {
     case "refreshView":
       return 8_000;
+    case "refreshLocalUsage":
+      return 120_000;
     case "details":
     case "reloadPrompt":
     case "reauthorize":
