@@ -34,13 +34,17 @@
 
 仅调用 `account/login/start` 不足以保证已有 thread 的下一轮请求改用新账号。已验证的 Codex `0.144.2` 会为每个已加载 thread 缓存 Responses WebSocket；登录接口会更新共享认证状态，`account/read` 也会显示新账号，但旧 thread 仍可能复用由旧账号建立的 WebSocket。这会造成 Manager 显示切换成功、实际却继续扣旧账号额度。
 
-runtime protocol v4 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v4 保留 v3 的无旧 Manager 账号内存回滚快照，并新增只读的账号用量归因：shim 在受管 turn 开始时批量记录不透明本地账号 ID、thread ID 和时间，不把提示词、会话正文、邮箱、远端账号 ID 或凭据写入 journal、账号库或 runtime 配置。
+runtime protocol v5 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v5 保留 v3 的无旧 Manager 账号内存回滚快照，并新增只读的账号用量归因：shim 在受管 turn 开始时批量记录不透明本地账号 ID、thread ID 和时间，不把提示词、会话正文、邮箱、远端账号 ID 或凭据写入 journal、账号库或 runtime 配置。
 
 Codex 会把创建会话时的 provider ID 写入本地 thread 元数据，官方界面的 `thread/list` 默认又只查询当前 provider。无感 runtime 若不处理这层过滤，安装前的 `openai` 会话和安装后的 HTTP provider 会话就会像两套独立历史。shim 只把 `thread/list` 中显式的 `modelProviders: null` 改成协议定义的空数组（所有 provider），保留显式 provider 列表不变；它不修改 rollout、`session_index.jsonl` 或 SQLite。官方界面恢复旧 thread 时会传入当前无感 provider，因此后续 turn 仍使用 HTTP transport。
 
 代价是失去 Responses WebSocket 的跨 turn 复用，可能增加少量建连延迟和连接开销。它只影响通过已安装无感 runtime 启动的 app-server，不会启动常驻 HTTP 调度服务，也不会把 token 发给 Manager 之外的本地服务。
 
 Dashboard 中关闭`无感切号（实验性）`会立即恢复 Manager 原有的账号写入、reload 提示和官方自动切号逻辑，但不会在运行中重启 app-server，因此底层 HTTP transport 会保留。若要连底层 transport 一并恢复为官方默认值，请运行 Remove Experimental Seamless Runtime，并按提示 reload 一次。
+
+## 与本地 Sub2API Gateway 的关系
+
+Sub2API Gateway 是本地 fork 的独立可选传输，不是本章的 OAuth 账号池成员。它也借用同一可回滚 shim 来在启动时设置 custom provider，但不会调用 `account/login/start`、写入 OAuth `auth.json`、写入普通账号的五小时/周额度，或参与无感分档、储备账号和耗尽恢复。Gateway 与 ChatGPT Auth 复用同一条本地 HTTP provider identity，以免仅因切换传输而将 thread history 分裂；端点、凭据类型和 app-server 配置仍在启动时固定，所以两者通过显式选择与 window reload 切换，不会跨类型自动无感切号。为兼容第一个本地 Gateway 版本遗留的 `codex-accounts-sub2api` thread，shim 会额外注册仅供恢复用的别名，并把它指向当前选择的传输；新 thread 不会采用该旧 ID。Gateway 自己的 token 观察及可选上游窗口观察均与 OAuth 统计隔离。具体配置、SecretStorage、回环适配器和统计语义见 [LOCAL_SUB2API_GATEWAY.md](LOCAL_SUB2API_GATEWAY.md)。
 
 ## 启用步骤
 
@@ -154,7 +158,7 @@ Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储
 
 - shim 与 manager 使用当前 extension-host PID 对应的本地 Unix socket；目录权限为 `0700`，socket 为 `0600`。
 - shim 在收到成功的 `initialize` 响应或客户端 `initialized` 通知后即可进入 ready；状态接口同时报告两个握手信号，便于区分官方扩展版本差异。热切换已启用但 bridge 未 ready 时，Manager 必须失败关闭，不能回退为磁盘切号。
-- runtime protocol v4 的状态接口必须同时报告 `httpTransportForced=true`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
+- runtime protocol v5 的状态接口必须同时报告 `httpTransportForced=true`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
 - access token 只通过进程内存和本地 IPC 传递，不写入 shim 配置，也不输出到日志。runtime 配置文件只保存官方 Codex CLI 的绝对路径及受保护的归因 journal 目录；两者均不含账号身份或凭据。
 - token 临近过期时由 manager 使用原有 OAuth 刷新逻辑更新；app-server 的 refresh 回调必须匹配原 ChatGPT account ID，否则拒绝返回凭据。
 - 同一 workspace ID 可能对应多个已导入用户。manager 在切换前校验 access token 的 user ID 与本地账号记录一致，再把 access token 的 runtime email 交给 app-server 身份校验；稳定账号记录邮箱与 runtime email 允许是同一 user ID 的不同别名。refresh 与失败回滚以 manager 本地账号 ID 和 workspace ID 为主；缺少本地身份且 workspace ID 不唯一时安全失败，不按数组顺序猜测账号。

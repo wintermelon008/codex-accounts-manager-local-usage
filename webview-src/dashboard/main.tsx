@@ -25,6 +25,7 @@ import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon } from "./icons";
 import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
 import { SavedAccountCard } from "./savedAccountCard";
 import { LocalUsageSection } from "./localUsageSection";
+import { Sub2ApiGatewaySection } from "./sub2apiGatewaySection";
 import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
 
@@ -209,6 +210,12 @@ function App() {
   const unhideAccountsPending = isActionPending("unhideAccounts");
   const setAccountGroupPending = isActionPending("setAccountGroup");
   const localUsageRefreshPending = isActionPending("refreshLocalUsage");
+  const sub2apiGatewayActivatePending = isActionPending("sub2apiGatewayActivate");
+  const sub2apiGatewayDeactivatePending = isActionPending("sub2apiGatewayDeactivate");
+  const sub2apiGatewayRefreshPending = isActionPending("sub2apiGatewayRefresh");
+  const sub2apiGatewayCredentialPending = isActionPending("sub2apiGatewayConfigureCredential");
+  const sub2apiGatewayObserverCredentialPending = isActionPending("sub2apiGatewayConfigureObserverCredential");
+  const sub2apiGatewayOpenConfigPending = isActionPending("sub2apiGatewayOpenConfig");
   const invalidAccountCount = snapshot.accounts.filter(
     (account) =>
       !account.dismissedHealth &&
@@ -599,6 +606,18 @@ function App() {
             ) : null}
           </section>
         ) : null}
+        <Sub2ApiGatewaySection
+          gateway={snapshot.sub2apiGateway}
+          lang={snapshot.lang}
+          busy={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
+          activatePending={sub2apiGatewayActivatePending}
+          deactivatePending={sub2apiGatewayDeactivatePending}
+          refreshPending={sub2apiGatewayRefreshPending}
+          credentialPending={sub2apiGatewayCredentialPending}
+          observerCredentialPending={sub2apiGatewayObserverCredentialPending}
+          openConfigPending={sub2apiGatewayOpenConfigPending}
+          onAction={sendAction}
+        />
         <LocalUsageSection
           usage={snapshot.localUsage}
           copy={snapshot.copy}

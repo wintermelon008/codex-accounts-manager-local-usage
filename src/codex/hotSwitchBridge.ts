@@ -18,12 +18,42 @@ export type HotSwitchStatus = {
   switching: boolean;
   httpTransportForced: boolean;
   transportMode: "http" | "default";
+  providerKind: "chatgpt" | "sub2api" | "default";
+  sub2apiGatewayActive: boolean;
   recentUsageLimitedThreads: number;
   observedUsageLimitFailures: number;
   recoveredUsageLimitedThreads: number;
   resumedUsageLimitedGoals: number;
   shimPid: number;
   appServerPid: number | null;
+};
+
+export type Sub2ApiGatewayRuntimeStatus = {
+  active: boolean;
+  ready: boolean;
+  instanceId?: string;
+  startedAt?: number;
+  requestCount: number;
+  successfulRequestCount: number;
+  failedRequestCount: number;
+  lastRequestAt?: number;
+  lastFailureAt?: number;
+  lastFailureOrigin?: "adapter" | "sub2api";
+  lastFailureStatusCode?: number;
+  /** A bounded Node transport code (for example ECONNRESET), never an error message. */
+  lastFailureTransportCode?: string;
+  /** Sanitized request metadata; never contains a query string, header, or body. */
+  lastFailureRequestMethod?: string;
+  lastFailureRequestPath?: string;
+  lastFailureContentLength?: number;
+  lastFailureTransferEncoding?: "chunked";
+  lastUpstreamStatusCode?: number;
+  usageDay?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
 };
 
 export type HotSwitchIdentity = {
@@ -148,6 +178,14 @@ export class CodexHotSwitchBridge {
 
   async activateUsageAttribution(params: HotSwitchUsageAttributionParams): Promise<HotSwitchUsageAttributionResult> {
     return this.request<HotSwitchUsageAttributionResult>("runtime/usage/activate", params, REQUEST_TIMEOUT_MS);
+  }
+
+  async configureSub2ApiGatewayCredential(apiKey: string): Promise<Sub2ApiGatewayRuntimeStatus> {
+    return this.request<Sub2ApiGatewayRuntimeStatus>("gateway/configure", { apiKey }, REQUEST_TIMEOUT_MS);
+  }
+
+  async getSub2ApiGatewayStatus(): Promise<Sub2ApiGatewayRuntimeStatus> {
+    return this.request<Sub2ApiGatewayRuntimeStatus>("gateway/status", {}, REQUEST_TIMEOUT_MS);
   }
 
   async switchAccount(params: HotSwitchAccountParams): Promise<HotSwitchAccountResult> {

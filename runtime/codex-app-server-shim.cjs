@@ -3,9 +3,12 @@
 "use strict";
 
 const fs = require("node:fs");
+const http = require("node:http");
+const https = require("node:https");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const { randomBytes, randomUUID, timingSafeEqual } = require("node:crypto");
 const { spawn } = require("node:child_process");
 
 const INTERNAL_ID_PREFIX = "__codex_accounts_manager__";
@@ -19,16 +22,35 @@ const RECENT_USAGE_LIMITED_THREAD_TTL_MS = 2 * 60 * 1000;
 const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
-const RUNTIME_PROTOCOL_VERSION = 4;
+const RUNTIME_PROTOCOL_VERSION = 5;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
 const SEAMLESS_HTTP_PROVIDER_CONFIG =
   `model_providers.${SEAMLESS_HTTP_PROVIDER_ID}={ name="OpenAI", wire_api="responses", ` +
   "requires_openai_auth=true, supports_websockets=false }";
+// Local .37 Gateway threads were created under this provider ID. Keep it as
+// an internal alias so those threads resume through the currently selected
+// transport, without making it the provider for new threads.
+const LEGACY_SUB2API_PROVIDER_ID = "codex-accounts-sub2api";
+const LEGACY_SUB2API_PROVIDER_CONFIG =
+  `model_providers.${LEGACY_SUB2API_PROVIDER_ID}={ name="OpenAI", wire_api="responses", ` +
+  "requires_openai_auth=true, supports_websockets=false }";
+const SUB2API_ADAPTER_ENV_KEY = "CODEX_ACCOUNTS_SUB2API_ADAPTER_TOKEN";
+const MAX_GATEWAY_API_KEY_LENGTH = 4_096;
+// The adapter starts before the VS Code extension host reconnects and passes
+// the SecretStorage key over its local control socket. Hold a valid early
+// request briefly instead of making the automatic thread resume fail first.
+const GATEWAY_CREDENTIAL_WAIT_TIMEOUT_MS = 15_000;
+const MAX_GATEWAY_USAGE_LINE_BYTES = 256 * 1024;
+const MAX_GATEWAY_JSON_USAGE_BYTES = 1024 * 1024;
+const GATEWAY_DIAGNOSTIC_SCHEMA = "codex-accounts-sub2api-gateway-diagnostic/v1";
+const GATEWAY_DIAGNOSTIC_PATH = path.join(path.dirname(CONFIG_PATH), "sub2api-gateway-last-failure.json");
+const MAX_GATEWAY_DIAGNOSTIC_CONTENT_LENGTH = 512 * 1024 * 1024;
 
 const runtimeConfig = process.env.CODEX_ACCOUNTS_REAL_CLI ? {} : readRuntimeConfig();
 const realCliPath = process.env.CODEX_ACCOUNTS_REAL_CLI || runtimeConfig.realCliPath;
 const forceHttpTransport = runtimeConfig.forceHttpTransport !== false;
 const usageAttributionDirectory = resolveUsageAttributionDirectory(runtimeConfig);
+const sub2apiGatewayConfig = resolveSub2ApiGatewayConfig(runtimeConfig);
 
 if (!realCliPath || !path.isAbsolute(realCliPath)) {
   failStartup("The real Codex CLI path is missing from the hot-switch runtime configuration");
@@ -36,11 +58,6 @@ if (!realCliPath || !path.isAbsolute(realCliPath)) {
 if (path.resolve(realCliPath) === path.resolve(process.argv[1])) {
   failStartup("The hot-switch shim cannot launch itself as the real Codex CLI");
 }
-
-const child = spawn(realCliPath, buildRealCliArgs(process.argv.slice(2)), {
-  env: process.env,
-  stdio: ["pipe", "pipe", "pipe"]
-});
 
 let childReady = false;
 let initializeResponseReceived = false;
@@ -75,35 +92,14 @@ const lastUsageAttributionByThread = new Map();
 let pendingUsageAttributionRecords = [];
 let usageAttributionFlushTimer;
 let usageAttributionWriteFailureReported = false;
+let child;
+let gatewayAdapter;
 
-child.on("error", (error) => {
-  safeLog(`failed to start the real Codex CLI: ${safeErrorMessage(error)}`);
-});
-
-child.stderr.pipe(process.stderr);
-
-consumeLines(process.stdin, handleOfficialLine, () => {
-  child.stdin.end();
-});
-consumeLines(child.stdout, handleCodexLine, () => {
-  process.stdout.end();
-});
-
-if (process.argv.includes("app-server")) {
-  startControlServer();
-}
-
-child.on("exit", (code, signal) => {
-  childExited = true;
-  flushUsageAttributionRecords();
-  rejectPendingRequests(new Error("Codex app-server exited"));
-  closeControlServer();
-  process.exitCode = typeof code === "number" ? code : signal ? 1 : 0;
-});
+void startRuntime();
 
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => {
-    if (!childExited) {
+    if (!childExited && child) {
       child.kill(signal);
     }
   });
@@ -111,7 +107,55 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 
 process.on("exit", () => {
   flushUsageAttributionRecords();
+  closeGatewayAdapter();
 });
+
+async function startRuntime() {
+  try {
+    if (sub2apiGatewayConfig && process.argv.includes("app-server")) {
+      gatewayAdapter = await startSub2ApiGatewayAdapter(sub2apiGatewayConfig);
+    }
+    const childEnv = { ...process.env };
+    if (gatewayAdapter) {
+      childEnv[SUB2API_ADAPTER_ENV_KEY] = gatewayAdapter.token;
+      configureGatewayLoopbackProxyBypass(childEnv);
+      safeLog("Sub2API Gateway loopback proxy bypass configured");
+    }
+    child = spawn(realCliPath, buildRealCliArgs(process.argv.slice(2)), {
+      env: childEnv,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    child.on("error", (error) => {
+      safeLog(`failed to start the real Codex CLI: ${safeErrorMessage(error)}`);
+    });
+
+    child.stderr.pipe(process.stderr);
+
+    consumeLines(process.stdin, handleOfficialLine, () => {
+      child.stdin.end();
+    });
+    consumeLines(child.stdout, handleCodexLine, () => {
+      process.stdout.end();
+    });
+
+    if (process.argv.includes("app-server")) {
+      startControlServer();
+    }
+
+    child.on("exit", (code, signal) => {
+      childExited = true;
+      flushUsageAttributionRecords();
+      rejectPendingRequests(new Error("Codex app-server exited"));
+      closeControlServer();
+      closeGatewayAdapter();
+      process.exitCode = typeof code === "number" ? code : signal ? 1 : 0;
+    });
+  } catch (error) {
+    closeGatewayAdapter();
+    failStartup(`Unable to start the Codex runtime: ${safeErrorMessage(error)}`);
+  }
+}
 
 function handleOfficialLine(line) {
   const message = parseJson(line);
@@ -374,6 +418,20 @@ function handleControlLine(socket, line) {
       (result) => sendControlResult(socket, message.id, result),
       (error) => sendControlError(socket, message.id, safeErrorMessage(error))
     );
+    return;
+  }
+
+  if (message.method === "gateway/configure") {
+    try {
+      sendControlResult(socket, message.id, configureSub2ApiGatewayAdapter(message.params));
+    } catch (error) {
+      sendControlError(socket, message.id, safeErrorMessage(error));
+    }
+    return;
+  }
+
+  if (message.method === "gateway/status") {
+    sendControlResult(socket, message.id, getSub2ApiGatewayAdapterStatus());
     return;
   }
 
@@ -924,12 +982,14 @@ function runtimeStatus() {
     switching: switching || goalRecoveryCount > 0,
     httpTransportForced: forceHttpTransport,
     transportMode: forceHttpTransport ? "http" : "default",
+    providerKind: sub2apiGatewayConfig ? "sub2api" : forceHttpTransport ? "chatgpt" : "default",
+    sub2apiGatewayActive: Boolean(sub2apiGatewayConfig),
     recentUsageLimitedThreads: getRecentUsageLimitedThreadIds().size,
     observedUsageLimitFailures,
     recoveredUsageLimitedThreads,
     resumedUsageLimitedGoals,
     shimPid: process.pid,
-    appServerPid: child.pid || null
+    appServerPid: child?.pid || null
   };
 }
 
@@ -1424,14 +1484,753 @@ function buildRealCliArgs(args) {
   if (appServerIndex < 0) {
     return args;
   }
+  if (sub2apiGatewayConfig) {
+    if (!gatewayAdapter) {
+      failStartup("The Sub2API Gateway adapter was not initialized");
+    }
+    const providerConfig = buildGatewayProviderConfig(SEAMLESS_HTTP_PROVIDER_ID);
+    const legacyProviderConfig = buildGatewayProviderConfig(LEGACY_SUB2API_PROVIDER_ID);
+    return [
+      ...args.slice(0, appServerIndex + 1),
+      "-c",
+      // Keep the same local provider identity used by the ChatGPT HTTP
+      // transport.  Threads are local app-server records keyed by provider;
+      // changing only the transport endpoint must not split their history.
+      `model_provider="${SEAMLESS_HTTP_PROVIDER_ID}"`,
+      "-c",
+      `model=${tomlString(sub2apiGatewayConfig.model)}`,
+      "-c",
+      providerConfig,
+      "-c",
+      legacyProviderConfig,
+      ...args.slice(appServerIndex + 1)
+    ];
+  }
   return [
     ...args.slice(0, appServerIndex + 1),
     "-c",
     `model_provider="${SEAMLESS_HTTP_PROVIDER_ID}"`,
     "-c",
     SEAMLESS_HTTP_PROVIDER_CONFIG,
+    "-c",
+    LEGACY_SUB2API_PROVIDER_CONFIG,
     ...args.slice(appServerIndex + 1)
   ];
+}
+
+function buildGatewayProviderConfig(providerId) {
+  return (
+    `model_providers.${providerId}={ name=${tomlString(sub2apiGatewayConfig.displayName)}, ` +
+    `base_url=${tomlString(gatewayAdapter.baseUrl)}, env_key="${SUB2API_ADAPTER_ENV_KEY}", ` +
+    "wire_api=\"responses\", requires_openai_auth=false, supports_websockets=false }"
+  );
+}
+
+/**
+ * The child Codex app-server may inherit an outbound HTTP proxy. Its per-run
+ * Gateway adapter is always a local `127.0.0.1` service, so sending that
+ * random loopback port through the proxy makes the adapter unreachable before
+ * it can record a diagnostic. Preserve all user proxy routing and add only
+ * the standard loopback hosts to both spellings of NO_PROXY for this child.
+ */
+function configureGatewayLoopbackProxyBypass(environment) {
+  const entries = [environment.NO_PROXY, environment.no_proxy]
+    .filter((value) => typeof value === "string")
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const known = new Set(entries.map((value) => value.toLowerCase()));
+  for (const host of ["127.0.0.1", "localhost", "::1"]) {
+    if (!known.has(host)) {
+      entries.push(host);
+      known.add(host);
+    }
+  }
+  const value = entries.join(",");
+  environment.NO_PROXY = value;
+  environment.no_proxy = value;
+}
+
+function resolveSub2ApiGatewayConfig(config) {
+  const gateway = config && config.sub2apiGateway;
+  if (gateway === undefined || gateway === null) {
+    return undefined;
+  }
+  if (!gateway || typeof gateway !== "object" || Array.isArray(gateway)) {
+    failStartup("The Sub2API Gateway runtime configuration is invalid");
+  }
+  const displayName = readBoundedString(gateway.displayName, 128);
+  const baseUrl = readBoundedString(gateway.baseUrl, 2_048);
+  const model = readBoundedString(gateway.model, 160);
+  if (!displayName || !baseUrl || !model) {
+    failStartup("The Sub2API Gateway runtime configuration is invalid");
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    failStartup("The Sub2API Gateway base URL is invalid");
+  }
+  if (
+    !parsed ||
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    !parsed.hostname ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.pathname.replace(/\/+$/u, "") !== "/v1"
+  ) {
+    failStartup("The Sub2API Gateway base URL must end with /v1");
+  }
+  parsed.pathname = "/v1";
+  return { displayName, baseUrl: parsed.toString().replace(/\/$/u, ""), model };
+}
+
+function startSub2ApiGatewayAdapter(config) {
+  return new Promise((resolve, reject) => {
+    const token = randomBytes(32).toString("base64url");
+    const adapter = {
+      token,
+      config,
+      apiKey: undefined,
+      instanceId: randomUUID(),
+      startedAt: Date.now(),
+      requestCount: 0,
+      successfulRequestCount: 0,
+      failedRequestCount: 0,
+      lastRequestAt: undefined,
+      lastFailureAt: undefined,
+      lastFailureOrigin: undefined,
+      lastFailureStatusCode: undefined,
+      lastFailureTransportCode: undefined,
+      lastFailureRequestMethod: undefined,
+      lastFailureRequestPath: undefined,
+      lastFailureContentLength: undefined,
+      lastFailureTransferEncoding: undefined,
+      lastUpstreamStatusCode: undefined,
+      usageDay: localGatewayUsageDay(),
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0,
+      credentialWaiters: new Set(),
+      server: undefined,
+      baseUrl: undefined
+    };
+    const server = http.createServer((request, response) => {
+      void handleSub2ApiGatewayRequest(adapter, request, response).catch(() => {
+        // The adapter only exposes a fixed request shape. Do not surface an
+        // arbitrary Node error here because it could contain request details.
+        safeLog("Sub2API Gateway request handler failed");
+        if (!response.headersSent && !response.destroyed) {
+          writeGatewayError(response, 502, "The local Gateway request failed");
+        } else if (!response.destroyed) {
+          response.destroy();
+        }
+      });
+    });
+    adapter.server = server;
+    const failStart = (error) => {
+      server.close();
+      reject(error);
+    };
+    server.once("error", failStart);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", failStart);
+      server.on("error", (error) => {
+        safeLog(`Sub2API Gateway adapter failed: ${safeErrorMessage(error)}`);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string" || !Number.isInteger(address.port) || address.port <= 0) {
+        failStart(new Error("The Sub2API Gateway adapter did not receive a loopback port"));
+        return;
+      }
+      adapter.baseUrl = `http://127.0.0.1:${address.port}/v1`;
+      safeLog("Sub2API Gateway adapter ready");
+      resolve(adapter);
+    });
+  });
+}
+
+function configureSub2ApiGatewayAdapter(params) {
+  if (!gatewayAdapter || !sub2apiGatewayConfig) {
+    throw new Error("The Sub2API Gateway adapter is not active");
+  }
+  const apiKey = params && typeof params.apiKey === "string" ? params.apiKey.trim() : "";
+  if (!apiKey || apiKey.length > MAX_GATEWAY_API_KEY_LENGTH) {
+    throw new Error("The Sub2API Gateway credential is invalid");
+  }
+  const becameReady = !gatewayAdapter.apiKey;
+  gatewayAdapter.apiKey = apiKey;
+  releaseGatewayCredentialWaiters(gatewayAdapter);
+  if (becameReady) {
+    safeLog("Sub2API Gateway credential configured");
+  }
+  return getSub2ApiGatewayAdapterStatus();
+}
+
+function getSub2ApiGatewayAdapterStatus() {
+  if (!gatewayAdapter || !sub2apiGatewayConfig) {
+    return {
+      active: false,
+      ready: false,
+      requestCount: 0,
+      successfulRequestCount: 0,
+      failedRequestCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0
+    };
+  }
+  ensureGatewayUsageDay(gatewayAdapter);
+  return {
+    active: true,
+    ready: typeof gatewayAdapter.apiKey === "string" && gatewayAdapter.apiKey.length > 0,
+    instanceId: gatewayAdapter.instanceId,
+    startedAt: gatewayAdapter.startedAt,
+    requestCount: gatewayAdapter.requestCount,
+    successfulRequestCount: gatewayAdapter.successfulRequestCount,
+    failedRequestCount: gatewayAdapter.failedRequestCount,
+    lastRequestAt: gatewayAdapter.lastRequestAt,
+    lastFailureAt: gatewayAdapter.lastFailureAt,
+    lastFailureOrigin: gatewayAdapter.lastFailureOrigin,
+    lastFailureStatusCode: gatewayAdapter.lastFailureStatusCode,
+    lastFailureTransportCode: gatewayAdapter.lastFailureTransportCode,
+    lastFailureRequestMethod: gatewayAdapter.lastFailureRequestMethod,
+    lastFailureRequestPath: gatewayAdapter.lastFailureRequestPath,
+    lastFailureContentLength: gatewayAdapter.lastFailureContentLength,
+    lastFailureTransferEncoding: gatewayAdapter.lastFailureTransferEncoding,
+    lastUpstreamStatusCode: gatewayAdapter.lastUpstreamStatusCode,
+    usageDay: gatewayAdapter.usageDay,
+    inputTokens: gatewayAdapter.inputTokens,
+    outputTokens: gatewayAdapter.outputTokens,
+    cachedInputTokens: gatewayAdapter.cachedInputTokens,
+    reasoningTokens: gatewayAdapter.reasoningTokens,
+    totalTokens: gatewayAdapter.totalTokens
+  };
+}
+
+function closeGatewayAdapter() {
+  if (!gatewayAdapter) {
+    return;
+  }
+  gatewayAdapter.apiKey = undefined;
+  releaseGatewayCredentialWaiters(gatewayAdapter);
+  gatewayAdapter.server?.close();
+  gatewayAdapter = undefined;
+}
+
+async function handleSub2ApiGatewayRequest(adapter, request, response) {
+  if (!hasExpectedGatewayAdapterToken(adapter, request.headers.authorization)) {
+    safeLog("Sub2API Gateway request rejected: local authorization mismatch");
+    writeGatewayError(response, 401, "Invalid local Gateway authorization");
+    return;
+  }
+
+  let target;
+  try {
+    target = resolveGatewayTargetUrl(adapter.config.baseUrl, request.url);
+  } catch (error) {
+    writeGatewayError(response, 400, safeErrorMessage(error));
+    return;
+  }
+  if (!isAllowedGatewayRequest(target.pathname, request.method)) {
+    writeGatewayError(response, 404, "The local Gateway only permits Responses and model requests");
+    return;
+  }
+
+  adapter.requestCount += 1;
+  adapter.lastRequestAt = Date.now();
+  const requestDiagnostic = summarizeGatewayRequest(request, target);
+  let recorded = false;
+  let incomingRequestAborted = false;
+  let cancellationLogged = false;
+  let upstream;
+  const logCancellation = () => {
+    if (cancellationLogged) {
+      return;
+    }
+    cancellationLogged = true;
+    logGatewayRequestLifecycle("request canceled by local client", requestDiagnostic);
+  };
+  request.on("aborted", () => {
+    incomingRequestAborted = true;
+    logCancellation();
+    upstream?.destroy();
+  });
+  const recordResult = (successful, details = {}) => {
+    if (recorded) {
+      return;
+    }
+    recorded = true;
+    if (successful) {
+      adapter.successfulRequestCount += 1;
+    } else {
+      adapter.failedRequestCount += 1;
+      adapter.lastFailureAt = Date.now();
+      adapter.lastFailureOrigin = details.origin === "sub2api" ? "sub2api" : "adapter";
+      adapter.lastFailureStatusCode = Number.isInteger(details.statusCode) ? details.statusCode : undefined;
+      adapter.lastFailureTransportCode = normalizeGatewayTransportCode(details.transportCode);
+      adapter.lastFailureRequestMethod = requestDiagnostic.method;
+      adapter.lastFailureRequestPath = requestDiagnostic.path;
+      adapter.lastFailureContentLength = requestDiagnostic.contentLength;
+      adapter.lastFailureTransferEncoding = requestDiagnostic.transferEncoding;
+      const failure = {
+        at: adapter.lastFailureAt,
+        origin: adapter.lastFailureOrigin,
+        statusCode: adapter.lastFailureStatusCode,
+        upstreamStatusCode: details.upstreamStatusCode,
+        transportCode: adapter.lastFailureTransportCode,
+        request: requestDiagnostic
+      };
+      persistGatewayFailureDiagnostic(adapter, failure);
+      logGatewayForwardingFailure(failure);
+    }
+  };
+
+  if (!adapter.apiKey) {
+    logGatewayRequestLifecycle("request is waiting for credential", requestDiagnostic);
+    const credentialReady = await waitForGatewayCredential(adapter);
+    if (incomingRequestAborted) {
+      return;
+    }
+    if (!credentialReady || !adapter.apiKey) {
+      logGatewayRequestLifecycle("credential wait timed out", requestDiagnostic);
+      recordResult(false, {
+        origin: "adapter",
+        statusCode: 503,
+        transportCode: "CREDENTIAL_TIMEOUT"
+      });
+      if (!response.headersSent && !response.destroyed) {
+        writeGatewayError(response, 503, "The local Gateway credential is not ready");
+      }
+      return;
+    }
+  }
+
+  logGatewayRequestLifecycle("forwarding started", requestDiagnostic);
+
+  const headers = { ...request.headers };
+  delete headers.authorization;
+  delete headers["x-api-key"];
+  delete headers.host;
+  headers.authorization = `Bearer ${adapter.apiKey}`;
+  headers.host = target.host;
+  const client = target.protocol === "https:" ? https : http;
+  try {
+    upstream = client.request(
+      target,
+      {
+        method: request.method,
+        headers
+      },
+      (upstreamResponse) => {
+        const statusCode = upstreamResponse.statusCode ?? 502;
+        adapter.lastUpstreamStatusCode = statusCode;
+        recordResult(statusCode >= 200 && statusCode < 300, {
+          origin: "sub2api",
+          statusCode,
+          upstreamStatusCode: statusCode
+        });
+        observeGatewayResponseUsage(adapter, upstreamResponse);
+        response.writeHead(statusCode, upstreamResponse.headers);
+        upstreamResponse.pipe(response);
+      }
+    );
+  } catch (error) {
+    recordResult(false, {
+      origin: "adapter",
+      statusCode: 502,
+      transportCode: readGatewayTransportCode(error)
+    });
+    writeGatewayError(response, 502, "The configured Sub2API endpoint is unavailable");
+    return;
+  }
+  upstream.on("error", (error) => {
+    if (incomingRequestAborted) {
+      return;
+    }
+    recordResult(false, {
+      origin: "adapter",
+      statusCode: 502,
+      transportCode: readGatewayTransportCode(error)
+    });
+    if (!response.headersSent) {
+      writeGatewayError(response, 502, "The configured Sub2API endpoint is unavailable");
+    } else {
+      response.destroy();
+    }
+  });
+  request.pipe(upstream);
+}
+
+function waitForGatewayCredential(adapter) {
+  if (adapter.apiKey) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const waiter = () => {
+      clearTimeout(timeout);
+      resolve(Boolean(adapter.apiKey));
+    };
+    const timeout = setTimeout(() => {
+      adapter.credentialWaiters.delete(waiter);
+      resolve(Boolean(adapter.apiKey));
+    }, GATEWAY_CREDENTIAL_WAIT_TIMEOUT_MS);
+    adapter.credentialWaiters.add(waiter);
+    // The credential may have arrived between the initial check and adding
+    // this waiter through the control socket's event loop turn.
+    if (adapter.apiKey) {
+      adapter.credentialWaiters.delete(waiter);
+      clearTimeout(timeout);
+      resolve(true);
+    }
+  });
+}
+
+function releaseGatewayCredentialWaiters(adapter) {
+  for (const waiter of adapter.credentialWaiters) {
+    waiter();
+  }
+  adapter.credentialWaiters.clear();
+}
+
+/**
+ * Persist one bounded, credential-free failure record before the user switches
+ * the active transport back to ChatGPT Auth.  The shim's in-memory status is
+ * otherwise lost at that switch, while this file remains inside the Manager
+ * runtime directory with owner-only permissions.
+ */
+function persistGatewayFailureDiagnostic(adapter, details) {
+  const request = normalizeGatewayDiagnosticRequest(details.request);
+  const diagnostic = {
+    schema: GATEWAY_DIAGNOSTIC_SCHEMA,
+    recordedAt: Number.isSafeInteger(details.at) && details.at > 0 ? details.at : Date.now(),
+    origin: details.origin === "sub2api" ? "sub2api" : "adapter",
+    ...(normalizeGatewayHttpStatus(details.statusCode) ? { statusCode: normalizeGatewayHttpStatus(details.statusCode) } : {}),
+    ...(normalizeGatewayHttpStatus(details.upstreamStatusCode)
+      ? { upstreamStatusCode: normalizeGatewayHttpStatus(details.upstreamStatusCode) }
+      : {}),
+    ...(normalizeGatewayTransportCode(details.transportCode) ? { transportCode: normalizeGatewayTransportCode(details.transportCode) } : {}),
+    ...(request ? { request } : {})
+  };
+  const temporaryPath = `${GATEWAY_DIAGNOSTIC_PATH}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(diagnostic)}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporaryPath, GATEWAY_DIAGNOSTIC_PATH);
+    fs.chmodSync(GATEWAY_DIAGNOSTIC_PATH, 0o600);
+  } catch {
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch {
+      // The temporary file may not have been created; failure diagnostics must
+      // never disrupt the active forwarding request.
+    }
+    safeLog("Sub2API Gateway diagnostic write failed");
+  }
+}
+
+function logGatewayForwardingFailure(details) {
+  const request = normalizeGatewayDiagnosticRequest(details.request);
+  const fields = [
+    `origin=${details.origin === "sub2api" ? "sub2api" : "adapter"}`,
+    ...(normalizeGatewayHttpStatus(details.statusCode) ? [`status=${normalizeGatewayHttpStatus(details.statusCode)}`] : []),
+    ...(normalizeGatewayHttpStatus(details.upstreamStatusCode)
+      ? [`upstreamStatus=${normalizeGatewayHttpStatus(details.upstreamStatusCode)}`]
+      : []),
+    ...(normalizeGatewayTransportCode(details.transportCode) ? [`transport=${normalizeGatewayTransportCode(details.transportCode)}`] : []),
+    ...formatGatewayRequestDiagnosticFields(request)
+  ];
+  safeLog(`Sub2API Gateway forwarding failed: ${fields.join(" ")}`);
+}
+
+function logGatewayRequestLifecycle(event, request) {
+  const fields = formatGatewayRequestDiagnosticFields(request);
+  safeLog(`Sub2API Gateway ${event}${fields.length > 0 ? `: ${fields.join(" ")}` : ""}`);
+}
+
+function formatGatewayRequestDiagnosticFields(value) {
+  const request = normalizeGatewayDiagnosticRequest(value);
+  return [
+    ...(request?.method ? [`method=${request.method}`] : []),
+    ...(request?.path ? [`path=${request.path}`] : []),
+    ...(request?.contentLength !== undefined ? [`contentLength=${request.contentLength}`] : []),
+    ...(request?.transferEncoding ? [`transferEncoding=${request.transferEncoding}`] : [])
+  ];
+}
+
+function summarizeGatewayRequest(request, target) {
+  const method = normalizeGatewayRequestMethod(request.method);
+  const path = normalizeGatewayRequestPath(target.pathname);
+  const contentLength = readGatewayContentLength(request.headers["content-length"]);
+  const transferEncoding = readGatewayTransferEncoding(request.headers["transfer-encoding"]);
+  return {
+    ...(method ? { method } : {}),
+    ...(path ? { path } : {}),
+    ...(contentLength !== undefined ? { contentLength } : {}),
+    ...(transferEncoding ? { transferEncoding } : {})
+  };
+}
+
+function normalizeGatewayDiagnosticRequest(value) {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+  const method = normalizeGatewayRequestMethod(value.method);
+  const path = normalizeGatewayRequestPath(value.path);
+  const contentLength = normalizeGatewayContentLength(value.contentLength);
+  const transferEncoding = value.transferEncoding === "chunked" ? "chunked" : undefined;
+  if (!method && !path && contentLength === undefined && !transferEncoding) {
+    return undefined;
+  }
+  return {
+    ...(method ? { method } : {}),
+    ...(path ? { path } : {}),
+    ...(contentLength !== undefined ? { contentLength } : {}),
+    ...(transferEncoding ? { transferEncoding } : {})
+  };
+}
+
+function normalizeGatewayRequestMethod(value) {
+  return typeof value === "string" && /^[A-Z]{1,16}$/u.test(value) ? value : undefined;
+}
+
+function normalizeGatewayRequestPath(value) {
+  if (value === "/v1/models" || value === "/v1/responses" || value === "/v1/responses/compact") {
+    return value;
+  }
+  return typeof value === "string" && value.startsWith("/v1/responses/") ? "/v1/responses/*" : undefined;
+}
+
+function readGatewayContentLength(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== "string" || !/^\d{1,10}$/u.test(raw)) {
+    return undefined;
+  }
+  return normalizeGatewayContentLength(Number(raw));
+}
+
+function normalizeGatewayContentLength(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= MAX_GATEWAY_DIAGNOSTIC_CONTENT_LENGTH ? value : undefined;
+}
+
+function readGatewayTransferEncoding(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === "string" && raw.toLowerCase() === "chunked" ? "chunked" : undefined;
+}
+
+function readGatewayTransportCode(error) {
+  return error && typeof error === "object" ? normalizeGatewayTransportCode(error.code) : undefined;
+}
+
+function normalizeGatewayTransportCode(value) {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,63}$/u.test(value) ? value : undefined;
+}
+
+function normalizeGatewayHttpStatus(value) {
+  return Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined;
+}
+
+/**
+ * Observe only the final Responses usage envelope while preserving the
+ * upstream stream byte-for-byte.  No prompt, output text, response IDs, or
+ * raw payload is retained after a line has been inspected.
+ */
+function observeGatewayResponseUsage(adapter, upstreamResponse) {
+  const contentType = String(upstreamResponse.headers["content-type"] || "").toLowerCase();
+  let recorded = false;
+  const record = (payload) => {
+    if (recorded) {
+      return;
+    }
+    const usage = extractGatewayResponseUsage(payload);
+    if (!usage) {
+      return;
+    }
+    recorded = true;
+    recordGatewayUsage(adapter, usage);
+  };
+
+  if (contentType.includes("text/event-stream")) {
+    let remainder = "";
+    let eventName = "";
+    upstreamResponse.on("data", (chunk) => {
+      if (recorded) {
+        return;
+      }
+      remainder += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      if (Buffer.byteLength(remainder, "utf8") > MAX_GATEWAY_USAGE_LINE_BYTES) {
+        // A completion envelope is compact.  Discard an unexpectedly huge
+        // unfinished line rather than retaining streamed model output.
+        remainder = "";
+        eventName = "";
+        return;
+      }
+      const lines = remainder.split(/\r?\n/u);
+      remainder = lines.pop() || "";
+      for (const line of lines) {
+        if (line.length === 0) {
+          eventName = "";
+          continue;
+        }
+        if (line.startsWith("event:")) {
+          eventName = line.slice("event:".length).trim();
+          continue;
+        }
+        if (!line.startsWith("data:")) {
+          continue;
+        }
+        const data = line.slice("data:".length).trim();
+        if (data === "[DONE]" || (eventName !== "response.completed" && !data.includes("response.completed"))) {
+          continue;
+        }
+        try {
+          record(JSON.parse(data));
+        } catch {
+          // The upstream data stream remains untouched.  A malformed event
+          // simply contributes no token observation.
+        }
+      }
+    });
+    return;
+  }
+
+  if (!contentType.includes("json")) {
+    return;
+  }
+  const chunks = [];
+  let bytes = 0;
+  let exceeded = false;
+  upstreamResponse.on("data", (chunk) => {
+    if (exceeded || recorded) {
+      return;
+    }
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > MAX_GATEWAY_JSON_USAGE_BYTES) {
+      exceeded = true;
+      chunks.length = 0;
+      return;
+    }
+    chunks.push(buffer);
+  });
+  upstreamResponse.on("end", () => {
+    if (exceeded || recorded || chunks.length === 0) {
+      return;
+    }
+    try {
+      record(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    } catch {
+      // See stream case above: this observer is deliberately best-effort.
+    }
+  });
+}
+
+function extractGatewayResponseUsage(payload) {
+  const response = isPlainObject(payload) && isPlainObject(payload.response) ? payload.response : payload;
+  const usage = isPlainObject(response) && isPlainObject(response.usage) ? response.usage : undefined;
+  if (!usage) {
+    return undefined;
+  }
+  const inputTokens = nonNegativeSafeInteger(usage.input_tokens);
+  const outputTokens = nonNegativeSafeInteger(usage.output_tokens);
+  const totalTokens = nonNegativeSafeInteger(usage.total_tokens);
+  const inputDetails = isPlainObject(usage.input_tokens_details) ? usage.input_tokens_details : undefined;
+  const outputDetails = isPlainObject(usage.output_tokens_details) ? usage.output_tokens_details : undefined;
+  const cachedInputTokens = inputDetails ? nonNegativeSafeInteger(inputDetails.cached_tokens) : 0;
+  const reasoningTokens = outputDetails ? nonNegativeSafeInteger(outputDetails.reasoning_tokens) : 0;
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+  return {
+    inputTokens: inputTokens || 0,
+    outputTokens: outputTokens || 0,
+    cachedInputTokens,
+    reasoningTokens,
+    totalTokens: totalTokens === undefined ? (inputTokens || 0) + (outputTokens || 0) : totalTokens
+  };
+}
+
+function recordGatewayUsage(adapter, usage) {
+  ensureGatewayUsageDay(adapter);
+  adapter.inputTokens += usage.inputTokens;
+  adapter.outputTokens += usage.outputTokens;
+  adapter.cachedInputTokens += usage.cachedInputTokens;
+  adapter.reasoningTokens += usage.reasoningTokens;
+  adapter.totalTokens += usage.totalTokens;
+}
+
+function ensureGatewayUsageDay(adapter) {
+  const today = localGatewayUsageDay();
+  if (adapter.usageDay === today) {
+    return;
+  }
+  adapter.usageDay = today;
+  adapter.inputTokens = 0;
+  adapter.outputTokens = 0;
+  adapter.cachedInputTokens = 0;
+  adapter.reasoningTokens = 0;
+  adapter.totalTokens = 0;
+}
+
+function localGatewayUsageDay(timestamp = Date.now()) {
+  const date = new Date(timestamp);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function nonNegativeSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExpectedGatewayAdapterToken(adapter, authorization) {
+  const received = Array.isArray(authorization) ? authorization[0] : authorization;
+  const expected = `Bearer ${adapter.token}`;
+  if (typeof received !== "string" || received.length !== expected.length) {
+    return false;
+  }
+  return timingSafeEqual(Buffer.from(received), Buffer.from(expected));
+}
+
+function resolveGatewayTargetUrl(baseUrl, requestUrl) {
+  const incoming = new URL(requestUrl || "/", "http://127.0.0.1");
+  const pathWithoutVersion = incoming.pathname === "/v1" ? "/" : incoming.pathname.replace(/^\/v1(?=\/|$)/u, "");
+  const relative = `${pathWithoutVersion.replace(/^\/+/, "")}${incoming.search}`;
+  return new URL(relative, `${baseUrl.replace(/\/+$/u, "")}/`);
+}
+
+function isAllowedGatewayRequest(pathname, method) {
+  if (pathname === "/v1/models") {
+    return method === "GET";
+  }
+  return pathname === "/v1/responses" || pathname === "/v1/responses/compact" || pathname.startsWith("/v1/responses/");
+}
+
+function writeGatewayError(response, statusCode, message) {
+  if (response.headersSent) {
+    response.destroy();
+    return;
+  }
+  response.writeHead(statusCode, { "content-type": "application/json", "cache-control": "no-store" });
+  response.end(JSON.stringify({ error: { message } }));
+}
+
+function tomlString(value) {
+  return `"${String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function readBoundedString(value, maximumLength) {
+  return typeof value === "string" && value.trim() && value.trim().length <= maximumLength ? value.trim() : undefined;
 }
 
 function readRuntimeConfig() {

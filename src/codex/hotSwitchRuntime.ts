@@ -22,7 +22,8 @@ import {
   HotSwitchLongTurnPolicy,
   HotSwitchRefreshRequest,
   HotSwitchRefreshResult,
-  HotSwitchStatus
+  HotSwitchStatus,
+  Sub2ApiGatewayRuntimeStatus
 } from "./hotSwitchBridge";
 import { readAuthFile, writeAuthFile } from "./authFile";
 import { installRemoteCliOverlay, restoreRemoteCliOverlay } from "./remoteCliOverlay";
@@ -38,7 +39,19 @@ const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
 const SHIM_FILE = "codex-app-server-shim.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 4;
+const RUNTIME_PROTOCOL_VERSION = 5;
+const SUB2API_GATEWAY_RUNTIME_CONFIG_KEY = "sub2apiGateway.runtimeConfig";
+
+/**
+ * This structure is safe to persist in VS Code global state. It intentionally
+ * contains no API key; the credential is provided to the loopback adapter only
+ * after the extension host reconnects to the shim.
+ */
+export type Sub2ApiGatewayRuntimeConfig = {
+  displayName: string;
+  baseUrl: string;
+  model: string;
+};
 
 export type HotSwitchSetupResult = {
   enabled: boolean;
@@ -89,9 +102,67 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     return this.configureRuntime();
   }
 
+  isSub2ApiGatewayActive(): boolean {
+    return this.getSub2ApiGatewayRuntimeConfig() !== undefined;
+  }
+
+  async activateSub2ApiGateway(config: Sub2ApiGatewayRuntimeConfig): Promise<HotSwitchSetupResult> {
+    const normalized = normalizeSub2ApiGatewayRuntimeConfig(config);
+    await this.context.globalState.update(SUB2API_GATEWAY_RUNTIME_CONFIG_KEY, normalized);
+    await this.ensureGatewayDoesNotEnableSeamlessScheduling();
+    if (!isHotSwitchEnabled()) {
+      await getCodexAccountsConfiguration().update(HOT_SWITCH_ENABLED, true, vscode.ConfigurationTarget.Global);
+    }
+    return this.configureRuntime();
+  }
+
+  async deactivateSub2ApiGateway(): Promise<HotSwitchSetupResult> {
+    await this.context.globalState.update(SUB2API_GATEWAY_RUNTIME_CONFIG_KEY, undefined);
+    if (!isHotSwitchEnabled()) {
+      return {
+        enabled: false,
+        configured: false,
+        requiresReload: false
+      };
+    }
+    return this.configureRuntime();
+  }
+
+  async configureSub2ApiGatewayCredential(apiKey: string): Promise<Sub2ApiGatewayRuntimeStatus> {
+    if (!this.isSub2ApiGatewayActive()) {
+      throw new Error("The Sub2API Gateway is not the active Codex transport");
+    }
+    if (!this.bridge) {
+      throw new Error("The Sub2API Gateway runtime is not ready; reload the VS Code window first");
+    }
+    return this.bridge.configureSub2ApiGatewayCredential(apiKey);
+  }
+
+  async getSub2ApiGatewayStatus(): Promise<Sub2ApiGatewayRuntimeStatus> {
+    if (!this.isSub2ApiGatewayActive()) {
+      return {
+        active: false,
+        ready: false,
+        requestCount: 0,
+        successfulRequestCount: 0,
+        failedRequestCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 0
+      };
+    }
+    if (!this.bridge) {
+      throw new Error("The Sub2API Gateway runtime is not ready; reload the VS Code window first");
+    }
+    return this.bridge.getSub2ApiGatewayStatus();
+  }
+
   async disable(): Promise<HotSwitchSetupResult> {
     try {
       await getCodexAccountsConfiguration().update(HOT_SWITCH_ENABLED, false, vscode.ConfigurationTarget.Global);
+      await this.context.globalState.update(SUB2API_GATEWAY_RUNTIME_CONFIG_KEY, undefined);
       this.bridge?.dispose();
       this.bridge = undefined;
       const runtimeLauncherPath = path.join(
@@ -151,6 +222,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     }
     if (!this.bridge) {
       throw new Error("Codex hot switch is enabled, but its runtime is not ready; restart the extension host");
+    }
+    if (this.isSub2ApiGatewayActive()) {
+      throw new Error("Switch back from the Sub2API Gateway before selecting a ChatGPT Auth account");
     }
 
     const account = await this.repo.getAccount(accountId);
@@ -239,6 +313,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const launcherDestination = path.join(runtimeDirectory, SHIM_LAUNCHER_FILE);
       const shimConfigDestination = path.join(runtimeDirectory, SHIM_CONFIG_FILE);
       const usageAttributionDirectory = path.join(runtimeDirectory, USAGE_ATTRIBUTION_DIRECTORY);
+      const sub2apiGateway = this.getSub2ApiGatewayRuntimeConfig();
 
       await fs.mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
       await fs.mkdir(usageAttributionDirectory, { recursive: true, mode: 0o700 });
@@ -260,7 +335,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const realCliPath = remoteOverlay?.realCliPath ?? cliPath;
       await writeJsonAtomically(
         shimConfigDestination,
-        { realCliPath, forceHttpTransport: true, usageAttributionDirectory },
+        { realCliPath, forceHttpTransport: true, usageAttributionDirectory, sub2apiGateway },
         0o600
       );
 
@@ -293,7 +368,8 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
             requiresReload =
               !status.ready ||
               status.runtimeProtocolVersion !== RUNTIME_PROTOCOL_VERSION ||
-              status.httpTransportForced !== true;
+              status.httpTransportForced !== true ||
+              status.sub2apiGatewayActive !== Boolean(sub2apiGateway);
           } catch {
             requiresReload = true;
           }
@@ -302,7 +378,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
           candidateBridge.dispose();
         } else {
           this.bridge = candidateBridge;
-          void this.synchronizeUsageAttribution(candidateBridge);
+          if (!sub2apiGateway) {
+            void this.synchronizeUsageAttribution(candidateBridge);
+          }
         }
       }
       return {
@@ -471,6 +549,34 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     await this.repo.updateTokens(account.id, effectiveTokens);
     return effectiveTokens;
   }
+
+  private getSub2ApiGatewayRuntimeConfig(): Sub2ApiGatewayRuntimeConfig | undefined {
+    // Some narrow test/embedding hosts only provide the parts of
+    // ExtensionContext needed for OAuth switching. Gateway state is optional,
+    // so absence of globalState must remain equivalent to Gateway being off.
+    const globalState = this.context.globalState;
+    if (!globalState || typeof globalState.get !== "function") {
+      return undefined;
+    }
+    const stored = globalState.get<unknown>(SUB2API_GATEWAY_RUNTIME_CONFIG_KEY);
+    try {
+      return stored === undefined ? undefined : normalizeSub2ApiGatewayRuntimeConfig(stored);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async ensureGatewayDoesNotEnableSeamlessScheduling(): Promise<void> {
+    const config = getCodexAccountsConfiguration();
+    const inspected = config.inspect<boolean>("seamlessSwitchEnabled");
+    const explicitlyConfigured =
+      inspected?.workspaceFolderValue !== undefined ||
+      inspected?.workspaceValue !== undefined ||
+      inspected?.globalValue !== undefined;
+    if (!explicitlyConfigured) {
+      await config.update("seamlessSwitchEnabled", false, vscode.ConfigurationTarget.Global);
+    }
+  }
 }
 
 export function selectManagedAccountForRefresh(
@@ -588,6 +694,47 @@ export function getHotSwitchLongTurnPolicy(): HotSwitchLongTurnPolicy {
   return normalizeHotSwitchLongTurnPolicy(
     getCodexAccountsConfiguration().get<string>(HOT_SWITCH_LONG_TURN_POLICY, "defer")
   );
+}
+
+function normalizeSub2ApiGatewayRuntimeConfig(value: unknown): Sub2ApiGatewayRuntimeConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Sub2API Gateway runtime configuration");
+  }
+  const record = value as Record<string, unknown>;
+  const displayName = readRuntimeString(record["displayName"], 128);
+  const baseUrl = readRuntimeString(record["baseUrl"], 2_048);
+  const model = readRuntimeString(record["model"], 160);
+  if (!displayName || !baseUrl || !model) {
+    throw new Error("Invalid Sub2API Gateway runtime configuration");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("Invalid Sub2API Gateway runtime configuration");
+  }
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    !parsed.hostname ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.pathname.replace(/\/+$/u, "") !== "/v1"
+  ) {
+    throw new Error("Invalid Sub2API Gateway runtime configuration");
+  }
+
+  return {
+    displayName,
+    baseUrl: parsed.toString().replace(/\/$/u, ""),
+    model
+  };
+}
+
+function readRuntimeString(value: unknown, maxLength: number): string | undefined {
+  return typeof value === "string" && value.trim() && value.trim().length <= maxLength ? value.trim() : undefined;
 }
 
 function isRemoteExtensionHost(): boolean {

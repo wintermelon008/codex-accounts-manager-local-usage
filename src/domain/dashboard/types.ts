@@ -492,6 +492,101 @@ export interface DashboardLocalUsageViewModel {
   byThreeHourAndModel: DashboardLocalUsageThreeHourModelViewModel[];
 }
 
+/**
+ * A local, opt-in Sub2API transport. It is deliberately not a
+ * DashboardAccountViewModel: it has no OAuth identity, no ChatGPT quota
+ * windows, and never participates in the OAuth seamless-switch scheduler.
+ */
+export interface DashboardSub2ApiGatewayViewModel {
+  displayName: string;
+  configFile: string;
+  baseUrl?: string;
+  model?: string;
+  credentialRef?: string;
+  credentialPresent: boolean;
+  isActive: boolean;
+  status: "configuration_required" | "configuration_error" | "credential_required" | "ready" | "active" | "degraded";
+  statusMessage: string;
+  health?: {
+    checkedAt: number;
+    status: "healthy" | "failed";
+    exposedModelCount?: number;
+    message?: string;
+  };
+  usage: {
+    /**
+     * This is adapter-observed traffic only.  It deliberately has a distinct
+     * shape and storage path from OAuth account-window token attribution.
+     */
+    today: {
+      date: string;
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+      reasoningTokens: number;
+      totalTokens: number;
+      observedSince?: number;
+    };
+    /**
+     * Token consumption in rolling local observation windows.  These are a
+     * transparent fallback when an upstream quota window cannot be read; they
+     * are not percentages and do not imply an upstream allowance.
+     */
+    windows: {
+      fiveHour: DashboardSub2ApiGatewayTokenTotals;
+      sevenDay: DashboardSub2ApiGatewayTokenTotals;
+    };
+    requestCount: number;
+    successfulRequestCount: number;
+    failedRequestCount: number;
+    lastRequestAt?: number;
+    observedAt?: number;
+    lastFailure?: {
+      at: number;
+      origin: "adapter" | "sub2api";
+      statusCode?: number;
+      transportCode?: string;
+      requestMethod?: string;
+      requestPath?: string;
+      contentLength?: number;
+      transferEncoding?: "chunked";
+    };
+  };
+  inventory: {
+    configured: boolean;
+    credentialPresent: boolean;
+    status: "not_configured" | "credential_required" | "ready" | "healthy" | "failed";
+    group?: string;
+    checkedAt?: number;
+    message?: string;
+    eligibleAccountCount?: number;
+    observedAccountCount?: number;
+    fiveHour?: DashboardSub2ApiGatewayQuotaPool;
+    weekly?: DashboardSub2ApiGatewayQuotaPool;
+  };
+}
+
+export interface DashboardSub2ApiGatewayTokenTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  observedSince?: number;
+}
+
+/**
+ * A capacity-weighted aggregate of independent upstream windows.  It is not
+ * an OAuth account quota and never becomes an auto-switch input.
+ */
+export interface DashboardSub2ApiGatewayQuotaPool {
+  accountCount: number;
+  remainingUnits: number;
+  capacityUnits: number;
+  remainingPercent: number;
+  earliestResetAt?: number;
+}
+
 export type DashboardBatchResultKind =
   | "tags_set"
   | "tags_add"
@@ -526,6 +621,7 @@ export interface DashboardState {
   indexHealth: CodexIndexHealthSummary;
   accounts: DashboardAccountViewModel[];
   localUsage?: DashboardLocalUsageViewModel;
+  sub2apiGateway?: DashboardSub2ApiGatewayViewModel;
 }
 
 export type DashboardActionName =
@@ -560,6 +656,12 @@ export type DashboardActionName =
   | "batchRemove"
   | "refreshView"
   | "refreshLocalUsage"
+  | "sub2apiGatewayActivate"
+  | "sub2apiGatewayDeactivate"
+  | "sub2apiGatewayRefresh"
+  | "sub2apiGatewayConfigureCredential"
+  | "sub2apiGatewayConfigureObserverCredential"
+  | "sub2apiGatewayOpenConfig"
   | "reloadPrompt"
   | "reauthorize"
   | "resyncProfile"

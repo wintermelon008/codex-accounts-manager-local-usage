@@ -277,6 +277,8 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 
 若同时部署了受限的飞书文本命令机器人，可在需要接收任务的服务器上显式启用 `codexAccounts.localImportInboxEnabled`，再将原始 JSON 放入它写入的本地收件箱；扩展会自动导入、强制刷新额度，并只将合格账号加入无感切号池。该能力默认关闭，因此其他服务器安装同一扩展不受影响。完整的本地契约与安全边界见 [本地文本导入收件箱](docs/LOCAL_IMPORT_INBOX.md)。
 
+若该 Linux 扩展宿主本机部署了 Sub2API，可显式启用 `codexAccounts.sub2apiGatewayEnabled`，把一个下游 API 作为独立 Gateway 卡片接入。它不伪造 OAuth 账号、不进入五小时额度或无感切号池；关闭时不会读取其配置或凭据。卡片默认展示隔离的 Gateway token 消耗，只有显式配置独立的只读管理观察密钥后才聚合真实上游 5 小时/周窗口。完整的相对路径配置、SecretStorage、回环适配器、统计语义与回退步骤见 [本地 Sub2API Gateway](docs/LOCAL_SUB2API_GATEWAY.md)。
+
 ### 如何迁移账号到另一台电脑
 
 1. 在账号管理界面勾选需要迁移的账号

@@ -83,6 +83,179 @@ html[data-theme="auto"] body.vscode-light .panel {
   font-size: 12px;
   line-height: 1.5;
 }
+.sub2api-gateway-section {
+  padding-top: 0;
+}
+.sub2api-gateway-card {
+  display: grid;
+  gap: 14px;
+  padding: 15px;
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+.sub2api-gateway-card.status-active {
+  border-color: rgba(34, 197, 94, 0.5);
+}
+.sub2api-gateway-card.status-degraded,
+.sub2api-gateway-card.status-configuration_error {
+  border-color: rgba(239, 68, 68, 0.55);
+}
+.sub2api-gateway-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sub2api-gateway-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sub2api-gateway-title-row h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.sub2api-gateway-head p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sub2api-gateway-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--bg-elevated);
+  font-size: 10px;
+  font-weight: 800;
+}
+.sub2api-gateway-status.status-active,
+.sub2api-gateway-status.status-ready {
+  color: #86efac;
+  border-color: rgba(34, 197, 94, 0.42);
+  background: rgba(34, 197, 94, 0.1);
+}
+.sub2api-gateway-status.status-degraded,
+.sub2api-gateway-status.status-configuration_error {
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.42);
+  background: rgba(239, 68, 68, 0.1);
+}
+.sub2api-gateway-status.status-credential_required,
+.sub2api-gateway-status.status-configuration_required {
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.42);
+  background: rgba(245, 158, 11, 0.1);
+}
+.sub2api-gateway-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.sub2api-gateway-details > div,
+.sub2api-gateway-usage > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+.sub2api-gateway-details span,
+.sub2api-gateway-usage span,
+.sub2api-gateway-health > span:first-child,
+.sub2api-gateway-observer > span:first-child {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sub2api-gateway-details code {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sub2api-gateway-health {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+.sub2api-gateway-health time {
+  color: var(--muted);
+  font-size: 11px;
+}
+.sub2api-gateway-usage {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.sub2api-gateway-usage strong {
+  color: var(--text);
+  font-size: 17px;
+}
+.sub2api-gateway-usage small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.sub2api-gateway-usage p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.sub2api-gateway-quota-metric strong {
+  color: #86efac;
+}
+.sub2api-gateway-token-metric strong {
+  color: #93c5fd;
+}
+.sub2api-gateway-observer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+.sub2api-gateway-observer time {
+  color: var(--muted);
+  font-size: 11px;
+}
+.sub2api-gateway-failure {
+  margin: -4px 0 0;
+  color: #fca5a5;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.sub2api-gateway-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 620px) {
+  .sub2api-gateway-details,
+  .sub2api-gateway-usage {
+    grid-template-columns: 1fr;
+  }
+}
 .header-title {
   font-weight: 800;
   letter-spacing: 0.01em;

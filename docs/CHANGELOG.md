@@ -6,6 +6,85 @@
 - 历史版本正文统一写在本文件，按版本追加条目，不做删除。
 - 详情可按 `releaseVersion` 反查本次发布公告对应的 `id` 与变更内容。
 
+## 0.1.16-local.42（2026-07-22）
+
+### 本地定制变更
+
+- 修复 Gateway adapter 的回环代理路由：仅对 Gateway 启动的 Codex app-server 子进程补充 `NO_PROXY`/`no_proxy` 中的 `127.0.0.1`、`localhost` 与 `::1`。这样随机回环 adapter 端口不会被继承的 HTTP(S)/ALL 代理截走；外部代理路由和父进程环境保持不变。
+
+### 验证说明
+
+- 使用实际 Codex app-server 与隔离回环服务复现：设置代理且没有 `NO_PROXY` 时请求不会到达本地服务；加入回环 bypass 后请求立即到达。
+- shim 回归断言 Gateway 子进程得到回环 bypass，不打印任何代理值或凭据。
+- 本地构建版本升级为 `0.1.16-local.42`，继续基于上游 `0.1.16`。
+
+## 0.1.16-local.41（2026-07-22）
+
+### 本地定制变更
+
+- 修复 Gateway 重载启动竞态：回环 adapter 已就绪但 Manager 尚未从 SecretStorage 通过本地控制 socket 注入下游 Key 时，首个带有效本地令牌的请求会最多等待 15 秒，而不是立即以未就绪凭据失败。超时会留下安全的 `CREDENTIAL_TIMEOUT` 本地 `503` 诊断。
+- Gateway shim 增加脱敏生命周期日志：adapter 就绪、凭据已配置、请求等待凭据、开始转发、客户端取消和已有的转发失败。日志仍不含 Key、Authorization、正文、完整 URL、响应文本或上游账号信息。
+
+### 验证说明
+
+- shim 回归覆盖请求先到、凭据后到时的等待与成功转发，并断言生命周期日志不含下游 Key 或请求正文。
+- 以隔离的真实 Codex app-server 探针确认 `requires_openai_auth=false` 加 `env_key` 会将每进程本地令牌作为 Bearer 请求头发送给自定义 provider。
+- 本地构建版本升级为 `0.1.16-local.41`，继续基于上游 `0.1.16`。
+
+## 0.1.16-local.40（2026-07-22）
+
+### 本地定制变更
+
+- 修复最早本地 Gateway 版本创建的 thread 在恢复时找不到 `codex-accounts-sub2api` provider、因而在到达回环 adapter 前失败的问题。旧 ID 现在是内部兼容别名，始终指向当前手动选择的 ChatGPT Auth 或 Sub2API Gateway 传输；新 thread 继续使用统一 HTTP provider identity。
+- Gateway 每次实际转发失败都会额外写一条 `Sub2API Gateway forwarding failed:` 的安全日志，包含来源、状态、transport code 和脱敏请求形态，便于直接在 Codex 输出/扩展日志中排查。
+
+### 验证说明
+
+- shim 回归覆盖普通与 Gateway 两种启动参数中的旧 provider 兼容别名，以及上游 502/本地连接失败的固定格式日志；断言日志不包含下游 Key 或请求正文。
+- 本地构建版本升级为 `0.1.16-local.40`，继续基于上游 `0.1.16`。
+
+## 0.1.16-local.39（2026-07-22）
+
+### 本地定制变更
+
+- Sub2API Gateway 在实际转发失败的瞬间同步保存一条固定大小、owner-only 的诊断记录。即使随后必须切回 ChatGPT Auth 才能继续对话，Dashboard 仍可显示最近失败来源、HTTP 状态、Node transport code 与脱敏请求形态。
+- 诊断不保存请求正文、API Key、Authorization、完整 URL、响应文本或上游账号信息；解析时也只接受白名单字段，避免本地文件内容被原样反射到 Dashboard。
+
+### 验证说明
+
+- shim 端到端测试覆盖 Sub2API HTTP 失败与本地 `ECONNREFUSED`，并断言两类诊断均不含下游 Key 或请求正文；Controller 回归覆盖切回 ChatGPT Auth 后读取该记录。
+- 本地构建版本升级为 `0.1.16-local.39`，继续基于上游 `0.1.16`。
+
+## 0.1.16-local.38（2026-07-22）
+
+### 本地定制变更
+
+- Sub2API Gateway 卡片改为额度/使用视图：有明确上游观察数据时展示动态聚合的 5 小时与每周上游池；没有可读窗口时展示近 5 小时、近 7 天及今日的 Gateway 已观察 token，不再显示容易误解的请求/成功/失败计数或伪造额度百分比。
+- 新增可选 `inventoryObserver` 配置块和独立 SecretStorage 引用。它只在用户明确配置并保存独立管理观察密钥后，以只读 GET 聚合指定分组的可调度 OpenAI 上游账号 primary/secondary 额度；账号库存增减会在下一次刷新中更新容量分母，读取失败的账号不会被记为 0%。
+- Gateway token 只从本地回环适配器收到的最终 Responses `usage` 汇总中聚合，使用独立的五分钟匿名 token 桶和独立状态键；不会混入普通 ChatGPT 本机用量、账号窗口统计或无感切号池。
+- runtime protocol 升级到 v5。Gateway 与 ChatGPT HTTP transport 复用本地 provider identity，避免只因切换端点而将本地 thread history 按 provider 分开；仍需显式切换和 reload，且不会让两种上游服务共享远端上下文或自动切号。
+- Gateway 状态会区分本地适配器无法连接与 Sub2API 已返回的上游 HTTP 失败，便于定位 `502`；不显示请求正文或凭据。
+
+### 验证说明
+
+- 覆盖观察器配置/明文管理 Key 拒绝、分组账号窗口聚合、不可读取账号不伪造 0%、独立 SecretStorage、Gateway token 滚动窗口、Dashboard 签名与 provider identity。
+- shim 端到端测试覆盖未注入 Key 的 503、真实 Key 仅经回环转发、SSE `response.completed` token 汇总，以及 Sub2API 返回 502 时的来源标记。
+- 本地构建版本升级为 `0.1.16-local.38`，继续基于上游 `0.1.16`。
+
+## 0.1.16-local.37（2026-07-22）
+
+### 本地定制变更
+
+- 新增默认关闭的本地 Sub2API Gateway：一个 Gateway 卡片对应一个下游 API，不伪造 OAuth 账号，也不会进入 ChatGPT Auth 的五小时额度或无感切号池。
+- Gateway 配置文件只接受扩展 global storage 下的相对路径；明文 API Key 配置会被拒绝，真实下游 Key 仅保存在 VS Code SecretStorage。
+- 选中 Gateway 后，runtime 启动仅监听 `127.0.0.1` 的每进程适配器，使用随机本地令牌接收 Codex 请求，并在内存中替换为 SecretStorage Key 后转发到配置的 Sub2API `/v1`。
+- 卡片展示当前 `/v1/models` 健康快照与 Manager 观察到的请求/成功/失败计数；库存或模型变化不会伪造、重置或换算成五小时额度。
+
+### 验证说明
+
+- 覆盖相对配置路径、模板创建、明文密钥拒绝、SecretStorage 注入、跨 runtime 观察计数，以及未注入 Key 时适配器 503、注入后仅向 Sub2API 转发真实 Key 的端到端 shim 测试。
+- 本地构建版本升级为 `0.1.16-local.37`，继续基于上游 `0.1.16`。
+
 ## 0.1.16-local.36（2026-07-22）
 
 ### 本地定制变更
