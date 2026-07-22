@@ -64,6 +64,21 @@ describe("extension manifest configuration", () => {
     );
   });
 
+  it("keeps the local import inbox opt-in by default", () => {
+    const manifestPath = path.resolve(__dirname, "../package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      contributes?: {
+        configuration?: {
+          properties?: Record<string, { type?: string; default?: unknown; markdownDescription?: string }>;
+        };
+      };
+    };
+    const property = manifest.contributes?.configuration?.properties?.["codexAccounts.localImportInboxEnabled"];
+
+    expect(property).toMatchObject({ type: "boolean", default: false });
+    expect(property?.markdownDescription).toContain("does not create, watch, or import");
+  });
+
   it("declares seamless behavior, runtime installation, quota-band balancing, and rollback commands", () => {
     const manifestPath = path.resolve(__dirname, "../package.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {

@@ -1,13 +1,14 @@
 import * as vscode from "vscode";
 import { maybeSeamlessBalanceSwitchForActiveQuota } from "../../application/accounts/quota";
 import { registerCommands } from "../../commands";
-import { isSeamlessSwitchEnabled } from "../../infrastructure/config/extensionSettings";
+import { isLocalImportInboxEnabled, isSeamlessSwitchEnabled } from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
 import { registerDebugOutput, t } from "../../utils";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
+import { LocalImportInbox } from "./localImportInbox";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
 import {
   registerAutoRefreshScheduler,
@@ -23,12 +24,18 @@ export class AccountsWorkbench {
   private readonly statusBar: AccountsStatusBarProvider;
   private readonly refreshCoordinator: WorkbenchRefreshCoordinator;
   private readonly hotSwitchRuntime: CodexHotSwitchRuntime;
+  private readonly localImportInbox: LocalImportInbox | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.repo = new AccountsRepository(context);
     this.statusBar = new AccountsStatusBarProvider(context, this.repo);
     this.refreshCoordinator = new WorkbenchRefreshCoordinator(context, this.repo, this.statusBar);
     this.hotSwitchRuntime = new CodexHotSwitchRuntime(context, this.repo);
+    this.localImportInbox = isLocalImportInboxEnabled()
+      ? new LocalImportInbox(this.repo, () => {
+          void this.statusBar.refresh();
+        })
+      : undefined;
   }
 
   async activate(): Promise<void> {
@@ -59,6 +66,9 @@ export class AccountsWorkbench {
     this.context.subscriptions.push({ dispose: () => this.repo.dispose() });
     this.context.subscriptions.push({ dispose: () => this.refreshCoordinator.dispose() });
     this.context.subscriptions.push(this.hotSwitchRuntime);
+    if (this.localImportInbox) {
+      this.context.subscriptions.push(this.localImportInbox);
+    }
 
     const refreshers = {
       ...this.refreshCoordinator.createRefreshView(),
@@ -107,6 +117,10 @@ export class AccountsWorkbench {
         })
       );
     });
+    const localImportInbox = this.localImportInbox;
+    if (localImportInbox) {
+      await measureStep("localImportInbox.start", () => localImportInbox.start());
+    }
     await measureStep("promptImportCurrentAccountIfNeeded", async () => {
       await this.refreshCoordinator.promptImportCurrentAccountIfNeeded(refreshers);
     });
@@ -141,6 +155,7 @@ export class AccountsWorkbench {
   dispose(): void {
     this.refreshCoordinator.dispose();
     this.hotSwitchRuntime.dispose();
+    this.localImportInbox?.dispose();
     this.repo.dispose();
   }
 

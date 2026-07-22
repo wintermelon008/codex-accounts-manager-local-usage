@@ -100,6 +100,11 @@
           "default": true,
           "markdownDescription": "Automatically refresh saved account tokens in the background before they expire while VS Code is running."
         },
+        "codexAccounts.localImportInboxEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Opt in to a private local inbox written by a separately configured Feishu command bot. When disabled, Codex Accounts Manager does not create, watch, or import from the inbox."
+        },
         "codexAccounts.autoSwitchEnabled": {
           "type": "boolean",
           "default": false,
