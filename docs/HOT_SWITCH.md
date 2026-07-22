@@ -9,8 +9,11 @@
 - 每张已保存账号卡片左下角都有独立的无感切号池开关，也可使用批量操作同时设置多个账号；池成员少于两个时只保存选择，不启动分档调度。
 - 卡片左上角的选择框可批量隐藏或解除隐藏账号。隐藏成功后仅取消实际被隐藏账号的勾选；隐藏账号默认从面板列表中筛掉、以紫色标识，立即移出无感切号池，且不会成为自动或手动切换目标；解除隐藏会自动重新加入无感切号池。面板的眼睛按钮可随时显示隐藏卡片。
 - Saved Accounts 右上角的“隐藏周额度 <3%”按钮只处理当前显示范围中周额度严格低于 `3%` 的未隐藏账号；无周额度窗口或已隐藏账号不会被处理。
+- 同一区域的“解除隐藏周额度 >90%”按钮会检查所有隐藏账号，不受当前分组显示状态影响；只有周额度严格高于 `90%` 且存在周窗口的账号会被恢复。恢复在同一次写入中自动加入无感切号池并移出 `A/B/C` 分组，普通批量解除隐藏继续保留原分组。
 - 同一批量选择可将账号放入 `A`、`B`、`C` 分组或移出分组。面板右上角的 `A/B/C` 按钮同时控制该分组卡片是否显示、该分组是否进入无感候选；未分组且未隐藏账号固定显示并始终进入无感候选。分组筛选不改池成员、不影响手动切号或官方自动切号；已激活的关闭分组账号仅在原有切换条件满足时才会转出，且目标只能来自当前显示范围。
-- Dashboard 的“刷新全部配额”只刷新当前显示范围的账号，因此隐藏账号和关闭分组账号不会被一键刷新；单卡和明确选中的批量刷新不受此筛选影响。
+- 已保存账号按每页最多 `50` 张卡片分页；隐藏、解除隐藏及分组显示变化会立即重新分页，页码越界时自动回到有效页。
+- Dashboard 的“刷新当前页配额”只刷新当前显示页；单卡、明确选中的批量刷新和命令面板的显式全量刷新不受此页范围限制。
+- 定时配额刷新只处理未隐藏且分组已启用的第 `1` 页（最多 `50` 个账号）；其余账号仅按需手动刷新。需要持续参与分钟级无感调度的账号应放在这一范围内。
 - 全局任意时刻只启用一个账号，不把账号分配到单独的 conversation。
 - 普通自动调度只依据最新有效额度窗口识别能力，不依据 Free、Plus 等套餐标签推断：同时有五小时和周窗口的是分档账号，明确没有五小时窗口但有周窗口的是储备账号，额度缺失、过期或报错时暂不参与自动选择。
 - 经过 Free 标签与实际窗口双重验证的 Free 账号是唯一例外：不参加普通 `20%/25%/33%/50%` 分档或 `1%/2%/3%` 储备阈值，而是在启用耗尽保护后一直使用到五小时 `1%` 或 runtime 的额度耗尽信号。
@@ -31,7 +34,7 @@
 
 仅调用 `account/login/start` 不足以保证已有 thread 的下一轮请求改用新账号。已验证的 Codex `0.144.2` 会为每个已加载 thread 缓存 Responses WebSocket；登录接口会更新共享认证状态，`account/read` 也会显示新账号，但旧 thread 仍可能复用由旧账号建立的 WebSocket。这会造成 Manager 显示切换成功、实际却继续扣旧账号额度。
 
-runtime protocol v3 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v3 还支持无旧 Manager 账号时的内存回滚快照，不把快照凭据持久化到账号库或 runtime 配置。
+runtime protocol v4 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v4 保留 v3 的无旧 Manager 账号内存回滚快照，并新增只读的账号用量归因：shim 在受管 turn 开始时批量记录不透明本地账号 ID、thread ID 和时间，不把提示词、会话正文、邮箱、远端账号 ID 或凭据写入 journal、账号库或 runtime 配置。
 
 Codex 会把创建会话时的 provider ID 写入本地 thread 元数据，官方界面的 `thread/list` 默认又只查询当前 provider。无感 runtime 若不处理这层过滤，安装前的 `openai` 会话和安装后的 HTTP provider 会话就会像两套独立历史。shim 只把 `thread/list` 中显式的 `modelProviders: null` 改成协议定义的空数组（所有 provider），保留显式 provider 列表不变；它不修改 rollout、`session_index.jsonl` 或 SQLite。官方界面恢复旧 thread 时会传入当前无感 provider，因此后续 turn 仍使用 HTTP transport。
 
@@ -48,7 +51,7 @@ Dashboard 中关闭`无感切号（实验性）`会立即恢复 Manager 原有�
    - `chatgpt.cliExecutable` 是官方扩展的 application 级开发设置，不能由 Remote Settings 覆盖，并会优先于远端 shim 链接。启用远端 runtime 前，必须从每台连接设备的本地 User Settings 和远端 Remote Settings 中删除该键；否则 manager 会拒绝安装，避免出现跨设备启动失败或假成功。
 3. 打开账号 Dashboard，使用每张账号卡片左下角的开关，将至少两个账号加入无感切号池。也可勾选多个账号后使用“设为无感切号池”或“移出无感切号池”批量操作；同一选择框还可批量“隐藏账号”/“解除隐藏”以及设置 `A/B/C` 分组或移出分组。右上角 `A/B/C` 按钮是无感候选范围筛选；未分组且未隐藏账号不会被筛掉。隐藏会立即移出池并禁止切换到该账号，解除隐藏会重新加入池。
 4. 在 Dashboard 设置中开启：
-   - 配额自动刷新，Free 耗尽保护建议 `1` 分钟；
+   - 配额自动刷新，Free 耗尽保护建议 `1` 分钟；它只刷新未隐藏、已启用分组的第 `1` 页（最多 `50` 个账号），因此需自动调度的账号应通过隐藏/分组整理到该范围；
    - `无感切号（实验性）`总开关；
    - 其子设置`额度分档无感平衡`，并选择 `1/5 (20%)`、`1/4 (25%)`、`1/3 (33%)` 或 `1/2 (50%)`；不要为此额外开启官方自动切号或五小时配额控制；
    - 选择`储备账号切换阈值`：`1%`、`2%` 或 `3%`，默认 `3%`。具有新鲜五小时窗口的账号优先分档轮换，全部到达该阈值后才使用没有五小时窗口、周额度最高的储备账号；
@@ -141,7 +144,9 @@ shim 以真实 `turn.id` 跟踪 app-server 中的活动 turn：
 
 Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储目录。Manager 对账号索引、Aideck token 与配额镜像使用 UUID 临时文件和原子替换，并在短期共享租约下执行三方合并；一个宿主刚导入、删除或刷新账号时，另一个宿主的旧内存快照不会直接覆盖新状态。后台 token 刷新、配额扫描和调度各自使用可过期租约，宿主异常退出后其他实例可回收租约继续工作；手动刷新不依赖等待后台租约完成。
 
-本地会话用量聚合也采用共享缓存，但不会把某个窗口启动时的旧副本永久留在内存。统计按 rollout 的累计 token 高水位取增量，忽略同一累计值的重复/过期上报；spawned subagent 中复制的父会话历史只建立基线，从子代理自己的 trigger-turn 边界后才计入新增。每次读取会采用 `calculatedAt` 严格更新的共享结果；到达 `nextRefreshAt` 时 Dashboard 主动更新，而不是必须关闭重开面板。扫描操作由独立可过期租约去重，避免多个设备重复遍历同一批本地会话。缓存只保存汇总计数和时间边界，不保存会话正文、账号标识、token、完整会话路径或其他凭据。
+本地会话用量聚合也采用共享缓存，但不会把某个窗口启动时的旧副本永久留在内存。统计按 rollout 的累计 token 高水位取增量，忽略同一累计值的重复/过期上报；spawned subagent 中复制的父会话历史只建立基线，从子代理自己的 trigger-turn 边界后才计入新增。每次读取会采用 `calculatedAt` 严格更新的共享结果；到达 `nextRefreshAt` 时 Dashboard 主动更新，而不是必须关闭重开面板。扫描操作由独立可过期租约去重，避免多个设备重复遍历同一批本地会话。
+
+账号卡片下方的当前额度窗口 Token 统计不另起扫描：同一轮既有会话扫描只读取原有 token 元数据，并把最多 2 MiB 的归因 journal 尾部索引到本地账号。journal 只记录不透明本地账号 ID、thread ID 与时间；账号窗口缓存仅保留该本地 ID、额度 reset 时间及汇总 token 数，文件权限为 `0600`。它不回填安装前或未受管的历史；卡片只接受与当前五小时/周额度 reset 时间匹配的桶，额度重置后旧统计立即归零并等待新受管 turn。runtime 若只返回一个 `primary` 窗口，会按实际 `window_minutes` 判定短期或长期，因此不把 Plus 等长周期额度错误归为五小时。没有逐 token IPC、额外网络请求或会话正文的第二次加载。
 
 这些机制提供最终收敛，不把多个 app-server 伪装成单一原子事务：已经开始的 turn 仍按其原身份运行到安全边界，各宿主随后热切换到共享活动账号。现场核验应同时检查 Manager 当前账号、runtime 身份以及额度刷新时间，不能只根据某一台设备缓存的卡片顺序判断是否切换成功。
 
@@ -149,8 +154,8 @@ Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储
 
 - shim 与 manager 使用当前 extension-host PID 对应的本地 Unix socket；目录权限为 `0700`，socket 为 `0600`。
 - shim 在收到成功的 `initialize` 响应或客户端 `initialized` 通知后即可进入 ready；状态接口同时报告两个握手信号，便于区分官方扩展版本差异。热切换已启用但 bridge 未 ready 时，Manager 必须失败关闭，不能回退为磁盘切号。
-- runtime protocol v3 的状态接口必须同时报告 `httpTransportForced=true`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
-- access token 只通过进程内存和本地 IPC 传递，不写入 shim 配置，也不输出到日志。runtime 配置文件只保存官方 Codex CLI 的绝对路径。
+- runtime protocol v4 的状态接口必须同时报告 `httpTransportForced=true`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
+- access token 只通过进程内存和本地 IPC 传递，不写入 shim 配置，也不输出到日志。runtime 配置文件只保存官方 Codex CLI 的绝对路径及受保护的归因 journal 目录；两者均不含账号身份或凭据。
 - token 临近过期时由 manager 使用原有 OAuth 刷新逻辑更新；app-server 的 refresh 回调必须匹配原 ChatGPT account ID，否则拒绝返回凭据。
 - 同一 workspace ID 可能对应多个已导入用户。manager 在切换前校验 access token 的 user ID 与本地账号记录一致，再把 access token 的 runtime email 交给 app-server 身份校验；稳定账号记录邮箱与 runtime email 允许是同一 user ID 的不同别名。refresh 与失败回滚以 manager 本地账号 ID 和 workspace ID 为主；缺少本地身份且 workspace ID 不唯一时安全失败，不按数组顺序猜测账号。
 - 该能力依赖 Codex app-server 的 experimental API。当前实现按本机 Codex `0.144.5` schema 和官方 VS Code 扩展 `26.707.91948` 验证；官方扩展升级后必须重新跑测试。协议在初始化前即不可用时可走原 reload 路径；事务已经开始后发生的不兼容会安全失败并保持/回滚旧账号。

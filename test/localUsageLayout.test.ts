@@ -112,8 +112,10 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).toContain("ACCOUNT_GROUPS");
     expect(main).toContain("isAccountInVisibleGroup");
     expect(main).toContain(
-      'sendAction("refreshAll", undefined, { accountIds: displayedAccounts.map((account) => account.id) })'
+      'sendAction("refreshAll", undefined, { accountIds: pageAccounts.map((account) => account.id) })'
     );
+    expect(main).toContain("getDashboardAccountPage");
+    expect(main).toContain("saved-accounts-pagination");
   });
 
   it("exposes a per-account seamless-switch pool toggle at the left of the card action row", () => {
@@ -130,6 +132,16 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain("margin-right: auto");
   });
 
+  it("renders a compact quota-window token counter in the paginated account card", () => {
+    const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
+    const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
+
+    expect(card).toContain("saved-token-usage-line");
+    expect(card).toContain("formatAccountTokenUsage");
+    expect(stylesheet).toContain(".saved-token-usage-line");
+    expect(stylesheet).toContain("text-overflow: ellipsis");
+  });
+
   it("supports hiding selected accounts and filtering them from the saved-account grid", () => {
     const accountViews = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/accountViews.tsx"), "utf8");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
@@ -143,7 +155,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).toContain('sendAction("hideAccounts"');
     expect(main).toContain('sendAction("unhideAccounts"');
     expect(main).toContain("hiddenAccountsToggleButton");
-    expect(main).toContain("displayedAccounts.map");
+    expect(main).toContain("pageAccounts.map");
     expect(card).toContain("is-hidden-account");
     expect(card).toContain("已隐藏");
     expect(stylesheet).toContain(".saved-card.is-hidden-account");

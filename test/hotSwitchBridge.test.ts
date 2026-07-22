@@ -1,4 +1,6 @@
 import * as childProcess from "node:child_process";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -73,7 +75,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 3,
+      runtimeProtocolVersion: 4,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -97,6 +99,80 @@ describe("CodexHotSwitchBridge", () => {
       managedLocalAccountId: null,
       httpTransportForced: true
     });
+    await expect(
+      bridge.activateUsageAttribution({
+        localAccountId: "local-a",
+        accountId: "account-a",
+        expectedEmail: "a@example.invalid"
+      })
+    ).resolves.toEqual({ active: true, localAccountId: "local-a" });
+  });
+
+  it("writes only compact thread-to-local-account attribution records", async () => {
+    const root = path.resolve(__dirname, "..");
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-runtime-attribution-"));
+    const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
+    const attributionDirectory = path.join(runtimeDirectory, "account-usage-attribution");
+    const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
+    try {
+      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await writeFile(
+        path.join(runtimeDirectory, "codex-app-server-shim.json"),
+        JSON.stringify({ realCliPath: fakeCliPath, forceHttpTransport: true, usageAttributionDirectory: attributionDirectory }),
+        "utf8"
+      );
+      shim = childProcess.spawn(shimPath, ["app-server"], {
+        cwd: root,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const messages = createMessageCollector(shim.stdout);
+      shim.stdin.write(`${JSON.stringify({ id: "initialize", method: "initialize", params: {} })}\n`);
+      await messages.next((message) => message.id === "initialize");
+
+      bridge = new CodexHotSwitchBridge(async () => ({
+        accessToken: "unused-token",
+        chatgptAccountId: "account-a",
+        chatgptPlanType: "plus"
+      }));
+      await waitForSocket(getHotSwitchSocketPath(process.pid));
+      await bridge.activateUsageAttribution({
+        localAccountId: "local-account-a",
+        accountId: "workspace-sensitive-marker",
+        expectedEmail: "a@example.invalid"
+      });
+
+      shim.stdin.write(
+        `${JSON.stringify({
+          id: "start-attributed-turn",
+          method: "turn/start",
+          params: { threadId: "thread-a", input: [] }
+        })}\n`
+      );
+      await messages.next((message) => message.id === "start-attributed-turn");
+
+      const exited = new Promise<void>((resolve) => shim?.once("exit", () => resolve()));
+      bridge.dispose();
+      bridge = undefined;
+      shim.stdin.end();
+      shim.kill("SIGTERM");
+      await exited;
+      const journal = await readFile(path.join(attributionDirectory, `${shim.pid}.jsonl`), "utf8");
+      expect(journal).toContain('"th":"thread-a"');
+      expect(journal).toContain('"a":"local-account-a"');
+      expect(journal).not.toContain("a@example.invalid");
+      expect(journal).not.toContain("workspace-sensitive-marker");
+      expect(journal).not.toContain("unused-token");
+    } finally {
+      bridge?.dispose();
+      bridge = undefined;
+      if (shim && !shim.killed) {
+        shim.stdin.end();
+        shim.kill("SIGTERM");
+      }
+      shim = undefined;
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
   });
 
   it("lists history across runtime provider IDs without overriding explicit provider filters", async () => {

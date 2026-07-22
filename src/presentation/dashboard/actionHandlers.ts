@@ -548,13 +548,22 @@ async function handleUnhideAccounts(
   if (!accountIds.length) {
     return undefined;
   }
-  await repo.unhideAccounts(accountIds);
+  const clearAccountGroup = payload?.clearAccountGroup === true;
+  if (clearAccountGroup) {
+    await repo.unhideAccounts(accountIds, { clearAccountGroup: true });
+  } else {
+    await repo.unhideAccounts(accountIds);
+  }
   resetSeamlessSwitchRuntimeState();
   schedulePublishState();
   void vscode.window.showInformationMessage(
     language === "zh" || language === "zh-hant"
-      ? `已解除隐藏 ${accountIds.length} 个账号，并加入无感切号池`
-      : `${accountIds.length} account(s) were unhidden and added to the seamless-switch pool`
+      ? clearAccountGroup
+        ? `已解除隐藏 ${accountIds.length} 个账号，加入无感切号池并移出分组`
+        : `已解除隐藏 ${accountIds.length} 个账号，并加入无感切号池`
+      : clearAccountGroup
+        ? `${accountIds.length} account(s) were unhidden, added to the seamless-switch pool, and ungrouped`
+        : `${accountIds.length} account(s) were unhidden and added to the seamless-switch pool`
   );
   return undefined;
 }

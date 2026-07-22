@@ -20,6 +20,7 @@ export function OverviewSection(props: {
   addPending: boolean;
   importPending: boolean;
   refreshAllPending: boolean;
+  refreshPageLabel: string;
   onToggleAutoSwitchLock: () => void;
   onAddAccount: () => void;
   onImportCurrent: () => void;
@@ -117,7 +118,7 @@ export function OverviewSection(props: {
             {copy.importCurrent}
           </ActionButton>
           <ActionButton class="toolbar-btn" pending={props.refreshAllPending} disabled={props.disabled} onClick={props.onRefreshAll}>
-            {copy.refreshAll}
+            {props.refreshPageLabel}
           </ActionButton>
           {account?.isActive ? (
             <ActionButton class="toolbar-btn" onClick={props.onToggleAutoSwitchLock}>

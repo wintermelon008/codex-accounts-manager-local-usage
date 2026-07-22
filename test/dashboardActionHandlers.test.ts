@@ -211,6 +211,33 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
+  it("can unhide accounts into the seamless-switch pool without retaining their group", async () => {
+    const unhideAccounts = vi.fn().mockResolvedValue([]);
+    const schedulePublishState = vi.fn();
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: { unhideAccounts } as unknown as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState,
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "unhideAccounts",
+        requestId: "req-unhide-ungrouped",
+        payload: { accountIds: ["account-1"], clearAccountGroup: true }
+      }
+    );
+
+    expect(unhideAccounts).toHaveBeenCalledWith(["account-1"], { clearAccountGroup: true });
+    expect(schedulePublishState).toHaveBeenCalledOnce();
+    expect(result.status).toBe("completed");
+  });
+
   it("sets a selected account group and resets seamless scheduling", async () => {
     const setAccountGroup = vi.fn().mockResolvedValue([]);
     const schedulePublishState = vi.fn();

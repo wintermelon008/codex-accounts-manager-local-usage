@@ -19,7 +19,12 @@ import {
   getDashboardLocalUsageRefreshDelay,
   publishDashboardSnapshot
 } from "../src/presentation/dashboard/panel";
-import { getLowWeeklyQuotaAccountIds } from "../webview-src/dashboard/helpers";
+import {
+  getDashboardAccountPage,
+  getDashboardVisibleAccounts,
+  getHighWeeklyQuotaHiddenAccountIds,
+  getLowWeeklyQuotaAccountIds
+} from "../webview-src/dashboard/helpers";
 import { createInitialState, reducer } from "../webview-src/dashboard/state";
 
 const localUsage = {
@@ -42,6 +47,14 @@ const localUsage = {
   byDayAndModel: [],
   byThreeHour: [],
   byThreeHourAndModel: []
+};
+
+const accountTokenUsage = {
+  status: "ready" as const,
+  isRefreshing: false,
+  calculatedAt: 1,
+  nextRefreshAt: 2,
+  windowsByAccount: {}
 };
 
 function createState(): DashboardState {
@@ -123,6 +136,32 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | "ti
 }
 
 describe("Dashboard account selection", () => {
+  it("paginates the displayed account set and clamps a removed last page", () => {
+    const accounts = Array.from({ length: 101 }, (_, index) => `account-${index + 1}`);
+
+    expect(getDashboardAccountPage(accounts, 1)).toMatchObject({
+      page: 1,
+      pageCount: 3,
+      startIndex: 0,
+      endIndex: 50,
+      accounts: accounts.slice(0, 50)
+    });
+    expect(getDashboardAccountPage(accounts, 3)).toMatchObject({
+      page: 3,
+      pageCount: 3,
+      startIndex: 100,
+      endIndex: 101,
+      accounts: ["account-101"]
+    });
+    expect(getDashboardAccountPage(accounts.slice(0, 50), 3)).toMatchObject({
+      page: 1,
+      pageCount: 1,
+      startIndex: 0,
+      endIndex: 50,
+      accounts: accounts.slice(0, 50)
+    });
+  });
+
   it("only targets visible, non-hidden accounts whose weekly quota is below 3%", () => {
     const accounts = [
       {
@@ -150,6 +189,35 @@ describe("Dashboard account selection", () => {
     expect(getLowWeeklyQuotaAccountIds(accounts)).toEqual(["below-threshold"]);
   });
 
+  it("targets hidden accounts above 90% weekly quota across all groups", () => {
+    const accounts = [
+      {
+        id: "above-threshold",
+        isHidden: true,
+        accountGroup: "A",
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 90.01, visible: true }]
+      },
+      {
+        id: "at-threshold",
+        isHidden: true,
+        accountGroup: "B",
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 90, visible: true }]
+      },
+      {
+        id: "visible-high-quota",
+        isHidden: false,
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 99, visible: true }]
+      },
+      {
+        id: "no-weekly-window",
+        isHidden: true,
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 99, visible: false }]
+      }
+    ] as DashboardState["accounts"];
+
+    expect(getHighWeeklyQuotaHiddenAccountIds(accounts)).toEqual(["above-threshold"]);
+  });
+
   it("deselects only accounts that were actually hidden", () => {
     let state = createInitialState();
     state = reducer(state, { type: "toggle-select", accountId: "hidden-account" });
@@ -159,6 +227,75 @@ describe("Dashboard account selection", () => {
 
     expect(nextState.selectedAccountIds).toEqual(["still-selected"]);
   });
+
+  it("clears accounts that leave the group filter while retaining visible selections", () => {
+    const dashboardState = createState();
+    dashboardState.settings = {
+      ...dashboardState.settings,
+      seamlessSwitchGroupAVisible: false
+    };
+    dashboardState.accounts = [
+      {
+        id: "ungrouped-account",
+        isHidden: false
+      },
+      {
+        id: "group-a-account-1",
+        accountGroup: "A",
+        isHidden: false
+      },
+      {
+        id: "group-a-account-2",
+        accountGroup: "A",
+        isHidden: false
+      },
+      {
+        id: "hidden-account",
+        isHidden: true
+      }
+    ] as DashboardState["accounts"];
+
+    let state = createInitialState();
+    for (const accountId of ["ungrouped-account", "group-a-account-1", "group-a-account-2", "hidden-account"]) {
+      state = reducer(state, { type: "toggle-select", accountId });
+    }
+
+    const visibleAccountIds = getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, false).map(
+      (account) => account.id
+    );
+    const nextState = reducer(state, { type: "reconcile-selection-scope", visibleAccountIds });
+
+    expect(nextState.selectedAccountIds).toEqual(["ungrouped-account"]);
+  });
+
+  it("keeps hidden accounts selected only while the hidden-account view is enabled", () => {
+    const dashboardState = createState();
+    dashboardState.accounts = [
+      {
+        id: "hidden-account",
+        isHidden: true
+      }
+    ] as DashboardState["accounts"];
+
+    let state = createInitialState();
+    state = reducer(state, { type: "toggle-select", accountId: "hidden-account" });
+
+    const shownHiddenAccountIds = getDashboardVisibleAccounts(
+      dashboardState.accounts,
+      dashboardState.settings,
+      true
+    ).map((account) => account.id);
+    expect(
+      reducer(state, { type: "reconcile-selection-scope", visibleAccountIds: shownHiddenAccountIds }).selectedAccountIds
+    ).toEqual(["hidden-account"]);
+
+    const hiddenAccountIds = getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, false).map(
+      (account) => account.id
+    );
+    expect(
+      reducer(state, { type: "reconcile-selection-scope", visibleAccountIds: hiddenAccountIds }).selectedAccountIds
+    ).toEqual([]);
+  });
 });
 
 describe("publishDashboardSnapshot", () => {
@@ -167,7 +304,7 @@ describe("publishDashboardSnapshot", () => {
     buildDashboardStateMock.mockResolvedValue(state);
     backfillMissingResetCreditExpiriesMock.mockResolvedValue(false);
     const usageAnalytics = {
-      getSnapshot: vi.fn(async () => localUsage)
+      getSnapshots: vi.fn(async () => ({ localUsage, accountTokenUsage }))
     };
     const scheduleLocalUsageRefresh = vi.fn();
 
@@ -183,13 +320,14 @@ describe("publishDashboardSnapshot", () => {
       usageAnalytics: usageAnalytics as never
     });
 
-    expect(usageAnalytics.getSnapshot).toHaveBeenCalledTimes(1);
+    expect(usageAnalytics.getSnapshots).toHaveBeenCalledTimes(1);
     expect(buildDashboardStateMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
       "logo",
       state.announcements,
-      localUsage
+      localUsage,
+      accountTokenUsage
     );
     expect(scheduleLocalUsageRefresh).toHaveBeenCalledWith(localUsage.nextRefreshAt);
   });

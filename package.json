@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.30",
+  "version": "0.1.16-local.34",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -93,7 +93,7 @@
           "maximum": 60,
           "multipleOf": 1,
           "default": 0,
-          "markdownDescription": "Automatically refresh saved account quotas every N minutes. Set to `0` to disable, or choose any interval from `1` to `60` minutes."
+          "markdownDescription": "Automatically refresh only the first Dashboard page (up to 50 non-hidden accounts in enabled groups) every N minutes. Set to `0` to disable, or choose any interval from `1` to `60` minutes; refresh other accounts manually."
         },
         "codexAccounts.backgroundTokenRefreshEnabled": {
           "type": "boolean",

@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { needsRefresh, refreshTokens } from "../../auth/oauth";
 import type { CodexHotSwitchRuntime, HotSwitchIdentity, HotSwitchStatus } from "../../codex";
+import type { CodexAccountRecord } from "../../core/types";
+import { DASHBOARD_ACCOUNTS_PAGE_SIZE } from "../../domain/dashboard/types";
 import {
   getAutoRefreshMinutes,
   getCodexAccountsConfiguration,
@@ -23,6 +25,9 @@ import {
 const SCHEDULER_LEASE_MS = 2 * 60 * 1000;
 const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
 const SEAMLESS_EMERGENCY_SWITCH_ENABLED = "seamlessSwitchEmergencySwitchEnabled";
+const SEAMLESS_SWITCH_GROUP_A_VISIBLE = "seamlessSwitchGroupAVisible";
+const SEAMLESS_SWITCH_GROUP_B_VISIBLE = "seamlessSwitchGroupBVisible";
+const SEAMLESS_SWITCH_GROUP_C_VISIBLE = "seamlessSwitchGroupCVisible";
 
 // This monitor deliberately only consumes the runtime's bounded scalar status
 // response. It never asks the runtime for thread IDs, conversation text, or
@@ -213,7 +218,8 @@ export function registerAutoRefreshScheduler(params: {
       inFlight = true;
       try {
         const accounts = await params.repo.listAccounts();
-        if (!shouldRunAccountScheduler(accounts.length)) {
+        const accountIds = getAutomaticQuotaRefreshAccountIds(accounts, getCodexAccountsConfiguration());
+        if (!shouldRunAccountScheduler(accountIds.length)) {
           return;
         }
 
@@ -224,7 +230,8 @@ export function registerAutoRefreshScheduler(params: {
         try {
           await vscode.commands.executeCommand("codexAccounts.refreshAllQuotas", {
             silent: true,
-            forceRefresh: true
+            forceRefresh: true,
+            accountIds
           });
         } finally {
           await lease.release();
@@ -241,7 +248,7 @@ export function registerAutoRefreshScheduler(params: {
       minutes * 60 * 1000
     );
     void params.repo.listAccounts().then((accounts) => {
-      if (shouldRunAccountScheduler(accounts.length)) {
+      if (shouldRunAccountScheduler(getAutomaticQuotaRefreshAccountIds(accounts, getCodexAccountsConfiguration()).length)) {
         void runAutoRefresh();
       }
     });
@@ -250,7 +257,12 @@ export function registerAutoRefreshScheduler(params: {
   applySchedule();
 
   const configDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
-    if (event.affectsConfiguration("codexAccounts.autoRefreshMinutes")) {
+    if (
+      event.affectsConfiguration("codexAccounts.autoRefreshMinutes") ||
+      event.affectsConfiguration("codexAccounts.seamlessSwitchGroupAVisible") ||
+      event.affectsConfiguration("codexAccounts.seamlessSwitchGroupBVisible") ||
+      event.affectsConfiguration("codexAccounts.seamlessSwitchGroupCVisible")
+    ) {
       applySchedule();
     }
   });
@@ -264,6 +276,51 @@ export function registerAutoRefreshScheduler(params: {
       }
     }
   };
+}
+
+/**
+ * Automatic quota refresh follows the same persisted visibility controls as
+ * the Dashboard: hidden accounts and disabled groups are outside the working
+ * set. It intentionally uses only the first bounded page so a short interval
+ * cannot turn a large account archive into a permanent refresh queue.
+ */
+export function getAutomaticQuotaRefreshAccountIds(
+  accounts: readonly CodexAccountRecord[],
+  config: vscode.WorkspaceConfiguration,
+  pageSize = DASHBOARD_ACCOUNTS_PAGE_SIZE
+): string[] {
+  const normalizedPageSize = Math.max(1, Math.floor(pageSize));
+  return accounts
+    .filter((account) => isAutomaticallyRefreshable(account, config))
+    .sort(compareAutomaticQuotaRefreshAccounts)
+    .slice(0, normalizedPageSize)
+    .map((account) => account.id);
+}
+
+function isAutomaticallyRefreshable(account: CodexAccountRecord, config: vscode.WorkspaceConfiguration): boolean {
+  if (account.isHidden) {
+    return false;
+  }
+
+  switch (account.accountGroup) {
+    case "A":
+      return config.get<boolean>(SEAMLESS_SWITCH_GROUP_A_VISIBLE, true);
+    case "B":
+      return config.get<boolean>(SEAMLESS_SWITCH_GROUP_B_VISIBLE, true);
+    case "C":
+      return config.get<boolean>(SEAMLESS_SWITCH_GROUP_C_VISIBLE, true);
+    default:
+      return true;
+  }
+}
+
+function compareAutomaticQuotaRefreshAccounts(left: CodexAccountRecord, right: CodexAccountRecord): number {
+  return (
+    Number(right.isActive) - Number(left.isActive) ||
+    right.createdAt - left.createdAt ||
+    left.email.localeCompare(right.email) ||
+    left.id.localeCompare(right.id)
+  );
 }
 
 export function registerTokenRefreshScheduler(params: {

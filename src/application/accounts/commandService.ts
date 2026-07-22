@@ -275,6 +275,11 @@ export class AccountsCommandService {
       : allAccounts;
     let success = 0;
     let failed = 0;
+    // The individual quota refresh path also updates reset-credit details in
+    // the background. During a bounded batch, defer those view signals to the
+    // single final refresh below instead of publishing one Dashboard snapshot
+    // per account.
+    const batchRefreshView: RefreshView = { refresh() {} };
     const refreshAll = async (progress?: vscode.Progress<{ message?: string; increment?: number }>) => {
       let started = 0;
       await runWithConcurrencyLimit(
@@ -284,13 +289,13 @@ export class AccountsCommandService {
           started += 1;
           progress?.report({ message: copy.refreshingStep(started, accounts.length, account.email) });
           if (options?.silent) {
-            await refreshSingleQuotaSafely(this.repo, this.view, account.id, {
+            await refreshSingleQuotaSafely(this.repo, batchRefreshView, account.id, {
               forceRefresh: options.forceRefresh
             });
             return;
           }
           try {
-            await refreshSingleQuota(this.repo, this.view, account.id, {
+            await refreshSingleQuota(this.repo, batchRefreshView, account.id, {
               announce: false,
               forceRefresh: options?.forceRefresh ?? true,
               refreshView: false,

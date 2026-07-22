@@ -37,6 +37,8 @@ const RUNTIME_DIRECTORY = "hot-switch-runtime";
 const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
 const SHIM_FILE = "codex-app-server-shim.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
+const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
+const RUNTIME_PROTOCOL_VERSION = 4;
 
 export type HotSwitchSetupResult = {
   enabled: boolean;
@@ -236,8 +238,10 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const shimDestination = path.join(runtimeDirectory, SHIM_FILE);
       const launcherDestination = path.join(runtimeDirectory, SHIM_LAUNCHER_FILE);
       const shimConfigDestination = path.join(runtimeDirectory, SHIM_CONFIG_FILE);
+      const usageAttributionDirectory = path.join(runtimeDirectory, USAGE_ATTRIBUTION_DIRECTORY);
 
       await fs.mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
+      await fs.mkdir(usageAttributionDirectory, { recursive: true, mode: 0o700 });
       await fs.copyFile(shimSource, shimDestination);
       await fs.chmod(shimDestination, 0o700);
       await writePosixLauncher(launcherDestination, process.execPath, shimDestination);
@@ -254,7 +258,11 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         installedRemoteOverlay = remoteOverlay;
       }
       const realCliPath = remoteOverlay?.realCliPath ?? cliPath;
-      await writeJsonAtomically(shimConfigDestination, { realCliPath, forceHttpTransport: true }, 0o600);
+      await writeJsonAtomically(
+        shimConfigDestination,
+        { realCliPath, forceHttpTransport: true, usageAttributionDirectory },
+        0o600
+      );
 
       let requiresReload = false;
       if (isRemoteExtensionHost()) {
@@ -283,7 +291,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
           try {
             const status = await candidateBridge.getStatus();
             requiresReload =
-              !status.ready || status.runtimeProtocolVersion !== 3 || status.httpTransportForced !== true;
+              !status.ready ||
+              status.runtimeProtocolVersion !== RUNTIME_PROTOCOL_VERSION ||
+              status.httpTransportForced !== true;
           } catch {
             requiresReload = true;
           }
@@ -292,6 +302,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
           candidateBridge.dispose();
         } else {
           this.bridge = candidateBridge;
+          void this.synchronizeUsageAttribution(candidateBridge);
         }
       }
       return {
@@ -312,6 +323,42 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         requiresReload: false,
         error: error instanceof Error ? error.message : String(error)
       };
+    }
+  }
+
+  /**
+   * This is intentionally a one-shot startup handshake. The shim records only
+   * a local account ID when it sees a managed turn; it never receives token
+   * counters, prompts, or account credentials through this path.
+   */
+  private async synchronizeUsageAttribution(bridge: CodexHotSwitchBridge): Promise<void> {
+    try {
+      const identity = await bridge.getIdentity();
+      if (identity.accountType !== "chatgpt" || !identity.email) {
+        return;
+      }
+
+      const accounts = await this.repo.listAccounts();
+      const account = selectManagedAccountForUsageAttribution(accounts, identity);
+      if (!account) {
+        return;
+      }
+
+      const tokens = await this.repo.getTokens(account.id, { syncExternal: false });
+      const remoteAccountId = account.accountId ?? tokens?.accountId;
+      if (!remoteAccountId || (identity.managedAccountId && identity.managedAccountId !== remoteAccountId)) {
+        return;
+      }
+
+      await bridge.activateUsageAttribution({
+        localAccountId: account.id,
+        accountId: remoteAccountId,
+        expectedEmail: account.email
+      });
+    } catch (error) {
+      // Attribution is observational. A transient handshake failure must never
+      // make seamless account switching unavailable.
+      console.warn("[codexAccounts] token usage attribution initialization skipped", error);
     }
   }
 
@@ -467,6 +514,34 @@ export function selectManagedAccountForRefresh(
     throw new Error("The managed account does not match the Codex workspace refresh request");
   }
   return account;
+}
+
+/**
+ * Choose an unambiguous local record for a running app-server identity. The
+ * runtime's managed local ID wins; before the first hot switch we require a
+ * unique active record (or a unique email match) so duplicate imports cannot
+ * silently receive each other's token usage.
+ */
+export function selectManagedAccountForUsageAttribution(
+  accounts: readonly CodexAccountRecord[],
+  identity: Pick<HotSwitchIdentity, "email" | "managedLocalAccountId">
+): CodexAccountRecord | undefined {
+  const runtimeEmail = identity.email ? normalizeEmail(identity.email) : undefined;
+  if (!runtimeEmail) {
+    return undefined;
+  }
+
+  if (identity.managedLocalAccountId) {
+    const managed = accounts.find((account) => account.id === identity.managedLocalAccountId);
+    return managed && normalizeEmail(managed.email) === runtimeEmail ? managed : undefined;
+  }
+
+  const matchingEmail = accounts.filter((account) => normalizeEmail(account.email) === runtimeEmail);
+  const activeMatchingEmail = matchingEmail.filter((account) => account.isActive);
+  if (activeMatchingEmail.length === 1) {
+    return activeMatchingEmail[0];
+  }
+  return matchingEmail.length === 1 ? matchingEmail[0] : undefined;
 }
 
 export function resolveRuntimeAccessTokenIdentity(

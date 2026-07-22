@@ -40,7 +40,9 @@ type PublishDashboardSnapshotParams = {
 };
 
 export async function publishDashboardSnapshot(params: PublishDashboardSnapshotParams): Promise<string | undefined> {
-  const localUsage = await params.usageAnalytics?.getSnapshot(() => params.schedulePublishState());
+  const usageSnapshots = await params.usageAnalytics?.getSnapshots(() => params.schedulePublishState());
+  const localUsage = usageSnapshots?.localUsage;
+  const accountTokenUsage = usageSnapshots?.accountTokenUsage;
   if (localUsage?.nextRefreshAt != null) {
     params.scheduleLocalUsageRefresh?.(localUsage.nextRefreshAt);
   }
@@ -49,7 +51,8 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
     params.settingsStore,
     params.logoUri,
     params.announcementsState,
-    localUsage
+    localUsage,
+    accountTokenUsage
   );
   void backfillMissingResetCreditExpiries(params.repo, state.accounts, params.schedulePublishState).catch(
     () => undefined

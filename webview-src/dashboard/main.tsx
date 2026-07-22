@@ -1,18 +1,21 @@
 import { render } from "preact";
-import { useEffect, useReducer, useState } from "preact/hooks";
+import { useEffect, useMemo, useReducer, useState } from "preact/hooks";
 import packageJson from "../../package.json";
 import type { CodexAccountGroup } from "../../src/core/types";
-import type {
-  DashboardAccountViewModel,
-  DashboardSettingKey,
-  DashboardSettings
+import {
+  DASHBOARD_ACCOUNTS_PAGE_SIZE,
+  type DashboardAccountViewModel,
+  type DashboardSettingKey
 } from "../../src/domain/dashboard/types";
 import { AnnouncementCenter } from "./announcementCenter";
 import { ActionButton, BatchSelectionBar, OverviewSection, RecoveryPanel } from "./components";
 import { postMessageToHost } from "./host";
 import {
   formatSavedAccountsSummary,
+  getDashboardAccountPage,
+  getHighWeeklyQuotaHiddenAccountIds,
   getLowWeeklyQuotaAccountIds,
+  getDashboardVisibleAccounts,
   normalizeThresholds,
   resolveLockMinutes,
   resolveOverviewAccount
@@ -44,20 +47,21 @@ function getAccountGroupVisibilityKey(group: CodexAccountGroup): SeamlessSwitchG
   }
 }
 
-function isAccountInVisibleGroup(account: DashboardAccountViewModel, settings: DashboardSettings): boolean {
-  return account.accountGroup == null || settings[getAccountGroupVisibilityKey(account.accountGroup)];
-}
-
 function App() {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
+  const [accountsPage, setAccountsPage] = useState(1);
   const { patchSettings, sendAction, sendSetting, isActionPending, hasGlobalPendingAction } = useDashboardActions(
     state,
     dispatch
   );
   const snapshot = state.snapshot;
+  const displayedAccounts = useMemo(
+    () => (snapshot ? getDashboardVisibleAccounts(snapshot.accounts, snapshot.settings, showHiddenAccounts) : []),
+    [showHiddenAccounts, snapshot]
+  );
   const modals = useDashboardModals({
     dispatch,
     sendAction,
@@ -87,6 +91,31 @@ function App() {
     };
   }, [snapshot?.settings.dashboardTheme]);
 
+  useEffect(() => {
+    setAccountsPage(1);
+  }, [
+    showHiddenAccounts,
+    snapshot?.settings.seamlessSwitchGroupAVisible,
+    snapshot?.settings.seamlessSwitchGroupBVisible,
+    snapshot?.settings.seamlessSwitchGroupCVisible
+  ]);
+
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+
+    const lastPage = Math.max(1, Math.ceil(displayedAccounts.length / DASHBOARD_ACCOUNTS_PAGE_SIZE));
+    setAccountsPage((page) => Math.min(page, lastPage));
+  }, [displayedAccounts, snapshot]);
+
+  useEffect(() => {
+    dispatch({
+      type: "reconcile-selection-scope",
+      visibleAccountIds: displayedAccounts.map((account) => account.id)
+    });
+  }, [dispatch, displayedAccounts]);
+
   if (!snapshot) {
     return (
       <div class="panel">
@@ -100,10 +129,10 @@ function App() {
   const activeAccount = snapshot.accounts.find((account) => account.isActive);
   const overviewAccount = resolveOverviewAccount(snapshot.accounts);
   const hiddenAccountCount = snapshot.accounts.filter((account) => account.isHidden).length;
-  const displayedAccounts = snapshot.accounts.filter(
-    (account) => isAccountInVisibleGroup(account, snapshot.settings) && (showHiddenAccounts || !account.isHidden)
-  );
-  const lowWeeklyQuotaAccountIds = getLowWeeklyQuotaAccountIds(displayedAccounts);
+  const displayedAccountPage = getDashboardAccountPage(displayedAccounts, accountsPage);
+  const pageAccounts = displayedAccountPage.accounts;
+  const lowWeeklyQuotaAccountIds = getLowWeeklyQuotaAccountIds(pageAccounts);
+  const highWeeklyQuotaHiddenAccountIds = getHighWeeklyQuotaHiddenAccountIds(snapshot.accounts);
   const hiddenAccountsToggleLabel = resolveHiddenAccountsToggleLabel(
     snapshot.lang,
     showHiddenAccounts,
@@ -150,6 +179,7 @@ function App() {
   const handleAccountGroupVisibilityToggle = (group: CodexAccountGroup): void => {
     const key = getAccountGroupVisibilityKey(group);
     const nextVisible = !snapshot.settings[key];
+    setAccountsPage(1);
     patchSettings({ [key]: nextVisible });
     sendSetting(key, nextVisible);
   };
@@ -366,11 +396,12 @@ function App() {
             addPending={prepareOAuthPending}
             importPending={isActionPending("importCurrent")}
             refreshAllPending={isActionPending("refreshAll")}
+            refreshPageLabel={resolveRefreshCurrentPageLabel(snapshot.lang, pageAccounts.length)}
             onToggleAutoSwitchLock={handleAutoSwitchLock}
             onAddAccount={modals.openAddAccountModal}
             onImportCurrent={() => sendAction("importCurrent")}
             onRefreshAll={() =>
-              sendAction("refreshAll", undefined, { accountIds: displayedAccounts.map((account) => account.id) })
+              sendAction("refreshAll", undefined, { accountIds: pageAccounts.map((account) => account.id) })
             }
           />
         </section>
@@ -420,7 +451,10 @@ function App() {
                   aria-label={hiddenAccountsToggleLabel}
                   aria-pressed={showHiddenAccounts}
                   disabled={hiddenAccountCount === 0}
-                  onClick={() => setShowHiddenAccounts((visible) => !visible)}
+                  onClick={() => {
+                    setAccountsPage(1);
+                    setShowHiddenAccounts((visible) => !visible);
+                  }}
                 >
                   <span class="button-face">
                     <span class="button-icon">{showHiddenAccounts ? <EyeOffIcon /> : <EyeIcon />}</span>
@@ -445,6 +479,24 @@ function App() {
                   }
                 >
                   {resolveHideLowWeeklyQuotaLabel(snapshot.lang, lowWeeklyQuotaAccountIds.length)}
+                </ActionButton>
+                <ActionButton
+                  class="toolbar-btn"
+                  pending={unhideAccountsPending}
+                  disabled={
+                    highWeeklyQuotaHiddenAccountIds.length === 0 ||
+                    hideAccountsPending ||
+                    hasGlobalPendingAction ||
+                    snapshot.indexHealth.status === "corrupted_unrecoverable"
+                  }
+                  onClick={() =>
+                    sendAction("unhideAccounts", undefined, {
+                      accountIds: highWeeklyQuotaHiddenAccountIds,
+                      clearAccountGroup: true
+                    })
+                  }
+                >
+                  {resolveUnhideHighWeeklyQuotaLabel(snapshot.lang, highWeeklyQuotaHiddenAccountIds.length)}
                 </ActionButton>
                 {selectedCount > 0 ? (
                   <BatchSelectionBar
@@ -483,7 +535,7 @@ function App() {
               </div>
             </div>
             <div class="accounts-grid">
-              {displayedAccounts.map((account) => (
+              {pageAccounts.map((account) => (
                 <SavedAccountCard
                   key={account.id}
                   account={account}
@@ -511,6 +563,32 @@ function App() {
                 />
               ))}
             </div>
+            {displayedAccounts.length > 0 && displayedAccountPage.pageCount > 1 ? (
+              <nav
+                class="saved-accounts-pagination"
+                aria-label={resolveAccountPaginationLabel(snapshot.lang, displayedAccountPage)}
+              >
+                <button
+                  class="account-page-btn"
+                  type="button"
+                  disabled={displayedAccountPage.page <= 1}
+                  onClick={() => setAccountsPage(displayedAccountPage.page - 1)}
+                >
+                  {resolvePreviousPageLabel(snapshot.lang)}
+                </button>
+                <span class="account-page-status">
+                  {resolveAccountPaginationLabel(snapshot.lang, displayedAccountPage)}
+                </span>
+                <button
+                  class="account-page-btn"
+                  type="button"
+                  disabled={displayedAccountPage.page >= displayedAccountPage.pageCount}
+                  onClick={() => setAccountsPage(displayedAccountPage.page + 1)}
+                >
+                  {resolveNextPageLabel(snapshot.lang)}
+                </button>
+              </nav>
+            ) : null}
             {displayedAccounts.length === 0 ? (
               <div class="saved-accounts-hidden-empty">
                 {hiddenAccountCount > 0 && !showHiddenAccounts
@@ -657,6 +735,59 @@ function resolveHideLowWeeklyQuotaLabel(lang: string, count: number): string {
     return `隱藏週額度 <3%（${count}）`;
   }
   return `Hide weekly <3% (${count})`;
+}
+
+function resolveUnhideHighWeeklyQuotaLabel(lang: string, count: number): string {
+  if (lang === "zh") {
+    return `解除隐藏周额度 >90%（${count}）`;
+  }
+  if (lang === "zh-hant") {
+    return `解除隱藏週額度 >90%（${count}）`;
+  }
+  return `Unhide weekly >90% (${count})`;
+}
+
+function resolveAccountPaginationLabel(
+  lang: string,
+  page: { page: number; pageCount: number; startIndex: number; endIndex: number }
+): string {
+  if (lang === "zh") {
+    return `第 ${page.page}/${page.pageCount} 页 · ${page.startIndex + 1}-${page.endIndex}`;
+  }
+  if (lang === "zh-hant") {
+    return `第 ${page.page}/${page.pageCount} 頁 · ${page.startIndex + 1}-${page.endIndex}`;
+  }
+  return `Page ${page.page}/${page.pageCount} · ${page.startIndex + 1}-${page.endIndex}`;
+}
+
+function resolvePreviousPageLabel(lang: string): string {
+  if (lang === "zh") {
+    return "上一页";
+  }
+  if (lang === "zh-hant") {
+    return "上一頁";
+  }
+  return "Previous";
+}
+
+function resolveNextPageLabel(lang: string): string {
+  if (lang === "zh") {
+    return "下一页";
+  }
+  if (lang === "zh-hant") {
+    return "下一頁";
+  }
+  return "Next";
+}
+
+function resolveRefreshCurrentPageLabel(lang: string, count: number): string {
+  if (lang === "zh") {
+    return `刷新当前页配额（${count}）`;
+  }
+  if (lang === "zh-hant") {
+    return `重新整理目前頁面配額（${count}）`;
+  }
+  return `Refresh current page (${count})`;
 }
 
 function resolveAccountGroupFiltersLabel(lang: string): string {

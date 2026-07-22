@@ -39,7 +39,7 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 - Current account summary with team info and quick actions
 - Quota gauges for 5-hour, weekly, and code review usage
 - Saved accounts list for multi-account management
-- Quick actions for add, import, and refreshing the currently displayed accounts (all accounts when no filter is active)
+- Quick actions for add, import, and refreshing the currently displayed page (up to 50 accounts)
 
 ### Multi-Account Management
 
@@ -74,8 +74,11 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 - Use the switch at the lower-left of each account card to control pool membership, or update several accounts with the batch actions. Ordinary scheduling classifies accounts by capability: `windowed` has usable five-hour and long-term windows, `reserve` explicitly has no five-hour window but has a usable long-term window, and `unknown` is excluded because data is missing, stale, or erroneous. Plan labels such as Free or Plus are never used to guess ordinary capability
 - Select cards from their upper-left controls to hide or unhide them in bulk. A successful hide clears only the corresponding card selections. Hidden accounts are purple, omitted from the default list, removed from the seamless pool immediately, and excluded from both automatic and manual switching. Unhiding restores pool membership; the eye button reveals hidden cards
 - The Saved Accounts header also has **Hide weekly <3%**. It targets only currently displayed, non-hidden accounts with a recognized weekly quota strictly below `3%`; accounts without a weekly window are left unchanged
+- The same header has **Unhide weekly >90%**. It checks every hidden account regardless of the current group filter, restores only accounts with a recognized weekly quota strictly above `90%`, returns them to the seamless pool, and clears their `A/B/C` group; normal bulk unhide still preserves the group
 - Assign selected accounts to groups `A`, `B`, or `C`; each card shows its group. The `A/B/C` buttons above Saved Accounts decide which groups are displayed and eligible for seamless scheduling. Ungrouped, non-hidden accounts always remain displayed and eligible. Turning a group off excludes only its targets from seamless band, Free-1%, and reserve selection; it does not affect manual switching or upstream Auto Switch. An already active account in a disabled group is not forced away, but its next automatic rotation can only target the currently displayed scope
-- The Dashboard **Refresh All Quotas** button refreshes only the accounts currently displayed by the hidden/group filters. Per-card refresh and explicitly selected batch refresh keep their existing target scope
+- Saved accounts are paged at 50 cards. Hide/unhide and group-display changes repaginate immediately, and an out-of-range page is clamped back to a valid page.
+- The Dashboard **Refresh current page** button refreshes only that displayed page. Per-card refresh, explicitly selected batch refresh, and the explicit Command Palette full refresh retain their explicit target scope.
+- Timed quota refresh also processes only the first page of non-hidden accounts in enabled groups (at most 50 accounts). Other accounts remain manual-refresh only.
 - A verified Free account with a usable five-hour window never participates in ordinary `20%/25%/33%/50%` bands or the `1%/2%/3%` reserve threshold. It moves only at 1% or a runtime hard-stop signal when Free exhaustion protection is enabled
 - Choose `1/5 (20%)`, `1/4 (25%)`, `1/3 (33%)`, or `1/2 (50%)` bands and a `1%`, `2%`, or `3%` reserve threshold (default `3%`). The scheduler rotates eligible windowed accounts first; only after all of them reach the threshold does it select the reserve account with the most long-term quota. A reserve account stays active until its long-term quota reaches the threshold, then selection starts with recovered windowed accounts before another reserve account
 - Optionally enable **1% exhaustion protection (Free first)**. At 1% or lower of a usable five-hour or long-term window it bypasses the initial baseline and grace period, interrupts active turns, and auto-continues. When a verified Free account reaches its five-hour floor, it first chooses the fresh Free pool member with the highest five-hour quota and long-term quota above the reserve threshold; if none is eligible, it returns to normal mixed safe selection. A structured `usageLimitExceeded`, including a `turn/start` RPC rejection, is detected through bounded runtime scalars without loading conversation content or history. It is off by default because non-idempotent effects can repeat
@@ -90,7 +93,8 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 - The installed runtime disables Responses WebSocket reuse so an existing thread's next turn actually uses the newly selected account. Disabling the Seamless Switching master toggle restores the original switch/reload logic; removing the runtime and reloading also restores the official transport
 - The runtime expands official history requests that explicitly target the current provider to all providers, so local sessions from before and after runtime installation share one history list. It changes only the `thread/list` filter and does not rewrite session files or the state database
 - After all managed accounts have been removed, the first seamless switch to a newly imported account uses the currently valid `auth.json` as an in-memory rollback snapshot and validates it against the live app-server identity. A failed switch restores that identity without requiring the master toggle to be disabled first
-- Local usage analytics advance a cumulative high-water mark per rollout, ignore repeated or stale `token_count` reports, and treat parent history copied into spawned subagents only as an initial baseline. They adopt a newer shared cache by `calculatedAt`, and the dashboard refreshes at `nextRefreshAt`; the cache contains aggregate statistics only, never conversation text, account identifiers, credentials, or session paths
+- Local usage analytics advance a cumulative high-water mark per rollout, ignore repeated or stale `token_count` reports, and treat parent history copied into spawned subagents only as an initial baseline. They adopt a newer shared cache by `calculatedAt`, and the dashboard refreshes at `nextRefreshAt`; the aggregate cache contains statistics only, never conversation text, account identifiers, credentials, or session paths
+- The installed seamless runtime batches a tiny local attribution record when a managed turn starts. It contains only an opaque local account ID, thread ID, and timestamp—never prompts, conversation text, email, remote account IDs, or credentials. Account cards reuse the existing 15-minute session scan to aggregate the already-present `token_count` metadata into the current five-hour quota window (or long-term/weekly window when no five-hour window exists). When the runtime returns only one `primary` window, its actual `window_minutes` classifies it as short- or long-term, so a Plus-style long window is not mistaken for a five-hour window. There is no per-token IPC, extra network request, or second body scan. Counters start with the first managed turn and do not backfill history; after a quota reset changes, the old bucket no longer matches and the card shows zero while waiting for a new managed turn.
 - See [docs/HOT_SWITCH.md](docs/HOT_SWITCH.md) for exact scheduling, compatibility, security, and rollback details
 
 #### Enable and configure
@@ -180,9 +184,9 @@ You can change these directly from the settings button in the top-right corner o
   - `Restart automatically`: restart Codex App on account switch if it is already running
   - `Ask every time`: let you confirm each restart manually
 - `Automatic Quota Refresh`
-  - Can be disabled, or set to `5 / 10 / 15 / 30 / 60` minutes
+  - Can be disabled, or set to any whole-minute interval from `1` to `60`
   - Disabled by default
-  - When disabled, no timed refresh runs
+  - When enabled, refreshes only the first page of non-hidden accounts in enabled groups (at most 50); other accounts stay manual-refresh only
 - `5-hour Quota Control`
   - Disabled by default; the 5-hour quota remains visible while disabled
   - Controls whether a valid 5-hour quota can trigger automatic switching or quota warnings

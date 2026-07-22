@@ -7,6 +7,7 @@ function createState(overrides?: {
   resetCreditsNextExpiresAt?: number;
   isHidden?: boolean;
   accountGroup?: "A" | "B" | "C";
+  tokenUsage?: { totalTokens: number; resetAt: number };
 }): DashboardState {
   return {
     lang: "zh",
@@ -74,7 +75,19 @@ function createState(overrides?: {
         dismissedHealth: false,
         metrics: [],
         resetCreditsAvailable: overrides?.resetCreditsAvailable,
-        resetCreditsNextExpiresAt: overrides?.resetCreditsNextExpiresAt
+        resetCreditsNextExpiresAt: overrides?.resetCreditsNextExpiresAt,
+        tokenUsage: overrides?.tokenUsage
+          ? {
+              status: "tracking",
+              window: "hourly",
+              resetAt: overrides.tokenUsage.resetAt,
+              inputTokens: overrides.tokenUsage.totalTokens,
+              cachedInputTokens: 0,
+              outputTokens: 0,
+              reasoningOutputTokens: 0,
+              totalTokens: overrides.tokenUsage.totalTokens
+            }
+          : undefined
       } as DashboardState["accounts"][number]
     ]
   };
@@ -263,5 +276,14 @@ describe("buildDashboardStateSignature", () => {
     };
 
     expect(buildDashboardStateSignature(disabled)).not.toBe(buildDashboardStateSignature(base));
+  });
+
+  it("changes when the current quota-window token counter changes or resets", () => {
+    const before = createState({ tokenUsage: { totalTokens: 100, resetAt: 1_800_000_000 } });
+    const usedMore = createState({ tokenUsage: { totalTokens: 200, resetAt: 1_800_000_000 } });
+    const reset = createState({ tokenUsage: { totalTokens: 0, resetAt: 1_800_001_000 } });
+
+    expect(buildDashboardStateSignature(usedMore)).not.toBe(buildDashboardStateSignature(before));
+    expect(buildDashboardStateSignature(reset)).not.toBe(buildDashboardStateSignature(usedMore));
   });
 });

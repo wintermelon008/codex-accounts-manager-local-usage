@@ -237,6 +237,11 @@ export function SavedAccountCard(props: {
                 : ""}
             </div>
           ) : null}
+          {account.tokenUsage ? (
+            <div class="saved-token-usage-line" title={formatAccountTokenUsageTitle(account, props.lang)}>
+              {formatAccountTokenUsage(account, props.lang)}
+            </div>
+          ) : null}
           <div class="saved-card-divider"></div>
           <div class="saved-actions" onClick={stopFlip}>
             <button
@@ -443,4 +448,67 @@ function formatResetCreditsExpiry(epochSeconds: number): string {
   const mi = String(d.getMinutes()).padStart(2, "0");
   const s = String(d.getSeconds()).padStart(2, "0");
   return `最近到期: ${y}/${mo}/${day} ${h}:${mi}:${s}`;
+}
+
+function formatAccountTokenUsage(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
+  const usage = account.tokenUsage;
+  if (!usage) {
+    return "";
+  }
+  const label = resolveTokenUsageLabel(lang, usage.window);
+  if (usage.status === "loading") {
+    return `${label}: ${lang === "zh" ? "统计中" : lang === "zh-hant" ? "統計中" : "Calculating"}`;
+  }
+  if (usage.status === "waiting") {
+    return `${label}: ${lang === "zh" ? "等待受管会话" : lang === "zh-hant" ? "等待受管會話" : "Waiting for a managed turn"}`;
+  }
+
+  const input = formatCompactTokenCount(usage.inputTokens);
+  const output = formatCompactTokenCount(usage.outputTokens);
+  const cached = formatCompactTokenCount(usage.cachedInputTokens);
+  if (lang === "zh") {
+    return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · 入 ${input} · 出 ${output} · 缓存 ${cached}`;
+  }
+  if (lang === "zh-hant") {
+    return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · 入 ${input} · 出 ${output} · 快取 ${cached}`;
+  }
+  return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · in ${input} · out ${output} · cache ${cached}`;
+}
+
+function formatAccountTokenUsageTitle(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
+  const usage = account.tokenUsage;
+  if (!usage || usage.status !== "tracking") {
+    return formatAccountTokenUsage(account, lang);
+  }
+  const label = resolveTokenUsageLabel(lang, usage.window);
+  if (lang === "zh") {
+    return `${label}: ${usage.totalTokens.toLocaleString()} Token（输入 ${usage.inputTokens.toLocaleString()}，输出 ${usage.outputTokens.toLocaleString()}，缓存 ${usage.cachedInputTokens.toLocaleString()}，推理 ${usage.reasoningOutputTokens.toLocaleString()}）`;
+  }
+  if (lang === "zh-hant") {
+    return `${label}: ${usage.totalTokens.toLocaleString()} Token（輸入 ${usage.inputTokens.toLocaleString()}，輸出 ${usage.outputTokens.toLocaleString()}，快取 ${usage.cachedInputTokens.toLocaleString()}，推理 ${usage.reasoningOutputTokens.toLocaleString()}）`;
+  }
+  return `${label}: ${usage.totalTokens.toLocaleString()} tokens (input ${usage.inputTokens.toLocaleString()}, output ${usage.outputTokens.toLocaleString()}, cached ${usage.cachedInputTokens.toLocaleString()}, reasoning ${usage.reasoningOutputTokens.toLocaleString()})`;
+}
+
+function resolveTokenUsageLabel(
+  lang: DashboardState["lang"],
+  window: NonNullable<DashboardAccountViewModel["tokenUsage"]>["window"]
+): string {
+  if (lang === "zh") {
+    return window === "hourly" ? "本五小时窗口 Token" : "本周窗口 Token";
+  }
+  if (lang === "zh-hant") {
+    return window === "hourly" ? "本五小時窗口 Token" : "本週窗口 Token";
+  }
+  return window === "hourly" ? "This 5-hour window tokens" : "This weekly window tokens";
+}
+
+function formatCompactTokenCount(value: number): string {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
+  }
+  return String(value);
 }

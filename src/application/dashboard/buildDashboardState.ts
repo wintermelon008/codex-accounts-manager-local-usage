@@ -4,6 +4,7 @@ import {
   DashboardMetricViewModel,
   DashboardState
 } from "../../domain/dashboard/types";
+import { findAccountTokenUsageWindow, type AccountTokenUsageSnapshot } from "../../services/localUsageAnalytics";
 import { AccountsRepository } from "../../storage";
 import { ExtensionSettingsStore } from "../../infrastructure/config/extensionSettings";
 import { formatAccountStructure, formatAuthProvider, formatPlanType, getDashboardCopy } from "./copy";
@@ -20,7 +21,8 @@ export async function buildDashboardState(
   settingsStore: ExtensionSettingsStore,
   logoUri: string,
   announcements: CodexAnnouncementState,
-  localUsage?: DashboardLocalUsageViewModel
+  localUsage?: DashboardLocalUsageViewModel,
+  accountTokenUsage?: AccountTokenUsageSnapshot
 ): Promise<DashboardState> {
   const lang = settingsStore.resolveLanguage();
   const baseSettings = settingsStore.getDashboardSettings();
@@ -82,7 +84,8 @@ export async function buildDashboardState(
         lang,
         copy,
         currentWindowAccountId,
-        autoSwitchRuntime
+        autoSwitchRuntime,
+        accountTokenUsage
       )
     )
   };
@@ -117,7 +120,8 @@ function mapAccount(
   lang: DashboardState["lang"],
   copy: DashboardState["copy"],
   currentWindowAccountId?: string,
-  autoSwitchRuntime?: ReturnType<typeof getAutoSwitchRuntimeSnapshot>
+  autoSwitchRuntime?: ReturnType<typeof getAutoSwitchRuntimeSnapshot>,
+  accountTokenUsage?: AccountTokenUsageSnapshot
 ): DashboardAccountViewModel {
   const canToggleStatusBar = account.isActive ? false : Boolean(account.showInStatusBar) || extraSelectedCount < 2;
   const health = viewState?.health ?? resolveAccountHealth(account, viewState?.tokens, getTokenAutomationSnapshot());
@@ -183,9 +187,51 @@ function mapAccount(
     lastQuotaAt: account.lastQuotaAt,
     resetCreditsAvailable,
     resetCreditsNextExpiresAt,
+    tokenUsage: resolveAccountTokenUsage(account, accountTokenUsage),
     autoSwitchLockedUntil:
       autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
     metrics: buildMetrics(account, copy)
+  };
+}
+
+function resolveAccountTokenUsage(
+  account: CodexAccountRecord,
+  snapshot: AccountTokenUsageSnapshot | undefined
+): DashboardAccountViewModel["tokenUsage"] {
+  if (!snapshot) {
+    return undefined;
+  }
+
+  const quota = account.quotaSummary;
+  const quotaWindow =
+    quota?.hourlyWindowPresent && quota.hourlyResetTime != null
+      ? { window: "hourly" as const, resetAt: quota.hourlyResetTime }
+      : quota?.weeklyWindowPresent && quota.weeklyResetTime != null
+        ? { window: "weekly" as const, resetAt: quota.weeklyResetTime }
+        : undefined;
+  if (!quotaWindow) {
+    return undefined;
+  }
+
+  const observed = findAccountTokenUsageWindow(snapshot, account.id, quotaWindow.window, quotaWindow.resetAt);
+  if (observed) {
+    return {
+      ...observed,
+      calculatedAt: snapshot.calculatedAt,
+      status: "tracking"
+    };
+  }
+
+  return {
+    window: quotaWindow.window,
+    resetAt: quotaWindow.resetAt,
+    calculatedAt: snapshot.calculatedAt,
+    status: snapshot.status === "loading" ? "loading" : "waiting",
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens: 0
   };
 }
 

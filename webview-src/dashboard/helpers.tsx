@@ -1,10 +1,77 @@
 import type { ComponentChildren } from "preact";
-import type { DashboardAccountViewModel, DashboardSettings, DashboardState } from "../../src/domain/dashboard/types";
+import {
+  DASHBOARD_ACCOUNTS_PAGE_SIZE,
+  type DashboardAccountViewModel,
+  type DashboardSettings,
+  type DashboardState
+} from "../../src/domain/dashboard/types";
 import { formatResetRelativeTime } from "../../src/utils/resetTime";
 
 type SensitiveKind = "email" | "id" | "name";
 
 export const LOW_WEEKLY_QUOTA_HIDE_THRESHOLD = 3;
+export const HIGH_WEEKLY_QUOTA_UNHIDE_THRESHOLD = 90;
+
+export type DashboardAccountPage<T> = {
+  page: number;
+  pageCount: number;
+  startIndex: number;
+  endIndex: number;
+  accounts: T[];
+};
+
+/**
+ * Slices the currently displayed account set into a bounded page. The page is
+ * clamped after filter or account changes so a removal can never leave the
+ * Dashboard on an empty, stale page.
+ */
+export function getDashboardAccountPage<T>(
+  accounts: readonly T[],
+  requestedPage: number,
+  pageSize = DASHBOARD_ACCOUNTS_PAGE_SIZE
+): DashboardAccountPage<T> {
+  const normalizedPageSize = Math.max(1, Math.floor(pageSize));
+  const pageCount = Math.max(1, Math.ceil(accounts.length / normalizedPageSize));
+  const page = Math.min(pageCount, Math.max(1, Math.floor(requestedPage)));
+  const startIndex = (page - 1) * normalizedPageSize;
+  const endIndex = Math.min(accounts.length, startIndex + normalizedPageSize);
+
+  return {
+    page,
+    pageCount,
+    startIndex,
+    endIndex,
+    accounts: accounts.slice(startIndex, endIndex)
+  };
+}
+
+/**
+ * Returns the account set currently exposed by the Dashboard's hidden/group
+ * filters. Pagination deliberately does not participate so batch selection can
+ * remain useful across pages within the same visible scope.
+ */
+export function getDashboardVisibleAccounts(
+  accounts: readonly DashboardAccountViewModel[],
+  settings: DashboardSettings,
+  showHiddenAccounts: boolean
+): DashboardAccountViewModel[] {
+  return accounts.filter(
+    (account) => isAccountInVisibleGroup(account, settings) && (showHiddenAccounts || !account.isHidden)
+  );
+}
+
+function isAccountInVisibleGroup(account: DashboardAccountViewModel, settings: DashboardSettings): boolean {
+  switch (account.accountGroup) {
+    case "A":
+      return settings.seamlessSwitchGroupAVisible;
+    case "B":
+      return settings.seamlessSwitchGroupBVisible;
+    case "C":
+      return settings.seamlessSwitchGroupCVisible;
+    default:
+      return true;
+  }
+}
 
 /**
  * Finds non-hidden accounts whose reported weekly window is below the bulk-hide threshold.
@@ -20,6 +87,23 @@ export function getLowWeeklyQuotaAccountIds(accounts: DashboardAccountViewModel[
       weeklyMetric.percentage < LOW_WEEKLY_QUOTA_HIDE_THRESHOLD;
 
     return !account.isHidden && isBelowThreshold ? [account.id] : [];
+  });
+}
+
+/**
+ * Finds hidden accounts whose reported weekly window is above the bulk-unhide threshold.
+ * Hidden accounts are considered across the full snapshot so a disabled group cannot trap them.
+ */
+export function getHighWeeklyQuotaHiddenAccountIds(accounts: DashboardAccountViewModel[]): string[] {
+  return accounts.flatMap((account) => {
+    const weeklyMetric = account.metrics.find((metric) => metric.key === "weekly");
+    const isAboveThreshold =
+      weeklyMetric?.visible === true &&
+      typeof weeklyMetric.percentage === "number" &&
+      Number.isFinite(weeklyMetric.percentage) &&
+      weeklyMetric.percentage > HIGH_WEEKLY_QUOTA_UNHIDE_THRESHOLD;
+
+    return account.isHidden && isAboveThreshold ? [account.id] : [];
   });
 }
 
