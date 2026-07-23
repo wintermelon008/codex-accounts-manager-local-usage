@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
-import { maybeSeamlessBalanceSwitchForActiveQuota } from "../../application/accounts/quota";
+import { maybeSeamlessBalanceSwitchForActiveQuota, refreshSingleQuota } from "../../application/accounts/quota";
 import { registerCommands } from "../../commands";
 import {
+  getCodexAccountsConfiguration,
   isLocalImportInboxEnabled,
   isSeamlessSwitchEnabled,
   isSub2ApiGatewayEnabled
@@ -14,6 +15,7 @@ import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
 import { LocalImportInbox } from "./localImportInbox";
 import { Sub2ApiGatewayController } from "../../local/sub2apiGateway/controller";
+import { selectFreshSub2ApiGatewayFallbackCandidate } from "../../local/sub2apiGateway/fallbackSelection";
 import { setSub2ApiGatewayController } from "../../local/sub2apiGateway/registry";
 import { refreshQuotaSummaryPanel } from "../dashboard/panel";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
@@ -197,13 +199,67 @@ export class AccountsWorkbench {
     if (previous) {
       previous.dispose();
     }
-    const gateway = new Sub2ApiGatewayController(this.context, this.hotSwitchRuntime, () => {
-      void refreshQuotaSummaryPanel();
-    });
+    const gateway = new Sub2ApiGatewayController(
+      this.context,
+      this.hotSwitchRuntime,
+      () => {
+        void refreshQuotaSummaryPanel();
+      },
+      () => this.fallbackSub2ApiGatewayToChatGpt()
+    );
     this.sub2apiGateway = gateway;
     setSub2ApiGatewayController(gateway);
     await gateway.initialize();
     await refreshQuotaSummaryPanel();
+  }
+
+  private async fallbackSub2ApiGatewayToChatGpt(): Promise<RuntimeAccountSwitchOutcome> {
+    const excludedAccountIds = new Set<string>();
+    const refreshedAccountIds = new Set<string>();
+    let lastCandidateFailure: string | undefined;
+    try {
+      const maximumCandidateAttempts = (await this.repo.listAccounts()).length;
+      for (let candidateAttempt = 0; candidateAttempt < maximumCandidateAttempts; candidateAttempt += 1) {
+        const candidate = await selectFreshSub2ApiGatewayFallbackCandidate(
+          {
+            listAccounts: () => this.repo.listAccounts(),
+            refreshQuota: (accountId) =>
+              refreshSingleQuota(this.repo, { refresh: () => undefined }, accountId, {
+                announce: false,
+                forceRefresh: true,
+                refreshView: false,
+                warnQuota: false
+              })
+          },
+          getCodexAccountsConfiguration(),
+          { excludedAccountIds, refreshedAccountIds }
+        );
+        if (!candidate) {
+          break;
+        }
+        excludedAccountIds.add(candidate.id);
+        try {
+          const tokens = await this.repo.getTokens(candidate.id);
+          if (!tokens?.accessToken) {
+            lastCandidateFailure = "The selected fallback account has no usable Codex credentials";
+            continue;
+          }
+          return await this.hotSwitchRuntime.fallbackSub2ApiGatewayToChatGpt(candidate.id);
+        } catch (error) {
+          lastCandidateFailure = error instanceof Error ? error.message : String(error);
+        }
+      }
+    } finally {
+      void this.statusBar.refresh();
+      void refreshQuotaSummaryPanel();
+    }
+    return {
+      status: "failed",
+      message:
+        lastCandidateFailure === undefined
+          ? "No eligible ChatGPT Auth account completed the mandatory quota refresh for Sub2API fallback"
+          : `No eligible ChatGPT Auth fallback completed safely: ${lastCandidateFailure}`
+    };
   }
 
   private async notifyIndexHealth(): Promise<void> {

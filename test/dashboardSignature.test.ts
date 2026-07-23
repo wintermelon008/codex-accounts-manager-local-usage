@@ -7,6 +7,7 @@ function createState(overrides?: {
   resetCreditsNextExpiresAt?: number;
   isHidden?: boolean;
   accountGroup?: "A" | "B" | "C";
+  planType?: string;
   tokenUsage?: { totalTokens: number; resetAt: number };
 }): DashboardState {
   return {
@@ -26,8 +27,7 @@ function createState(overrides?: {
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: false,
       seamlessSwitchQuotaBandSize: 20,
-      seamlessSwitchReserveThreshold: 3,
-      seamlessSwitchEmergencySwitchEnabled: false,
+      seamlessSwitchThreshold: 3,
       seamlessSwitchGroupAVisible: true,
       seamlessSwitchGroupBVisible: true,
       seamlessSwitchGroupCVisible: true,
@@ -66,6 +66,7 @@ function createState(overrides?: {
         displayName: "dev@example.com",
         tags: [],
         planTypeLabel: "Plus",
+        planType: overrides?.planType ?? "plus",
         isActive: true,
         isHidden: overrides?.isHidden ?? false,
         accountGroup: overrides?.accountGroup,
@@ -119,6 +120,12 @@ describe("buildDashboardStateSignature", () => {
 
     expect(buildDashboardStateSignature(grouped)).not.toBe(buildDashboardStateSignature(base));
     expect(buildDashboardStateSignature(groupFilterChanged)).not.toBe(buildDashboardStateSignature(base));
+  });
+
+  it("changes when an account's raw plan type changes", () => {
+    expect(buildDashboardStateSignature(createState({ planType: "free" }))).not.toBe(
+      buildDashboardStateSignature(createState({ planType: "pro_20x" }))
+    );
   });
 
   it("changes when local usage settings or the cached aggregate changes", () => {
@@ -289,30 +296,30 @@ describe("buildDashboardStateSignature", () => {
     expect(buildDashboardStateSignature(poolChanged)).not.toBe(baseSignature);
   });
 
-  it("changes when the seamless reserve threshold changes", () => {
+  it("changes when the unified seamless switch threshold changes", () => {
     const base = createState();
     const changed: DashboardState = {
       ...base,
-      settings: { ...base.settings, seamlessSwitchReserveThreshold: 1 }
+      settings: { ...base.settings, seamlessSwitchThreshold: 1 }
     };
 
     expect(buildDashboardStateSignature(changed)).not.toBe(buildDashboardStateSignature(base));
   });
 
-  it("changes when the quota-band size or emergency switch changes", () => {
+  it("changes when the quota-band size or unified threshold changes", () => {
     const base = createState();
     const sizeChanged: DashboardState = {
       ...base,
       settings: { ...base.settings, seamlessSwitchQuotaBandSize: 33 }
     };
-    const emergencyChanged: DashboardState = {
+    const thresholdChanged: DashboardState = {
       ...base,
-      settings: { ...base.settings, seamlessSwitchEmergencySwitchEnabled: true }
+      settings: { ...base.settings, seamlessSwitchThreshold: 5 }
     };
 
     const baseSignature = buildDashboardStateSignature(base);
     expect(buildDashboardStateSignature(sizeChanged)).not.toBe(baseSignature);
-    expect(buildDashboardStateSignature(emergencyChanged)).not.toBe(baseSignature);
+    expect(buildDashboardStateSignature(thresholdChanged)).not.toBe(baseSignature);
   });
 
   it("changes when the hot-switch grace period or long-turn policy changes", () => {

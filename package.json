@@ -2,13 +2,13 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.42",
+  "version": "0.1.16-local.47",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wannanbigpig/codex-tools.git"
+    "url": "https://github.com/wintermelon008/codex-accounts-manager-local-usage.git"
   },
   "engines": {
     "vscode": "^1.96.0"
@@ -175,20 +175,22 @@
           "default": 20,
           "markdownDescription": "Quota band granularity used by seamless balancing. Changing it establishes a fresh baseline and does not immediately switch accounts."
         },
-        "codexAccounts.seamlessSwitchReserveThreshold": {
+        "codexAccounts.seamlessSwitchThreshold": {
           "type": "number",
           "enum": [
+            0,
             1,
-            2,
-            3
+            3,
+            5
+          ],
+          "enumDescriptions": [
+            "Disable low-quota and usage-limit hard switching while keeping quota-band balancing available.",
+            "Switch at 1% remaining quota or a structured usage-limit signal.",
+            "Switch at 3% remaining quota or a structured usage-limit signal.",
+            "Switch at 5% remaining quota or a structured usage-limit signal."
           ],
           "default": 3,
-          "markdownDescription": "Reserve transition threshold used only by Seamless Switching. Accounts with a fresh 5-hour window stay preferred; when every safe windowed pool account is at or below this percentage, balancing may use the reserve account with the strongest long-term quota. A reserve account stays active until its long-term quota reaches this threshold."
-        },
-        "codexAccounts.seamlessSwitchEmergencySwitchEnabled": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "When seamless quota balancing is enabled and an active 5-hour or long-term quota reaches 1% or lower, bypass the normal band-drop baseline and grace period, interrupt active turns, and recover interrupted or recently usage-limited threads. If a verified Free account reaches its 5-hour floor, first choose the fresh eligible Free pool account with the highest 5-hour quota and safe long-term quota; if none exists, use the normal mixed safe selector. Runtime usage-limit detection reads only bounded scalar status. This emergency behavior can repeat non-idempotent external side effects."
+          "markdownDescription": "Unified low-quota switching threshold for Seamless Switching. At or below the selected value, any eligible ChatGPT account (including Free) switches immediately through the no-reload runtime; structured usage-limit signals use the same path. Free sources first prefer a fresh, safe Free peer. The target must remain strictly above this threshold. This immediate interrupt-and-Continue behavior can repeat non-idempotent external side effects. Selecting 0 disables this hard-switch path but leaves quota-band balancing available."
         },
         "codexAccounts.seamlessSwitchGroupAVisible": {
           "type": "boolean",

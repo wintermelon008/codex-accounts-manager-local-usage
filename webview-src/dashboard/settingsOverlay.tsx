@@ -324,60 +324,55 @@ export function SettingsOverlay(props: {
                 <SettingsSegmentBlock
                   title={
                     props.lang === "zh"
-                      ? "储备账号切换阈值"
+                      ? "账号切换阈值"
                       : props.lang === "zh-hant"
-                        ? "儲備帳號切換閾值"
-                        : "Reserve transition threshold"
+                        ? "帳號切換閾值"
+                        : "Account switching threshold"
                   }
                   sub={
                     props.lang === "zh"
-                      ? "优先使用仍有五小时窗口且额度高于阈值的账号；全部触达阈值后才启用长期额度最高的储备账号。储备账号的长期额度触达同一阈值后，会优先切回已恢复的五小时账号。"
+                      ? "统一控制低额度与结构化额度耗尽时的硬切：当前账号达到阈值后立即切换，Free 优先选择仍安全的 Free 账号。候选账号必须严格高于该阈值；关闭后仍保留上方的额度分档平衡。"
                       : props.lang === "zh-hant"
-                        ? "優先使用仍有五小時視窗且額度高於閾值的帳號；全部觸達閾值後才啟用長期額度最高的儲備帳號。儲備帳號的長期額度觸達同一閾值後，會優先切回已恢復的五小時帳號。"
-                        : "Prefer accounts with a fresh 5-hour window above this threshold. Use the reserve account with the strongest long-term quota only after all safe windowed accounts reach it; switch back to a recovered windowed account before another reserve."
+                        ? "統一控制低額度與結構化額度耗盡時的硬切：目前帳號達到閾值後立即切換，Free 優先選擇仍安全的 Free 帳號。候選帳號必須嚴格高於此閾值；關閉後仍保留上方的額度分檔平衡。"
+                        : "Use one hard-switch threshold for low quota and structured usage-limit signals. At or below it, switch immediately; Free sources prefer a safe Free peer. Targets must be strictly above the threshold. Off keeps quota-band balancing above."
                   }
-                  options={([1, 2, 3] as const).map((threshold) => ({
-                    key: `reserve-threshold-${threshold}`,
-                    title: `${threshold}%${threshold === 3 ? (props.lang === "zh" ? "（默认）" : props.lang === "zh-hant" ? "（預設）" : " (default)") : ""}`,
+                  options={([0, 1, 3, 5] as const).map((threshold) => ({
+                    key: `switch-threshold-${threshold}`,
+                    title:
+                      threshold === 0
+                        ? props.lang === "zh"
+                          ? "关闭"
+                          : props.lang === "zh-hant"
+                            ? "關閉"
+                            : "Off"
+                        : `${threshold}%${threshold === 3 ? (props.lang === "zh" ? "（默认）" : props.lang === "zh-hant" ? "（預設）" : " (default)") : ""}`,
                     description:
                       props.lang === "zh"
-                        ? threshold === 1
-                          ? "尽量用完五小时额度"
-                          : threshold === 2
-                            ? "兼顾利用率与切换余量"
-                            : "预留更多安全余量"
-                        : props.lang === "zh-hant"
-                          ? threshold === 1
-                            ? "盡量用完五小時額度"
-                            : threshold === 2
-                              ? "兼顧利用率與切換餘量"
-                              : "預留更多安全餘量"
+                        ? threshold === 0
+                          ? "仅使用额度分档平衡"
                           : threshold === 1
-                            ? "Maximize 5-hour quota use"
-                            : threshold === 2
-                              ? "Balance utilization and headroom"
-                              : "Keep more switching headroom",
-                    active: props.settings.seamlessSwitchReserveThreshold === threshold,
-                    onClick: () => patchAndSend("seamlessSwitchReserveThreshold", threshold)
+                            ? "最大化额度利用率"
+                            : threshold === 3
+                              ? "推荐的安全余量"
+                              : "更早保护长任务"
+                        : props.lang === "zh-hant"
+                          ? threshold === 0
+                            ? "僅使用額度分檔平衡"
+                            : threshold === 1
+                              ? "最大化額度利用率"
+                              : threshold === 3
+                                ? "建議的安全餘量"
+                                : "更早保護長任務"
+                          : threshold === 0
+                            ? "Use quota-band balancing only"
+                            : threshold === 1
+                              ? "Maximize quota utilization"
+                              : threshold === 3
+                                ? "Recommended safety headroom"
+                                : "Protect long turns earlier",
+                    active: props.settings.seamlessSwitchThreshold === threshold,
+                    onClick: () => patchAndSend("seamlessSwitchThreshold", threshold)
                   }))}
-                />
-                <SettingsToggleBlock
-                  title={
-                    props.lang === "zh"
-                      ? "1% 耗尽保护（Free 优先）"
-                      : props.lang === "zh-hant"
-                        ? "1% 耗盡保護（Free 優先）"
-                        : "1% exhaustion protection (Free first)"
-                  }
-                  sub={
-                    props.lang === "zh"
-                      ? "Free 五小时额度降到 1% 或更低时，优先切到池中五小时额度最高、周额度仍安全的 Free 账号；没有可用 Free 时回到混合选择。会立即中断并自动 Continue，可能重复非幂等外部操作。"
-                      : props.lang === "zh-hant"
-                        ? "Free 五小時額度降到 1% 或更低時，優先切到池中五小時額度最高、週額度仍安全的 Free 帳號；沒有可用 Free 時回到混合選擇。會立即中斷並自動 Continue，可能重複非冪等外部操作。"
-                        : "When a Free 5-hour quota reaches 1% or lower, first switch to the eligible Free pool account with the most 5-hour quota; otherwise use mixed selection. It interrupts and auto-Continues, so non-idempotent external actions can repeat."
-                  }
-                  enabled={props.settings.seamlessSwitchEmergencySwitchEnabled}
-                  onToggle={(enabled) => patchAndSend("seamlessSwitchEmergencySwitchEnabled", enabled)}
                 />
               </div>
               <SettingsSegmentBlock

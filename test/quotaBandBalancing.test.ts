@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BALANCE_QUOTA_MAX_AGE_MS,
   didQuotaBandDrop,
-  FREE_EXHAUSTION_QUOTA_MAX_AGE_MS,
+  FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS,
   getBalanceQuotaCapability,
   getFiveHourQuotaBand,
   isFreePlanType,
@@ -100,7 +100,7 @@ describe("5-hour quota band balancing", () => {
     ).toBeUndefined();
   });
 
-  it("uses the configured band size and can exclude emergency-depleted candidates", () => {
+  it("uses the configured band size and unified threshold", () => {
     const now = 10_000_000;
     const active = account("active", 25, now);
     const depleted = account("depleted", 1, now);
@@ -112,7 +112,7 @@ describe("5-hour quota band balancing", () => {
         activeAccountId: active.id,
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage, 25),
         quotaBandSize: 25,
-        minimumHourlyPercentage: 1,
+        switchThreshold: 1,
         lastSelectedAt: {},
         now
       })?.id
@@ -136,7 +136,7 @@ describe("5-hour quota band balancing", () => {
     ).toBeUndefined();
   });
 
-  it("prioritizes weekly quota during a weekly emergency", () => {
+  it("prioritizes weekly quota during a weekly threshold switch", () => {
     const now = 10_000_000;
     const active = account("active", 100, now);
     active.quotaSummary!.weeklyPercentage = 1;
@@ -150,8 +150,8 @@ describe("5-hour quota band balancing", () => {
         accounts: [active, highHourlyLowWeekly, lowerHourlyHealthyWeekly],
         activeAccountId: active.id,
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
-        minimumHourlyPercentage: 1,
-        emergencyQuota: "weekly",
+        switchThreshold: 1,
+        thresholdQuota: "weekly",
         lastSelectedAt: {},
         now
       })?.id
@@ -203,7 +203,7 @@ describe("5-hour quota band balancing", () => {
       accounts: [active, recovered, reserve],
       activeAccountId: active.id,
       activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
-      reserveThreshold: 3 as const,
+      switchThreshold: 3 as const,
       lastSelectedAt: {},
       now
     };
@@ -223,7 +223,7 @@ describe("5-hour quota band balancing", () => {
       accounts: [active, lowerReserve, strongerReserve, recovered],
       activeAccountId: active.id,
       activeBand: 0,
-      reserveThreshold: 3 as const,
+      switchThreshold: 3 as const,
       lastSelectedAt: {},
       now
     };
@@ -233,7 +233,7 @@ describe("5-hour quota band balancing", () => {
     expect(selectBalanceCandidate(params)?.id).toBe("reserve-high");
   });
 
-  it("preserves the explicit 1% emergency fallback after preferring a safe reserve", () => {
+  it("uses a windowed candidate strictly above the unified threshold before reserve", () => {
     const now = 10_000_000;
     const active = account("active", 1, now);
     active.quotaSummary!.weeklyPercentage = 1;
@@ -243,18 +243,18 @@ describe("5-hour quota band balancing", () => {
       accounts: [active, emergencyFallback, reserve],
       activeAccountId: active.id,
       activeBand: 1,
-      reserveThreshold: 3 as const,
-      minimumHourlyPercentage: 1,
-      emergencyQuota: "weekly" as const,
+      switchThreshold: 1 as const,
+      thresholdQuota: "weekly" as const,
       lastSelectedAt: {},
       now
     };
 
+    expect(selectBalanceCandidate(params)?.id).toBe("fallback");
+    emergencyFallback.quotaSummary!.hourlyPercentage = 1;
     expect(selectBalanceCandidate(params)?.id).toBe("reserve");
-    expect(selectBalanceCandidate({ ...params, accounts: [active, emergencyFallback] })?.id).toBe("fallback");
   });
 
-  it("prioritizes the highest fresh same-Free five-hour quota at the 1% hard-stop floor", () => {
+  it("prioritizes the highest fresh same-Free five-hour quota at the configured threshold", () => {
     const now = 10_000_000;
     const active = account("active", 1, now);
     active.planType = "free";
@@ -269,7 +269,7 @@ describe("5-hour quota band balancing", () => {
       selectFreeExhaustionCandidate({
         accounts: [active, lowerFree, reserve, higherFree],
         activeAccountId: active.id,
-        reserveThreshold: 3,
+        switchThreshold: 1,
         lastSelectedAt: {},
         now
       })?.id
@@ -277,7 +277,7 @@ describe("5-hour quota band balancing", () => {
     expect(isFreePlanType("ChatGPT Free Plan")).toBe(true);
   });
 
-  it("keeps Free hard-stop candidates fresh and above both safety floors", () => {
+  it("keeps Free threshold candidates fresh and above the unified safety floor", () => {
     const now = 10_000_000;
     const active = account("active", 1, now);
     active.planType = "free";
@@ -289,7 +289,7 @@ describe("5-hour quota band balancing", () => {
     const weeklyDepleted = account("weekly-depleted", 100, now);
     weeklyDepleted.planType = "free";
     weeklyDepleted.quotaSummary!.weeklyPercentage = 3;
-    const stale = account("stale", 100, now - FREE_EXHAUSTION_QUOTA_MAX_AGE_MS - 1);
+    const stale = account("stale", 100, now - FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS - 1);
     stale.planType = "free";
     const plus = account("plus", 100, now);
     plus.planType = "plus";
@@ -298,7 +298,7 @@ describe("5-hour quota band balancing", () => {
       selectFreeExhaustionCandidate({
         accounts: [active, depleted, weeklyDepleted, stale, plus, eligible],
         activeAccountId: active.id,
-        reserveThreshold: 3,
+        switchThreshold: 3,
         lastSelectedAt: {},
         now
       })?.id

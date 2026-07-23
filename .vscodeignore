@@ -14,7 +14,6 @@ webview-src/**
 test/**
 **/*.map
 
-docs/**
 scripts/**
 coverage/**
 tsconfig.json
@@ -23,7 +22,6 @@ tsconfig.eslint.json
 vite.webview.config.mts
 vitest.config.mts
 
-README.en.md
 media/dashboard.png
 media/detail.png
 media/setting.png

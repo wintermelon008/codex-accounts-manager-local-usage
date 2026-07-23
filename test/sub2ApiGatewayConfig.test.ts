@@ -48,6 +48,7 @@ describe("Sub2API Gateway configuration", () => {
 
   it("normalizes a /v1 endpoint and rejects plaintext credentials", () => {
     const template = createSub2ApiGatewayConfigTemplate();
+    expect(template.autoFallbackToChatGpt).toBe(false);
     expect(
       parseSub2ApiGatewayConfig({
         ...template,
@@ -78,6 +79,21 @@ describe("Sub2API Gateway configuration", () => {
         sub2api: { ...template.sub2api, baseUrl: "https://sub2api.example.test/not-v1" }
       })
     ).toThrow("end with /v1");
+    expect(() =>
+      parseSub2ApiGatewayConfig({
+        ...template,
+        autoFallbackToChatGpt: "yes"
+      })
+    ).toThrow("must be a boolean");
+  });
+
+  it("keeps automatic ChatGPT fallback explicitly opt-in", () => {
+    const template = createSub2ApiGatewayConfigTemplate();
+
+    expect(parseSub2ApiGatewayConfig({ ...template, autoFallbackToChatGpt: true })).toMatchObject({
+      autoFallbackToChatGpt: true
+    });
+    expect(Boolean(parseSub2ApiGatewayConfig(template).autoFallbackToChatGpt)).toBe(false);
   });
 
   it("accepts a separately referenced optional upstream inventory observer", () => {

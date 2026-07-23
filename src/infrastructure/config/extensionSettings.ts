@@ -1,10 +1,13 @@
 import * as vscode from "vscode";
 import type { DashboardLocalUsageRange, DashboardSettings, DashboardThemeOption } from "../../domain/dashboard/types";
-import type { SeamlessQuotaBandSize, SeamlessReserveThreshold } from "../../core/types";
+import type { SeamlessQuotaBandSize, SeamlessSwitchThreshold } from "../../core/types";
 import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } from "../../localization/languages";
 import { normalizeQuotaColorThresholds } from "../../utils";
 
 const CODEX_ACCOUNTS_SECTION = "codexAccounts";
+
+type ReadableCodexAccountsConfiguration = Pick<vscode.WorkspaceConfiguration, "get"> &
+  Partial<Pick<vscode.WorkspaceConfiguration, "inspect">>;
 
 export class ExtensionSettingsStore {
   getDashboardSettings(): DashboardSettings {
@@ -32,10 +35,7 @@ export class ExtensionSettingsStore {
       seamlessSwitchQuotaBandSize: normalizeSeamlessQuotaBandSize(
         config.get<number>("seamlessSwitchQuotaBandSize", 20)
       ),
-      seamlessSwitchReserveThreshold: normalizeSeamlessReserveThreshold(
-        config.get<number>("seamlessSwitchReserveThreshold", 3)
-      ),
-      seamlessSwitchEmergencySwitchEnabled: config.get<boolean>("seamlessSwitchEmergencySwitchEnabled", false),
+      seamlessSwitchThreshold: getSeamlessSwitchThreshold(config),
       seamlessSwitchGroupAVisible: config.get<boolean>("seamlessSwitchGroupAVisible", true),
       seamlessSwitchGroupBVisible: config.get<boolean>("seamlessSwitchGroupBVisible", true),
       seamlessSwitchGroupCVisible: config.get<boolean>("seamlessSwitchGroupCVisible", true),
@@ -85,8 +85,8 @@ export function normalizeLocalUsageRange(value: unknown): DashboardLocalUsageRan
   return value === 14 ? "14d" : "7d";
 }
 
-function explicitConfigurationValue(config: vscode.WorkspaceConfiguration, key: string): unknown {
-  const inspected = config.inspect<unknown>(key);
+function explicitConfigurationValue(config: ReadableCodexAccountsConfiguration, key: string): unknown {
+  const inspected = config.inspect?.<unknown>(key);
   return inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
 }
 
@@ -129,8 +129,48 @@ export function normalizeSeamlessQuotaBandSize(value: unknown): SeamlessQuotaBan
   return value === 25 || value === 33 || value === 50 ? value : 20;
 }
 
-export function normalizeSeamlessReserveThreshold(value: unknown): SeamlessReserveThreshold {
-  return value === 1 || value === 2 ? value : 3;
+export function normalizeSeamlessSwitchThreshold(value: unknown): SeamlessSwitchThreshold {
+  return value === 0 || value === 1 || value === 3 || value === 5 ? value : 3;
+}
+
+/**
+ * The unified threshold replaces the separate reserve floor and opt-in 1%
+ * protection. Preserve prior explicit choices until the user saves the new
+ * setting: a former hard-stop opt-in maps to 1%, otherwise 2% maps upward to
+ * the closest available safe threshold (3%).
+ */
+export function getSeamlessSwitchThreshold(
+  config: ReadableCodexAccountsConfiguration = getCodexAccountsConfiguration()
+): SeamlessSwitchThreshold {
+  const configured = explicitConfigurationValue(config, "seamlessSwitchThreshold");
+  if (configured !== undefined) {
+    return normalizeSeamlessSwitchThreshold(configured);
+  }
+
+  // Small embedded callers (for example the Gateway selector) only provide
+  // `get`; in that narrow case the supplied value is already the effective
+  // value and there is no VS Code default to distinguish from an override.
+  if (!config.inspect) {
+    const supplied = config.get<unknown>("seamlessSwitchThreshold", undefined);
+    if (supplied !== undefined) {
+      return normalizeSeamlessSwitchThreshold(supplied);
+    }
+  }
+
+  const legacyEmergencySwitchEnabled =
+    explicitConfigurationValue(config, "seamlessSwitchEmergencySwitchEnabled") ??
+    config.get<unknown>("seamlessSwitchEmergencySwitchEnabled", undefined);
+  if (legacyEmergencySwitchEnabled === true) {
+    return 1;
+  }
+
+  const legacyReserveThreshold =
+    explicitConfigurationValue(config, "seamlessSwitchReserveThreshold") ??
+    config.get<unknown>("seamlessSwitchReserveThreshold", undefined);
+  if (legacyReserveThreshold === 1) {
+    return 1;
+  }
+  return 3;
 }
 
 export function normalizeHotSwitchLongTurnPolicy(

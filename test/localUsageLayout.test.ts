@@ -88,11 +88,11 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(settings).toContain("1/4 (25%)");
     expect(settings).toContain("1/3 (33%)");
     expect(settings).toContain("1/2 (50%)");
-    expect(settings).toContain("1% 耗尽保护（Free 优先）");
+    expect(settings).toContain("账号切换阈值");
     expect(settings).toContain('patchAndSend("seamlessSwitchEnabled"');
     expect(settings).toContain('patchAndSend("seamlessSwitchQuotaBandsEnabled"');
     expect(settings).toContain('patchAndSend("seamlessSwitchQuotaBandSize"');
-    expect(settings).toContain('patchAndSend("seamlessSwitchEmergencySwitchEnabled"');
+    expect(settings).toContain('patchAndSend("seamlessSwitchThreshold"');
     expect(settings.slice(autoSwitchHiddenStack, seamlessBoundary)).not.toContain("seamlessSwitchQuotaBandsEnabled");
     expect(settings).toContain("安装或移除 runtime 请使用命令面板");
     expect(settings).not.toContain('patchAndSend("hotSwitchEnabled"');

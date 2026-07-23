@@ -6,6 +6,7 @@ import { DASHBOARD_ACCOUNTS_PAGE_SIZE } from "../../domain/dashboard/types";
 import {
   getAutoRefreshMinutes,
   getCodexAccountsConfiguration,
+  getSeamlessSwitchThreshold,
   isBackgroundTokenRefreshEnabled,
   isSeamlessSwitchEnabled,
   isSeamlessSwitchQuotaBandsEnabled
@@ -24,7 +25,6 @@ import {
 
 const SCHEDULER_LEASE_MS = 2 * 60 * 1000;
 const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
-const SEAMLESS_EMERGENCY_SWITCH_ENABLED = "seamlessSwitchEmergencySwitchEnabled";
 const SEAMLESS_SWITCH_GROUP_A_VISIBLE = "seamlessSwitchGroupAVisible";
 const SEAMLESS_SWITCH_GROUP_B_VISIBLE = "seamlessSwitchGroupBVisible";
 const SEAMLESS_SWITCH_GROUP_C_VISIBLE = "seamlessSwitchGroupCVisible";
@@ -60,7 +60,7 @@ export function registerSeamlessUsageLimitMonitor(params: {
       config.get<boolean>(HOT_SWITCH_ENABLED, false) &&
       isSeamlessSwitchEnabled(config) &&
       isSeamlessSwitchQuotaBandsEnabled(config) &&
-      config.get<boolean>(SEAMLESS_EMERGENCY_SWITCH_ENABLED, false)
+      getSeamlessSwitchThreshold(config) > 0
     );
   };
 
@@ -163,7 +163,7 @@ export function registerSeamlessUsageLimitMonitor(params: {
       event.affectsConfiguration("codexAccounts.hotSwitchEnabled") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchEnabled") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchQuotaBandsEnabled") ||
-      event.affectsConfiguration("codexAccounts.seamlessSwitchEmergencySwitchEnabled") ||
+      event.affectsConfiguration("codexAccounts.seamlessSwitchThreshold") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchGroupAVisible") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchGroupBVisible") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchGroupCVisible")
@@ -248,7 +248,9 @@ export function registerAutoRefreshScheduler(params: {
       minutes * 60 * 1000
     );
     void params.repo.listAccounts().then((accounts) => {
-      if (shouldRunAccountScheduler(getAutomaticQuotaRefreshAccountIds(accounts, getCodexAccountsConfiguration()).length)) {
+      if (
+        shouldRunAccountScheduler(getAutomaticQuotaRefreshAccountIds(accounts, getCodexAccountsConfiguration()).length)
+      ) {
         void runAutoRefresh();
       }
     });

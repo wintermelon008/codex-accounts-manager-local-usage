@@ -26,7 +26,7 @@ export interface CodexTokens {
 export type CodexAuthMode = "chatgpt" | "oauth";
 
 export type SeamlessQuotaBandSize = 20 | 25 | 33 | 50;
-export type SeamlessReserveThreshold = 1 | 2 | 3;
+export type SeamlessSwitchThreshold = 0 | 1 | 3 | 5;
 /** 账号面板与无感切号使用的可见分组。 */
 export type CodexAccountGroup = "A" | "B" | "C";
 

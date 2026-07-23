@@ -22,6 +22,11 @@ export type Sub2ApiGatewayConfig = {
     credentialRef: string;
   };
   /**
+   * Opt in to automatic, no-reload fallback from a semantically confirmed
+   * exhausted Gateway route to an eligible saved ChatGPT Auth account.
+   */
+  autoFallbackToChatGpt?: boolean;
+  /**
    * Optional because a downstream API key intentionally cannot read the
    * provider inventory.  The corresponding admin credential lives only in
    * SecretStorage under this separate reference.
@@ -124,6 +129,10 @@ export function parseSub2ApiGatewayConfig(value: unknown): Sub2ApiGatewayConfig 
   }
 
   const inventoryObserver = parseInventoryObserver(value["inventoryObserver"]);
+  const autoFallbackToChatGpt = value["autoFallbackToChatGpt"];
+  if (autoFallbackToChatGpt !== undefined && typeof autoFallbackToChatGpt !== "boolean") {
+    throw new Error("The Sub2API Gateway autoFallbackToChatGpt setting must be a boolean");
+  }
   if (inventoryObserver?.credentialRef === credentialRef) {
     throw new Error("The inventory observer credentialRef must be different from the downstream API key reference");
   }
@@ -136,6 +145,7 @@ export function parseSub2ApiGatewayConfig(value: unknown): Sub2ApiGatewayConfig 
       model,
       credentialRef
     },
+    ...(autoFallbackToChatGpt === true ? { autoFallbackToChatGpt: true } : {}),
     ...(inventoryObserver ? { inventoryObserver } : {})
   };
 }
@@ -148,7 +158,8 @@ export function createSub2ApiGatewayConfigTemplate(): Sub2ApiGatewayConfig {
       baseUrl: "http://127.0.0.1:65432/v1",
       model: "gpt-5.5",
       credentialRef: "primary"
-    }
+    },
+    autoFallbackToChatGpt: false
   };
 }
 

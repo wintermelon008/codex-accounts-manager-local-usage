@@ -20,6 +20,8 @@ export type HotSwitchStatus = {
   transportMode: "http" | "default";
   providerKind: "chatgpt" | "sub2api" | "default";
   sub2apiGatewayActive: boolean;
+  sub2apiGatewayConfigured: boolean;
+  sub2apiGatewayAutoFallbackEnabled: boolean;
   recentUsageLimitedThreads: number;
   observedUsageLimitFailures: number;
   recoveredUsageLimitedThreads: number;
@@ -31,6 +33,10 @@ export type HotSwitchStatus = {
 export type Sub2ApiGatewayRuntimeStatus = {
   active: boolean;
   ready: boolean;
+  route?: "sub2api" | "chatgpt";
+  autoFallbackToChatGpt?: boolean;
+  quotaExhaustionCount?: number;
+  lastQuotaExhaustionAt?: number;
   instanceId?: string;
   startedAt?: number;
   requestCount: number;
@@ -93,6 +99,22 @@ export type HotSwitchAccountParams = {
   gracePeriodMs: number;
   longTurnPolicy: HotSwitchLongTurnPolicy;
   recoverRecentUsageLimitedTurns?: boolean;
+} & (HotSwitchManagedRollbackParams | HotSwitchSnapshotRollbackParams);
+
+/**
+ * Gateway fallback is also a transactional auth switch.  The adapter keeps
+ * serving Sub2API until the target identity and local active-account commit
+ * both succeed; if either fails, the previous ChatGPT credentials are restored
+ * before the relay is left on its original route.
+ */
+export type HotSwitchGatewayFallbackParams = {
+  accessToken: string;
+  accountId: string;
+  localAccountId: string;
+  expectedEmail: string;
+  planType?: string;
+  gracePeriodMs: number;
+  longTurnPolicy: HotSwitchLongTurnPolicy;
 } & (HotSwitchManagedRollbackParams | HotSwitchSnapshotRollbackParams);
 
 export type HotSwitchAccountResult =
@@ -184,6 +206,10 @@ export class CodexHotSwitchBridge {
     return this.request<Sub2ApiGatewayRuntimeStatus>("gateway/configure", { apiKey }, REQUEST_TIMEOUT_MS);
   }
 
+  async activateSub2ApiGateway(): Promise<Sub2ApiGatewayRuntimeStatus> {
+    return this.request<Sub2ApiGatewayRuntimeStatus>("gateway/activate", {}, REQUEST_TIMEOUT_MS);
+  }
+
   async getSub2ApiGatewayStatus(): Promise<Sub2ApiGatewayRuntimeStatus> {
     return this.request<Sub2ApiGatewayRuntimeStatus>("gateway/status", {}, REQUEST_TIMEOUT_MS);
   }
@@ -191,6 +217,11 @@ export class CodexHotSwitchBridge {
   async switchAccount(params: HotSwitchAccountParams): Promise<HotSwitchAccountResult> {
     const timeoutMs = Math.max(REQUEST_TIMEOUT_MS, params.gracePeriodMs + SWITCH_COMPLETION_BUFFER_MS);
     return this.request<HotSwitchAccountResult>("runtime/switch", params, timeoutMs);
+  }
+
+  async fallbackToChatGpt(params: HotSwitchGatewayFallbackParams): Promise<HotSwitchAccountResult> {
+    const timeoutMs = Math.max(REQUEST_TIMEOUT_MS, params.gracePeriodMs + SWITCH_COMPLETION_BUFFER_MS);
+    return this.request<HotSwitchAccountResult>("runtime/gateway/fallback", params, timeoutMs);
   }
 
   dispose(): void {
@@ -214,7 +245,7 @@ export class CodexHotSwitchBridge {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        if (!socket.destroyed && method === "runtime/switch") {
+        if (!socket.destroyed && (method === "runtime/switch" || method === "runtime/gateway/fallback")) {
           socket.write(
             `${JSON.stringify({
               id: `cancel:${id}`,

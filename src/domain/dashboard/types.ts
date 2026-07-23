@@ -6,7 +6,7 @@ import type {
   CodexIndexHealthSummary,
   CodexAccountGroup,
   SeamlessQuotaBandSize,
-  SeamlessReserveThreshold
+  SeamlessSwitchThreshold
 } from "../../core/types";
 
 /**
@@ -27,8 +27,7 @@ export type DashboardSettingKey =
   | "seamlessSwitchEnabled"
   | "seamlessSwitchQuotaBandsEnabled"
   | "seamlessSwitchQuotaBandSize"
-  | "seamlessSwitchReserveThreshold"
-  | "seamlessSwitchEmergencySwitchEnabled"
+  | "seamlessSwitchThreshold"
   | "seamlessSwitchGroupAVisible"
   | "seamlessSwitchGroupBVisible"
   | "seamlessSwitchGroupCVisible"
@@ -59,8 +58,7 @@ export interface DashboardSettings {
   seamlessSwitchEnabled: boolean;
   seamlessSwitchQuotaBandsEnabled: boolean;
   seamlessSwitchQuotaBandSize: SeamlessQuotaBandSize;
-  seamlessSwitchReserveThreshold: SeamlessReserveThreshold;
-  seamlessSwitchEmergencySwitchEnabled: boolean;
+  seamlessSwitchThreshold: SeamlessSwitchThreshold;
   seamlessSwitchGroupAVisible: boolean;
   seamlessSwitchGroupBVisible: boolean;
   seamlessSwitchGroupCVisible: boolean;
@@ -362,6 +360,12 @@ export interface DashboardCopy {
 
 type DashboardMetricKey = string;
 
+/**
+ * The local Dashboard-only filters supported for personal ChatGPT plans.
+ * These do not change account scheduling or persisted pool membership.
+ */
+export type DashboardAccountPlanFilter = "free" | "plus" | "pro";
+
 export interface DashboardMetricViewModel {
   key: DashboardMetricKey;
   label: string;
@@ -390,6 +394,7 @@ export interface DashboardAccountViewModel {
   addedAtLabel: string;
   statusColor?: string;
   planTypeLabel: string;
+  planType?: string;
   creditsText?: string;
   userId?: string;
   accountId?: string;

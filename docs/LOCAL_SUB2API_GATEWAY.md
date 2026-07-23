@@ -27,7 +27,8 @@
     "baseUrl": "http://127.0.0.1:65432/v1",
     "model": "gpt-5.5",
     "credentialRef": "primary"
-  }
+  },
+  "autoFallbackToChatGpt": false
 }
 ```
 
@@ -49,9 +50,27 @@ Sub2API 内部上游账号调度
 
 - 适配器只监听 `127.0.0.1`，只允许模型与 Responses 请求；下游 Key 不会写进 `auth.json`、shim 配置、Dashboard 状态、日志或仓库文件。
 - 启用 Gateway 时，shim 仅在其启动的 Codex app-server 子进程中把 `127.0.0.1`、`localhost` 与 `::1` 加入 `NO_PROXY`/`no_proxy`。这保证每次随机回环 adapter 端口不会被服务器已有的 HTTP(S)/ALL 代理截走；外部请求仍沿用你原有的代理设置，系统环境不会被修改。
-- Gateway 和 ChatGPT Auth 仍通过显式选择加 window reload 切换，绝不跨类型自动无感切号。Gateway 复用 HTTP runtime 的本地 provider identity，使切换传输端点本身不再把本地 thread history 按 provider 拆成两组；这不表示两种上游服务共享远端上下文或额度。
+- 默认情况下，Gateway 和 ChatGPT Auth 仍通过显式选择加 window reload 切换。仅当配置中的 `autoFallbackToChatGpt` 明确设为 `true` 时，已确认的 Sub2API 上游额度耗尽才会触发单向、无 reload 的 Gateway → ChatGPT Auth 回退；它绝不会自动从 ChatGPT Auth 切回 Gateway，也不会让 Gateway 加入普通 OAuth 调度池。Gateway 复用 HTTP runtime 的本地 provider identity，使这个传输切换不再把本地 thread history 按 provider 拆成两组；这不表示两种上游服务共享远端上下文或额度。
 - 为兼容最早本地 Gateway 版本创建的旧 thread，runtime 仅内部注册一次旧 provider ID 的别名，并将它指向当前选中的 ChatGPT Auth 或 Gateway 传输；新 thread 仍只使用当前 HTTP provider identity。
 - OAuth 账号、`auth.json`、普通账号的五小时/周额度刷新、无感切号池及其 token 归因保持原有逻辑。Gateway 不进入这些调度器，也不会向其写入数据。
+
+## 可选：额度耗尽后无 reload 回退至 ChatGPT Auth
+
+这是一项默认关闭的单向保护。需要时把配置改为：
+
+```json
+"autoFallbackToChatGpt": true
+```
+
+启用前应先安装一次 Experimental Seamless Runtime、重载窗口，并准备至少一个可用的 ChatGPT Auth 候选。候选沿用现有无感切号池和分组可见性：必须未隐藏、在池中、最近 15 分钟成功刷新过有效额度，且周额度严格高于当前“账号切换阈值”（阈值关闭时只要求大于 `0%`）；有有效五小时窗口的候选优先，再按五小时/周剩余额度排序，最后才考虑储备账号。Gateway 只读取这一安全线，不会修改普通 ChatGPT 调度设置。
+
+真正交接前，Manager 会对当前最优候选强制刷新额度并重新排序；若刷新后另一候选成为最优，也会先刷新它。刷新失败、失去资格或没有可用凭据的账号只会从**本次**回退事务排除，不会把旧快照当作可用额度。回退因无候选、运行时不可用、身份校验失败或安全边界延后而未完成时，会以 `5 → 10 → 20 → 40 → 60` 秒封顶的指数退避重试；Gateway 卡片会显示下一次重试和次数。新的、递增的耗尽事件会重置该退避。
+
+adapter 只在实际 `/v1/responses` 返回 `429`、`502` 或 `503` 且受限 JSON 错误体中出现额度耗尽语义（例如 `quota_exhausted`、`usage_limit_exceeded`、`no_available_account` 或 `insufficient_balance`）时才触发。普通 5xx、网络错误、超时、模型错误和未识别响应都只保留原有诊断，**不会**误切到 ChatGPT。
+
+确认耗尽后，adapter 会停止继续向 Sub2API 发新请求，Manager 在同一 app-server 的安全边界登录并验证所选 ChatGPT Auth 账号，然后把同一个本地 HTTP provider 路由到 ChatGPT；本地 thread history 不需要重建，也不需要 reload。若目标账号、身份校验或本地账号提交失败，事务会恢复切换前的 ChatGPT 身份和 Sub2API 路由，保持失败关闭。
+
+已收到耗尽响应的那一轮不会被自动重放：请求正文不会被 adapter 缓存或重试，以免重复非幂等工具操作。切换成功后，在同一 thread 重试或继续下一轮即可使用 ChatGPT Auth。恢复 Sub2API 时，在 Gateway 卡片再次选择 Gateway；已安装且连接正常时可原地恢复其上游路由，无需再重载窗口。
 
 ## 卡片数据语义
 
@@ -109,8 +128,8 @@ Sub2API 内部上游账号调度
 
 ## 回退
 
-1. 在 Gateway 卡片选择 **切回 ChatGPT Auth**。
-2. 按提示重载 VS Code 窗口。
+1. 默认模式下，在 Gateway 卡片选择 **切回 ChatGPT Auth**，并按提示重载 VS Code 窗口。
+2. 若已启用自动回退且当前显示“ChatGPT Auth fallback is active”，可保留该安全回退状态，或在 Gateway 卡片再次选择 Gateway 以恢复 Sub2API 路由。
 3. 可选地将 `codexAccounts.sub2apiGatewayEnabled` 改回 `false`。
 
 此操作不会删除 SecretStorage 中的 Key，也不会改动 Sub2API 服务、Linux 代理脚本或 Chisel 仓库。

@@ -162,6 +162,7 @@ function mapAccount(
     addedAtLabel: formatAddedAt(account.createdAt, copy.never),
     statusColor: account.isActive ? "var(--accent-green)" : health.kind === "healthy" ? undefined : "#ef4444",
     planTypeLabel: formatPlanTypeWithQuota(account, lang),
+    planType: account.planType,
     creditsText: formatCreditsText(account.quotaSummary?.credits, lang),
     userId: account.userId,
     accountId: account.accountId,
