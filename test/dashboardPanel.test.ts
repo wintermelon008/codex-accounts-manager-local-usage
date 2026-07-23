@@ -75,8 +75,7 @@ function createState(): DashboardState {
       seamlessSwitchEnabled: false,
       seamlessSwitchQuotaBandsEnabled: false,
       seamlessSwitchQuotaBandSize: 20,
-      seamlessSwitchReserveThreshold: 3,
-      seamlessSwitchEmergencySwitchEnabled: false,
+      seamlessSwitchThreshold: 3,
       seamlessSwitchGroupAVisible: true,
       seamlessSwitchGroupBVisible: true,
       seamlessSwitchGroupCVisible: true,
@@ -266,6 +265,54 @@ describe("Dashboard account selection", () => {
     const nextState = reducer(state, { type: "reconcile-selection-scope", visibleAccountIds });
 
     expect(nextState.selectedAccountIds).toEqual(["ungrouped-account"]);
+  });
+
+  it("intersects selected Free/Plus/Pro plans with the existing group and hidden-account filters", () => {
+    const dashboardState = createState();
+    dashboardState.settings = {
+      ...dashboardState.settings,
+      seamlessSwitchGroupBVisible: false
+    };
+    dashboardState.accounts = [
+      { id: "free-a", planType: "free", accountGroup: "A", isHidden: false },
+      { id: "plus-a", planType: "plus", accountGroup: "A", isHidden: false },
+      { id: "pro-b", planType: "pro_20x", accountGroup: "B", isHidden: false },
+      { id: "pro-hidden", planType: "pro", accountGroup: "A", isHidden: true },
+      { id: "team-a", planType: "team", accountGroup: "A", isHidden: false }
+    ] as DashboardState["accounts"];
+
+    expect(
+      getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, false, ["free", "pro"]).map(
+        (account) => account.id
+      )
+    ).toEqual(["free-a"]);
+    expect(
+      getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, true, ["free", "pro"]).map(
+        (account) => account.id
+      )
+    ).toEqual(["free-a", "pro-hidden"]);
+    expect(
+      getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, false).map((account) => account.id)
+    ).toEqual(["free-a", "plus-a", "team-a"]);
+  });
+
+  it("clears only selections that leave the selected plan scope", () => {
+    const dashboardState = createState();
+    dashboardState.accounts = [
+      { id: "free-account", planType: "free", isHidden: false },
+      { id: "plus-account", planType: "plus", isHidden: false }
+    ] as DashboardState["accounts"];
+
+    let state = createInitialState();
+    state = reducer(state, { type: "toggle-select", accountId: "free-account" });
+    state = reducer(state, { type: "toggle-select", accountId: "plus-account" });
+    const visibleAccountIds = getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, false, [
+      "free"
+    ]).map((account) => account.id);
+
+    expect(reducer(state, { type: "reconcile-selection-scope", visibleAccountIds }).selectedAccountIds).toEqual([
+      "free-account"
+    ]);
   });
 
   it("keeps hidden accounts selected only while the hidden-account view is enabled", () => {

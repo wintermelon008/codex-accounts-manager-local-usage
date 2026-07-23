@@ -81,13 +81,21 @@ describe("Sub2API Gateway inventory observer", () => {
     });
     expect(requests).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ url: "/api/v1/admin/groups/all?platform=openai", apiKey: "admin-observer-key", authorization: null }),
+        expect.objectContaining({
+          url: "/api/v1/admin/groups/all?platform=openai",
+          apiKey: "admin-observer-key",
+          authorization: null
+        }),
         expect.objectContaining({ url: "/api/v1/admin/accounts?platform=openai&group=9&page=1&page_size=100" }),
         expect.objectContaining({ url: "/api/v1/admin/openai/accounts/11/quota" })
       ])
     );
-    expect(JSON.stringify(snapshot)).not.toContain("11");
-    expect(JSON.stringify(snapshot)).not.toContain("admin-observer-key");
+    // checkedAt is intentionally a live timestamp and can coincidentally
+    // contain an account-ID substring, so exclude only that scalar from the
+    // privacy assertion.
+    const serializedSnapshot = JSON.stringify({ ...snapshot, checkedAt: 0 });
+    expect(serializedSnapshot).not.toContain("11");
+    expect(serializedSnapshot).not.toContain("admin-observer-key");
   });
 
   it("does not convert an unreadable account into a fabricated exhausted pool", async () => {

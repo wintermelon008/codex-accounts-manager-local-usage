@@ -4,12 +4,12 @@ import { createError } from "../../core";
 import { CodexAccountRecord } from "../../core/types";
 import {
   getCodexAccountsConfiguration,
+  getSeamlessSwitchThreshold,
   isSeamlessSwitchEnabled,
   isSeamlessSwitchQuotaBandsEnabled,
   normalizeAutoSwitchThreshold,
   normalizeQuotaWarningThreshold,
-  normalizeSeamlessQuotaBandSize,
-  normalizeSeamlessReserveThreshold
+  normalizeSeamlessQuotaBandSize
 } from "../../infrastructure/config/extensionSettings";
 import { QuotaRefreshResult, refreshQuota, fetchResetCredits } from "../../services";
 import { AccountsRepository } from "../../storage";
@@ -30,7 +30,6 @@ import { getCommandCopy, getLanguage, getQuotaWarningCopy } from "../../utils";
 import { getDashboardCopy } from "../dashboard/copy";
 import { autoReloadWindowForAccount, handleCodexAppRestartPreference } from "./switchEffects";
 import {
-  FREE_EXHAUSTION_QUOTA_PERCENTAGE,
   getBalanceQuotaCapability,
   getFiveHourQuotaBand,
   isFreePlanType,
@@ -48,8 +47,6 @@ const AUTO_SWITCH_WEEKLY_THRESHOLD = "autoSwitchWeeklyThreshold";
 const QUOTA_WARNING_ENABLED = "quotaWarningEnabled";
 const QUOTA_WARNING_THRESHOLD = "quotaWarningThreshold";
 const SEAMLESS_QUOTA_BAND_SIZE = "seamlessSwitchQuotaBandSize";
-const SEAMLESS_RESERVE_THRESHOLD = "seamlessSwitchReserveThreshold";
-const SEAMLESS_EMERGENCY_SWITCH_ENABLED = "seamlessSwitchEmergencySwitchEnabled";
 const SEAMLESS_SWITCH_GROUP_A_VISIBLE = "seamlessSwitchGroupAVisible";
 const SEAMLESS_SWITCH_GROUP_B_VISIBLE = "seamlessSwitchGroupBVisible";
 const SEAMLESS_SWITCH_GROUP_C_VISIBLE = "seamlessSwitchGroupCVisible";
@@ -281,6 +278,9 @@ async function runSeamlessBalanceSwitchForActiveQuota(
   ) {
     return false;
   }
+  if (options.trigger === "runtimeUsageLimit" && getSeamlessSwitchThreshold(config) === 0) {
+    return false;
+  }
 
   const accounts = await repo.listAccounts();
   const globallyActive = accounts.find((account) => account.isActive);
@@ -300,7 +300,7 @@ async function runSeamlessBalanceSwitchForActiveQuota(
   const activeCapability = active ? getBalanceQuotaCapability(active, now) : "unknown";
   // A disabled group only removes potential targets. Keep the currently active
   // account in this one decision so it can safely rotate out after reaching its
-  // existing band/emergency condition instead of being forced away immediately.
+  // existing band/threshold condition instead of being forced away immediately.
   const scopedAccounts = active
     ? accounts.filter((account) => account.id === active.id || isAccountVisibleToSeamlessSwitch(account, config))
     : accounts;
@@ -362,44 +362,40 @@ async function executeSeamlessBalanceSwitch(params: {
 }): Promise<boolean> {
   const { accounts, active, activeCapability, config, now, view, runtimeUsageLimit } = params;
   const quotaBandSize = normalizeSeamlessQuotaBandSize(config.get<number>(SEAMLESS_QUOTA_BAND_SIZE, 20));
-  const reserveThreshold = normalizeSeamlessReserveThreshold(config.get<number>(SEAMLESS_RESERVE_THRESHOLD, 3));
-  const emergencyEnabled = config.get<boolean>(SEAMLESS_EMERGENCY_SWITCH_ENABLED, false);
+  const switchThreshold = getSeamlessSwitchThreshold(config);
+  const thresholdEnabled = switchThreshold > 0;
   const activeIsFreeWindowed = isVerifiedFreeWindowedAccount(active, now);
-  const hourlyEmergency =
-    emergencyEnabled &&
+  const hourlyThresholdReached =
+    thresholdEnabled &&
     activeCapability === "windowed" &&
-    (active.quotaSummary!.hourlyPercentage <= FREE_EXHAUSTION_QUOTA_PERCENTAGE || runtimeUsageLimit);
-  const weeklyEmergency =
-    emergencyEnabled &&
-    (active.quotaSummary!.weeklyPercentage <= FREE_EXHAUSTION_QUOTA_PERCENTAGE ||
-      (runtimeUsageLimit && activeCapability === "reserve"));
-  const emergencySwitch = hourlyEmergency || weeklyEmergency;
-  const emergencyQuota = weeklyEmergency && !hourlyEmergency ? "weekly" : hourlyEmergency ? "hourly" : undefined;
+    (active.quotaSummary!.hourlyPercentage <= switchThreshold || runtimeUsageLimit);
+  const weeklyThresholdReached =
+    thresholdEnabled &&
+    (active.quotaSummary!.weeklyPercentage <= switchThreshold || (runtimeUsageLimit && activeCapability === "reserve"));
+  const thresholdSwitch = hourlyThresholdReached || weeklyThresholdReached;
+  const thresholdQuota =
+    weeklyThresholdReached && !hourlyThresholdReached ? "weekly" : hourlyThresholdReached ? "hourly" : undefined;
   const activeBand =
     activeCapability === "windowed" ? getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage, quotaBandSize) : 0;
-  // Free accounts intentionally consume their small five-hour window to the
-  // configured hard-stop floor. They do not participate in the ordinary band
-  // or reserve-threshold scheduler; only the opt-in 1%/usage-limit path moves
-  // them, which prevents premature rotation at 20%/3%.
+  // Free accounts do not participate in ordinary band balancing. They only
+  // move at the unified hard-switch threshold or from a structured runtime
+  // usage-limit signal, so the chosen threshold has the same meaning for
+  // Free, Plus, and reserve accounts.
   const bandDropped =
     activeCapability === "windowed" &&
     !activeIsFreeWindowed &&
     observeSeamlessQuotaBand(active.id, activeBand, quotaBandSize);
-  const reserveThresholdReached =
-    activeCapability === "windowed"
-      ? !activeIsFreeWindowed && active.quotaSummary!.hourlyPercentage <= reserveThreshold
-      : active.quotaSummary!.weeklyPercentage <= reserveThreshold;
-  if (!emergencySwitch && !bandDropped && !reserveThresholdReached) {
+  if (!thresholdSwitch && !bandDropped) {
     return false;
   }
 
   const lastSelectedAt = getSeamlessSwitchRuntimeSnapshot().lastSelectedAt ?? {};
-  const freeExhaustionCandidate =
-    hourlyEmergency && activeIsFreeWindowed
+  const freeThresholdCandidate =
+    thresholdSwitch && activeIsFreeWindowed
       ? selectFreeExhaustionCandidate({
           accounts,
           activeAccountId: active.id,
-          reserveThreshold,
+          switchThreshold,
           lastSelectedAt,
           now
         })
@@ -409,22 +405,21 @@ async function executeSeamlessBalanceSwitch(params: {
   // is the normal mixed pool (for example a Plus/reserve account), not a
   // second-best Free candidate whose five-hour view may already be obsolete.
   const normalSelectionAccounts =
-    hourlyEmergency && activeIsFreeWindowed
+    thresholdSwitch && activeIsFreeWindowed
       ? accounts.filter(
           (account) => !account.isHidden && (account.id === active.id || !isFreePlanType(account.planType))
         )
       : accounts;
   const next =
-    freeExhaustionCandidate ??
+    freeThresholdCandidate ??
     selectBalanceCandidate({
       accounts: normalSelectionAccounts,
       activeAccountId: active.id,
       activeBand,
       quotaBandSize,
-      reserveThreshold,
-      minimumHourlyPercentage: emergencySwitch ? FREE_EXHAUSTION_QUOTA_PERCENTAGE : undefined,
-      emergencyQuota,
-      forceRecoveryMode: runtimeUsageLimit,
+      switchThreshold,
+      thresholdQuota,
+      forceRecoveryMode: thresholdSwitch && runtimeUsageLimit,
       lastSelectedAt,
       now
     });
@@ -432,7 +427,7 @@ async function executeSeamlessBalanceSwitch(params: {
     return false;
   }
 
-  const runtimeOutcome = (await (emergencySwitch
+  const runtimeOutcome = (await (thresholdSwitch
     ? view.switchRuntimeAccount?.(next.id, {
         gracePeriodMs: 0,
         longTurnPolicy: "interruptAndContinue",
@@ -440,9 +435,9 @@ async function executeSeamlessBalanceSwitch(params: {
       })
     : view.switchRuntimeAccount?.(next.id))) ?? { status: "unavailable" as const };
   const reason = formatSeamlessSwitchReason({
-    freeExhaustionCandidate,
-    emergencyQuota,
-    reserveThresholdReached,
+    freeThresholdCandidate,
+    switchThreshold,
+    thresholdQuota,
     runtimeUsageLimit
   });
   if (runtimeOutcome.status === "deferred") {
@@ -498,21 +493,23 @@ async function convergeUsageLimitedRuntimeToGlobalAccount(
 }
 
 function formatSeamlessSwitchReason(params: {
-  freeExhaustionCandidate?: CodexAccountRecord;
-  emergencyQuota?: "hourly" | "weekly";
-  reserveThresholdReached: boolean;
+  freeThresholdCandidate?: CodexAccountRecord;
+  switchThreshold: number;
+  thresholdQuota?: "hourly" | "weekly";
   runtimeUsageLimit: boolean;
 }): string {
-  if (params.freeExhaustionCandidate) {
-    return params.runtimeUsageLimit ? "Free usage-limit priority " : "Free 1% priority ";
+  if (params.freeThresholdCandidate) {
+    return params.runtimeUsageLimit
+      ? "Free usage-limit priority "
+      : `Free ${params.switchThreshold}% threshold priority `;
   }
   if (params.runtimeUsageLimit) {
     return "usage-limit recovery ";
   }
-  if (params.emergencyQuota) {
-    return `${params.emergencyQuota} 1% emergency `;
+  if (params.thresholdQuota) {
+    return `${params.thresholdQuota} ${params.switchThreshold}% threshold `;
   }
-  return params.reserveThresholdReached ? "reserve-threshold " : "quota-band ";
+  return "quota-band ";
 }
 
 export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, view: RefreshView): Promise<boolean> {

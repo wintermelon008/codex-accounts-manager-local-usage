@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
 import { maybeSeamlessBalanceSwitchForActiveQuota, maybeSwitchForActiveQuota } from "../src/application/accounts/quota";
-import { FREE_EXHAUSTION_QUOTA_MAX_AGE_MS } from "../src/application/accounts/balanceScheduler";
+import { FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS } from "../src/application/accounts/balanceScheduler";
 import type { CodexAccountRecord } from "../src/core/types";
 import type { AccountsRepository } from "../src/storage";
 import { initSeamlessSwitchRuntimeState } from "../src/presentation/workbench/seamlessSwitchState";
@@ -98,11 +98,11 @@ describe("seamless 5-hour quota-band switching", () => {
     expect(switchRuntimeAccount).toHaveBeenCalledWith(visibleGroupCandidate.id);
   });
 
-  it("does not rotate a verified Free account on ordinary bands or the reserve threshold", async () => {
+  it("does not rotate a verified Free account on ordinary bands when the unified threshold is off", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: false,
+      seamlessSwitchThreshold: 0,
       hotSwitchEnabled: true
     });
     const active = account("active", true, 100);
@@ -155,7 +155,7 @@ describe("seamless 5-hour quota-band switching", () => {
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
       seamlessSwitchQuotaBandSize: 33,
-      seamlessSwitchEmergencySwitchEnabled: true,
+      seamlessSwitchThreshold: 1,
       hotSwitchEnabled: true
     });
     const active = account("active", true, 1);
@@ -175,14 +175,40 @@ describe("seamless 5-hour quota-band switching", () => {
     });
   });
 
-  it("keeps a Free account on the highest fresh same-Free quota at the 1% hard-stop floor", async () => {
+  it("uses the selected 5% threshold for an immediate Plus-account switch", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: true,
+      seamlessSwitchThreshold: 5,
       hotSwitchEnabled: true
     });
-    const active = account("active", true, 1);
+    const active = account("active", true, 5);
+    const candidate = account("candidate", false, 6);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+
+    await expect(
+      maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, {
+        refresh: vi.fn(),
+        switchRuntimeAccount
+      })
+    ).resolves.toBe(true);
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
+  });
+
+  it("keeps a Free account on the highest fresh same-Free quota at the selected threshold", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchThreshold: 3,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 3);
     active.planType = "free";
     const lowerFree = account("free-low", false, 45);
     lowerFree.planType = "free";
@@ -211,16 +237,16 @@ describe("seamless 5-hour quota-band switching", () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: true,
+      seamlessSwitchThreshold: 3,
       hotSwitchEnabled: true
     });
-    const active = account("active", true, 1);
+    const active = account("active", true, 3);
     active.planType = "free";
-    const exhaustedFree = account("free-exhausted", false, 1);
+    const exhaustedFree = account("free-exhausted", false, 3);
     exhaustedFree.planType = "free";
     const staleFree = account("free-stale", false, 100);
     staleFree.planType = "free";
-    staleFree.lastQuotaAt = Date.now() - FREE_EXHAUSTION_QUOTA_MAX_AGE_MS - 1;
+    staleFree.lastQuotaAt = Date.now() - FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS - 1;
     const plus = account("plus", false, 90);
     plus.planType = "plus";
     const repo = repository(active, exhaustedFree, staleFree, plus);
@@ -244,7 +270,7 @@ describe("seamless 5-hour quota-band switching", () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: true,
+      seamlessSwitchThreshold: 1,
       hotSwitchEnabled: true
     });
     const active = account("active", true, 74);
@@ -269,11 +295,34 @@ describe("seamless 5-hour quota-band switching", () => {
     });
   });
 
+  it("does not react to a runtime usage-limit signal when the unified threshold is off", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchThreshold: 0,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 74);
+    const candidate = account("candidate", false, 90);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+
+    await expect(
+      maybeSeamlessBalanceSwitchForActiveQuota(
+        repo as unknown as AccountsRepository,
+        { refresh: vi.fn(), switchRuntimeAccount },
+        { trigger: "runtimeUsageLimit", activeAccountId: active.id }
+      )
+    ).resolves.toBe(false);
+
+    expect(switchRuntimeAccount).not.toHaveBeenCalled();
+  });
+
   it("converges a stopped remote runtime to the shared active account without reselecting", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: true,
+      seamlessSwitchThreshold: 1,
       hotSwitchEnabled: true
     });
     const globallyActive = account("global", true, 70);
@@ -301,7 +350,7 @@ describe("seamless 5-hour quota-band switching", () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: true,
+      seamlessSwitchThreshold: 1,
       hotSwitchEnabled: true
     });
     const active = account("active", true, 100, 1);
@@ -325,7 +374,7 @@ describe("seamless 5-hour quota-band switching", () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: true,
+      seamlessSwitchThreshold: 1,
       hotSwitchEnabled: true
     });
     const active = account("active", true, 0, 1);
@@ -347,11 +396,11 @@ describe("seamless 5-hour quota-band switching", () => {
     });
   });
 
-  it("uses a normal reserve-threshold switch on first observation when emergency interruption is disabled", async () => {
+  it("uses the unified threshold switch on first observation", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: false,
+      seamlessSwitchThreshold: 1,
       hotSwitchEnabled: true
     });
     const active = account("active", true, 1);
@@ -362,14 +411,18 @@ describe("seamless 5-hour quota-band switching", () => {
     await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
       true
     );
-    expect(view.switchRuntimeAccount).toHaveBeenCalledWith(candidate.id);
+    expect(view.switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
   });
 
   it("prefers recovered windowed quota before a reserve account", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchReserveThreshold: 3,
+      seamlessSwitchThreshold: 3,
       hotSwitchEnabled: true
     });
     const active = account("active", true, 2);
@@ -385,14 +438,18 @@ describe("seamless 5-hour quota-band switching", () => {
       })
     ).resolves.toBe(true);
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(recovered.id);
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(recovered.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
   });
 
   it("enters reserve only after every safe windowed pool account reaches the threshold", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchReserveThreshold: 3,
+      seamlessSwitchThreshold: 3,
       hotSwitchEnabled: true
     });
     const active = account("active", true, 2);
@@ -408,14 +465,18 @@ describe("seamless 5-hour quota-band switching", () => {
       })
     ).resolves.toBe(true);
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(reserve.id);
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(reserve.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
   });
 
   it("keeps a healthy reserve active and returns to recovered windowed quota at its long-term threshold", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchReserveThreshold: 3,
+      seamlessSwitchThreshold: 3,
       hotSwitchEnabled: true
     });
     const active = reserveAccount("active", true, 50);
@@ -432,14 +493,18 @@ describe("seamless 5-hour quota-band switching", () => {
       true
     );
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(recovered.id);
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(recovered.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
   });
 
   it("chooses the reserve account with the strongest long-term quota when no windowed account recovered", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchReserveThreshold: 3,
+      seamlessSwitchThreshold: 3,
       hotSwitchEnabled: true
     });
     const active = reserveAccount("active", true, 3);
@@ -455,14 +520,18 @@ describe("seamless 5-hour quota-band switching", () => {
       })
     ).resolves.toBe(true);
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(strongerReserve.id);
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(strongerReserve.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue",
+      recoverRecentUsageLimitedTurns: true
+    });
   });
 
-  it("does not force-switch to another account at or below the 1% emergency floor", async () => {
+  it("does not force-switch to another account at or below the selected threshold", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: true,
+      seamlessSwitchThreshold: 1,
       hotSwitchEnabled: true
     });
     const active = account("active", true, 1);

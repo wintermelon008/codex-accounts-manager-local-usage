@@ -42,7 +42,8 @@ html[data-theme="auto"] body.vscode-light .panel {
   flex-wrap: wrap;
   gap: 8px;
 }
-.account-group-filters {
+.account-group-filters,
+.account-plan-filters {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -51,8 +52,8 @@ html[data-theme="auto"] body.vscode-light .panel {
   border-radius: 10px;
   background: var(--bg-surface);
 }
-.account-group-filter {
-  width: 24px;
+.account-group-filter,
+.account-plan-filter {
   height: 24px;
   padding: 0;
   border: 1px solid transparent;
@@ -63,12 +64,22 @@ html[data-theme="auto"] body.vscode-light .panel {
   font-weight: 800;
   cursor: pointer;
 }
+.account-group-filter {
+  width: 24px;
+}
+.account-plan-filter {
+  min-width: 34px;
+  padding: 0 7px;
+}
 .account-group-filter:hover,
-.account-group-filter:focus-visible {
+.account-group-filter:focus-visible,
+.account-plan-filter:hover,
+.account-plan-filter:focus-visible {
   color: var(--text);
   background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
 }
-.account-group-filter.is-active {
+.account-group-filter.is-active,
+.account-plan-filter.is-active {
   border-color: rgba(56, 139, 253, 0.42);
   background: rgba(56, 139, 253, 0.18);
   color: var(--accent-blue);

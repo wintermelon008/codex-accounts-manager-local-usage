@@ -78,7 +78,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 5,
+      runtimeProtocolVersion: 6,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -203,7 +203,9 @@ describe("CodexHotSwitchBridge", () => {
       const delayedGatewayProbe = messages.next(
         (message) => message.method === "test/gatewayProbe" && message.params?.statusCode === 200
       );
-      await waitFor(() => shimStderr.join("").includes("Sub2API Gateway request is waiting for credential: method=GET path=/v1/models"));
+      await waitFor(() =>
+        shimStderr.join("").includes("Sub2API Gateway request is waiting for credential: method=GET path=/v1/models")
+      );
       expect(upstreamRequests).toEqual([]);
 
       await expect(bridge.configureSub2ApiGatewayCredential("real-sub2api-key")).resolves.toMatchObject({
@@ -278,12 +280,16 @@ describe("CodexHotSwitchBridge", () => {
           resolve();
         });
       });
-      const previousResponseProbeCount = messages.all.filter((message) => message.method === "test/gatewayResponseProbe").length;
+      const previousResponseProbeCount = messages.all.filter(
+        (message) => message.method === "test/gatewayResponseProbe"
+      ).length;
       shim.stdin.write(
         `${JSON.stringify({ id: "gateway-connection-refused-probe", method: "test/probeGatewayResponse", params: {} })}\n`
       );
       await waitFor(
-        () => messages.all.filter((message) => message.method === "test/gatewayResponseProbe").length > previousResponseProbeCount
+        () =>
+          messages.all.filter((message) => message.method === "test/gatewayResponseProbe").length >
+          previousResponseProbeCount
       );
       expect(messages.all.filter((message) => message.method === "test/gatewayResponseProbe").at(-1)).toMatchObject({
         params: { statusCode: 502, hasAdapterToken: true }
@@ -320,6 +326,200 @@ describe("CodexHotSwitchBridge", () => {
       if (!upstreamClosed) {
         await new Promise<void>((resolve) => upstream.close(() => resolve()));
       }
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("falls back only after a semantic Sub2API quota-exhaustion signal and keeps the same HTTP provider", async () => {
+    const root = path.resolve(__dirname, "..");
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-sub2api-fallback-"));
+    const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
+    let emitQuotaExhaustion = false;
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      response.writeHead(emitQuotaExhaustion ? 429 : 502, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify(
+          emitQuotaExhaustion
+            ? { error: { code: "quota_exhausted", message: "no_available_accounts" } }
+            : { error: { message: "temporary upstream failure" } }
+        )
+      );
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("Test upstream did not receive a TCP port");
+    }
+
+    try {
+      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await writeFile(
+        path.join(runtimeDirectory, "codex-app-server-shim.json"),
+        JSON.stringify({
+          realCliPath: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+          forceHttpTransport: true,
+          sub2apiGateway: {
+            displayName: "Sub2API Gateway",
+            baseUrl: `http://127.0.0.1:${upstreamAddress.port}/v1`,
+            model: "gateway-test-model",
+            autoFallbackToChatGpt: true
+          }
+        }),
+        "utf8"
+      );
+      shim = childProcess.spawn(shimPath, ["app-server"], {
+        cwd: root,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const messages = createMessageCollector(shim.stdout);
+      shim.stdin.write(`${JSON.stringify({ id: "fallback-initialize", method: "initialize", params: {} })}\n`);
+      await messages.next((message) => message.id === "fallback-initialize");
+      const runtimeArgs = await messages.next((message) => message.method === "test/runtimeArgs");
+      const adapterBaseUrl = readGatewayAdapterBaseUrl(runtimeArgs);
+      const activatedLocalAccounts: string[] = [];
+      bridge = new CodexHotSwitchBridge(
+        async () => ({ accessToken: "unused-token", chatgptAccountId: "account-a", chatgptPlanType: "plus" }),
+        async (localAccountId) => {
+          activatedLocalAccounts.push(localAccountId);
+        }
+      );
+      await waitForSocket(getHotSwitchSocketPath(process.pid));
+      await bridge.configureSub2ApiGatewayCredential("real-sub2api-key");
+
+      await expect(postGatewayResponse(adapterBaseUrl)).resolves.toMatchObject({ statusCode: 502 });
+      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({
+        quotaExhaustionCount: 0,
+        route: "sub2api"
+      });
+
+      emitQuotaExhaustion = true;
+      await expect(postGatewayResponse(adapterBaseUrl)).resolves.toMatchObject({ statusCode: 429 });
+      await waitFor(async () => (await bridge!.getSub2ApiGatewayStatus()).quotaExhaustionCount === 1);
+
+      await expect(
+        bridge.fallbackToChatGpt({
+          accessToken: "access-token-b",
+          accountId: "account-b",
+          localAccountId: "local-b",
+          previousAccountId: "account-a",
+          previousLocalAccountId: "local-a",
+          previousExpectedEmail: "a@example.invalid",
+          expectedEmail: "b@example.invalid",
+          planType: "plus",
+          gracePeriodMs: 0,
+          longTurnPolicy: "defer"
+        })
+      ).resolves.toMatchObject({ status: "switched", accountId: "account-b", email: "b@example.invalid" });
+      expect(activatedLocalAccounts).toEqual(["local-b"]);
+      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({
+        active: false,
+        ready: true,
+        route: "chatgpt",
+        quotaExhaustionCount: 1
+      });
+      await expect(bridge.getStatus()).resolves.toMatchObject({
+        providerKind: "chatgpt",
+        sub2apiGatewayActive: false,
+        sub2apiGatewayConfigured: true,
+        sub2apiGatewayAutoFallbackEnabled: true
+      });
+    } finally {
+      bridge?.dispose();
+      bridge = undefined;
+      shim?.kill("SIGTERM");
+      shim = undefined;
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("rolls a failed Gateway fallback back to the previous auth identity and Gateway route", async () => {
+    const root = path.resolve(__dirname, "..");
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-sub2api-fallback-rollback-"));
+    const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [] }));
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("Test upstream did not receive a TCP port");
+    }
+
+    try {
+      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await writeFile(
+        path.join(runtimeDirectory, "codex-app-server-shim.json"),
+        JSON.stringify({
+          realCliPath: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+          forceHttpTransport: true,
+          sub2apiGateway: {
+            displayName: "Sub2API Gateway",
+            baseUrl: `http://127.0.0.1:${upstreamAddress.port}/v1`,
+            model: "gateway-test-model",
+            autoFallbackToChatGpt: true
+          }
+        }),
+        "utf8"
+      );
+      shim = childProcess.spawn(shimPath, ["app-server"], {
+        cwd: root,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const messages = createMessageCollector(shim.stdout);
+      shim.stdin.write(`${JSON.stringify({ id: "fallback-rollback-initialize", method: "initialize", params: {} })}\n`);
+      await messages.next((message) => message.id === "fallback-rollback-initialize");
+      const restoredContexts: string[] = [];
+      bridge = new CodexHotSwitchBridge(
+        async () => ({ accessToken: "unused-token", chatgptAccountId: "account-a", chatgptPlanType: "plus" }),
+        async () => {
+          throw new Error("local account commit failed");
+        },
+        async (rollbackContextId) => {
+          restoredContexts.push(rollbackContextId);
+        }
+      );
+      await waitForSocket(getHotSwitchSocketPath(process.pid));
+      await bridge.configureSub2ApiGatewayCredential("real-sub2api-key");
+
+      await expect(
+        bridge.fallbackToChatGpt({
+          accessToken: "access-token-b",
+          accountId: "account-b",
+          localAccountId: "local-b",
+          previousAccountId: "account-a",
+          previousExpectedEmail: "a@example.invalid",
+          previousAccessToken: "access-token-a",
+          previousPlanType: "plus",
+          rollbackContextId: "snapshot-a",
+          expectedEmail: "b@example.invalid",
+          planType: "plus",
+          gracePeriodMs: 0,
+          longTurnPolicy: "defer"
+        })
+      ).rejects.toThrow("local account commit failed");
+      expect(restoredContexts).toEqual(["snapshot-a"]);
+      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({ active: true, route: "sub2api" });
+      await expect(bridge.getIdentity()).resolves.toMatchObject({
+        email: "a@example.invalid",
+        managedAccountId: null,
+        managedLocalAccountId: null
+      });
+      const loginAccountIds = messages.all
+        .filter((message) => message.method === "test/received" && message.params?.method === "account/login/start")
+        .map((message) => message.params?.accountId);
+      expect(loginAccountIds).toEqual(["account-b", "account-a"]);
+    } finally {
+      bridge?.dispose();
+      bridge = undefined;
+      shim?.kill("SIGTERM");
+      shim = undefined;
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
       await rm(runtimeDirectory, { recursive: true, force: true });
     }
   }, 15_000);
@@ -1786,6 +1986,42 @@ async function waitForSocket(socketPath: string): Promise<void> {
     } catch {
       return false;
     }
+  });
+}
+
+function readGatewayAdapterBaseUrl(message: Message): string {
+  const providerConfig = message.params?.args?.find((arg) => arg.includes("base_url="));
+  const baseUrl = providerConfig && /base_url="([^"\\]+)"/u.exec(providerConfig)?.[1];
+  if (!baseUrl) {
+    throw new Error("The fake app-server did not receive a Gateway base URL");
+  }
+  return baseUrl;
+}
+
+async function postGatewayResponse(baseUrl: string): Promise<{ statusCode: number; body: string }> {
+  const target = new URL("responses", `${baseUrl.replace(/\/+$/u, "")}/`);
+  const body = JSON.stringify({ model: "gateway-test-model", input: "test", stream: false });
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      target,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer synthetic-oauth-token",
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body)
+        }
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.once("end", () => {
+          resolve({ statusCode: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") });
+        });
+      }
+    );
+    request.once("error", reject);
+    request.end(body);
   });
 }
 

@@ -161,9 +161,9 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
     const release = vi.fn().mockResolvedValue(undefined);
     const repo = {
-      listAccounts: vi.fn().mockResolvedValue([
-        { id: "a", email: "a@example.invalid", isActive: true, createdAt: 1, updatedAt: 1 }
-      ]),
+      listAccounts: vi
+        .fn()
+        .mockResolvedValue([{ id: "a", email: "a@example.invalid", isActive: true, createdAt: 1, updatedAt: 1 }]),
       tryAcquireSchedulerLease: vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce({ release })
     };
     const registration = registerAutoRefreshScheduler({
@@ -234,7 +234,7 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
       hotSwitchEnabled: true,
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: true
+      seamlessSwitchThreshold: 1
     };
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(configuration(values));
     vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
@@ -276,7 +276,7 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
       hotSwitchEnabled: true,
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
-      seamlessSwitchEmergencySwitchEnabled: true
+      seamlessSwitchThreshold: 1
     };
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(configuration(values));
     vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
@@ -309,7 +309,7 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     }
   });
 
-  it("does not create a runtime polling timer while Free exhaustion protection is off", async () => {
+  it("does not create a runtime polling timer while the unified threshold is off", async () => {
     vi.useFakeTimers();
     const configurationDisposable = { dispose: vi.fn() };
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
@@ -317,7 +317,7 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
         hotSwitchEnabled: true,
         seamlessSwitchEnabled: true,
         seamlessSwitchQuotaBandsEnabled: true,
-        seamlessSwitchEmergencySwitchEnabled: false
+        seamlessSwitchThreshold: 0
       })
     );
     vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);

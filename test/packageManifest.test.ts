@@ -138,15 +138,13 @@ describe("extension manifest configuration", () => {
       default: 20,
       enum: [20, 25, 33, 50]
     });
-    expect(properties?.["codexAccounts.seamlessSwitchReserveThreshold"]).toMatchObject({
+    expect(properties?.["codexAccounts.seamlessSwitchThreshold"]).toMatchObject({
       type: "number",
       default: 3,
-      enum: [1, 2, 3]
+      enum: [0, 1, 3, 5]
     });
-    expect(properties?.["codexAccounts.seamlessSwitchEmergencySwitchEnabled"]).toMatchObject({
-      type: "boolean",
-      default: false
-    });
+    expect(properties?.["codexAccounts.seamlessSwitchReserveThreshold"]).toBeUndefined();
+    expect(properties?.["codexAccounts.seamlessSwitchEmergencySwitchEnabled"]).toBeUndefined();
     expect(properties?.["codexAccounts.seamlessSwitchGroupAVisible"]).toMatchObject({
       type: "boolean",
       default: true

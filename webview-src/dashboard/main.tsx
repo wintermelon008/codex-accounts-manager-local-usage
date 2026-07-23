@@ -5,6 +5,7 @@ import type { CodexAccountGroup } from "../../src/core/types";
 import {
   DASHBOARD_ACCOUNTS_PAGE_SIZE,
   type DashboardAccountViewModel,
+  type DashboardAccountPlanFilter,
   type DashboardSettingKey
 } from "../../src/domain/dashboard/types";
 import { AnnouncementCenter } from "./announcementCenter";
@@ -31,6 +32,7 @@ import { resolveDashboardThemeFromMedia } from "./theme";
 
 const GITHUB_PROJECT_URL = "https://github.com/wannanbigpig/codex-tools";
 const ACCOUNT_GROUPS: readonly CodexAccountGroup[] = ["A", "B", "C"];
+const ACCOUNT_PLAN_FILTERS: readonly DashboardAccountPlanFilter[] = ["free", "plus", "pro"];
 
 type SeamlessSwitchGroupVisibilityKey = Extract<
   DashboardSettingKey,
@@ -53,6 +55,7 @@ function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
+  const [selectedPlanFilters, setSelectedPlanFilters] = useState<DashboardAccountPlanFilter[]>([]);
   const [accountsPage, setAccountsPage] = useState(1);
   const { patchSettings, sendAction, sendSetting, isActionPending, hasGlobalPendingAction } = useDashboardActions(
     state,
@@ -60,8 +63,11 @@ function App() {
   );
   const snapshot = state.snapshot;
   const displayedAccounts = useMemo(
-    () => (snapshot ? getDashboardVisibleAccounts(snapshot.accounts, snapshot.settings, showHiddenAccounts) : []),
-    [showHiddenAccounts, snapshot]
+    () =>
+      snapshot
+        ? getDashboardVisibleAccounts(snapshot.accounts, snapshot.settings, showHiddenAccounts, selectedPlanFilters)
+        : [],
+    [selectedPlanFilters, showHiddenAccounts, snapshot]
   );
   const modals = useDashboardModals({
     dispatch,
@@ -95,6 +101,7 @@ function App() {
   useEffect(() => {
     setAccountsPage(1);
   }, [
+    selectedPlanFilters,
     showHiddenAccounts,
     snapshot?.settings.seamlessSwitchGroupAVisible,
     snapshot?.settings.seamlessSwitchGroupBVisible,
@@ -183,6 +190,13 @@ function App() {
     setAccountsPage(1);
     patchSettings({ [key]: nextVisible });
     sendSetting(key, nextVisible);
+  };
+
+  const handleAccountPlanFilterToggle = (plan: DashboardAccountPlanFilter): void => {
+    setAccountsPage(1);
+    setSelectedPlanFilters((filters) =>
+      filters.includes(plan) ? filters.filter((selectedPlan) => selectedPlan !== plan) : [...filters, plan]
+    );
   };
 
   const selectedAccountIds = new Set(state.selectedAccountIds);
@@ -451,6 +465,25 @@ function App() {
                     );
                   })}
                 </div>
+                <div class="account-plan-filters" aria-label={resolveAccountPlanFiltersLabel(snapshot.lang)}>
+                  {ACCOUNT_PLAN_FILTERS.map((plan) => {
+                    const selected = selectedPlanFilters.includes(plan);
+                    const label = resolveAccountPlanFilterLabel(snapshot.lang, plan, selected);
+                    return (
+                      <button
+                        key={plan}
+                        class={`account-plan-filter ${selected ? "is-active" : ""}`}
+                        type="button"
+                        title={label}
+                        aria-label={label}
+                        aria-pressed={selected}
+                        onClick={() => handleAccountPlanFilterToggle(plan)}
+                      >
+                        {resolveAccountPlanFilterName(plan)}
+                      </button>
+                    );
+                  })}
+                </div>
                 <button
                   id="hiddenAccountsToggleButton"
                   class={`settings-btn action-btn icon-only ${showHiddenAccounts ? "is-active" : ""}`}
@@ -599,9 +632,11 @@ function App() {
             ) : null}
             {displayedAccounts.length === 0 ? (
               <div class="saved-accounts-hidden-empty">
-                {hiddenAccountCount > 0 && !showHiddenAccounts
-                  ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
-                  : resolveAccountGroupEmptyLabel(snapshot.lang)}
+                {selectedPlanFilters.length > 0
+                  ? resolveAccountPlanFilterEmptyLabel(snapshot.lang)
+                  : hiddenAccountCount > 0 && !showHiddenAccounts
+                    ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
+                    : resolveAccountGroupEmptyLabel(snapshot.lang)}
               </div>
             ) : null}
           </section>
@@ -822,6 +857,31 @@ function resolveAccountGroupFiltersLabel(lang: string): string {
   return "Account group filters";
 }
 
+function resolveAccountPlanFiltersLabel(lang: string): string {
+  if (lang === "zh") {
+    return "账号套餐筛选";
+  }
+  if (lang === "zh-hant") {
+    return "帳號方案篩選";
+  }
+  return "Account plan filters";
+}
+
+function resolveAccountPlanFilterName(plan: DashboardAccountPlanFilter): string {
+  return plan === "free" ? "Free" : plan === "plus" ? "Plus" : "Pro";
+}
+
+function resolveAccountPlanFilterLabel(lang: string, plan: DashboardAccountPlanFilter, selected: boolean): string {
+  const label = resolveAccountPlanFilterName(plan);
+  if (lang === "zh") {
+    return selected ? `取消筛选 ${label}` : `筛选 ${label}`;
+  }
+  if (lang === "zh-hant") {
+    return selected ? `取消篩選 ${label}` : `篩選 ${label}`;
+  }
+  return selected ? `Remove ${label} filter` : `Filter ${label}`;
+}
+
 function resolveAccountGroupVisibilityLabel(lang: string, group: CodexAccountGroup, visible: boolean): string {
   if (lang === "zh") {
     return visible ? `隐藏分组 ${group}` : `显示分组 ${group}`;
@@ -840,6 +900,16 @@ function resolveAccountGroupEmptyLabel(lang: string): string {
     return "目前篩選沒有顯示帳號。未分組且未隱藏的帳號會一律顯示。";
   }
   return "No accounts match the current group filters. Ungrouped, non-hidden accounts always remain visible.";
+}
+
+function resolveAccountPlanFilterEmptyLabel(lang: string): string {
+  if (lang === "zh") {
+    return "当前套餐、分组和隐藏筛选未显示任何账号。取消套餐筛选可显示所有套餐。";
+  }
+  if (lang === "zh-hant") {
+    return "目前方案、分組與隱藏篩選沒有顯示帳號。取消方案篩選即可顯示所有方案。";
+  }
+  return "No accounts match the current plan, group, and hidden-account filters. Clear plan filters to show every plan.";
 }
 
 render(<App />, document.getElementById("app")!);

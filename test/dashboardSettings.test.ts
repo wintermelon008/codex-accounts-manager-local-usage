@@ -155,39 +155,61 @@ describe("handleDashboardSettingUpdate", () => {
     expect(update).toHaveBeenNthCalledWith(2, "seamlessSwitchQuotaBandSize", 20, vscode.ConfigurationTarget.Global);
   });
 
-  it("reads and persists only supported seamless reserve thresholds", async () => {
+  it("reads and persists only supported unified seamless switch thresholds", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
-      get: vi.fn((key: string, fallback: unknown) => (key === "seamlessSwitchReserveThreshold" ? 2 : fallback)),
+      get: vi.fn((key: string, fallback: unknown) => (key === "seamlessSwitchThreshold" ? 5 : fallback)),
       update,
-      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+      inspect: vi.fn((key: string) =>
+        key === "seamlessSwitchThreshold"
+          ? { key: `codexAccounts.${key}`, globalValue: 5 }
+          : { key: `codexAccounts.${key}` }
+      )
     } as never);
 
-    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchReserveThreshold).toBe(2);
-    await expect(handleDashboardSettingUpdate("seamlessSwitchReserveThreshold", 1)).resolves.toBe(true);
-    await expect(handleDashboardSettingUpdate("seamlessSwitchReserveThreshold", 99)).resolves.toBe(true);
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchThreshold).toBe(5);
+    await expect(handleDashboardSettingUpdate("seamlessSwitchThreshold", 0)).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("seamlessSwitchThreshold", 1)).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("seamlessSwitchThreshold", 2)).resolves.toBe(true);
 
-    expect(update).toHaveBeenNthCalledWith(1, "seamlessSwitchReserveThreshold", 1, vscode.ConfigurationTarget.Global);
-    expect(update).toHaveBeenNthCalledWith(2, "seamlessSwitchReserveThreshold", 3, vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(1, "seamlessSwitchThreshold", 0, vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(2, "seamlessSwitchThreshold", 1, vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(3, "seamlessSwitchThreshold", 3, vscode.ConfigurationTarget.Global);
   });
 
-  it("reads and persists the 1% emergency switch setting", async () => {
-    const update = vi.fn().mockResolvedValue(undefined);
+  it("migrates the former 1% protection to the unified threshold until explicitly configured", () => {
+    const inspect = vi.fn((key: string) => {
+      if (key === "seamlessSwitchEmergencySwitchEnabled") {
+        return { key: `codexAccounts.${key}`, globalValue: true };
+      }
+      return { key: `codexAccounts.${key}`, defaultValue: key === "seamlessSwitchThreshold" ? 3 : undefined };
+    });
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
-      get: vi.fn((key: string, fallback: unknown) =>
-        key === "seamlessSwitchEmergencySwitchEnabled" ? true : fallback
-      ),
-      update,
-      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+      get: vi.fn((_: string, fallback: unknown) => fallback),
+      inspect
     } as never);
 
-    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchEmergencySwitchEnabled).toBe(true);
-    await expect(handleDashboardSettingUpdate("seamlessSwitchEmergencySwitchEnabled", false)).resolves.toBe(true);
-    expect(update).toHaveBeenCalledWith(
-      "seamlessSwitchEmergencySwitchEnabled",
-      false,
-      vscode.ConfigurationTarget.Global
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchThreshold).toBe(1);
+
+    inspect.mockImplementation((key: string) =>
+      key === "seamlessSwitchThreshold"
+        ? { key: `codexAccounts.${key}`, globalValue: 5 }
+        : { key: `codexAccounts.${key}` }
     );
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchThreshold).toBe(5);
+  });
+
+  it("maps the retired 2% reserve value to the nearest available 3% threshold", () => {
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((_: string, fallback: unknown) => fallback),
+      inspect: vi.fn((key: string) =>
+        key === "seamlessSwitchReserveThreshold"
+          ? { key: `codexAccounts.${key}`, globalValue: 2 }
+          : { key: `codexAccounts.${key}` }
+      )
+    } as never);
+
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchThreshold).toBe(3);
   });
 
   it("defaults all seamless groups to visible and persists an individual group filter", async () => {

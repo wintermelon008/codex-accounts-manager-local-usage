@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import {
   DASHBOARD_ACCOUNTS_PAGE_SIZE,
   type DashboardAccountViewModel,
+  type DashboardAccountPlanFilter,
   type DashboardSettings,
   type DashboardState
 } from "../../src/domain/dashboard/types";
@@ -46,17 +47,22 @@ export function getDashboardAccountPage<T>(
 }
 
 /**
- * Returns the account set currently exposed by the Dashboard's hidden/group
- * filters. Pagination deliberately does not participate so batch selection can
- * remain useful across pages within the same visible scope.
+ * Returns the account set currently exposed by the Dashboard's hidden, group,
+ * and optional plan filters. Pagination deliberately does not participate so
+ * batch selection can remain useful across pages within the same visible scope.
  */
 export function getDashboardVisibleAccounts(
   accounts: readonly DashboardAccountViewModel[],
   settings: DashboardSettings,
-  showHiddenAccounts: boolean
+  showHiddenAccounts: boolean,
+  selectedPlanFilters: readonly DashboardAccountPlanFilter[] = []
 ): DashboardAccountViewModel[] {
+  const selectedPlans = new Set<DashboardAccountPlanFilter>(selectedPlanFilters);
   return accounts.filter(
-    (account) => isAccountInVisibleGroup(account, settings) && (showHiddenAccounts || !account.isHidden)
+    (account) =>
+      isAccountInVisibleGroup(account, settings) &&
+      (showHiddenAccounts || !account.isHidden) &&
+      isAccountInSelectedPlan(account, selectedPlans)
   );
 }
 
@@ -71,6 +77,31 @@ function isAccountInVisibleGroup(account: DashboardAccountViewModel, settings: D
     default:
       return true;
   }
+}
+
+function isAccountInSelectedPlan(
+  account: DashboardAccountViewModel,
+  selectedPlans: ReadonlySet<DashboardAccountPlanFilter>
+): boolean {
+  if (selectedPlans.size === 0) {
+    return true;
+  }
+  const plan = resolveDashboardAccountPlanFilter(account.planType);
+  return plan !== undefined && selectedPlans.has(plan);
+}
+
+function resolveDashboardAccountPlanFilter(planType: string | undefined): DashboardAccountPlanFilter | undefined {
+  const normalized = planType?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.includes("pro")) {
+    return "pro";
+  }
+  if (normalized.includes("plus")) {
+    return "plus";
+  }
+  return normalized.includes("free") ? "free" : undefined;
 }
 
 /**

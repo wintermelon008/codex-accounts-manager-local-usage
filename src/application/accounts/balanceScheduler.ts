@@ -1,13 +1,13 @@
-import type { CodexAccountRecord, SeamlessQuotaBandSize, SeamlessReserveThreshold } from "../../core/types";
+import type { CodexAccountRecord, SeamlessQuotaBandSize, SeamlessSwitchThreshold } from "../../core/types";
 
 export const QUOTA_BAND_SIZE = 20;
 export const BALANCE_QUOTA_MAX_AGE_MS = 15 * 60 * 1000;
-export const MINIMUM_BALANCE_CANDIDATE_WEEKLY_PERCENTAGE = 3;
-export const FREE_EXHAUSTION_QUOTA_PERCENTAGE = 1;
+export const DEFAULT_SEAMLESS_SWITCH_THRESHOLD = 3;
 // The ordinary band scheduler can tolerate a longer cache lifetime. A Free
-// account that is about to hard-stop cannot: with one-minute refresh enabled,
-// keep the emergency peer choice within two refresh intervals.
-export const FREE_EXHAUSTION_QUOTA_MAX_AGE_MS = 2 * 60 * 1000;
+// account that is about to hit the selected switching threshold cannot: with
+// one-minute refresh enabled, keep the Free-peer choice within two refresh
+// intervals.
+export const FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS = 2 * 60 * 1000;
 
 export type BalanceQuotaCapability = "windowed" | "reserve" | "unknown";
 
@@ -31,9 +31,8 @@ export function selectBalanceCandidate(params: {
   activeAccountId: string;
   activeBand: number;
   quotaBandSize?: SeamlessQuotaBandSize;
-  reserveThreshold?: SeamlessReserveThreshold;
-  minimumHourlyPercentage?: number;
-  emergencyQuota?: "hourly" | "weekly";
+  switchThreshold?: SeamlessSwitchThreshold;
+  thresholdQuota?: "hourly" | "weekly";
   forceRecoveryMode?: boolean;
   lastSelectedAt: Readonly<Record<string, number | undefined>>;
   now?: number;
@@ -49,36 +48,36 @@ export function selectBalanceCandidate(params: {
     return undefined;
   }
 
-  const reserveThreshold = params.reserveThreshold ?? MINIMUM_BALANCE_CANDIDATE_WEEKLY_PERCENTAGE;
+  const switchThreshold = params.switchThreshold ?? DEFAULT_SEAMLESS_SWITCH_THRESHOLD;
   const candidates = params.accounts.filter(
     (account) =>
       account.id !== params.activeAccountId &&
       !account.isHidden &&
       account.balancePoolEnabled === true &&
       getBalanceQuotaCapability(account, now) !== "unknown" &&
-      account.quotaSummary!.weeklyPercentage > reserveThreshold
+      account.quotaSummary!.weeklyPercentage > switchThreshold
   );
   const windowedCandidates = candidates.filter((account) => getBalanceQuotaCapability(account, now) === "windowed");
   const reserveCandidates = candidates.filter((account) => getBalanceQuotaCapability(account, now) === "reserve");
   const activeQuota = active.quotaSummary!;
-  const activeAtReserveFloor =
+  const activeAtSwitchThreshold =
     activeCapability === "windowed"
-      ? activeQuota.hourlyPercentage <= reserveThreshold
-      : activeQuota.weeklyPercentage <= reserveThreshold;
-  if (activeCapability === "reserve" && !activeAtReserveFloor && !params.emergencyQuota) {
+      ? activeQuota.hourlyPercentage <= switchThreshold
+      : activeQuota.weeklyPercentage <= switchThreshold;
+  if (activeCapability === "reserve" && !activeAtSwitchThreshold && !params.thresholdQuota) {
     return undefined;
   }
-  const reserveRecoveryMode =
+  const thresholdRecoveryMode =
     activeCapability === "reserve" ||
-    activeAtReserveFloor ||
-    params.emergencyQuota === "weekly" ||
+    activeAtSwitchThreshold ||
+    params.thresholdQuota === "weekly" ||
     params.forceRecoveryMode === true;
 
-  if (reserveRecoveryMode) {
+  if (thresholdRecoveryMode) {
     const recoveredWindowed = windowedCandidates
-      .filter((account) => account.quotaSummary!.hourlyPercentage > reserveThreshold)
+      .filter((account) => account.quotaSummary!.hourlyPercentage > switchThreshold)
       .sort((left, right) =>
-        compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.emergencyQuota)
+        compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.thresholdQuota)
       )[0];
     if (recoveredWindowed) {
       return recoveredWindowed;
@@ -91,12 +90,11 @@ export function selectBalanceCandidate(params: {
       return reserve;
     }
 
-    const emergencyFloor = params.minimumHourlyPercentage;
-    if (params.emergencyQuota && emergencyFloor !== undefined) {
+    if (params.thresholdQuota) {
       return windowedCandidates
-        .filter((account) => account.quotaSummary!.hourlyPercentage > emergencyFloor)
+        .filter((account) => account.quotaSummary!.hourlyPercentage > switchThreshold)
         .sort((left, right) =>
-          compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.emergencyQuota)
+          compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.thresholdQuota)
         )[0];
     }
     return undefined;
@@ -110,25 +108,23 @@ export function selectBalanceCandidate(params: {
     .filter(
       (account) =>
         getFiveHourQuotaBand(account.quotaSummary!.hourlyPercentage, params.quotaBandSize) >= params.activeBand &&
-        account.quotaSummary!.hourlyPercentage > activeQuota.hourlyPercentage &&
-        (params.minimumHourlyPercentage === undefined ||
-          account.quotaSummary!.hourlyPercentage > params.minimumHourlyPercentage)
+        account.quotaSummary!.hourlyPercentage > activeQuota.hourlyPercentage
     )
     .sort((left, right) =>
-      compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.emergencyQuota)
+      compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.thresholdQuota)
     )[0];
 }
 
 /**
- * Select a same-Free peer for the hard-stop path. Plan metadata alone is not
+ * Select a same-Free peer for the configured threshold path. Plan metadata alone is not
  * sufficient: both the source and target must still expose fresh, valid
  * five-hour and weekly windows. This keeps a stale/misreported plan label from
- * routing an emergency switch to an unusable account.
+ * routing a threshold switch to an unusable account.
  */
 export function selectFreeExhaustionCandidate(params: {
   accounts: CodexAccountRecord[];
   activeAccountId: string;
-  reserveThreshold?: SeamlessReserveThreshold;
+  switchThreshold?: SeamlessSwitchThreshold;
   lastSelectedAt: Readonly<Record<string, number | undefined>>;
   now?: number;
 }): CodexAccountRecord | undefined {
@@ -138,7 +134,7 @@ export function selectFreeExhaustionCandidate(params: {
     return undefined;
   }
 
-  const reserveThreshold = params.reserveThreshold ?? MINIMUM_BALANCE_CANDIDATE_WEEKLY_PERCENTAGE;
+  const switchThreshold = params.switchThreshold ?? DEFAULT_SEAMLESS_SWITCH_THRESHOLD;
   return params.accounts
     .filter(
       (account) =>
@@ -146,9 +142,9 @@ export function selectFreeExhaustionCandidate(params: {
         !account.isHidden &&
         account.balancePoolEnabled === true &&
         isVerifiedFreeWindowedAccount(account, now) &&
-        hasFreshFreeExhaustionQuota(account, now) &&
-        account.quotaSummary!.hourlyPercentage > FREE_EXHAUSTION_QUOTA_PERCENTAGE &&
-        account.quotaSummary!.weeklyPercentage > reserveThreshold
+        hasFreshFreeSwitchThresholdQuota(account, now) &&
+        account.quotaSummary!.hourlyPercentage > switchThreshold &&
+        account.quotaSummary!.weeklyPercentage > switchThreshold
     )
     .sort((left, right) => compareFreeExhaustionCandidates(left, right, params.lastSelectedAt))[0];
 }
@@ -218,11 +214,11 @@ function compareBalanceCandidates(
   right: CodexAccountRecord,
   lastSelectedAt: Readonly<Record<string, number | undefined>>,
   quotaBandSize: SeamlessQuotaBandSize = QUOTA_BAND_SIZE,
-  emergencyQuota?: "hourly" | "weekly"
+  thresholdQuota?: "hourly" | "weekly"
 ): number {
   const leftQuota = left.quotaSummary!;
   const rightQuota = right.quotaSummary!;
-  if (emergencyQuota === "weekly") {
+  if (thresholdQuota === "weekly") {
     const weeklyPercentageDifference = rightQuota.weeklyPercentage - leftQuota.weeklyPercentage;
     if (weeklyPercentageDifference !== 0) {
       return weeklyPercentageDifference;
@@ -253,9 +249,10 @@ function compareBalanceCandidates(
   return left.id.localeCompare(right.id);
 }
 
-function hasFreshFreeExhaustionQuota(account: CodexAccountRecord, now: number): boolean {
+function hasFreshFreeSwitchThresholdQuota(account: CodexAccountRecord, now: number): boolean {
   return (
-    typeof account.lastQuotaAt === "number" && Math.abs(now - account.lastQuotaAt) <= FREE_EXHAUSTION_QUOTA_MAX_AGE_MS
+    typeof account.lastQuotaAt === "number" &&
+    Math.abs(now - account.lastQuotaAt) <= FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS
   );
 }
 

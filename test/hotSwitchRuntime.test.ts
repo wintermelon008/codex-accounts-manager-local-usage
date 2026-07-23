@@ -348,6 +348,129 @@ describe("Codex hot-switch runtime setup", () => {
     expect(writeAuthFile).not.toHaveBeenCalled();
   });
 
+  it("carries a validated auth.json rollback snapshot into a Gateway fallback", async () => {
+    const enabledConfiguration = {
+      get: (key: string, defaultValue?: unknown) => (key === "hotSwitchEnabled" ? true : defaultValue),
+      update: vi.fn(),
+      inspect: vi.fn()
+    } as unknown as vscode.WorkspaceConfiguration;
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(enabledConfiguration);
+    const previousIdToken = createUnsignedJwt({
+      exp: Math.floor(Date.now() / 1_000) + 3_600,
+      email: "previous@example.invalid",
+      "https://api.openai.com/auth": {
+        chatgpt_user_id: "previous-user",
+        chatgpt_account_id: "workspace-previous",
+        chatgpt_plan_type: "plus"
+      }
+    });
+    const previousAccessToken = createUnsignedJwt({
+      exp: Math.floor(Date.now() / 1_000) + 3_600,
+      "https://api.openai.com/auth": {
+        chatgpt_user_id: "previous-user",
+        chatgpt_account_id: "workspace-previous"
+      },
+      "https://api.openai.com/profile": { email: "previous@example.invalid" }
+    });
+    vi.mocked(readAuthFile).mockResolvedValue({
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: previousIdToken,
+        access_token: previousAccessToken,
+        refresh_token: "previous-refresh-token",
+        account_id: "workspace-previous"
+      }
+    });
+    const target: CodexAccountRecord = {
+      id: "local-target",
+      email: "target@example.invalid",
+      userId: "target-user",
+      accountId: "workspace-target",
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const targetTokens = {
+      idToken: "unused-target-id",
+      accessToken: createUnsignedJwt({
+        exp: Math.floor(Date.now() / 1_000) + 3_600,
+        "https://api.openai.com/auth": { chatgpt_user_id: "target-user" },
+        "https://api.openai.com/profile": { email: "target@example.invalid" }
+      }),
+      accountId: "workspace-target"
+    };
+    const globalState = new Map<string, unknown>([
+      [
+        "sub2apiGateway.runtimeConfig",
+        {
+          config: {
+            displayName: "Sub2API Gateway",
+            baseUrl: "http://127.0.0.1:65432/v1",
+            model: "gpt-5.5",
+            autoFallbackToChatGpt: true
+          },
+          active: true
+        }
+      ]
+    ]);
+    const fallbackToChatGpt = vi.fn().mockResolvedValue({
+      status: "switched",
+      accountId: "workspace-target",
+      email: "target@example.invalid",
+      activeTurns: 0,
+      interruptedTurns: 0,
+      continuedThreads: 0
+    });
+    const runtime = new CodexHotSwitchRuntime(
+      {
+        globalState: {
+          get: (key: string) => globalState.get(key),
+          update: async (key: string, value: unknown) => {
+            if (value === undefined) {
+              globalState.delete(key);
+            } else {
+              globalState.set(key, value);
+            }
+          }
+        }
+      } as unknown as vscode.ExtensionContext,
+      {
+        getAccount: vi.fn(async (id: string) => (id === target.id ? target : undefined)),
+        getTokens: vi.fn(async (id: string) => (id === target.id ? targetTokens : undefined))
+      } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+    (
+      runtime as unknown as {
+        bridge: { getIdentity: () => Promise<unknown>; fallbackToChatGpt: typeof fallbackToChatGpt };
+      }
+    ).bridge = {
+      getIdentity: vi.fn().mockResolvedValue({
+        accountType: "chatgpt",
+        email: "previous@example.invalid",
+        planType: "plus",
+        externalAuthActive: true,
+        managedAccountId: null,
+        managedLocalAccountId: null,
+        httpTransportForced: true
+      }),
+      fallbackToChatGpt
+    };
+
+    await expect(runtime.fallbackSub2ApiGatewayToChatGpt(target.id)).resolves.toMatchObject({ status: "switched" });
+    expect(fallbackToChatGpt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localAccountId: target.id,
+        previousAccountId: "workspace-previous",
+        previousExpectedEmail: "previous@example.invalid",
+        previousAccessToken,
+        previousPlanType: "plus",
+        rollbackContextId: expect.any(String)
+      })
+    );
+    expect(fallbackToChatGpt.mock.calls[0]?.[0]).not.toHaveProperty("previousLocalAccountId");
+    expect(globalState.get("sub2apiGateway.runtimeConfig")).toMatchObject({ active: false });
+  });
+
   it("clears only the deleted account from the window runtime baseline", () => {
     setCurrentWindowRuntimeAccountId("local-a");
 

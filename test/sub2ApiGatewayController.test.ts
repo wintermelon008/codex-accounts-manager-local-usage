@@ -100,6 +100,148 @@ describe("Sub2API Gateway controller", () => {
     expect(JSON.stringify([...state.entries()])).not.toContain("secret-key");
   });
 
+  it("requests the configured ChatGPT fallback once after a semantic quota-exhaustion status", async () => {
+    await fs.writeFile(
+      path.join(storagePath, "gateway.json"),
+      JSON.stringify({
+        schema: "codex-accounts-sub2api-gateway/v1",
+        displayName: "Sub2API Gateway",
+        sub2api: {
+          baseUrl: "http://127.0.0.1:65432/v1",
+          model: "gpt-5.5",
+          credentialRef: "primary"
+        },
+        autoFallbackToChatGpt: true
+      }),
+      "utf8"
+    );
+    const usageDay = currentUsageDay();
+    const statusBeforeFallback = {
+      active: true,
+      ready: true,
+      route: "sub2api" as const,
+      autoFallbackToChatGpt: true,
+      quotaExhaustionCount: 1,
+      instanceId: "runtime-1",
+      requestCount: 1,
+      successfulRequestCount: 0,
+      failedRequestCount: 1,
+      usageDay,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0
+    };
+    const statusAfterFallback = {
+      ...statusBeforeFallback,
+      active: false,
+      route: "chatgpt" as const
+    };
+    const getSub2ApiGatewayStatus = vi
+      .fn()
+      .mockResolvedValueOnce(statusBeforeFallback)
+      .mockResolvedValueOnce(statusAfterFallback);
+    const fallback = vi.fn().mockResolvedValue({
+      status: "switched",
+      accountId: "workspace-b",
+      email: "b@example.invalid",
+      activeTurns: 0,
+      interruptedTurns: 0,
+      continuedThreads: 0
+    });
+    const runtime = {
+      isSub2ApiGatewayActive: vi.fn(() => true),
+      isSub2ApiGatewayConfigured: vi.fn(() => true),
+      configureSub2ApiGatewayCredential: vi.fn().mockResolvedValue(statusBeforeFallback),
+      getSub2ApiGatewayStatus
+    };
+    secrets.set("codex.sub2api.gateway.primary", "secret-key");
+    const controller = new Sub2ApiGatewayController(
+      createContext(storagePath, secrets, state),
+      runtime as never,
+      () => undefined,
+      fallback
+    );
+
+    await controller.initialize();
+
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(controller.getViewModel()).toMatchObject({
+      isActive: true,
+      status: "ready",
+      statusMessage: "Sub2API quota exhaustion confirmed; ChatGPT Auth fallback is active"
+    });
+    controller.dispose();
+  });
+
+  it("uses bounded exponential backoff after a failed ChatGPT fallback", async () => {
+    const startedAt = Date.parse("2026-07-23T00:00:00.000Z");
+    let now = startedAt;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await fs.writeFile(
+      path.join(storagePath, "gateway.json"),
+      JSON.stringify({
+        schema: "codex-accounts-sub2api-gateway/v1",
+        displayName: "Sub2API Gateway",
+        sub2api: {
+          baseUrl: "http://127.0.0.1:65432/v1",
+          model: "gpt-5.5",
+          credentialRef: "primary"
+        },
+        autoFallbackToChatGpt: true
+      }),
+      "utf8"
+    );
+    const status = {
+      active: true,
+      ready: true,
+      route: "sub2api" as const,
+      autoFallbackToChatGpt: true,
+      quotaExhaustionCount: 1,
+      instanceId: "runtime-1",
+      requestCount: 1,
+      successfulRequestCount: 0,
+      failedRequestCount: 1,
+      usageDay: currentUsageDay(),
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0
+    };
+    const fallback = vi.fn().mockResolvedValue({ status: "failed", message: "no refreshed candidate" });
+    const runtime = {
+      isSub2ApiGatewayActive: vi.fn(() => true),
+      isSub2ApiGatewayConfigured: vi.fn(() => true),
+      configureSub2ApiGatewayCredential: vi.fn().mockResolvedValue(status),
+      getSub2ApiGatewayStatus: vi.fn().mockResolvedValue(status)
+    };
+    secrets.set("codex.sub2api.gateway.primary", "secret-key");
+    const controller = new Sub2ApiGatewayController(
+      createContext(storagePath, secrets, state),
+      runtime as never,
+      () => undefined,
+      fallback
+    );
+
+    await controller.initialize();
+
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(controller.getViewModel().statusMessage).toContain("retrying in 5 seconds (attempt 1)");
+
+    const refreshRuntimeUsage = (controller as unknown as { refreshRuntimeUsage(): Promise<void> }).refreshRuntimeUsage;
+    now = startedAt + 4_999;
+    await refreshRuntimeUsage.call(controller);
+    expect(fallback).toHaveBeenCalledTimes(1);
+
+    now = startedAt + 5_000;
+    await refreshRuntimeUsage.call(controller);
+    expect(fallback).toHaveBeenCalledTimes(2);
+    expect(controller.getViewModel().statusMessage).toContain("retrying in 10 seconds (attempt 2)");
+    controller.dispose();
+  });
+
   it("retains the sanitized Gateway failure diagnostic after switching back to ChatGPT Auth", async () => {
     let gatewayActive = false;
     const deactivateSub2ApiGateway = vi.fn(async () => {

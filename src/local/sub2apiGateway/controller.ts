@@ -7,6 +7,7 @@ import {
   type HotSwitchSetupResult,
   type CodexHotSwitchRuntime
 } from "../../codex/hotSwitchRuntime";
+import type { RuntimeAccountSwitchOutcome, Sub2ApiGatewayRuntimeStatus } from "../../codex/hotSwitchBridge";
 import { getSub2ApiGatewayConfigFile } from "../../infrastructure/config/extensionSettings";
 import {
   ensureSub2ApiGatewayConfigFile,
@@ -24,6 +25,9 @@ const PREVIOUS_USAGE_STATE_KEY = "sub2apiGateway.usage.v2";
 const LEGACY_USAGE_STATE_KEY = "sub2apiGateway.usage.v1";
 const MAX_REMEMBERED_RUNTIME_INSTANCES = 8;
 const RUNTIME_USAGE_POLL_MS = 15_000;
+const AUTO_FALLBACK_RUNTIME_POLL_MS = 2_000;
+const AUTO_FALLBACK_INITIAL_RETRY_MS = 5_000;
+const AUTO_FALLBACK_MAX_RETRY_MS = 60_000;
 const TOKEN_BUCKET_MS = 5 * 60 * 1_000;
 const FIVE_HOUR_USAGE_WINDOW_MS = 5 * 60 * 60 * 1_000;
 const SEVEN_DAY_USAGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -38,6 +42,7 @@ type GatewayUsageTotals = DashboardSub2ApiGatewayViewModel["usage"];
 type GatewayTodayUsage = GatewayUsageTotals["today"];
 type GatewayWindowUsage = GatewayUsageTotals["windows"]["fiveHour"];
 type GatewayInventory = DashboardSub2ApiGatewayViewModel["inventory"];
+type GatewayFallbackHandler = () => Promise<RuntimeAccountSwitchOutcome>;
 
 type GatewayUsageRuntimeCheckpoint = {
   requestCount: number;
@@ -80,6 +85,12 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
   private tokenBuckets: GatewayTokenBucket[] = [];
   private persistedDiagnosticFailure: GatewayUsageTotals["lastFailure"] | undefined;
   private inventory: GatewayInventory = emptyInventory();
+  private runtimeStatus: Sub2ApiGatewayRuntimeStatus | undefined;
+  private fallbackStatusMessage: string | undefined;
+  private lastFallbackMarker: string | undefined;
+  private fallbackRetryAttempt = 0;
+  private nextFallbackAttemptAt = 0;
+  private fallbackPromise: Promise<void> | undefined;
   private runtimeUsageTimer: ReturnType<typeof setInterval> | undefined;
   private inventoryRefreshTimer: ReturnType<typeof setInterval> | undefined;
   private inventoryRefreshPromise: Promise<void> | undefined;
@@ -89,7 +100,8 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly runtime: CodexHotSwitchRuntime,
-    private readonly onDidChange: () => void = () => undefined
+    private readonly onDidChange: () => void = () => undefined,
+    private readonly onQuotaExhausted: GatewayFallbackHandler | undefined = undefined
   ) {
     this.secretStore = new Sub2ApiGatewaySecretStore(context.secrets);
   }
@@ -104,8 +116,10 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
     this.tokenBuckets = persistedUsage.tokenBuckets;
     await this.refreshPersistedFailure();
     await this.reloadConfiguration(true);
-    if (this.runtime.isSub2ApiGatewayActive()) {
-      await this.applyCredentialToActiveRuntime();
+    if (this.isGatewayRuntimeConfigured()) {
+      if (this.runtime.isSub2ApiGatewayActive()) {
+        await this.applyCredentialToActiveRuntime();
+      }
       await this.refreshRuntimeUsage();
       this.resetRuntimeUsagePolling();
     }
@@ -140,13 +154,14 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
     await this.reloadConfiguration(true);
     const config = this.requireConfig();
     const apiKey = await this.requireCredential(config);
-    const result = await this.runtime.activateSub2ApiGateway(toRuntimeConfig(config));
+    const result = await this.runtime.activateSub2ApiGateway(toRuntimeConfig(config), apiKey);
     if (result.error) {
       this.runtimeError = result.error;
       this.publishChange();
       throw new Error(result.error);
     }
     this.runtimeError = undefined;
+    this.fallbackStatusMessage = undefined;
     if (!result.requiresReload) {
       await this.runtime.configureSub2ApiGatewayCredential(apiKey);
       await this.refreshRuntimeUsage();
@@ -193,8 +208,10 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
     this.credentialPresent = Boolean(apiKey);
     if (apiKey) {
       this.health = await checkGatewayHealth(config, apiKey);
-      if (this.runtime.isSub2ApiGatewayActive()) {
-        await this.applyCredentialToActiveRuntime();
+      if (this.isGatewayRuntimeConfigured()) {
+        if (this.runtime.isSub2ApiGatewayActive()) {
+          await this.applyCredentialToActiveRuntime();
+        }
         await this.refreshRuntimeUsage();
         this.resetRuntimeUsagePolling();
       }
@@ -218,8 +235,10 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
     }
     await this.secretStore.set(config.sub2api.credentialRef, apiKey.trim());
     this.credentialPresent = true;
-    if (this.runtime.isSub2ApiGatewayActive()) {
-      await this.applyCredentialToActiveRuntime();
+    if (this.isGatewayRuntimeConfigured()) {
+      if (this.runtime.isSub2ApiGatewayActive()) {
+        await this.applyCredentialToActiveRuntime();
+      }
       await this.refreshRuntimeUsage();
       this.resetRuntimeUsagePolling();
     }
@@ -270,7 +289,7 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
    * next app-server process. This does not destroy the saved SecretStorage key.
    */
   async disableFeature(): Promise<void> {
-    if (this.runtime.isSub2ApiGatewayActive()) {
+    if (this.isGatewayRuntimeConfigured()) {
       const result = await this.runtime.deactivateSub2ApiGateway();
       if (!result.error) {
         await promptWindowReloadIfNeeded(
@@ -362,18 +381,115 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
       return;
     }
     await this.refreshPersistedFailure();
-    if (!this.runtime.isSub2ApiGatewayActive()) {
+    if (!this.isGatewayRuntimeConfigured()) {
       return;
     }
     try {
       const status = await this.runtime.getSub2ApiGatewayStatus();
+      this.runtimeStatus = status;
       if (status.instanceId) {
         await this.mergeRuntimeUsage(status);
       }
-      this.runtimeError = status.ready ? undefined : "The Gateway adapter is waiting for its API key";
+      if (status.route === "chatgpt") {
+        this.runtimeError = undefined;
+      } else {
+        this.runtimeError = status.ready ? undefined : "The Gateway adapter is waiting for its API key";
+        await this.observeQuotaExhaustion(status);
+      }
     } catch (error) {
       this.runtimeError = describeGatewayError(error);
     }
+  }
+
+  private async observeQuotaExhaustion(status: Sub2ApiGatewayRuntimeStatus): Promise<void> {
+    const config = this.config;
+    const count = nonNegativeInteger(status.quotaExhaustionCount);
+    if (!config?.autoFallbackToChatGpt || status.route !== "sub2api" || count === 0 || !status.instanceId) {
+      return;
+    }
+    const marker = `${status.instanceId}:${count}`;
+    const now = Date.now();
+    if (this.lastFallbackMarker !== marker) {
+      this.lastFallbackMarker = marker;
+      this.fallbackRetryAttempt = 0;
+      this.nextFallbackAttemptAt = 0;
+    }
+    if (this.fallbackPromise) {
+      await this.fallbackPromise;
+      return;
+    }
+    if (now < this.nextFallbackAttemptAt) {
+      return;
+    }
+    const attempt = this.runGatewayFallback(marker);
+    this.fallbackPromise = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (this.fallbackPromise === attempt) {
+        this.fallbackPromise = undefined;
+      }
+    }
+  }
+
+  private async runGatewayFallback(marker: string): Promise<void> {
+    if (!this.onQuotaExhausted) {
+      this.scheduleGatewayFallbackRetry(
+        marker,
+        "Sub2API quota exhaustion was confirmed, but no ChatGPT fallback handler is available"
+      );
+      return;
+    }
+    try {
+      const result = await this.onQuotaExhausted();
+      switch (result.status) {
+        case "switched":
+          this.fallbackStatusMessage = "Sub2API quota exhaustion confirmed; ChatGPT Auth fallback is active";
+          // Keep this marker suppressed until the adapter reports a new
+          // exhaustion count. This prevents a manual Gateway reactivation
+          // from replaying the already handled response.
+          this.nextFallbackAttemptAt = Number.POSITIVE_INFINITY;
+          this.runtimeStatus = await this.runtime.getSub2ApiGatewayStatus().catch(() => this.runtimeStatus);
+          this.runtimeError = undefined;
+          return;
+        case "deferred":
+          this.scheduleGatewayFallbackRetry(
+            marker,
+            "Sub2API quota exhaustion confirmed; waiting for a safe ChatGPT fallback boundary"
+          );
+          return;
+        case "failed":
+          this.scheduleGatewayFallbackRetry(
+            marker,
+            `Sub2API quota exhaustion confirmed; ChatGPT fallback is unavailable: ${result.message}`
+          );
+          return;
+        case "unavailable":
+          this.scheduleGatewayFallbackRetry(
+            marker,
+            "Sub2API quota exhaustion confirmed; the ChatGPT fallback runtime is unavailable"
+          );
+          return;
+      }
+    } catch (error) {
+      this.scheduleGatewayFallbackRetry(
+        marker,
+        `Sub2API quota exhaustion confirmed; ChatGPT fallback failed safely: ${describeGatewayError(error)}`
+      );
+    }
+  }
+
+  private scheduleGatewayFallbackRetry(marker: string, message: string): void {
+    if (this.lastFallbackMarker !== marker) {
+      return;
+    }
+    const retryDelay = Math.min(
+      AUTO_FALLBACK_INITIAL_RETRY_MS * 2 ** this.fallbackRetryAttempt,
+      AUTO_FALLBACK_MAX_RETRY_MS
+    );
+    this.fallbackRetryAttempt += 1;
+    this.nextFallbackAttemptAt = Date.now() + retryDelay;
+    this.fallbackStatusMessage = `${message}; retrying in ${Math.ceil(retryDelay / 1_000)} seconds (attempt ${this.fallbackRetryAttempt})`;
   }
 
   private async refreshInventory(): Promise<void> {
@@ -446,7 +562,9 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
       failedRequestCount: Math.max(0, nextCheckpoint.failedRequestCount - (previous?.failedRequestCount ?? 0))
     };
     const tokenDelta = {
-      inputTokens: sameUsageDay ? Math.max(0, nextCheckpoint.inputTokens - (previous?.inputTokens ?? 0)) : nextCheckpoint.inputTokens,
+      inputTokens: sameUsageDay
+        ? Math.max(0, nextCheckpoint.inputTokens - (previous?.inputTokens ?? 0))
+        : nextCheckpoint.inputTokens,
       outputTokens: sameUsageDay
         ? Math.max(0, nextCheckpoint.outputTokens - (previous?.outputTokens ?? 0))
         : nextCheckpoint.outputTokens,
@@ -456,7 +574,9 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
       reasoningTokens: sameUsageDay
         ? Math.max(0, nextCheckpoint.reasoningTokens - (previous?.reasoningTokens ?? 0))
         : nextCheckpoint.reasoningTokens,
-      totalTokens: sameUsageDay ? Math.max(0, nextCheckpoint.totalTokens - (previous?.totalTokens ?? 0)) : nextCheckpoint.totalTokens
+      totalTokens: sameUsageDay
+        ? Math.max(0, nextCheckpoint.totalTokens - (previous?.totalTokens ?? 0))
+        : nextCheckpoint.totalTokens
     };
     const currentToday =
       persisted.totals.today.date === nextCheckpoint.usageDay
@@ -464,24 +584,29 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
         : emptyTodayUsage(nextCheckpoint.usageDay);
     const runtimeFailure = readRuntimeFailure(status);
     persisted.tokenBuckets = appendTokenDelta(persisted.tokenBuckets, tokenDelta);
-    persisted.totals = withCurrentWindowUsage({
-      requestCount: persisted.totals.requestCount + countDelta.requestCount,
-      successfulRequestCount: persisted.totals.successfulRequestCount + countDelta.successfulRequestCount,
-      failedRequestCount: persisted.totals.failedRequestCount + countDelta.failedRequestCount,
-      lastRequestAt: maximumTimestamp(persisted.totals.lastRequestAt, status.lastRequestAt),
-      observedAt: Date.now(),
-      today: {
-        date: nextCheckpoint.usageDay,
-        inputTokens: currentToday.inputTokens + tokenDelta.inputTokens,
-        outputTokens: currentToday.outputTokens + tokenDelta.outputTokens,
-        cachedInputTokens: currentToday.cachedInputTokens + tokenDelta.cachedInputTokens,
-        reasoningTokens: currentToday.reasoningTokens + tokenDelta.reasoningTokens,
-        totalTokens: currentToday.totalTokens + tokenDelta.totalTokens,
-        observedSince: minimumTimestamp(currentToday.observedSince, status.startedAt)
+    persisted.totals = withCurrentWindowUsage(
+      {
+        requestCount: persisted.totals.requestCount + countDelta.requestCount,
+        successfulRequestCount: persisted.totals.successfulRequestCount + countDelta.successfulRequestCount,
+        failedRequestCount: persisted.totals.failedRequestCount + countDelta.failedRequestCount,
+        lastRequestAt: maximumTimestamp(persisted.totals.lastRequestAt, status.lastRequestAt),
+        observedAt: Date.now(),
+        today: {
+          date: nextCheckpoint.usageDay,
+          inputTokens: currentToday.inputTokens + tokenDelta.inputTokens,
+          outputTokens: currentToday.outputTokens + tokenDelta.outputTokens,
+          cachedInputTokens: currentToday.cachedInputTokens + tokenDelta.cachedInputTokens,
+          reasoningTokens: currentToday.reasoningTokens + tokenDelta.reasoningTokens,
+          totalTokens: currentToday.totalTokens + tokenDelta.totalTokens,
+          observedSince: minimumTimestamp(currentToday.observedSince, status.startedAt)
+        },
+        windows: persisted.totals.windows,
+        ...(shouldReplaceRuntimeFailure(persisted.totals.lastFailure, runtimeFailure)
+          ? { lastFailure: runtimeFailure }
+          : {})
       },
-      windows: persisted.totals.windows,
-      ...(shouldReplaceRuntimeFailure(persisted.totals.lastFailure, runtimeFailure) ? { lastFailure: runtimeFailure } : {})
-    }, persisted.tokenBuckets);
+      persisted.tokenBuckets
+    );
     persisted.checkpoints[status.instanceId] = nextCheckpoint;
     const instanceIds = Object.keys(persisted.checkpoints);
     while (instanceIds.length > MAX_REMEMBERED_RUNTIME_INSTANCES) {
@@ -512,12 +637,19 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
 
   private resetRuntimeUsagePolling(): void {
     this.stopRuntimeUsagePolling();
-    if (this.disposed || !this.runtime.isSub2ApiGatewayActive() || this.runtimeError) {
+    if (this.disposed || !this.isGatewayRuntimeConfigured() || this.runtimeError) {
       return;
     }
-    this.runtimeUsageTimer = setInterval(() => {
-      void this.refreshRuntimeUsage().then(() => this.publishChange());
-    }, RUNTIME_USAGE_POLL_MS);
+    const route = this.runtimeStatus?.route;
+    if (!this.runtime.isSub2ApiGatewayActive() && route !== "sub2api") {
+      return;
+    }
+    this.runtimeUsageTimer = setInterval(
+      () => {
+        void this.refreshRuntimeUsage().then(() => this.publishChange());
+      },
+      this.config?.autoFallbackToChatGpt === true ? AUTO_FALLBACK_RUNTIME_POLL_MS : RUNTIME_USAGE_POLL_MS
+    );
   }
 
   private stopRuntimeUsagePolling(): void {
@@ -564,10 +696,29 @@ export class Sub2ApiGatewayController implements vscode.Disposable {
     if (this.health?.status === "failed") {
       return { kind: "degraded", message: this.health.message ?? "Sub2API health check failed" };
     }
+    if (this.runtimeStatus?.route === "chatgpt" && this.config.autoFallbackToChatGpt === true) {
+      return {
+        kind: "ready",
+        message: this.fallbackStatusMessage ?? "ChatGPT Auth fallback is active; the Sub2API Gateway route is paused"
+      };
+    }
+    if (this.fallbackStatusMessage) {
+      return { kind: "degraded", message: this.fallbackStatusMessage };
+    }
     if (isActive) {
-      return { kind: "active", message: "Active local transport; OAuth quota scheduling remains separate" };
+      return {
+        kind: "active",
+        message:
+          this.config.autoFallbackToChatGpt === true
+            ? "Active local transport; confirmed quota exhaustion can fall back to ChatGPT Auth"
+            : "Active local transport; OAuth quota scheduling remains separate"
+      };
     }
     return { kind: "ready", message: "Ready for manual activation" };
+  }
+
+  private isGatewayRuntimeConfigured(): boolean {
+    return this.runtime.isSub2ApiGatewayConfigured?.() ?? this.runtime.isSub2ApiGatewayActive();
   }
 
   private publishChange(): void {
@@ -581,7 +732,8 @@ function toRuntimeConfig(config: ResolvedSub2ApiGatewayConfig): Sub2ApiGatewayRu
   return {
     displayName: config.displayName,
     baseUrl: config.sub2api.baseUrl,
-    model: config.sub2api.model
+    model: config.sub2api.model,
+    ...(config.autoFallbackToChatGpt === true ? { autoFallbackToChatGpt: true } : {})
   };
 }
 
@@ -664,7 +816,9 @@ function normalizeUsageTotals(value: unknown): GatewayUsageTotals {
     observedAt: positiveTimestamp(record["observedAt"]),
     today: normalizeTodayUsage(record["today"]),
     windows: emptyWindowsUsage(),
-    ...(normalizeUsageFailure(record["lastFailure"]) ? { lastFailure: normalizeUsageFailure(record["lastFailure"]) } : {})
+    ...(normalizeUsageFailure(record["lastFailure"])
+      ? { lastFailure: normalizeUsageFailure(record["lastFailure"]) }
+      : {})
   };
 }
 
@@ -813,7 +967,10 @@ function sumTokenBuckets(buckets: GatewayTokenBucket[], cutoff: number): Gateway
 
 function pruneTokenBuckets(buckets: GatewayTokenBucket[]): GatewayTokenBucket[] {
   const cutoff = Date.now() - SEVEN_DAY_USAGE_WINDOW_MS - TOKEN_BUCKET_MS;
-  return buckets.filter((bucket) => bucket.startAt >= cutoff).sort((left, right) => left.startAt - right.startAt).slice(-MAX_TOKEN_BUCKETS);
+  return buckets
+    .filter((bucket) => bucket.startAt >= cutoff)
+    .sort((left, right) => left.startAt - right.startAt)
+    .slice(-MAX_TOKEN_BUCKETS);
 }
 
 function emptyTokenBucket(startAt: number): GatewayTokenBucket {
@@ -886,7 +1043,9 @@ function latestGatewayFailure(
   return shouldReplaceRuntimeFailure(previous, next) ? next : previous;
 }
 
-async function readPersistedGatewayFailure(storagePath: string): Promise<GatewayUsageTotals["lastFailure"] | undefined> {
+async function readPersistedGatewayFailure(
+  storagePath: string
+): Promise<GatewayUsageTotals["lastFailure"] | undefined> {
   try {
     const diagnosticPath = path.join(storagePath, RUNTIME_DIRECTORY, GATEWAY_DIAGNOSTIC_FILE);
     const parsed: unknown = JSON.parse(await fs.readFile(diagnosticPath, "utf8"));
@@ -1019,7 +1178,9 @@ function normalizeInventoryForConfig(
   };
 }
 
-function observerSignature(observer: ResolvedSub2ApiGatewayConfig["inventoryObserver"] | undefined): string | undefined {
+function observerSignature(
+  observer: ResolvedSub2ApiGatewayConfig["inventoryObserver"] | undefined
+): string | undefined {
   return observer
     ? `${observer.adminBaseUrl}\u0000${observer.group}\u0000${observer.credentialRef}\u0000${observer.refreshSeconds}`
     : undefined;
