@@ -17,10 +17,11 @@
 - 全局任意时刻只启用一个账号，不把账号分配到单独的 conversation。
 - 普通自动调度只依据最新有效额度窗口识别能力，不依据 Free、Plus 等套餐标签推断：同时有五小时和周窗口的是分档账号，明确没有五小时窗口但有周窗口的是储备账号，额度缺失、过期或报错时暂不参与自动选择。
 - 经过 Free 标签与实际窗口双重验证的 Free 账号是唯一不参加普通 `20%/25%/33%/50%` 分档的账号；它仍与其他账号共用统一的账号切换阈值。触达阈值时先优先同类 Free 候选。
-- 当前非 Free 分档账号的有效五小时剩余额度下降一个已配置档位后，优先在池内选择五小时额度严格更高、周额度仍安全的分档账号。支持 20%、25%、33% 和 50% 四种分档；这条普通分档路径保留可配置自然完成等待期。
-- 统一`账号切换阈值`可选关闭、`1%`、`3%`（默认）或 `5%`。非零时，任何有效五小时或周窗口达到阈值或更低都会走同一条立即硬切路径，且目标的相关窗口必须严格高于阈值。当前为储备账号时先尝试已恢复的分档账号，否则切到周额度最高的其他储备账号。关闭阈值只关闭这条低额度硬切，普通分档平衡仍可工作。
-- 结构化 `usageLimitExceeded` 与选定的非零阈值共用硬切路径：绕过普通基线和等待期，强制中断并自动续接。当前具有实际有效窗口的 Free 账号触达阈值时，先选择最近两分钟内刷新、五小时与周额度都严格高于阈值的 Free 池成员；没有合格 Free 时才回到混合安全候选规则。若 turn 已先报告结构化额度错误并结束，也会恢复近期受影响的 thread。
-- 切换请求到达时，先给已经运行的 turn 一个可配置的自然完成等待期，默认 60 秒；屏障期间新 `turn/start` 会排队。
+- “分档切号”与低额度切号独立。非 Free 分档账号下降一个已配置档位后，优先切到五小时额度更高、周额度安全的池内账号；支持 20%、25%、33% 和 50% 分档，并使用可配置的“等待时间”。
+- “低额度切号”可选“耗尽后切换”、`1%`、`3%`（默认）或 `5%`。非零时，任一有效五小时或周窗口达到阈值，或出现结构化 `usageLimitExceeded`，都会立即发起切号；目标相关窗口必须严格高于阈值。
+- 关闭“低额度切号”后，低额度、结构化 `usageLimitExceeded` 和耗尽批次都不会启动新的自动切换；已开始的事务允许完成，分档切号不受影响。
+- 选择“耗尽后切换”时，25% 分档的 `26% → 1%` 仍可跨档平衡，而 `24% → 1%` 会等待当前活跃会话批次全部以结构化额度耗尽终止，最长观察 6 小时。Free 在低额度路径中优先选择最近两分钟内刷新的安全 Free 候选，随后才使用混合池。
+- “切换策略”适用于所有已发起的无感切换：分档切号先等到等待时间结束；低额度和耗尽后切号从零等待期开始。屏障期间新的 `turn/start` 会排队。
 - 若活动 turn 所属 thread 有 `active` 持久 Goal，切换事务会先把 Goal 改为 `paused`。等待期后仍未结束时，正式 `turn/interrupt` 旧 turn；确认其完成后切号，再把 Goal 恢复为 `active`。
 - 普通会话默认不被强制中断，而是延后本次切换并在下次配额刷新重试。也可显式选择“中断后手动继续”或实验性的“中断并在同一 thread 自动 Continue”。
 - 只有旧 app-server 中的活动 turn 数为零后才会切换认证和提交当前账号，再放行排队的 turn。因此 thread/conversation 状态不会因为切号而重建。
@@ -34,7 +35,7 @@
 
 仅调用 `account/login/start` 不足以保证已有 thread 的下一轮请求改用新账号。已验证的 Codex `0.144.2` 会为每个已加载 thread 缓存 Responses WebSocket；登录接口会更新共享认证状态，`account/read` 也会显示新账号，但旧 thread 仍可能复用由旧账号建立的 WebSocket。这会造成 Manager 显示切换成功、实际却继续扣旧账号额度。
 
-runtime protocol v6 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v6 保留 v3 的无旧 Manager 账号内存回滚快照和只读账号用量归因，并新增受控的 Gateway 双路由：只有显式启用的 Gateway 才能在语义确认的额度耗尽后从 Sub2API 原地回退到 ChatGPT Auth；回退失败会恢复旧身份和 Gateway 路由，不把部分成功状态写入 Manager。
+runtime protocol v8 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v8 保留无旧 Manager 账号的内存回滚快照、只读账号用量归因和有界耗尽批次，并新增可清除的低额度观察开关；关闭低额度切号不会让旧批次在重新开启后重放。Gateway 双路由仍只在显式启用且语义确认额度耗尽时从 Sub2API 原地回退到 ChatGPT Auth。
 
 Codex 会把创建会话时的 provider ID 写入本地 thread 元数据，官方界面的 `thread/list` 默认又只查询当前 provider。无感 runtime 若不处理这层过滤，安装前的 `openai` 会话和安装后的 HTTP provider 会话就会像两套独立历史。shim 只把 `thread/list` 中显式的 `modelProviders: null` 改成协议定义的空数组（所有 provider），保留显式 provider 列表不变；它不修改 rollout、`session_index.jsonl` 或 SQLite。官方界面恢复旧 thread 时会传入当前无感 provider，因此后续 turn 仍使用 HTTP transport。
 
@@ -57,10 +58,9 @@ Sub2API Gateway 是本地 fork 的独立可选传输，不是本章的 OAuth 账
 4. 在 Dashboard 设置中开启：
    - 配额自动刷新，启用非零账号切换阈值建议 `1` 分钟；它只刷新未隐藏、已启用分组的第 `1` 页（最多 `50` 个账号），因此需自动调度的账号应通过隐藏/分组整理到该范围；
    - `无感切号（实验性）`总开关；
-   - 其子设置`额度分档无感平衡`，并选择 `1/5 (20%)`、`1/4 (25%)`、`1/3 (33%)` 或 `1/2 (50%)`；不要为此额外开启官方自动切号或五小时配额控制；
-   - 选择`账号切换阈值`：关闭、`1%`、`3%` 或 `5%`，默认 `3%`。非零时，所有账号在相关窗口达到阈值或收到结构化额度耗尽时立即切换；Free 源账号优先安全 Free 池账号，没有时才回到混合选择；
-   - 将`无感切号等待时间`保持 60 秒或按实际负载调整；
-   - 为普通会话选择无感切号策略；推荐默认的“延后切换”。若确实需要无人值守续接，可选择“中断并自动继续”，并接受非幂等外部操作可能重复的风险。
+   - 按需开启`分档切号`，并选择分档方式与等待时间；不要为此额外开启官方自动切号或五小时配额控制；
+   - 按需开启`低额度切号`，并选择“耗尽后切换”、`1%`、`3%` 或 `5%`，默认 `3%`；关闭时不会因低额度、结构化额度耗尽或耗尽批次切号；
+   - 选择通用的`切换策略`；推荐默认的“延后切换”。若确实需要无人值守续接，可选择“中断并自动继续”，并接受非幂等外部操作可能重复的风险。
 5. 官方`自动 reload window`只属于官方自动切号，对无感分档没有作用。无感 runtime 未 ready 时调度会安全跳过并保持旧账号；已进入热切换事务后的延后/失败同样保持旧账号。
 
 对应的 VS Code 设置为：
@@ -73,12 +73,13 @@ Sub2API Gateway 是本地 fork 的独立可选传输，不是本章的 OAuth 账
   "codexAccounts.hotSwitchLongTurnPolicy": "defer",
   "codexAccounts.autoRefreshMinutes": 1,
   "codexAccounts.seamlessSwitchQuotaBandsEnabled": true,
+  "codexAccounts.seamlessSwitchLowQuotaEnabled": true,
   "codexAccounts.seamlessSwitchQuotaBandSize": 20,
   "codexAccounts.seamlessSwitchThreshold": 3
 }
 ```
 
-`codexAccounts.balanceByQuotaBandsEnabled` 只作为旧本地构建的兼容读取键保留。首次在 Dashboard 修改开关后会写入新的 `seamlessSwitchQuotaBandsEnabled`；不要在新配置中继续使用旧键。
+`codexAccounts.balanceByQuotaBandsEnabled` 只作为旧本地构建的兼容读取键保留。新的 `seamlessSwitchLowQuotaEnabled` 尚未保存时会继承旧的分档开关状态；保存后两个开关独立。不要在新配置中继续使用旧键。
 
 若要启用你当前测试的普通会话无人值守续接，把 `hotSwitchLongTurnPolicy` 改为 `"interruptAndContinue"`。它会在 60 秒后中断旧 turn，完成切号后在同一 thread 自动发送一次带恢复上下文的 `Continue`；这不是同一 turn 的精确恢复。
 
@@ -101,13 +102,15 @@ Sub2API Gateway 是本地 fork 的独立可选传输，不是本章的 OAuth 账
 | `1/3 (33%)` | `67~100`、`34~66`、`1~33`                   |
 | `1/2 (50%)` | `51~100`、`1~50`                            |
 
-`1/3 (33%)` 按精确三等分计算，而不是连续三个 33% 后额外留下 100% 档位。首次观察只记录基线，不立即切换；修改分档也会清除旧档位状态并重新建立基线。之后检测到当前非 Free `windowed` 账号下降到更低档位时，从无感切号池选择候选。候选必须有新鲜、无错误的周窗口，且周额度高于当前统一阈值（关闭时只要求大于 `0%`）；优先选择当前档位不低于触发账号且五小时额度严格更高的 `windowed`。当前账号仍是最优候选或没有合格候选时保持不变，待后续刷新重试。`windowed` 候选依次比较更高档位、更高五小时剩余百分比、更早重置时间、最久未被调度，最后用账号 ID 保证结果稳定。用户发起的手动切号仍不受能力排序或阈值影响，但隐藏账号必须先解除隐藏才可作为目标。
+`1/3 (33%)` 按精确三等分计算，而不是连续三个 33% 后额外留下 100% 档位。首次观察只记录基线，不立即切换；修改分档也会清除旧档位状态并重新建立基线。之后检测到当前非 Free `windowed` 账号下降到更低档位时，从无感切号池选择候选。候选必须有新鲜、无错误的周窗口，且周额度高于当前低额度阈值（选择“耗尽后切换”时只要求大于 `0%`）；优先选择当前档位不低于触发账号且五小时额度严格更高的 `windowed`。当前账号仍是最优候选或没有合格候选时保持不变，待后续刷新重试。`windowed` 候选依次比较更高档位、更高五小时剩余百分比、更早重置时间、最久未被调度，最后用账号 ID 保证结果稳定。用户发起的手动切号仍不受能力排序或阈值影响，但隐藏账号必须先解除隐藏才可作为目标。
 
-`codexAccounts.seamlessSwitchThreshold` 可设为 `0`（关闭）、`1`、`3` 或 `5`，默认 `3`。非零值统一所有低额度条件：有效五小时或周额度达到该值或更低时，即使是首次观测也触发硬切；目标相关窗口必须严格高于该值。`windowed` 源账号优先切往已恢复到该阈值以上的 `windowed`，否则选择周额度最高的 `reserve`；`reserve` 源账号也使用相同顺序。若源账号同时被验证为 Free 和有效 `windowed`，先在 Free 池成员中选择最近两分钟内刷新、五小时和周额度都高于阈值的候选，并按五小时百分比、周百分比、更早重置时间、最久未使用、账号 ID 排序。没有合格 Free 时才使用混合安全选择，避免把 Free 的硬停错误路由到不安全账号。该路径把等待期覆盖为 0，将普通会话策略覆盖为 `interruptAndContinue`：它先中断活动普通 turn/Goal turn，等待 app-server 确认所有旧 turn 已结束，再切换认证并在原 thread 自动续接。
+`codexAccounts.seamlessSwitchThreshold` 可设为 `0`（耗尽后切换）、`1`、`3` 或 `5`，默认 `3`。非零值统一低额度条件：有效五小时或周额度达到该值或更低时，即使是首次观测也开始切号事务；目标相关窗口必须严格高于该值。`windowed` 源账号优先切往已恢复到该阈值以上的 `windowed`，否则选择周额度最高的 `reserve`；`reserve` 源账号也使用相同顺序。若源账号同时被验证为 Free 和有效 `windowed`，先在 Free 池成员中选择最近两分钟内刷新、五小时和周额度都高于阈值的候选，并按五小时百分比、周百分比、更早重置时间、最久未使用、账号 ID 排序。没有合格 Free 时才使用混合安全选择。非零事务使用零等待期，但**不会覆盖**普通会话策略。
 
-若 turn 在切号请求到达前已经通过终态 `error` 通知报告 `error.codexErrorInfo: usageLimitExceeded`、`turn/start` 以同一结构化错误的 JSON-RPC 响应被拒绝，或在兼容的失败 turn 中携带同一结构化错误，shim 会在两分钟的有界窗口内记住对应 thread。扩展只在统一阈值非零时每两秒读取一次固定大小的 runtime 状态（不请求 thread ID、正文或历史），遇到新失败才读取一次当前账号并发起同一硬切选择；未能切换时约每十秒重试，状态 RPC 失败退避三十秒。成功切号后，普通 thread 获得一次恢复标记的 `Continue`，持久 Goal 则先暂停再恢复，已处于 `usageLimited` 的 Goal 会显式重新设为 `active`。任何更新的 `turn/start` 都会清除旧记录，避免重复续接；记录到期也会自动清理，因此不会成为持久停止记忆。若没有合格候选、当前账号仍是最高额度、runtime 未 ready 或事务失败，旧账号保持不变，记录保留到超时并可由后续刷新重试。runtime 状态还提供观察到的额度失败、普通恢复和 Goal 恢复计数，便于不暴露 thread 内容地现场核验。阈值为关闭时，此低额度和结构化额度耗尽路径完全不运行。
+阈值为 `0` 时并不是关闭调度。普通分档仍按原始分档下降工作，并且会携带近期恢复集合：如果额度刷新滞后、turn 已经因额度耗尽终止，随后发生的跨档切换仍会在目标账号续接它。只有同档内继续下降才进入耗尽批次规则。shim 在第一个结构化额度终止信号到来时快照所有可识别的活动 thread；只有快照中的每一个 thread 都以额度耗尽终态结束，才把批次标为可切换。任一 peer 正常完成、被手动中断、出现非额度错误或用户开始新工作都会取消该**调度批次**，但不会删除既有的近期恢复记录；同一批次的迟到终态也不能把已取消的批次重新缩小建立，下一次新工作才会开始新的观察范围。批次最多观察 6 小时；到期后即使仍有原始会话活动，也将发起切号事务并交给通用普通会话策略决定延后、中断或继续。
 
-统一阈值触发的自动 Continue 仍是新 turn，不是原 turn 的 exactly-once 恢复。正在执行部署、消息发送、支付或其他非幂等外部写操作时可能产生重复副作用，因此应只在接受该风险时选择非零阈值。
+终态 `error` 通知中的 `error.codexErrorInfo: usageLimitExceeded`、`turn/start` 的同类 JSON-RPC 拒绝，以及兼容失败 turn 中的同类结构化错误，都会把对应 thread 写入一个有界的近期恢复集合。该集合的保留期为 6 小时。非零阈值监视器每两秒读取固定大小的 runtime 状态（不请求 thread ID、正文或历史），遇到新失败才读取一次当前账号并发起低额度选择；“耗尽后切换”监视器也每两秒轮询，但只在批次已就绪时发起选择。未能切换时约每十秒重试，状态 RPC 失败退避三十秒。成功切号后，普通 thread 获得一次恢复标记的 `Continue`，持久 Goal 则先暂停再恢复，已处于 `usageLimited` 的 Goal 会显式重新设为 `active`。任何更新的 `turn/start` 都会清除其旧记录，避免重复续接。runtime 状态只暴露有界计数、批次就绪标记和单调批次号，不暴露 thread 内容。
+
+自动 Continue 始终是新 turn，不是原 turn 的 exactly-once 恢复。正在执行部署、消息发送、支付或其他非幂等外部写操作时可能产生重复副作用，因此只应在接受该风险时选择“中断并自动继续”。
 
 ## 并发屏障
 
@@ -118,15 +121,16 @@ shim 以真实 `turn.id` 跟踪 app-server 中的活动 turn：
 3. `turn/steer`、`turn/interrupt` 等属于当前 turn 的消息继续透传。
 4. 新的 `turn/start`、`review/start` 和 `thread/compact/start` 暂存在内存队列。
 5. 对活动 turn 的 thread 调用 `thread/goal/get`；发现 `active` Goal 时只把状态改为 `paused`，保留 objective、token budget 和累计用量。Goal mutation 请求也会在事务期间排队。
-6. 等待 `codexAccounts.hotSwitchGraceSeconds`（默认 60 秒）：
-   - 只有 Goal turn 仍活动时，调用 `turn/interrupt` 并等待 `turn/completed`；
-   - 普通 turn 按 `codexAccounts.hotSwitchLongTurnPolicy` 选择延后、中断，或中断后自动续接；
+6. 到达本次切号的处理边界：
+   - 分档与手动切号等待 `codexAccounts.hotSwitchGraceSeconds`（默认 60 秒）；低额度和耗尽后切号以零等待期开始；
+   - 仍活动的 Goal turn 会暂停，并在需要处理时调用 `turn/interrupt` 后等待 `turn/completed`；
+   - 普通 turn 一律按 `codexAccounts.hotSwitchLongTurnPolicy` 选择延后、中断，或中断后自动续接；
    - 无法取得 `threadId`/`turnId` 的在途请求始终延后，绝不带着未知活动 turn 切认证。
 7. 仅当活动 turn 数为零时调用实验性 `account/login/start`，随后用 `account/read` 校验账号身份。这里比较的是实际 access token 中的 runtime email，而不是稳定账号记录中的 ID-token email；两者可能是同一 user ID 的不同邮箱别名。
-8. 身份校验成功后由 manager 提交目标账号及 `auth.json`，再恢复 Goal 为 `active`。选择 `interruptAndContinue` 时，为由本次切换中断且最终状态确认为 `interrupted` 的非子代理普通 thread 启动一个带内部恢复上下文的新 `turn/start`；统一阈值路径还会恢复近期以结构化额度错误结束、且尚未开始更新工作的非子代理普通 thread。multi-agent 子代理由其父代理负责后续调度，shim 不会向它们直接发送 `Continue`。
+8. 身份校验成功后由 manager 提交目标账号及 `auth.json`，再恢复 Goal 为 `active`。选择 `interruptAndContinue` 时，为由本次切换中断且最终状态确认为 `interrupted` 的非子代理普通 thread 启动一个带内部恢复上下文的新 `turn/start`；任何带近期额度恢复标记的切换也会续接尚未开始新工作的非子代理普通 thread。multi-agent 子代理由其父代理负责后续调度，shim 不会向它们直接发送 `Continue`。
 9. 登录、身份校验或本地账号提交失败时，尝试同时回滚 app-server 与 manager 当前账号并恢复 Goal；在旧 turn 仍活动时不会把失败降级成“先写认证再 reload”。如果旧身份不在 Manager 账号库中（例如曾删除全部账号），事务开始前会从有效 `auth.json` 读取仅驻留内存的回滚快照，并先用 live app-server 身份确认它确实对应当前账号；快照不会被自动导入或写入日志。
 
-在 60 秒等待期内，Goal pause 不会强制终止正在执行的命令或 tool call；当前 turn 仍按旧账号和原权限运行。超时后的 interrupt 会终止这一轮，Goal 的下一轮自动续跑发生在账号身份切换之后。由于 app-server 和 thread 没有重建，`cwd`、runtime workspace roots、sandbox policy、approval policy 与 named permission profile 保持原 thread 的 sticky 设置。一次性“仅批准本次操作”仍按 Codex 自身语义只对那次操作有效，不会被热切换扩展为持久权限。
+在分档或手动切号的 60 秒等待期内，Goal pause 不会强制终止正在执行的命令或 tool call；当前 turn 仍按旧账号和原权限运行。低额度或耗尽后切号会立即进入同一策略处理边界。需要 interrupt 时，它会终止这一轮，Goal 的下一轮自动续跑发生在账号身份切换之后。由于 app-server 和 thread 没有重建，`cwd`、runtime workspace roots、sandbox policy、approval policy 与 named permission profile 保持原 thread 的 sticky 设置。一次性“仅批准本次操作”仍按 Codex 自身语义只对那次操作有效，不会被热切换扩展为持久权限。
 
 现场验证还确认了一个进程边界：`turn/interrupt` 会结束 Codex turn，但不保证终止该 turn 已启动的所有本地子进程。无感恢复前应避免正在执行不可重复的部署、消息发送或外部写操作；扩展无法在多个并发 turn 之间安全判断任意 app-server 子进程的归属，因此不会擅自按进程树批量杀进程。
 
@@ -152,7 +156,7 @@ Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储
 
 - shim 与 manager 使用当前 extension-host PID 对应的本地 Unix socket；目录权限为 `0700`，socket 为 `0600`。
 - shim 在收到成功的 `initialize` 响应或客户端 `initialized` 通知后即可进入 ready；状态接口同时报告两个握手信号，便于区分官方扩展版本差异。热切换已启用但 bridge 未 ready 时，Manager 必须失败关闭，不能回退为磁盘切号。
-- runtime protocol v6 的状态接口必须同时报告 `httpTransportForced=true`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
+- runtime protocol v8 的状态接口必须同时报告 `httpTransportForced=true`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
 - access token 只通过进程内存和本地 IPC 传递，不写入 shim 配置，也不输出到日志。runtime 配置文件只保存官方 Codex CLI 的绝对路径及受保护的归因 journal 目录；两者均不含账号身份或凭据。
 - token 临近过期时由 manager 使用原有 OAuth 刷新逻辑更新；app-server 的 refresh 回调必须匹配原 ChatGPT account ID，否则拒绝返回凭据。
 - 同一 workspace ID 可能对应多个已导入用户。manager 在切换前校验 access token 的 user ID 与本地账号记录一致，再把 access token 的 runtime email 交给 app-server 身份校验；稳定账号记录邮箱与 runtime email 允许是同一 user ID 的不同别名。refresh 与失败回滚以 manager 本地账号 ID 和 workspace ID 为主；缺少本地身份且 workspace ID 不唯一时安全失败，不按数组顺序猜测账号。

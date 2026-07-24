@@ -263,139 +263,175 @@ export function SettingsOverlay(props: {
             <div class={`settings-stack ${props.settings.seamlessSwitchEnabled ? "" : "is-hidden"}`}>
               <SettingsToggleBlock
                 title={
-                  props.lang === "zh"
-                    ? "额度分档无感平衡"
-                    : props.lang === "zh-hant"
-                      ? "額度分檔無感平衡"
-                      : "Seamless quota-band balancing"
+                  props.lang === "zh" ? "分档切号" : props.lang === "zh-hant" ? "分檔切換" : "Quota-band switching"
                 }
                 sub={
                   props.lang === "zh"
-                    ? "无需开启官方自动切号或五小时配额控制；当前账号下降一档后，只通过无感 runtime 切到池中额度更充足、最久未使用的账号。"
+                    ? "按五小时额度分档在无感池内平衡账号。"
                     : props.lang === "zh-hant"
-                      ? "無需啟用官方自動切換或五小時配額控制；目前帳號下降一檔後，只透過無感 runtime 切到池中額度更充足、最久未使用的帳號。"
-                      : "Does not require upstream Auto Switch or 5-hour quota control. After a band drop, it switches only through the seamless runtime to the strongest least-recently-used pool account."
+                      ? "依五小時額度分檔在無感池內平衡帳號。"
+                      : "Balance pool accounts by 5-hour quota bands."
                 }
                 enabled={props.settings.seamlessSwitchQuotaBandsEnabled}
                 onToggle={(enabled) => patchAndSend("seamlessSwitchQuotaBandsEnabled", enabled)}
-              />
-              <div class={`settings-stack ${props.settings.seamlessSwitchQuotaBandsEnabled ? "" : "is-hidden"}`}>
-                <SettingsSegmentBlock
-                  title={props.lang === "zh" ? "额度分档" : props.lang === "zh-hant" ? "額度分檔" : "Quota band size"}
-                  sub={
-                    props.lang === "zh"
-                      ? "选择五小时额度下降多少时触发一次无感平衡；修改后会重新建立基线。"
-                      : props.lang === "zh-hant"
-                        ? "選擇五小時額度下降多少時觸發一次無感平衡；修改後會重新建立基線。"
-                        : "Choose how much 5-hour quota must drop before seamless balancing runs; changing it establishes a new baseline."
-                  }
-                  options={([20, 25, 33, 50] as const).map((size) => ({
-                    key: `quota-band-${size}`,
-                    title:
-                      size === 20 ? "1/5 (20%)" : size === 25 ? "1/4 (25%)" : size === 33 ? "1/3 (33%)" : "1/2 (50%)",
-                    description:
+              >
+                <div class={`settings-stack ${props.settings.seamlessSwitchQuotaBandsEnabled ? "" : "is-hidden"}`}>
+                  <SettingsSegmentBlock
+                    title={props.lang === "zh" ? "分档方式" : props.lang === "zh-hant" ? "分檔方式" : "Band size"}
+                    sub={
                       props.lang === "zh"
-                        ? size === 20
-                          ? "五档，切换更均衡"
-                          : size === 25
-                            ? "四档"
-                            : size === 33
-                              ? "三档"
-                              : "两档，切换更少"
+                        ? "下降一个分档时切换；修改后重新建立基线。"
                         : props.lang === "zh-hant"
+                          ? "下降一個分檔時切換；修改後重新建立基線。"
+                          : "Switch after a band drop; changing this resets the baseline."
+                    }
+                    options={([20, 25, 33, 50] as const).map((size) => ({
+                      key: `quota-band-${size}`,
+                      title:
+                        size === 20 ? "1/5 (20%)" : size === 25 ? "1/4 (25%)" : size === 33 ? "1/3 (33%)" : "1/2 (50%)",
+                      description:
+                        props.lang === "zh"
                           ? size === 20
-                            ? "五檔，切換更均衡"
+                            ? "五档，更均衡"
                             : size === 25
-                              ? "四檔"
+                              ? "四档"
                               : size === 33
-                                ? "三檔"
-                                : "兩檔，切換更少"
-                          : size === 20
-                            ? "Five bands; smoother balance"
-                            : size === 25
-                              ? "Four bands"
-                              : size === 33
-                                ? "Three bands"
-                                : "Two bands; fewer switches",
-                    active: props.settings.seamlessSwitchQuotaBandSize === size,
-                    onClick: () => patchAndSend("seamlessSwitchQuotaBandSize", size)
-                  }))}
-                />
-                <SettingsSegmentBlock
-                  title={
-                    props.lang === "zh"
-                      ? "账号切换阈值"
-                      : props.lang === "zh-hant"
-                        ? "帳號切換閾值"
-                        : "Account switching threshold"
-                  }
-                  sub={
-                    props.lang === "zh"
-                      ? "统一控制低额度与结构化额度耗尽时的硬切：当前账号达到阈值后立即切换，Free 优先选择仍安全的 Free 账号。候选账号必须严格高于该阈值；关闭后仍保留上方的额度分档平衡。"
-                      : props.lang === "zh-hant"
-                        ? "統一控制低額度與結構化額度耗盡時的硬切：目前帳號達到閾值後立即切換，Free 優先選擇仍安全的 Free 帳號。候選帳號必須嚴格高於此閾值；關閉後仍保留上方的額度分檔平衡。"
-                        : "Use one hard-switch threshold for low quota and structured usage-limit signals. At or below it, switch immediately; Free sources prefer a safe Free peer. Targets must be strictly above the threshold. Off keeps quota-band balancing above."
-                  }
-                  options={([0, 1, 3, 5] as const).map((threshold) => ({
-                    key: `switch-threshold-${threshold}`,
-                    title:
-                      threshold === 0
-                        ? props.lang === "zh"
-                          ? "关闭"
+                                ? "三档"
+                                : "两档，更少切换"
                           : props.lang === "zh-hant"
-                            ? "關閉"
-                            : "Off"
-                        : `${threshold}%${threshold === 3 ? (props.lang === "zh" ? "（默认）" : props.lang === "zh-hant" ? "（預設）" : " (default)") : ""}`,
-                    description:
-                      props.lang === "zh"
-                        ? threshold === 0
-                          ? "仅使用额度分档平衡"
-                          : threshold === 1
-                            ? "最大化额度利用率"
-                            : threshold === 3
-                              ? "推荐的安全余量"
-                              : "更早保护长任务"
+                            ? size === 20
+                              ? "五檔，更均衡"
+                              : size === 25
+                                ? "四檔"
+                                : size === 33
+                                  ? "三檔"
+                                  : "兩檔，較少切換"
+                            : size === 20
+                              ? "Five bands; smoother balance"
+                              : size === 25
+                                ? "Four bands"
+                                : size === 33
+                                  ? "Three bands"
+                                  : "Two bands; fewer switches",
+                      active: props.settings.seamlessSwitchQuotaBandSize === size,
+                      onClick: () => patchAndSend("seamlessSwitchQuotaBandSize", size)
+                    }))}
+                  />
+                  <div class="settings-block-head">
+                    <div class="settings-block-title">
+                      {props.lang === "zh" ? "等待时间" : props.lang === "zh-hant" ? "等待時間" : "Wait time"}
+                    </div>
+                    <div class="settings-block-sub">
+                      {props.lang === "zh"
+                        ? "触发后等待会话自然结束；超时后按切换策略处理。"
                         : props.lang === "zh-hant"
-                          ? threshold === 0
-                            ? "僅使用額度分檔平衡"
-                            : threshold === 1
-                              ? "最大化額度利用率"
-                              : threshold === 3
-                                ? "建議的安全餘量"
-                                : "更早保護長任務"
-                          : threshold === 0
-                            ? "Use quota-band balancing only"
-                            : threshold === 1
-                              ? "Maximize quota utilization"
-                              : threshold === 3
-                                ? "Recommended safety headroom"
-                                : "Protect long turns earlier",
-                    active: props.settings.seamlessSwitchThreshold === threshold,
-                    onClick: () => patchAndSend("seamlessSwitchThreshold", threshold)
-                  }))}
-                />
-              </div>
-              <SettingsSegmentBlock
+                          ? "觸發後等待對話自然結束；逾時後依切換策略處理。"
+                          : "Wait for active turns to finish, then apply the switch policy."}
+                    </div>
+                  </div>
+                  <SettingsDiscreteSlider
+                    value={props.settings.hotSwitchGraceSeconds}
+                    values={HOT_SWITCH_GRACE_VALUES}
+                    accent="violet"
+                    scaleValues={HOT_SWITCH_GRACE_VALUES}
+                    valueLabel={(value) => `${value}s`}
+                    description={(value) =>
+                      props.lang === "zh"
+                        ? `最多 ${value} 秒`
+                        : props.lang === "zh-hant"
+                          ? `最多 ${value} 秒`
+                          : `Up to ${value} seconds`
+                    }
+                    onPreview={(value) => props.onPatchSettings({ hotSwitchGraceSeconds: value })}
+                    onCommit={(value) => patchAndSend("hotSwitchGraceSeconds", value)}
+                  />
+                </div>
+              </SettingsToggleBlock>
+              <SettingsToggleBlock
                 title={
-                  props.lang === "zh"
-                    ? "普通会话策略"
-                    : props.lang === "zh-hant"
-                      ? "一般對話策略"
-                      : "Ordinary-turn policy"
+                  props.lang === "zh" ? "低额度切号" : props.lang === "zh-hant" ? "低額度切換" : "Low-quota switching"
                 }
                 sub={
                   props.lang === "zh"
-                    ? "只处理等待期后仍在运行的普通会话；Goal 始终使用暂停与恢复语义。"
+                    ? "低额度、实际耗尽和 usageLimitExceeded 的自动切号。"
                     : props.lang === "zh-hant"
-                      ? "只處理等待期後仍在執行的一般對話；Goal 一律使用暫停與恢復語義。"
-                      : "Applies only to ordinary turns still running after the grace period; Goals always use pause and resume semantics."
+                      ? "低額度、實際耗盡和 usageLimitExceeded 的自動切換。"
+                      : "Automatic switching for low quota, exhaustion, and usageLimitExceeded."
+                }
+                enabled={props.settings.seamlessSwitchLowQuotaEnabled}
+                onToggle={(enabled) => patchAndSend("seamlessSwitchLowQuotaEnabled", enabled)}
+              >
+                <div class={`settings-stack ${props.settings.seamlessSwitchLowQuotaEnabled ? "" : "is-hidden"}`}>
+                  <SettingsSegmentBlock
+                    title={
+                      props.lang === "zh"
+                        ? "低额度阈值"
+                        : props.lang === "zh-hant"
+                          ? "低額度閾值"
+                          : "Low-quota threshold"
+                    }
+                    sub={
+                      props.lang === "zh"
+                        ? "选择何时启动切换。"
+                        : props.lang === "zh-hant"
+                          ? "選擇何時啟動切換。"
+                          : "Choose when to start switching."
+                    }
+                    options={([0, 1, 3, 5] as const).map((threshold) => ({
+                      key: `switch-threshold-${threshold}`,
+                      title:
+                        threshold === 0
+                          ? props.lang === "zh"
+                            ? "耗尽后切换"
+                            : props.lang === "zh-hant"
+                              ? "耗盡後切換"
+                              : "After exhaustion"
+                          : `${threshold}%${threshold === 3 ? (props.lang === "zh" ? "（默认）" : props.lang === "zh-hant" ? "（預設）" : " (default)") : ""}`,
+                      description:
+                        props.lang === "zh"
+                          ? threshold === 0
+                            ? "全部活动会话耗尽后，最多观察 6 小时"
+                            : threshold === 1
+                              ? "尽量用尽额度"
+                              : threshold === 3
+                                ? "推荐"
+                                : "保护长会话"
+                          : props.lang === "zh-hant"
+                            ? threshold === 0
+                              ? "全部活動對話耗盡後，最多觀察 6 小時"
+                              : threshold === 1
+                                ? "盡量用盡額度"
+                                : threshold === 3
+                                  ? "建議"
+                                  : "保護長對話"
+                            : threshold === 0
+                              ? "After all active turns exhaust, observe for up to 6 hours"
+                              : threshold === 1
+                                ? "Use as much quota as possible"
+                                : threshold === 3
+                                  ? "Recommended"
+                                  : "Protect long turns",
+                      active: props.settings.seamlessSwitchThreshold === threshold,
+                      onClick: () => patchAndSend("seamlessSwitchThreshold", threshold)
+                    }))}
+                  />
+                </div>
+              </SettingsToggleBlock>
+              <SettingsSegmentBlock
+                title={props.lang === "zh" ? "切换策略" : props.lang === "zh-hant" ? "切換策略" : "Switch policy"}
+                sub={
+                  props.lang === "zh"
+                    ? "切号时仍在运行的普通会话如何处理；Goal 会自动暂停并恢复。"
+                    : props.lang === "zh-hant"
+                      ? "切換時仍在執行的一般對話如何處理；Goal 會自動暫停並恢復。"
+                      : "How to handle ordinary turns still running during a switch; Goals pause and resume automatically."
                 }
                 note={
                   props.lang === "zh"
-                    ? `${props.settings.hotSwitchEnabled ? "Runtime 已安装。" : "Runtime 未安装，无感切号将安全跳过。"} 安装或移除 runtime 请使用命令面板。`
+                    ? `${props.settings.hotSwitchEnabled ? "Runtime 已安装。" : "Runtime 未安装，切号会安全跳过。"} 安装或移除请使用命令面板。`
                     : props.lang === "zh-hant"
-                      ? `${props.settings.hotSwitchEnabled ? "Runtime 已安裝。" : "Runtime 未安裝，無感切換將安全略過。"} 安裝或移除 runtime 請使用命令面板。`
-                      : `${props.settings.hotSwitchEnabled ? "Runtime installed." : "Runtime not installed; seamless switching will fail closed."} Use the Command Palette to install or remove the runtime.`
+                      ? `${props.settings.hotSwitchEnabled ? "Runtime 已安裝。" : "Runtime 未安裝，切換會安全略過。"} 安裝或移除請使用命令面板。`
+                      : `${props.settings.hotSwitchEnabled ? "Runtime installed." : "Runtime not installed; switching fails closed."} Use the Command Palette to install or remove it.`
                 }
                 options={[
                   {
@@ -450,38 +486,6 @@ export function SettingsOverlay(props: {
                     onClick: () => patchAndSend("hotSwitchLongTurnPolicy", "interruptAndContinue")
                   }
                 ]}
-              />
-              <div class="settings-block-head">
-                <div class="settings-block-title">
-                  {props.lang === "zh"
-                    ? "无感切号等待时间"
-                    : props.lang === "zh-hant"
-                      ? "無感切換等待時間"
-                      : "Seamless-switch grace period"}
-                </div>
-                <div class="settings-block-sub">
-                  {props.lang === "zh"
-                    ? "超时后按上面的策略处理；Goal 会被中断、切号并恢复。"
-                    : props.lang === "zh-hant"
-                      ? "逾時後依上述策略處理；Goal 會被中斷、切換帳號並恢復。"
-                      : "After this delay the selected policy applies; Goals are interrupted, switched, and resumed."}
-                </div>
-              </div>
-              <SettingsDiscreteSlider
-                value={props.settings.hotSwitchGraceSeconds}
-                values={HOT_SWITCH_GRACE_VALUES}
-                accent="violet"
-                scaleValues={HOT_SWITCH_GRACE_VALUES}
-                valueLabel={(value) => `${value}s`}
-                description={(value) =>
-                  props.lang === "zh"
-                    ? `等待 ${value} 秒后处理仍在运行的 turn。`
-                    : props.lang === "zh-hant"
-                      ? `等待 ${value} 秒後處理仍在執行的 turn。`
-                      : `Handle turns still active after ${value} seconds.`
-                }
-                onPreview={(value) => props.onPatchSettings({ hotSwitchGraceSeconds: value })}
-                onCommit={(value) => patchAndSend("hotSwitchGraceSeconds", value)}
               />
             </div>
           </SettingsToggleBlock>

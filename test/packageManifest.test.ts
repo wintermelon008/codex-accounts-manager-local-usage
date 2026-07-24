@@ -133,6 +133,10 @@ describe("extension manifest configuration", () => {
       type: "boolean",
       default: false
     });
+    expect(properties?.["codexAccounts.seamlessSwitchLowQuotaEnabled"]).toMatchObject({
+      type: "boolean",
+      default: false
+    });
     expect(properties?.["codexAccounts.seamlessSwitchQuotaBandSize"]).toMatchObject({
       type: "number",
       default: 20,

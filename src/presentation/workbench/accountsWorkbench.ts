@@ -119,9 +119,9 @@ export class AccountsWorkbench {
         registerSeamlessUsageLimitMonitor({
           context: this.context,
           runtime: this.hotSwitchRuntime,
-          onUsageLimitExceeded: (activeAccountId) =>
+          onUsageLimitExceeded: (activeAccountId, trigger) =>
             maybeSeamlessBalanceSwitchForActiveQuota(this.repo, refreshers, {
-              trigger: "runtimeUsageLimit",
+              trigger,
               activeAccountId
             })
         })

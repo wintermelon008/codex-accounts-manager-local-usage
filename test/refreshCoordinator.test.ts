@@ -258,7 +258,7 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
       expect(onUsageLimitExceeded).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS);
-      expect(onUsageLimitExceeded).toHaveBeenCalledWith("free-active");
+      expect(onUsageLimitExceeded).toHaveBeenCalledWith("free-active", "runtimeUsageLimit");
 
       await vi.advanceTimersByTimeAsync(SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS * 5);
       expect(onUsageLimitExceeded).toHaveBeenCalledOnce();
@@ -309,7 +309,44 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     }
   });
 
-  it("does not create a runtime polling timer while the unified threshold is off", async () => {
+  it("does not poll runtime usage limits when low-quota switching is off", async () => {
+    vi.useFakeTimers();
+    const configurationDisposable = { dispose: vi.fn() };
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({
+        hotSwitchEnabled: true,
+        seamlessSwitchEnabled: true,
+        seamlessSwitchQuotaBandsEnabled: true,
+        seamlessSwitchLowQuotaEnabled: false,
+        seamlessSwitchThreshold: 1
+      })
+    );
+    vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
+    const runtime = {
+      isEnabled: vi.fn(() => true),
+      getStatus: vi.fn().mockResolvedValue(runtimeStatus()),
+      getIdentity: vi.fn(),
+      configureUsageLimitObservation: vi.fn().mockResolvedValue({ enabled: false })
+    };
+    const onUsageLimitExceeded = vi.fn().mockResolvedValue(true);
+    const registration = registerSeamlessUsageLimitMonitor({
+      context: { subscriptions: [] } as never,
+      runtime: runtime as never,
+      onUsageLimitExceeded
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS * 2);
+      expect(runtime.configureUsageLimitObservation).toHaveBeenCalledWith(false);
+      expect(runtime.getStatus).not.toHaveBeenCalled();
+      expect(onUsageLimitExceeded).not.toHaveBeenCalled();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps polling in after-exhaustion mode but ignores a single stopped conversation", async () => {
     vi.useFakeTimers();
     const configurationDisposable = { dispose: vi.fn() };
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
@@ -323,18 +360,69 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
     const runtime = {
       isEnabled: vi.fn(() => true),
-      getStatus: vi.fn(),
-      getIdentity: vi.fn()
+      getStatus: vi
+        .fn()
+        .mockResolvedValueOnce(runtimeStatus())
+        .mockResolvedValue(runtimeStatus({ observedUsageLimitFailures: 1, recentUsageLimitedThreads: 1 })),
+      getIdentity: vi.fn().mockResolvedValue({ managedLocalAccountId: "free-active" })
     };
+    const onUsageLimitExceeded = vi.fn().mockResolvedValue(false);
     const registration = registerSeamlessUsageLimitMonitor({
       context: { subscriptions: [] } as never,
       runtime: runtime as never,
-      onUsageLimitExceeded: vi.fn().mockResolvedValue(false)
+      onUsageLimitExceeded
     });
 
     try {
       await vi.advanceTimersByTimeAsync(SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS * 3);
-      expect(runtime.getStatus).not.toHaveBeenCalled();
+      expect(runtime.getStatus).toHaveBeenCalled();
+      expect(onUsageLimitExceeded).not.toHaveBeenCalled();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the all-conversations exhaustion signal when the threshold is after exhaustion", async () => {
+    vi.useFakeTimers();
+    const configurationDisposable = { dispose: vi.fn() };
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({
+        hotSwitchEnabled: true,
+        seamlessSwitchEnabled: true,
+        seamlessSwitchQuotaBandsEnabled: true,
+        seamlessSwitchThreshold: 0
+      })
+    );
+    vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
+    const runtime = {
+      isEnabled: vi.fn(() => true),
+      getStatus: vi
+        .fn()
+        .mockResolvedValueOnce(runtimeStatus())
+        .mockResolvedValue(
+          runtimeStatus({
+            observedUsageLimitFailures: 2,
+            recentUsageLimitedThreads: 2,
+            usageLimitExhaustionReady: true,
+            usageLimitExhaustionBatchId: 1
+          })
+        ),
+      getIdentity: vi.fn().mockResolvedValue({ managedLocalAccountId: "free-active" })
+    };
+    const onUsageLimitExceeded = vi.fn().mockResolvedValue(true);
+    const registration = registerSeamlessUsageLimitMonitor({
+      context: { subscriptions: [] } as never,
+      runtime: runtime as never,
+      onUsageLimitExceeded
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onUsageLimitExceeded).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS);
+      expect(onUsageLimitExceeded).toHaveBeenCalledWith("free-active", "runtimeUsageLimitExhaustion");
     } finally {
       registration.dispose();
       vi.useRealTimers();
@@ -365,7 +453,10 @@ function runtimeStatus(overrides: Partial<HotSwitchStatus> = {}): HotSwitchStatu
     switching: false,
     httpTransportForced: false,
     transportMode: "http",
+    usageLimitObservationEnabled: true,
     recentUsageLimitedThreads: 0,
+    usageLimitExhaustionReady: false,
+    usageLimitExhaustionBatchId: 0,
     observedUsageLimitFailures: 0,
     recoveredUsageLimitedThreads: 0,
     resumedUsageLimitedGoals: 0,

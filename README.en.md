@@ -34,10 +34,10 @@ This is separate from upstream Auto Switch. It updates authentication at a safe 
 1. Import and refresh at least two accounts you are authorized to use.
 2. Run `Codex Accounts: Install Experimental Seamless Runtime`, then reload once.
 3. Add accounts to the seamless pool from their cards; use hidden accounts, `A/B/C` groups, and plan filters to organize the visible scope.
-4. Enable **Seamless account switching (experimental)** and **Seamless quota-band balancing** in Dashboard settings. A one-minute quota refresh is recommended.
-5. Choose the unified **Account switching threshold**: Off, `1%`, `3%` (default), or `5%`. A nonzero threshold makes low quota and structured `usageLimitExceeded` take an immediate switch-and-continue path, which can repeat non-idempotent external effects.
+4. Enable **Seamless account switching (experimental)**, then independently enable **Quota-band switching** and/or **Low-quota switching**. A one-minute quota refresh is recommended.
+5. Choose a band size and wait time under **Quota-band switching**; choose **After exhaustion**, `1%`, `3%` (default), or `5%` under **Low-quota switching**; then choose the shared **Switch policy**.
 
-Ordinary band changes use the configured grace period and ordinary-turn policy; threshold hard switches prioritize safe account selection and session continuity. See [the seamless-switch guide](docs/HOT_SWITCH.md) for candidate selection, concurrency barriers, safety constraints, and rollback.
+When **Low-quota switching** is off, low quota, structured `usageLimitExceeded`, and exhaustion batches cannot start a new automatic switch; quota-band switching remains independent. **After exhaustion** waits within one band until every conversation in the active batch actually stops for quota exhaustion, for up to 6 hours. Auto-continuation can still repeat non-idempotent external effects. See [the seamless-switch guide](docs/HOT_SWITCH.md) for full rules.
 
 ## Optional local integrations
 

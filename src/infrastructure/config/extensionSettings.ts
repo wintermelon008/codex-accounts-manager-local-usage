@@ -32,6 +32,7 @@ export class ExtensionSettingsStore {
       hotSwitchEnabled: config.get<boolean>("hotSwitchEnabled", false),
       seamlessSwitchEnabled: isSeamlessSwitchEnabled(config),
       seamlessSwitchQuotaBandsEnabled: isSeamlessSwitchQuotaBandsEnabled(config),
+      seamlessSwitchLowQuotaEnabled: isSeamlessSwitchLowQuotaEnabled(config),
       seamlessSwitchQuotaBandSize: normalizeSeamlessQuotaBandSize(
         config.get<number>("seamlessSwitchQuotaBandSize", 20)
       ),
@@ -91,13 +92,30 @@ function explicitConfigurationValue(config: ReadableCodexAccountsConfiguration, 
 }
 
 export function isSeamlessSwitchQuotaBandsEnabled(
-  config: vscode.WorkspaceConfiguration = getCodexAccountsConfiguration()
+  config: ReadableCodexAccountsConfiguration = getCodexAccountsConfiguration()
 ): boolean {
   const configured = explicitConfigurationValue(config, "seamlessSwitchQuotaBandsEnabled");
   if (typeof configured === "boolean") {
     return configured;
   }
   return config.get<boolean>("balanceByQuotaBandsEnabled", false);
+}
+
+/** Keep pre-toggle behavior until a user explicitly chooses the new switch. */
+export function isSeamlessSwitchLowQuotaEnabled(
+  config: ReadableCodexAccountsConfiguration = getCodexAccountsConfiguration()
+): boolean {
+  const configured = explicitConfigurationValue(config, "seamlessSwitchLowQuotaEnabled");
+  if (typeof configured === "boolean") {
+    return configured;
+  }
+  if (!config.inspect) {
+    const supplied = config.get<unknown>("seamlessSwitchLowQuotaEnabled", undefined);
+    if (typeof supplied === "boolean") {
+      return supplied;
+    }
+  }
+  return isSeamlessSwitchQuotaBandsEnabled(config);
 }
 
 export function isSeamlessSwitchEnabled(

@@ -19,11 +19,15 @@ const RECOVERY_CONTEXT_KEY = "codex-account-manager/recovery";
 const CONFIG_PATH = path.join(__dirname, "codex-app-server-shim.json");
 const MAX_TERMINAL_TURN_IDS = 2_048;
 const MAX_RECENT_USAGE_LIMITED_THREADS = 2_048;
-const RECENT_USAGE_LIMITED_THREAD_TTL_MS = 2 * 60 * 1000;
+const USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS = 6 * 60 * 60 * 1000;
+// A quota-exhaustion batch may wait for other active conversations to reach a
+// safe boundary. Keep the stopped threads available for the same bounded
+// six-hour window so the eventual switch can continue them together.
+const RECENT_USAGE_LIMITED_THREAD_TTL_MS = USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS;
 const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
-const RUNTIME_PROTOCOL_VERSION = 6;
+const RUNTIME_PROTOCOL_VERSION = 8;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
 const SEAMLESS_HTTP_PROVIDER_CONFIG =
   `model_providers.${SEAMLESS_HTTP_PROVIDER_ID}={ name="OpenAI", wire_api="responses", ` +
@@ -73,6 +77,10 @@ let goalRecoveryCount = 0;
 let observedUsageLimitFailures = 0;
 let recoveredUsageLimitedThreads = 0;
 let resumedUsageLimitedGoals = 0;
+let usageLimitExhaustionBatch;
+let readyUsageLimitExhaustionBatchId = 0;
+let usageLimitExhaustionObservationSuppressed = false;
+let usageLimitObservationEnabled = true;
 let externalAuthActive = false;
 let activeManagedAccount;
 let usageAttributionAccount;
@@ -174,6 +182,10 @@ function handleOfficialLine(line) {
   }
 
   if (isWorkStartMethod(message.method)) {
+    // New work demonstrates that the current runtime is still usable (or that
+    // the user intentionally moved on), so it must not inherit an older
+    // all-conversations-exhausted decision.
+    resetUsageLimitExhaustionObservation();
     clearRecentUsageLimitedThread(readThreadId(message.params));
   }
 
@@ -243,7 +255,12 @@ function handleCodexLine(line) {
           anonymousActiveTurnCount += 1;
         }
       } else if (isUsageLimitExceededError(message.error)) {
-        captureUsageLimitedThread(submittedThreadId);
+        // A rejected turn/start has no following turn/completed event. It is
+        // therefore already terminal when it becomes part of an exhaustion
+        // batch.
+        captureUsageLimitedThread(submittedThreadId, { terminal: true });
+      } else {
+        observeUsageLimitExhaustionTerminal(submittedThreadId, "rejected", false);
       }
       void drainPendingSwitch();
     }
@@ -274,7 +291,11 @@ function handleCodexLine(line) {
       rememberTerminalTurnId(turnId);
     }
     const request = pendingSwitch;
-    if (threadId && isUsageLimitExceededTurn(message.params)) {
+    const usageLimitExceeded = Boolean(threadId && isUsageLimitExceededTurn(message.params));
+    if (usageLimitExceeded) {
+      // Remember the recovery candidate while the completed turn is still in
+      // the active snapshot. Terminal classification happens after removing
+      // it below, so a contradictory normal completion cancels only the batch.
       captureUsageLimitedThread(threadId);
     }
     if (turnId && request && request.interruptedTurnIds.delete(turnId)) {
@@ -295,6 +316,7 @@ function handleCodexLine(line) {
     } else {
       anonymousActiveTurnCount = Math.max(0, anonymousActiveTurnCount - 1);
     }
+    observeUsageLimitExhaustionTerminal(threadId, readTurnStatus(message.params), usageLimitExceeded);
     void drainPendingSwitch();
   }
 
@@ -415,6 +437,15 @@ function handleControlLine(socket, line) {
       (identity) => sendControlResult(socket, message.id, identity),
       (error) => sendControlError(socket, message.id, safeErrorMessage(error))
     );
+    return;
+  }
+
+  if (message.method === "runtime/usage/configure") {
+    try {
+      sendControlResult(socket, message.id, configureUsageLimitObservation(message.params));
+    } catch (error) {
+      sendControlError(socket, message.id, safeErrorMessage(error));
+    }
     return;
   }
 
@@ -588,6 +619,10 @@ async function drainPendingSwitch() {
     const resumedPausedGoalThreadIds = await resumePausedGoals(request);
     await resumeRecentUsageLimitedGoals(request, resumedPausedGoalThreadIds);
     const continuedThreads = await startRecoveryTurns(request);
+    // The recovery request above owns its captured recent threads. Once the
+    // transactional switch commits, a previous exhaustion batch must not
+    // prompt the scheduler to repeat the same switch.
+    resetUsageLimitExhaustionObservation();
 
     sendControlResult(request.socket, request.id, {
       status: "switched",
@@ -1023,6 +1058,7 @@ function flushDeferredOfficialLines() {
 }
 
 function runtimeStatus() {
+  maybeFinalizeUsageLimitExhaustionBatch();
   const gatewayRoute = gatewayAdapter?.route;
   return {
     runtimeProtocolVersion: RUNTIME_PROTOCOL_VERSION,
@@ -1039,7 +1075,10 @@ function runtimeStatus() {
     sub2apiGatewayActive: gatewayRoute === "sub2api",
     sub2apiGatewayConfigured: Boolean(sub2apiGatewayConfig),
     sub2apiGatewayAutoFallbackEnabled: Boolean(sub2apiGatewayConfig?.autoFallbackToChatGpt),
+    usageLimitObservationEnabled,
     recentUsageLimitedThreads: getRecentUsageLimitedThreadIds().size,
+    usageLimitExhaustionReady: usageLimitExhaustionBatch?.ready === true,
+    usageLimitExhaustionBatchId: usageLimitExhaustionBatch?.ready === true ? usageLimitExhaustionBatch.id : 0,
     observedUsageLimitFailures,
     recoveredUsageLimitedThreads,
     resumedUsageLimitedGoals,
@@ -1243,26 +1282,26 @@ function isValidGatewayFallbackParams(params) {
     params.rollbackContextId.length > 0;
   return Boolean(
     params &&
-      typeof params.accessToken === "string" &&
-      params.accessToken.length > 0 &&
-      typeof params.accountId === "string" &&
-      params.accountId.length > 0 &&
-      typeof params.localAccountId === "string" &&
-      params.localAccountId.length > 0 &&
-      typeof params.previousAccountId === "string" &&
-      params.previousAccountId.length > 0 &&
-      (managedRollback || snapshotRollback) &&
-      typeof params.previousExpectedEmail === "string" &&
-      params.previousExpectedEmail.length > 0 &&
-      typeof params.expectedEmail === "string" &&
-      params.expectedEmail.length > 0 &&
-      (params.planType === undefined || params.planType === null || typeof params.planType === "string") &&
-      Number.isInteger(params.gracePeriodMs) &&
-      params.gracePeriodMs >= 0 &&
-      params.gracePeriodMs <= 300_000 &&
-      (params.longTurnPolicy === "defer" ||
-        params.longTurnPolicy === "interrupt" ||
-        params.longTurnPolicy === "interruptAndContinue")
+    typeof params.accessToken === "string" &&
+    params.accessToken.length > 0 &&
+    typeof params.accountId === "string" &&
+    params.accountId.length > 0 &&
+    typeof params.localAccountId === "string" &&
+    params.localAccountId.length > 0 &&
+    typeof params.previousAccountId === "string" &&
+    params.previousAccountId.length > 0 &&
+    (managedRollback || snapshotRollback) &&
+    typeof params.previousExpectedEmail === "string" &&
+    params.previousExpectedEmail.length > 0 &&
+    typeof params.expectedEmail === "string" &&
+    params.expectedEmail.length > 0 &&
+    (params.planType === undefined || params.planType === null || typeof params.planType === "string") &&
+    Number.isInteger(params.gracePeriodMs) &&
+    params.gracePeriodMs >= 0 &&
+    params.gracePeriodMs <= 300_000 &&
+    (params.longTurnPolicy === "defer" ||
+      params.longTurnPolicy === "interrupt" ||
+      params.longTurnPolicy === "interruptAndContinue")
   );
 }
 
@@ -1280,16 +1319,16 @@ function isValidRefreshResult(result) {
 function isValidUsageAttributionParams(params) {
   return Boolean(
     params &&
-      typeof params === "object" &&
-      typeof params.localAccountId === "string" &&
-      params.localAccountId.length > 0 &&
-      params.localAccountId.length <= 256 &&
-      typeof params.accountId === "string" &&
-      params.accountId.length > 0 &&
-      params.accountId.length <= 256 &&
-      typeof params.expectedEmail === "string" &&
-      params.expectedEmail.length > 0 &&
-      params.expectedEmail.length <= 320
+    typeof params === "object" &&
+    typeof params.localAccountId === "string" &&
+    params.localAccountId.length > 0 &&
+    params.localAccountId.length <= 256 &&
+    typeof params.accountId === "string" &&
+    params.accountId.length > 0 &&
+    params.accountId.length <= 256 &&
+    typeof params.expectedEmail === "string" &&
+    params.expectedEmail.length > 0 &&
+    params.expectedEmail.length <= 320
   );
 }
 
@@ -1425,11 +1464,12 @@ function rememberRecentUsageLimitedThread(threadId) {
   pruneRecentUsageLimitedThreads();
 }
 
-function captureUsageLimitedThread(threadId) {
-  if (typeof threadId !== "string" || threadId.length === 0) {
+function captureUsageLimitedThread(threadId, options = {}) {
+  if (!usageLimitObservationEnabled || typeof threadId !== "string" || threadId.length === 0) {
     return;
   }
   rememberRecentUsageLimitedThread(threadId);
+  observeUsageLimitExhaustionUsageLimited(threadId, options.terminal === true);
   const request = pendingSwitch;
   if (request?.params.recoverRecentUsageLimitedTurns !== true) {
     return;
@@ -1441,6 +1481,166 @@ function captureUsageLimitedThread(threadId) {
   } else if (request.goalsPrepared) {
     request.recoveryThreadIds.add(threadId);
   }
+}
+
+function configureUsageLimitObservation(params) {
+  if (!params || typeof params.enabled !== "boolean") {
+    throw new Error("Invalid usage-limit observation configuration");
+  }
+  usageLimitObservationEnabled = params.enabled;
+  // Existing transactions already own their recovery snapshot and are allowed
+  // to finish. Clearing only global observation state prevents a later toggle
+  // from replaying an old exhaustion batch or journal.
+  recentUsageLimitedThreads.clear();
+  observedUsageLimitFailures = 0;
+  resetUsageLimitExhaustionObservation();
+  return { enabled: usageLimitObservationEnabled };
+}
+
+/**
+ * Start or advance the bounded "all active conversations exhausted" batch.
+ *
+ * This state is intentionally separate from recentUsageLimitedThreads. The
+ * latter is the recovery journal used by every account switch; this batch only
+ * answers whether the threshold=0 scheduler may request one. Keeping them
+ * separate means a normal quota-band switch can still recover a turn whose
+ * quota refresh arrived slightly after the turn stopped.
+ */
+function observeUsageLimitExhaustionUsageLimited(threadId, terminal) {
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return;
+  }
+
+  let batch = usageLimitExhaustionBatch;
+  if (!batch) {
+    if (usageLimitExhaustionObservationSuppressed) {
+      return;
+    }
+    // We deliberately fail closed if the runtime cannot identify every active
+    // conversation. An anonymous turn must never be treated as exhausted by
+    // inference, because it could still be productive work on the old account.
+    if (!canTrackUsageLimitExhaustionBatch()) {
+      suppressUsageLimitExhaustionObservation();
+      return;
+    }
+    const threadIds = getActiveThreadIds();
+    threadIds.add(threadId);
+    const observedAt = Date.now();
+    batch = {
+      threadIds,
+      usageLimitedThreadIds: new Set(),
+      terminalThreadIds: new Set(),
+      deadlineAt: observedAt + USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS,
+      ready: false,
+      id: 0
+    };
+    usageLimitExhaustionBatch = batch;
+  }
+
+  // A thread outside the original snapshot can only mean that newer work
+  // raced with the observation. Do not merge it into an old decision.
+  if (!batch.threadIds.has(threadId)) {
+    suppressUsageLimitExhaustionObservation();
+    return;
+  }
+
+  batch.usageLimitedThreadIds.add(threadId);
+  if (terminal) {
+    batch.terminalThreadIds.add(threadId);
+  }
+  maybeFinalizeUsageLimitExhaustionBatch();
+}
+
+function observeUsageLimitExhaustionTerminal(threadId, status, reportedUsageLimit) {
+  const batch = usageLimitExhaustionBatch;
+  if (!batch || typeof threadId !== "string" || threadId.length === 0 || !batch.threadIds.has(threadId)) {
+    return;
+  }
+
+  // A normally completed or manually interrupted peer proves that this was not
+  // an all-conversations quota exhaustion. Keep the recovery journal intact,
+  // but cancel only this scheduling decision.
+  if (status === "completed" || status === "interrupted") {
+    suppressUsageLimitExhaustionObservation();
+    return;
+  }
+
+  const usageLimited = reportedUsageLimit || batch.usageLimitedThreadIds.has(threadId);
+  if (!usageLimited) {
+    suppressUsageLimitExhaustionObservation();
+    return;
+  }
+
+  batch.usageLimitedThreadIds.add(threadId);
+  batch.terminalThreadIds.add(threadId);
+  maybeFinalizeUsageLimitExhaustionBatch();
+}
+
+function canTrackUsageLimitExhaustionBatch() {
+  if (anonymousActiveTurnCount > 0) {
+    return false;
+  }
+  return [...submittedTurnStarts.values(), ...activeTurns.values()].every(
+    (threadId) => typeof threadId === "string" && threadId.length > 0
+  );
+}
+
+function maybeFinalizeUsageLimitExhaustionBatch() {
+  const batch = usageLimitExhaustionBatch;
+  if (!batch || batch.ready) {
+    return;
+  }
+
+  // This is intentionally checked before active-turn completion. At six hours
+  // the quota exhaustion has waited long enough; the configured ordinary-turn
+  // policy now decides whether to defer, interrupt, or continue remaining work.
+  if (Date.now() >= batch.deadlineAt) {
+    markUsageLimitExhaustionBatchReady(batch);
+    return;
+  }
+
+  if (getActiveTurnCount() > 0) {
+    return;
+  }
+
+  if (
+    batch.terminalThreadIds.size === batch.threadIds.size &&
+    batch.usageLimitedThreadIds.size === batch.threadIds.size
+  ) {
+    markUsageLimitExhaustionBatchReady(batch);
+    return;
+  }
+
+  // Turn tracking reached an idle state without a terminal quota-exhaustion
+  // result for every originally active conversation. Treat that ambiguity as a
+  // safe cancellation instead of switching on an incomplete observation.
+  suppressUsageLimitExhaustionObservation();
+}
+
+function markUsageLimitExhaustionBatchReady(batch) {
+  if (usageLimitExhaustionBatch !== batch || batch.ready) {
+    return;
+  }
+  batch.ready = true;
+  readyUsageLimitExhaustionBatchId += 1;
+  batch.id = readyUsageLimitExhaustionBatchId;
+}
+
+function clearUsageLimitExhaustionBatch() {
+  usageLimitExhaustionBatch = undefined;
+}
+
+function suppressUsageLimitExhaustionObservation() {
+  clearUsageLimitExhaustionBatch();
+  // Do not let a delayed terminal notification from the just-canceled batch
+  // recreate a smaller one. The next user work start establishes a fresh
+  // observation scope, while the independent recovery journal stays intact.
+  usageLimitExhaustionObservationSuppressed = true;
+}
+
+function resetUsageLimitExhaustionObservation() {
+  clearUsageLimitExhaustionBatch();
+  usageLimitExhaustionObservationSuppressed = false;
 }
 
 function getRecentUsageLimitedThreadIds() {
@@ -1462,9 +1662,16 @@ function clearRecentUsageLimitedThread(threadId) {
 
 function pruneRecentUsageLimitedThreads() {
   const cutoff = Date.now() - RECENT_USAGE_LIMITED_THREAD_TTL_MS;
+  const protectedThreadIds = usageLimitExhaustionBatch?.usageLimitedThreadIds;
   for (const [threadId, recordedAt] of recentUsageLimitedThreads) {
     if (recordedAt >= cutoff && recentUsageLimitedThreads.size <= MAX_RECENT_USAGE_LIMITED_THREADS) {
       break;
+    }
+    // A ready six-hour batch may be selected just as the journal reaches its
+    // normal TTL. Preserve its known exhausted threads until that one switch
+    // either commits, is canceled by new work, or the runtime exits.
+    if (protectedThreadIds?.has(threadId)) {
+      continue;
     }
     recentUsageLimitedThreads.delete(threadId);
   }
@@ -1621,7 +1828,7 @@ function buildGatewayProviderConfig(providerId) {
   return (
     `model_providers.${providerId}={ name=${tomlString(sub2apiGatewayConfig.displayName)}, ` +
     `base_url=${tomlString(gatewayAdapter.baseUrl)}, env_key="${SUB2API_ADAPTER_ENV_KEY}", ` +
-    "wire_api=\"responses\", requires_openai_auth=false, supports_websockets=false }"
+    'wire_api="responses", requires_openai_auth=false, supports_websockets=false }'
   );
 }
 
@@ -2124,7 +2331,9 @@ function resolveChatGptGatewayProxy(target) {
 }
 
 function shouldBypassGatewayProxy(hostname) {
-  const normalizedHost = String(hostname || "").trim().toLowerCase();
+  const normalizedHost = String(hostname || "")
+    .trim()
+    .toLowerCase();
   if (!normalizedHost) {
     return false;
   }
@@ -2137,7 +2346,10 @@ function shouldBypassGatewayProxy(hostname) {
     if (entry === "*") {
       return true;
     }
-    const host = entry.replace(/^\*\.?/u, "").replace(/^\./u, "").split(":")[0];
+    const host = entry
+      .replace(/^\*\.?/u, "")
+      .replace(/^\./u, "")
+      .split(":")[0];
     return Boolean(host) && (normalizedHost === host || normalizedHost.endsWith(`.${host}`));
   });
 }
@@ -2328,11 +2540,15 @@ function persistGatewayFailureDiagnostic(adapter, details) {
     schema: GATEWAY_DIAGNOSTIC_SCHEMA,
     recordedAt: Number.isSafeInteger(details.at) && details.at > 0 ? details.at : Date.now(),
     origin: details.origin === "sub2api" ? "sub2api" : "adapter",
-    ...(normalizeGatewayHttpStatus(details.statusCode) ? { statusCode: normalizeGatewayHttpStatus(details.statusCode) } : {}),
+    ...(normalizeGatewayHttpStatus(details.statusCode)
+      ? { statusCode: normalizeGatewayHttpStatus(details.statusCode) }
+      : {}),
     ...(normalizeGatewayHttpStatus(details.upstreamStatusCode)
       ? { upstreamStatusCode: normalizeGatewayHttpStatus(details.upstreamStatusCode) }
       : {}),
-    ...(normalizeGatewayTransportCode(details.transportCode) ? { transportCode: normalizeGatewayTransportCode(details.transportCode) } : {}),
+    ...(normalizeGatewayTransportCode(details.transportCode)
+      ? { transportCode: normalizeGatewayTransportCode(details.transportCode) }
+      : {}),
     ...(request ? { request } : {})
   };
   const temporaryPath = `${GATEWAY_DIAGNOSTIC_PATH}.${process.pid}.${randomUUID()}.tmp`;
@@ -2355,11 +2571,15 @@ function logGatewayForwardingFailure(details) {
   const request = normalizeGatewayDiagnosticRequest(details.request);
   const fields = [
     `origin=${details.origin === "sub2api" ? "sub2api" : "adapter"}`,
-    ...(normalizeGatewayHttpStatus(details.statusCode) ? [`status=${normalizeGatewayHttpStatus(details.statusCode)}`] : []),
+    ...(normalizeGatewayHttpStatus(details.statusCode)
+      ? [`status=${normalizeGatewayHttpStatus(details.statusCode)}`]
+      : []),
     ...(normalizeGatewayHttpStatus(details.upstreamStatusCode)
       ? [`upstreamStatus=${normalizeGatewayHttpStatus(details.upstreamStatusCode)}`]
       : []),
-    ...(normalizeGatewayTransportCode(details.transportCode) ? [`transport=${normalizeGatewayTransportCode(details.transportCode)}`] : []),
+    ...(normalizeGatewayTransportCode(details.transportCode)
+      ? [`transport=${normalizeGatewayTransportCode(details.transportCode)}`]
+      : []),
     ...formatGatewayRequestDiagnosticFields(request)
   ];
   safeLog(`Sub2API Gateway forwarding failed: ${fields.join(" ")}`);
@@ -2432,7 +2652,9 @@ function readGatewayContentLength(value) {
 }
 
 function normalizeGatewayContentLength(value) {
-  return Number.isSafeInteger(value) && value >= 0 && value <= MAX_GATEWAY_DIAGNOSTIC_CONTENT_LENGTH ? value : undefined;
+  return Number.isSafeInteger(value) && value >= 0 && value <= MAX_GATEWAY_DIAGNOSTIC_CONTENT_LENGTH
+    ? value
+    : undefined;
 }
 
 function readGatewayTransferEncoding(value) {
@@ -2658,7 +2880,8 @@ function readRuntimeConfig() {
 }
 
 function resolveUsageAttributionDirectory(config) {
-  const configured = config && typeof config.usageAttributionDirectory === "string" ? config.usageAttributionDirectory.trim() : "";
+  const configured =
+    config && typeof config.usageAttributionDirectory === "string" ? config.usageAttributionDirectory.trim() : "";
   return configured && path.isAbsolute(configured) ? configured : undefined;
 }
 

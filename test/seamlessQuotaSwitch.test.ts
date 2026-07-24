@@ -69,6 +69,90 @@ describe("seamless 5-hour quota-band switching", () => {
     );
   });
 
+  it("keeps band switching independent when low-quota switching is off", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchLowQuotaEnabled: false,
+      seamlessSwitchThreshold: 3,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 100);
+    const candidate = account("candidate", false, 100);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+    const view = { refresh: vi.fn(), switchRuntimeAccount };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    active.quotaSummary!.hourlyPercentage = 80;
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      true
+    );
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id);
+  });
+
+  it("runs low-quota switching without enabling quota-band switching", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: false,
+      seamlessSwitchLowQuotaEnabled: true,
+      seamlessSwitchThreshold: 3,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 3);
+    const candidate = account("candidate", false, 90);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+
+    await expect(
+      maybeSwitchForActiveQuota(repo as unknown as AccountsRepository, { refresh: vi.fn(), switchRuntimeAccount })
+    ).resolves.toBe(true);
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      recoverRecentUsageLimitedTurns: true
+    });
+  });
+
+  it("does not start threshold or exhaustion switches when low-quota switching is off", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchLowQuotaEnabled: false,
+      seamlessSwitchThreshold: 3,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 20);
+    const candidate = account("candidate", false, 90);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+    const view = { refresh: vi.fn(), switchRuntimeAccount };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    active.quotaSummary!.hourlyPercentage = 1;
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    await expect(
+      maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view, {
+        trigger: "runtimeUsageLimit",
+        activeAccountId: active.id
+      })
+    ).resolves.toBe(false);
+    await expect(
+      maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view, {
+        trigger: "runtimeUsageLimitExhaustion",
+        activeAccountId: active.id
+      })
+    ).resolves.toBe(false);
+
+    expect(switchRuntimeAccount).not.toHaveBeenCalled();
+  });
+
   it("only selects targets from currently visible groups while allowing a disabled-group source to rotate out", async () => {
     configure({
       seamlessSwitchEnabled: true,
@@ -150,7 +234,7 @@ describe("seamless 5-hour quota-band switching", () => {
     expect(view.switchRuntimeAccount).not.toHaveBeenCalled();
   });
 
-  it("forces an immediate interrupt-and-continue switch at 1% without requiring a prior baseline", async () => {
+  it("starts an immediate 1% switch without overriding the ordinary-turn policy", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
@@ -170,7 +254,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -196,7 +279,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -228,7 +310,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(higherFree.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -261,7 +342,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(plus.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -290,7 +370,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -318,6 +397,82 @@ describe("seamless 5-hour quota-band switching", () => {
     expect(switchRuntimeAccount).not.toHaveBeenCalled();
   });
 
+  it("switches after the runtime confirms all active conversations are exhausted at threshold zero", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchThreshold: 0,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 74);
+    const candidate = account("candidate", false, 90);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+
+    await expect(
+      maybeSeamlessBalanceSwitchForActiveQuota(
+        repo as unknown as AccountsRepository,
+        { refresh: vi.fn(), switchRuntimeAccount },
+        { trigger: "runtimeUsageLimitExhaustion", activeAccountId: active.id }
+      )
+    ).resolves.toBe(true);
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      recoverRecentUsageLimitedTurns: true
+    });
+  });
+
+  it("allows a 26% to 1% drop to cross a 25% band in after-exhaustion mode", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchQuotaBandSize: 25,
+      seamlessSwitchThreshold: 0,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 26);
+    const candidate = account("candidate", false, 90);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+    const view = { refresh: vi.fn(), switchRuntimeAccount };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    active.quotaSummary!.hourlyPercentage = 1;
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      true
+    );
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, { recoverRecentUsageLimitedTurns: true });
+  });
+
+  it("keeps a 24% to 1% drop in the lowest 25% band until actual exhaustion", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchQuotaBandSize: 25,
+      seamlessSwitchThreshold: 0,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 24);
+    const candidate = account("candidate", false, 90);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+    const view = { refresh: vi.fn(), switchRuntimeAccount };
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    active.quotaSummary!.hourlyPercentage = 1;
+
+    await expect(maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, view)).resolves.toBe(
+      false
+    );
+    expect(switchRuntimeAccount).not.toHaveBeenCalled();
+  });
+
   it("converges a stopped remote runtime to the shared active account without reselecting", async () => {
     configure({
       seamlessSwitchEnabled: true,
@@ -340,7 +495,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(globallyActive.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
     expect(repo.tryAcquireSchedulerLease).not.toHaveBeenCalled();
@@ -365,7 +519,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -391,7 +544,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -413,7 +565,6 @@ describe("seamless 5-hour quota-band switching", () => {
     );
     expect(view.switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -440,7 +591,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(recovered.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -467,7 +617,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(reserve.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -495,7 +644,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(recovered.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });
@@ -522,7 +670,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(strongerReserve.id, {
       gracePeriodMs: 0,
-      longTurnPolicy: "interruptAndContinue",
       recoverRecentUsageLimitedTurns: true
     });
   });

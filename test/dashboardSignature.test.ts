@@ -26,6 +26,7 @@ function createState(overrides?: {
       hotSwitchEnabled: true,
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: false,
+      seamlessSwitchLowQuotaEnabled: false,
       seamlessSwitchQuotaBandSize: 20,
       seamlessSwitchThreshold: 3,
       seamlessSwitchGroupAVisible: true,
@@ -306,7 +307,7 @@ describe("buildDashboardStateSignature", () => {
     expect(buildDashboardStateSignature(changed)).not.toBe(buildDashboardStateSignature(base));
   });
 
-  it("changes when the quota-band size or unified threshold changes", () => {
+  it("changes when quota-band, low-quota, or threshold settings change", () => {
     const base = createState();
     const sizeChanged: DashboardState = {
       ...base,
@@ -316,10 +317,15 @@ describe("buildDashboardStateSignature", () => {
       ...base,
       settings: { ...base.settings, seamlessSwitchThreshold: 5 }
     };
+    const lowQuotaChanged: DashboardState = {
+      ...base,
+      settings: { ...base.settings, seamlessSwitchLowQuotaEnabled: true }
+    };
 
     const baseSignature = buildDashboardStateSignature(base);
     expect(buildDashboardStateSignature(sizeChanged)).not.toBe(baseSignature);
     expect(buildDashboardStateSignature(thresholdChanged)).not.toBe(baseSignature);
+    expect(buildDashboardStateSignature(lowQuotaChanged)).not.toBe(baseSignature);
   });
 
   it("changes when the hot-switch grace period or long-turn policy changes", () => {
