@@ -39,7 +39,7 @@ const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
 const SHIM_FILE = "codex-app-server-shim.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 6;
+const RUNTIME_PROTOCOL_VERSION = 8;
 const SUB2API_GATEWAY_RUNTIME_CONFIG_KEY = "sub2apiGateway.runtimeConfig";
 
 /**
@@ -248,6 +248,13 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("Codex hot switch is not configured");
     }
     return this.bridge.getIdentity();
+  }
+
+  async configureUsageLimitObservation(enabled: boolean): Promise<void> {
+    if (!this.bridge) {
+      throw new Error("Codex hot switch is not configured");
+    }
+    await this.bridge.configureUsageLimitObservation(enabled);
   }
 
   async switchAccount(accountId: string, options: RuntimeAccountSwitchOptions = {}): Promise<HotSwitchAccountResult> {

@@ -140,6 +140,34 @@ describe("handleDashboardSettingUpdate", () => {
     expect(update).toHaveBeenCalledWith("seamlessSwitchQuotaBandsEnabled", true, vscode.ConfigurationTarget.Global);
   });
 
+  it("inherits the old quota-band setting for low-quota switching until the new toggle is explicit", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    const inspect = vi.fn((key: string) =>
+      key === "seamlessSwitchQuotaBandsEnabled"
+        ? { key: `codexAccounts.${key}`, globalValue: true }
+        : { key: `codexAccounts.${key}`, defaultValue: false }
+    );
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((_: string, fallback: unknown) => fallback),
+      update,
+      inspect
+    } as never);
+
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchLowQuotaEnabled).toBe(true);
+
+    inspect.mockImplementation((key: string) =>
+      key === "seamlessSwitchLowQuotaEnabled"
+        ? { key: `codexAccounts.${key}`, globalValue: false }
+        : key === "seamlessSwitchQuotaBandsEnabled"
+          ? { key: `codexAccounts.${key}`, globalValue: true }
+          : { key: `codexAccounts.${key}`, defaultValue: false }
+    );
+    expect(new ExtensionSettingsStore().getDashboardSettings().seamlessSwitchLowQuotaEnabled).toBe(false);
+
+    await expect(handleDashboardSettingUpdate("seamlessSwitchLowQuotaEnabled", true)).resolves.toBe(true);
+    expect(update).toHaveBeenCalledWith("seamlessSwitchLowQuotaEnabled", true, vscode.ConfigurationTarget.Global);
+  });
+
   it("persists supported quota-band sizes and normalizes unsupported values", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({

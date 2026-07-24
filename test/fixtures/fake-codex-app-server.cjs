@@ -228,6 +228,29 @@ function handleLine(line) {
       respond(message.id, {});
       break;
     }
+    case "test/notifyUsageLimit": {
+      const requestedThreadId = message.params && message.params.threadId;
+      const activeTurn =
+        typeof requestedThreadId === "string"
+          ? activeTurns.find((candidate) => candidate.threadId === requestedThreadId)
+          : activeTurns[0];
+      if (activeTurn) {
+        emit({
+          method: "error",
+          params: {
+            threadId: activeTurn.threadId,
+            turnId: activeTurn.id,
+            willRetry: false,
+            error: {
+              message: "Usage limit exceeded",
+              codexErrorInfo: "usageLimitExceeded"
+            }
+          }
+        });
+      }
+      respond(message.id, {});
+      break;
+    }
     case "test/forget-active":
       activeTurns.shift();
       respond(message.id, {});

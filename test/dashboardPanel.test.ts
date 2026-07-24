@@ -74,6 +74,7 @@ function createState(): DashboardState {
       hotSwitchEnabled: false,
       seamlessSwitchEnabled: false,
       seamlessSwitchQuotaBandsEnabled: false,
+      seamlessSwitchLowQuotaEnabled: false,
       seamlessSwitchQuotaBandSize: 20,
       seamlessSwitchThreshold: 3,
       seamlessSwitchGroupAVisible: true,

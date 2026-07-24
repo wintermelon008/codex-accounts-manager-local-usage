@@ -78,11 +78,12 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 6,
+      runtimeProtocolVersion: 8,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
       activeTurns: 0,
+      usageLimitObservationEnabled: true,
       httpTransportForced: true,
       transportMode: "http"
     });
@@ -111,6 +112,64 @@ describe("CodexHotSwitchBridge", () => {
       })
     ).resolves.toEqual({ active: true, localAccountId: "local-a" });
   });
+
+  it("clears and disables low-quota observation without affecting later fresh observations", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "observation-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "observation-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    await expect(bridge.configureUsageLimitObservation(false)).resolves.toEqual({ enabled: false });
+    shim.stdin.write(
+      `${JSON.stringify({ id: "observation-disabled-turn", method: "turn/start", params: { threadId: "disabled-thread", input: [] } })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "disabled-thread"
+    );
+    shim.stdin.write(
+      `${JSON.stringify({ id: "observation-disabled-fail", method: "test/failUsageLimit", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "observation-disabled-fail");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      usageLimitObservationEnabled: false,
+      recentUsageLimitedThreads: 0,
+      usageLimitExhaustionReady: false,
+      observedUsageLimitFailures: 0
+    });
+
+    await expect(bridge.configureUsageLimitObservation(true)).resolves.toEqual({ enabled: true });
+    shim.stdin.write(
+      `${JSON.stringify({ id: "observation-enabled-turn", method: "turn/start", params: { threadId: "enabled-thread", input: [] } })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "enabled-thread"
+    );
+    shim.stdin.write(
+      `${JSON.stringify({ id: "observation-enabled-fail", method: "test/failUsageLimit", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "observation-enabled-fail");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      usageLimitObservationEnabled: true,
+      recentUsageLimitedThreads: 1,
+      usageLimitExhaustionReady: true,
+      observedUsageLimitFailures: 1
+    });
+  }, 15_000);
 
   it("keeps the real Sub2API key in memory and forwards it only through the loopback adapter", async () => {
     const root = path.resolve(__dirname, "..");
@@ -1486,6 +1545,8 @@ describe("CodexHotSwitchBridge", () => {
     await expect(bridge.getStatus()).resolves.toMatchObject({
       activeTurns: 0,
       recentUsageLimitedThreads: 1,
+      usageLimitExhaustionReady: true,
+      usageLimitExhaustionBatchId: 1,
       observedUsageLimitFailures: 1,
       recoveredUsageLimitedThreads: 0
     });
@@ -1528,12 +1589,197 @@ describe("CodexHotSwitchBridge", () => {
     });
     await expect(bridge.getStatus()).resolves.toMatchObject({
       recentUsageLimitedThreads: 0,
+      usageLimitExhaustionReady: false,
+      usageLimitExhaustionBatchId: 0,
       observedUsageLimitFailures: 1,
       recoveredUsageLimitedThreads: 1
     });
 
     shim.stdin.write(`${JSON.stringify({ id: "quota-complete", method: "test/complete", params: {} })}\n`);
     await messages.next((message) => message.id === "quota-complete");
+  }, 15_000);
+
+  it("cancels only the exhaustion decision when a peer finishes normally and still recovers the stopped thread", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "mixed-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "mixed-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "mixed-failed-turn", method: "turn/start", params: { threadId: "mixed-failed", input: [] } })}\n`
+    );
+    shim.stdin.write(
+      `${JSON.stringify({ id: "mixed-complete-turn", method: "turn/start", params: { threadId: "mixed-complete", input: [] } })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "mixed-failed");
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "mixed-complete"
+    );
+
+    shim.stdin.write(`${JSON.stringify({ id: "mixed-fail", method: "test/failUsageLimit", params: {} })}\n`);
+    await messages.next((message) => message.id === "mixed-fail");
+    shim.stdin.write(`${JSON.stringify({ id: "mixed-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "mixed-complete");
+
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      activeTurns: 0,
+      recentUsageLimitedThreads: 1,
+      usageLimitExhaustionReady: false,
+      usageLimitExhaustionBatchId: 0
+    });
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "defer",
+        recoverRecentUsageLimitedTurns: true
+      })
+    ).resolves.toMatchObject({ status: "switched", continuedThreads: 1 });
+    await expect(
+      messages.next(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "mixed-failed" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).resolves.toMatchObject({ params: { runtimeAccountId: "account-b", inputText: "Continue." } });
+  }, 15_000);
+
+  it("does not recreate a canceled exhaustion batch from a delayed terminal failure", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "late-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "late-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    // Start the peer first so test/complete finishes it while the delayed
+    // usage-limit notification belongs to the second, still-active thread.
+    shim.stdin.write(
+      `${JSON.stringify({ id: "late-peer-turn", method: "turn/start", params: { threadId: "late-peer", input: [] } })}\n`
+    );
+    shim.stdin.write(
+      `${JSON.stringify({ id: "late-failed-turn", method: "turn/start", params: { threadId: "late-failed", input: [] } })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "late-peer");
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "late-failed");
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "late-notify", method: "test/notifyUsageLimit", params: { threadId: "late-failed" } })}\n`
+    );
+    await messages.next((message) => message.id === "late-notify");
+    shim.stdin.write(`${JSON.stringify({ id: "late-peer-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "late-peer-complete");
+    shim.stdin.write(`${JSON.stringify({ id: "late-failed-terminal", method: "test/failUsageLimit", params: {} })}\n`);
+    await messages.next((message) => message.id === "late-failed-terminal");
+
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      activeTurns: 0,
+      recentUsageLimitedThreads: 1,
+      usageLimitExhaustionReady: false,
+      usageLimitExhaustionBatchId: 0
+    });
+
+    // A new turn explicitly resets the observation scope, so a future real
+    // exhaustion can form a fresh batch rather than being suppressed forever.
+    shim.stdin.write(
+      `${JSON.stringify({ id: "late-fresh-turn", method: "turn/start", params: { threadId: "late-fresh", input: [] } })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "late-fresh");
+    shim.stdin.write(`${JSON.stringify({ id: "late-fresh-fail", method: "test/failUsageLimit", params: {} })}\n`);
+    await messages.next((message) => message.id === "late-fresh-fail");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      activeTurns: 0,
+      recentUsageLimitedThreads: 2,
+      usageLimitExhaustionReady: true,
+      usageLimitExhaustionBatchId: 1
+    });
+  }, 15_000);
+
+  it("marks a batch ready only after every originally active conversation reaches quota exhaustion", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "batch-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "batch-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "batch-turn-a", method: "turn/start", params: { threadId: "batch-a", input: [] } })}\n`
+    );
+    shim.stdin.write(
+      `${JSON.stringify({ id: "batch-turn-b", method: "turn/start", params: { threadId: "batch-b", input: [] } })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "batch-a");
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "batch-b");
+
+    shim.stdin.write(`${JSON.stringify({ id: "batch-fail-a", method: "test/failUsageLimit", params: {} })}\n`);
+    await messages.next((message) => message.id === "batch-fail-a");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      activeTurns: 1,
+      recentUsageLimitedThreads: 1,
+      usageLimitExhaustionReady: false,
+      usageLimitExhaustionBatchId: 0
+    });
+
+    shim.stdin.write(`${JSON.stringify({ id: "batch-fail-b", method: "test/failUsageLimit", params: {} })}\n`);
+    await messages.next((message) => message.id === "batch-fail-b");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      activeTurns: 0,
+      recentUsageLimitedThreads: 2,
+      usageLimitExhaustionReady: true,
+      usageLimitExhaustionBatchId: 1
+    });
   }, 15_000);
 
   it("continues a quota-exhausted thread when turn/start returns a structured RPC error", async () => {

@@ -22,7 +22,13 @@ export type HotSwitchStatus = {
   sub2apiGatewayActive: boolean;
   sub2apiGatewayConfigured: boolean;
   sub2apiGatewayAutoFallbackEnabled: boolean;
+  /** Whether the shim records low-quota signals for automatic switching/recovery. */
+  usageLimitObservationEnabled: boolean;
   recentUsageLimitedThreads: number;
+  /** A bounded batch of active conversations has reached actual quota exhaustion. */
+  usageLimitExhaustionReady: boolean;
+  /** Monotonic scalar used to distinguish one exhaustion batch from the next. */
+  usageLimitExhaustionBatchId: number;
   observedUsageLimitFailures: number;
   recoveredUsageLimitedThreads: number;
   resumedUsageLimitedGoals: number;
@@ -196,6 +202,10 @@ export class CodexHotSwitchBridge {
 
   async getIdentity(): Promise<HotSwitchIdentity> {
     return this.request<HotSwitchIdentity>("runtime/identity", {}, REQUEST_TIMEOUT_MS);
+  }
+
+  async configureUsageLimitObservation(enabled: boolean): Promise<{ enabled: boolean }> {
+    return this.request<{ enabled: boolean }>("runtime/usage/configure", { enabled }, REQUEST_TIMEOUT_MS);
   }
 
   async activateUsageAttribution(params: HotSwitchUsageAttributionParams): Promise<HotSwitchUsageAttributionResult> {

@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.47",
+  "version": "0.1.16-local.49",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -136,7 +136,7 @@
           "maximum": 300,
           "multipleOf": 1,
           "default": 60,
-          "markdownDescription": "How long seamless account switching waits for active Codex turns to finish naturally. Active Goal turns are interrupted after this grace period and the Goal is resumed on the new account."
+          "markdownDescription": "How long quota-band and manual seamless switches wait for active Codex turns to finish naturally. Low-quota and after-exhaustion switches begin their transaction immediately; the common ordinary-turn policy still determines how remaining ordinary turns are handled. Active Goal turns use pause/interruption/resume semantics."
         },
         "codexAccounts.hotSwitchLongTurnPolicy": {
           "type": "string",
@@ -151,12 +151,17 @@
             "Interrupt ordinary turns after the grace period, switch accounts, and start one marked continuation turn in each interrupted thread. This can repeat non-idempotent external side effects, so use it only when that risk is acceptable."
           ],
           "default": "defer",
-          "markdownDescription": "Policy for ordinary turns that remain active after the hot-switch grace period. Goal turns always use Goal pause/interruption/resume semantics. Authentication is never changed while an old turn is still active."
+          "markdownDescription": "Common policy for ordinary turns that remain active when a seamless switch reaches its handling boundary: after the grace period for quota-band/manual switches, or immediately for low-quota/after-exhaustion switches. Goal turns always use Goal pause/interruption/resume semantics. Authentication is never changed while an old turn is still active."
         },
         "codexAccounts.seamlessSwitchQuotaBandsEnabled": {
           "type": "boolean",
           "default": false,
           "markdownDescription": "Enable the seamless-switch scheduler for selected accounts. It balances valid 5-hour quota using the configured band size and switches only through the no-reload runtime after active Codex turns reach a safe boundary. This is independent of the upstream Auto Switch feature."
+        },
+        "codexAccounts.seamlessSwitchLowQuotaEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable low-quota and actual-exhaustion triggers for Seamless Switching. When disabled, low quota, structured usage-limit errors, and exhaustion batches never start a new automatic switch; quota-band switching remains independent."
         },
         "codexAccounts.seamlessSwitchQuotaBandSize": {
           "type": "number",
@@ -184,13 +189,13 @@
             5
           ],
           "enumDescriptions": [
-            "Disable low-quota and usage-limit hard switching while keeping quota-band balancing available.",
+            "After exhaustion: keep quota-band balancing. Within one band, switch only when every conversation in the observed active batch actually stops for quota exhaustion, with a six-hour maximum observation window.",
             "Switch at 1% remaining quota or a structured usage-limit signal.",
             "Switch at 3% remaining quota or a structured usage-limit signal.",
             "Switch at 5% remaining quota or a structured usage-limit signal."
           ],
           "default": 3,
-          "markdownDescription": "Unified low-quota switching threshold for Seamless Switching. At or below the selected value, any eligible ChatGPT account (including Free) switches immediately through the no-reload runtime; structured usage-limit signals use the same path. Free sources first prefer a fresh, safe Free peer. The target must remain strictly above this threshold. This immediate interrupt-and-Continue behavior can repeat non-idempotent external side effects. Selecting 0 disables this hard-switch path but leaves quota-band balancing available."
+          "markdownDescription": "Low-quota / exhaustion switching threshold for Seamless Switching. At 1%, 3%, or 5%, any eligible ChatGPT account (including Free) starts a no-reload switch immediately when a usable 5-hour or weekly quota reaches the selected value; structured usage-limit signals use the same path. Free sources first prefer a fresh, safe Free peer, and targets must remain strictly above the threshold. The configured ordinary-turn policy applies to every switch type. Selecting 0 means After exhaustion: ordinary quota-band balancing remains active, while an in-band drop waits until every conversation in the observed active batch actually stops for quota exhaustion, for at most six hours, before starting the switch transaction."
         },
         "codexAccounts.seamlessSwitchGroupAVisible": {
           "type": "boolean",

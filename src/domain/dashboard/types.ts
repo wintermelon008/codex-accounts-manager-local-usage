@@ -26,6 +26,7 @@ export type DashboardSettingKey =
   | "autoSwitchEnabled"
   | "seamlessSwitchEnabled"
   | "seamlessSwitchQuotaBandsEnabled"
+  | "seamlessSwitchLowQuotaEnabled"
   | "seamlessSwitchQuotaBandSize"
   | "seamlessSwitchThreshold"
   | "seamlessSwitchGroupAVisible"
@@ -57,6 +58,7 @@ export interface DashboardSettings {
   hotSwitchEnabled: boolean;
   seamlessSwitchEnabled: boolean;
   seamlessSwitchQuotaBandsEnabled: boolean;
+  seamlessSwitchLowQuotaEnabled: boolean;
   seamlessSwitchQuotaBandSize: SeamlessQuotaBandSize;
   seamlessSwitchThreshold: SeamlessSwitchThreshold;
   seamlessSwitchGroupAVisible: boolean;

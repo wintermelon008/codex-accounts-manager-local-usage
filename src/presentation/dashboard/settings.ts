@@ -35,6 +35,7 @@ export async function handleDashboardSettingUpdate(
     case "autoSwitchEnabled":
     case "seamlessSwitchEnabled":
     case "seamlessSwitchQuotaBandsEnabled":
+    case "seamlessSwitchLowQuotaEnabled":
     case "seamlessSwitchGroupAVisible":
     case "seamlessSwitchGroupBVisible":
     case "seamlessSwitchGroupCVisible":

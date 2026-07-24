@@ -9,7 +9,7 @@ import {
   getSeamlessSwitchThreshold,
   isBackgroundTokenRefreshEnabled,
   isSeamlessSwitchEnabled,
-  isSeamlessSwitchQuotaBandsEnabled
+  isSeamlessSwitchLowQuotaEnabled
 } from "../../infrastructure/config/extensionSettings";
 import type { AccountsRepository } from "../../storage";
 import { shouldRunAccountScheduler } from "./refreshSignature";
@@ -36,12 +36,14 @@ export const SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS = 2_000;
 export const SEAMLESS_USAGE_LIMIT_RETRY_MS = 10_000;
 export const SEAMLESS_USAGE_LIMIT_FAILURE_BACKOFF_MS = 30_000;
 
-type SeamlessUsageLimitRuntime = Pick<CodexHotSwitchRuntime, "isEnabled" | "getStatus" | "getIdentity">;
+type SeamlessUsageLimitRuntime = Pick<CodexHotSwitchRuntime, "isEnabled" | "getStatus" | "getIdentity"> &
+  Partial<Pick<CodexHotSwitchRuntime, "configureUsageLimitObservation">>;
+export type SeamlessUsageLimitTrigger = "runtimeUsageLimit" | "runtimeUsageLimitExhaustion";
 
 export function registerSeamlessUsageLimitMonitor(params: {
   context: vscode.ExtensionContext;
   runtime: SeamlessUsageLimitRuntime;
-  onUsageLimitExceeded: (activeAccountId?: string) => Promise<boolean>;
+  onUsageLimitExceeded: (activeAccountId: string | undefined, trigger: SeamlessUsageLimitTrigger) => Promise<boolean>;
 }): vscode.Disposable {
   let timer: NodeJS.Timeout | undefined;
   let disposed = false;
@@ -49,24 +51,41 @@ export function registerSeamlessUsageLimitMonitor(params: {
   let generation = 0;
   let lastShimPid: number | undefined;
   let lastObservedUsageLimitFailures: number | undefined;
+  let lastUsageLimitExhaustionBatchId: number | undefined;
   let retryPending = false;
   let nextAttemptAt = 0;
   let statusErrorReported = false;
+  let lastUsageLimitObservationEnabled: boolean | undefined;
 
-  const isEnabled = (): boolean => {
+  const shouldObserveUsageLimits = (): boolean => {
     const config = getCodexAccountsConfiguration();
     return (
       params.runtime.isEnabled() &&
       config.get<boolean>(HOT_SWITCH_ENABLED, false) &&
       isSeamlessSwitchEnabled(config) &&
-      isSeamlessSwitchQuotaBandsEnabled(config) &&
-      getSeamlessSwitchThreshold(config) > 0
+      isSeamlessSwitchLowQuotaEnabled(config)
     );
+  };
+
+  const synchronizeUsageLimitObservation = (enabled: boolean): void => {
+    const wasConfigured = lastUsageLimitObservationEnabled !== undefined;
+    if (lastUsageLimitObservationEnabled === enabled) {
+      return;
+    }
+    lastUsageLimitObservationEnabled = enabled;
+    // Preserve an enabled runtime's existing observation across extension-host
+    // activation. Every explicit transition, and an initially disabled mode,
+    // clears the shim-side journal/batch so old exhaustion cannot replay later.
+    if (enabled && !wasConfigured) {
+      return;
+    }
+    void params.runtime.configureUsageLimitObservation?.(enabled).catch(() => undefined);
   };
 
   const resetRuntimeObservation = (): void => {
     lastShimPid = undefined;
     lastObservedUsageLimitFailures = undefined;
+    lastUsageLimitExhaustionBatchId = undefined;
     retryPending = false;
     nextAttemptAt = 0;
     statusErrorReported = false;
@@ -84,8 +103,12 @@ export function registerSeamlessUsageLimitMonitor(params: {
         return;
       }
       statusErrorReported = false;
-      observeUsageLimitStatus(status);
-      if (!status.ready || status.recentUsageLimitedThreads <= 0) {
+      const exhaustionOnly = getSeamlessSwitchThreshold(getCodexAccountsConfiguration()) === 0;
+      observeUsageLimitStatus(status, exhaustionOnly);
+      const hasEligibleUsageSignal = exhaustionOnly
+        ? status.usageLimitExhaustionReady
+        : status.recentUsageLimitedThreads > 0;
+      if (!status.ready || !hasEligibleUsageSignal) {
         retryPending = false;
         return;
       }
@@ -105,7 +128,10 @@ export function registerSeamlessUsageLimitMonitor(params: {
       if (disposed || pollGeneration !== generation) {
         return;
       }
-      const switched = await params.onUsageLimitExceeded(getManagedLocalAccountId(identity));
+      const switched = await params.onUsageLimitExceeded(
+        getManagedLocalAccountId(identity),
+        exhaustionOnly ? "runtimeUsageLimitExhaustion" : "runtimeUsageLimit"
+      );
       retryPending = !switched;
       nextAttemptAt = switched ? 0 : Date.now() + SEAMLESS_USAGE_LIMIT_RETRY_MS;
     } catch (error) {
@@ -120,7 +146,7 @@ export function registerSeamlessUsageLimitMonitor(params: {
     }
   };
 
-  const observeUsageLimitStatus = (status: HotSwitchStatus): void => {
+  const observeUsageLimitStatus = (status: HotSwitchStatus, exhaustionOnly: boolean): void => {
     const runtimeChanged = lastShimPid === undefined || lastShimPid !== status.shimPid;
     const failuresIncreased =
       !runtimeChanged &&
@@ -131,12 +157,18 @@ export function registerSeamlessUsageLimitMonitor(params: {
       lastObservedUsageLimitFailures !== undefined &&
       status.observedUsageLimitFailures < lastObservedUsageLimitFailures;
 
-    if (runtimeChanged || failuresIncreased || failuresReset) {
-      retryPending = status.recentUsageLimitedThreads > 0;
+    const exhaustionBatchChanged =
+      !runtimeChanged &&
+      lastUsageLimitExhaustionBatchId !== undefined &&
+      status.usageLimitExhaustionBatchId !== lastUsageLimitExhaustionBatchId;
+
+    if (runtimeChanged || (exhaustionOnly ? exhaustionBatchChanged : failuresIncreased || failuresReset)) {
+      retryPending = exhaustionOnly ? status.usageLimitExhaustionReady : status.recentUsageLimitedThreads > 0;
       nextAttemptAt = 0;
     }
     lastShimPid = status.shimPid;
     lastObservedUsageLimitFailures = status.observedUsageLimitFailures;
+    lastUsageLimitExhaustionBatchId = status.usageLimitExhaustionBatchId;
   };
 
   const applySchedule = (): void => {
@@ -146,7 +178,9 @@ export function registerSeamlessUsageLimitMonitor(params: {
       timer = undefined;
     }
     resetRuntimeObservation();
-    if (!isEnabled()) {
+    const usageLimitObservationEnabled = shouldObserveUsageLimits();
+    synchronizeUsageLimitObservation(usageLimitObservationEnabled);
+    if (!usageLimitObservationEnabled) {
       return;
     }
 
@@ -163,6 +197,7 @@ export function registerSeamlessUsageLimitMonitor(params: {
       event.affectsConfiguration("codexAccounts.hotSwitchEnabled") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchEnabled") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchQuotaBandsEnabled") ||
+      event.affectsConfiguration("codexAccounts.seamlessSwitchLowQuotaEnabled") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchThreshold") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchGroupAVisible") ||
       event.affectsConfiguration("codexAccounts.seamlessSwitchGroupBVisible") ||
