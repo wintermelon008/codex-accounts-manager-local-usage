@@ -1,0 +1,16 @@
+[Unit]
+Description=Codex Accounts Sub2API private importer
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile={{PRIVATE_ENV_FILE}}
+ExecStart={{NODE_BIN}} {{PACKAGE_ROOT}}/src/cli.cjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

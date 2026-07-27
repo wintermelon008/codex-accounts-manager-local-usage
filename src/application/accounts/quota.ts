@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
+import type { RuntimeSwitchSource } from "./runtimeSwitchCoordinator";
 import { createError } from "../../core";
 import { CodexAccountRecord } from "../../core/types";
 import {
@@ -35,8 +36,7 @@ import {
   getFiveHourQuotaBand,
   isFreePlanType,
   isVerifiedFreeWindowedAccount,
-  selectBalanceCandidate,
-  selectFreeExhaustionCandidate
+  selectBalanceCandidate
 } from "./balanceScheduler";
 
 const AUTO_SWITCH_ENABLED = "autoSwitchEnabled";
@@ -61,7 +61,8 @@ export type RefreshView = {
   markObservedAuthIdentity?: (accountId?: string) => void;
   switchRuntimeAccount?: (
     accountId: string,
-    options?: RuntimeAccountSwitchOptions
+    options?: RuntimeAccountSwitchOptions,
+    source?: RuntimeSwitchSource
   ) => Promise<RuntimeAccountSwitchOutcome>;
 };
 
@@ -387,6 +388,7 @@ async function executeSeamlessBalanceSwitch(params: {
   const switchThreshold = lowQuotaSwitchEnabled ? configuredSwitchThreshold : 0;
   const thresholdEnabled = lowQuotaSwitchEnabled && switchThreshold > 0;
   const afterExhaustionRecoveryEnabled = lowQuotaSwitchEnabled && switchThreshold === 0;
+  const activeIsFree = isFreePlanType(active.planType);
   const activeIsFreeWindowed = isVerifiedFreeWindowedAccount(active, now);
   const hourlyThresholdReached =
     activeCapability === "windowed" &&
@@ -411,39 +413,18 @@ async function executeSeamlessBalanceSwitch(params: {
   }
 
   const lastSelectedAt = getSeamlessSwitchRuntimeSnapshot().lastSelectedAt ?? {};
-  const freeThresholdCandidate =
-    thresholdSwitch && activeIsFreeWindowed
-      ? selectFreeExhaustionCandidate({
-          accounts,
-          activeAccountId: active.id,
-          switchThreshold,
-          lastSelectedAt,
-          now
-        })
-      : undefined;
-  // If no Free peer passed the two-minute/safety checks, do not let the
-  // ordinary 15-minute selector pick a stale Free peer. The required fallback
-  // is the normal mixed pool (for example a Plus/reserve account), not a
-  // second-best Free candidate whose five-hour view may already be obsolete.
-  const normalSelectionAccounts =
-    thresholdSwitch && activeIsFreeWindowed
-      ? accounts.filter(
-          (account) => !account.isHidden && (account.id === active.id || !isFreePlanType(account.planType))
-        )
-      : accounts;
-  const next =
-    freeThresholdCandidate ??
-    selectBalanceCandidate({
-      accounts: normalSelectionAccounts,
-      activeAccountId: active.id,
-      activeBand,
-      quotaBandSize,
-      switchThreshold,
-      thresholdQuota,
-      forceRecoveryMode: thresholdSwitch && runtimeUsageLimit,
-      lastSelectedAt,
-      now
-    });
+  const next = selectBalanceCandidate({
+    accounts,
+    activeAccountId: active.id,
+    activeBand,
+    quotaBandSize,
+    switchThreshold,
+    thresholdQuota,
+    forceRecoveryMode: thresholdSwitch && runtimeUsageLimit,
+    requireFreshFreeCandidates: thresholdSwitch && activeIsFree,
+    lastSelectedAt,
+    now
+  });
   if (!next) {
     return false;
   }
@@ -457,7 +438,6 @@ async function executeSeamlessBalanceSwitch(params: {
     ? view.switchRuntimeAccount?.(next.id, switchOptions)
     : view.switchRuntimeAccount?.(next.id))) ?? { status: "unavailable" as const };
   const reason = formatSeamlessSwitchReason({
-    freeThresholdCandidate,
     switchThreshold,
     thresholdQuota,
     runtimeUsageLimit
@@ -474,6 +454,9 @@ async function executeSeamlessBalanceSwitch(params: {
   }
   if (runtimeOutcome.status === "unavailable") {
     console.warn("[codexAccounts] seamless quota-band switch skipped because the no-reload runtime is unavailable");
+    return false;
+  }
+  if (runtimeOutcome.status === "suppressed") {
     return false;
   }
 
@@ -514,16 +497,10 @@ async function convergeUsageLimitedRuntimeToGlobalAccount(
 }
 
 function formatSeamlessSwitchReason(params: {
-  freeThresholdCandidate?: CodexAccountRecord;
   switchThreshold: number;
   thresholdQuota?: "hourly" | "weekly";
   runtimeUsageLimit: boolean;
 }): string {
-  if (params.freeThresholdCandidate) {
-    return params.runtimeUsageLimit
-      ? "Free usage-limit priority "
-      : `Free ${params.switchThreshold}% threshold priority `;
-  }
   if (params.runtimeUsageLimit) {
     return params.switchThreshold === 0 ? "all-conversations exhaustion recovery " : "usage-limit recovery ";
   }

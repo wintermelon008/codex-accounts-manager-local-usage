@@ -79,7 +79,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
         byThreeHourAndModel: state.localUsage.byThreeHourAndModel
       })
     : "";
-  const sub2apiGatewaySignature = state.sub2apiGateway ? JSON.stringify(state.sub2apiGateway) : "";
+  const integrationsSignature = JSON.stringify(state.integrations ?? []);
 
   return [
     state.lang,
@@ -124,6 +124,6 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     announcementSignature,
     accountSignature,
     localUsageSignature,
-    sub2apiGatewaySignature
+    integrationsSignature
   ].join("||");
 }

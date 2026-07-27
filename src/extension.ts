@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { CodexAccountsIntegrationApi } from "./integrations";
 import { AccountsWorkbench } from "./presentation/workbench/accountsWorkbench";
 
 let workbench: AccountsWorkbench | undefined;
@@ -8,9 +9,10 @@ let workbench: AccountsWorkbench | undefined;
  *
  * @param context - 扩展上下文
  */
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export async function activate(context: vscode.ExtensionContext): Promise<CodexAccountsIntegrationApi> {
   workbench = new AccountsWorkbench(context);
   await workbench.activate();
+  return workbench.getIntegrationApi();
 }
 
 /**

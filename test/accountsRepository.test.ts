@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import type { CodexTokens } from "../src/core/types";
 
-const { writeAuthFileMock, readAuthFileMock } = vi.hoisted(() => ({
+const { writeAuthFileMock, readAuthFileMock, fetchRemoteAccountProfileMock } = vi.hoisted(() => ({
   writeAuthFileMock: vi.fn(),
-  readAuthFileMock: vi.fn()
+  readAuthFileMock: vi.fn(),
+  fetchRemoteAccountProfileMock: vi.fn()
 }));
 
 vi.mock("../src/codex", async (importOriginal) => {
@@ -20,7 +21,7 @@ vi.mock("../src/codex", async (importOriginal) => {
 });
 
 vi.mock("../src/services/profile", () => ({
-  fetchRemoteAccountProfile: vi.fn().mockResolvedValue(undefined)
+  fetchRemoteAccountProfile: fetchRemoteAccountProfileMock
 }));
 
 import { AccountsRepository } from "../src/storage";
@@ -95,6 +96,7 @@ describe("AccountsRepository token persistence", () => {
     process.env.AIDECK_DATA_DIR = path.join(tempDir, "aideck-data");
     writeAuthFileMock.mockReset();
     readAuthFileMock.mockReset().mockResolvedValue(undefined);
+    fetchRemoteAccountProfileMock.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -1166,6 +1168,61 @@ describe("AccountsRepository token persistence", () => {
 
     expect((await repo.getAccount("account-1"))?.quotaSummary?.resetCreditsNextExpiresAt).toBeUndefined();
 
+    repo.dispose();
+  });
+
+  it("quarantines a pool account before a local inbox credential replacement reaches the network", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const repo = new AccountsRepository(context);
+    const originalTokens = createTokens("acct_123", "dev@example.com");
+    const original = await repo.upsertFromTokens(originalTokens);
+    await repo.setBalancePoolMembership(original.id, true);
+
+    let releaseProfileFetch: (() => void) | undefined;
+    fetchRemoteAccountProfileMock.mockReset().mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          releaseProfileFetch = () => resolve(undefined);
+        })
+    );
+    const replacementTokens = {
+      ...originalTokens,
+      refreshToken: "replacement-refresh-token"
+    };
+    const importing = repo.importSharedAccountsForLocalInbox({
+      email: "dev@example.com",
+      account_id: "acct_123",
+      tokens: {
+        id_token: replacementTokens.idToken,
+        access_token: replacementTokens.accessToken,
+        refresh_token: replacementTokens.refreshToken,
+        account_id: "acct_123"
+      }
+    });
+
+    await vi.waitFor(() => expect(fetchRemoteAccountProfileMock).toHaveBeenCalledOnce());
+    expect((await repo.getAccount(original.id))?.balancePoolEnabled).toBe(false);
+    const persisted = JSON.parse(await fs.readFile(path.join(tempDir, "accounts-index.json"), "utf8")) as {
+      accounts: Array<{ id: string; balancePoolEnabled?: boolean }>;
+    };
+    expect(persisted.accounts.find((account) => account.id === original.id)?.balancePoolEnabled).toBe(false);
+
+    releaseProfileFetch?.();
+    await expect(importing).resolves.toMatchObject([{ id: original.id, balancePoolEnabled: false }]);
     repo.dispose();
   });
 

@@ -15,7 +15,7 @@ import { getQuotaIssueKind } from "../../utils/quotaIssue";
 import { getTokenAutomationSnapshot } from "../../presentation/workbench/tokenAutomationState";
 import { getAutoSwitchRuntimeSnapshot } from "../../presentation/workbench/autoSwitchState";
 import { getAccountAutomationState, isHealthDismissed, resolveAccountHealth } from "../accounts/health";
-import { getSub2ApiGatewayController } from "../../local/sub2apiGateway/registry";
+import { getActiveManagerIntegrationHost } from "../../integrations";
 
 export async function buildDashboardState(
   repo: AccountsRepository,
@@ -35,7 +35,7 @@ export async function buildDashboardState(
   const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
   const tokenAutomation = getTokenAutomationSnapshot();
   const autoSwitchRuntime = getAutoSwitchRuntimeSnapshot();
-  const sub2apiGateway = getSub2ApiGatewayController()?.getViewModel();
+  const integrations = getActiveManagerIntegrationHost()?.getDashboardIntegrations();
   const indexHealth = await repo.getIndexHealthSummary();
   const accounts = await repo.listAccounts();
   const tokenEntries = await Promise.all(
@@ -78,7 +78,7 @@ export async function buildDashboardState(
     announcements,
     indexHealth,
     localUsage,
-    sub2apiGateway,
+    integrations,
     accounts: sortedAccounts.map((account) =>
       mapAccount(
         account,

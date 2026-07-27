@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAccountsRepositoryState } from "../src/storage/accountsRepositoryState";
 import {
   assertWriteAllowed,
+  disposeWriteCoordinator,
   markPendingSave,
   mergeAccountsIndexChanges,
   readPendingOrCachedIndex,
@@ -115,6 +116,51 @@ describe("accountsWriteCoordinator helpers", () => {
       const afterExpiry = await tryAcquireSharedFileLease(lockPath, 1_000, 100);
       expect(afterExpiry).toBeDefined();
       await afterExpiry?.release();
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("defers a final dispose write when an in-process async writer still owns the shared lock", async () => {
+    const state = createAccountsRepositoryState();
+    state.isDirty = true;
+    state.pendingSave = {
+      accounts: [{ id: "account-a", email: "a@example.invalid", createdAt: 1, updatedAt: 1 }]
+    };
+    state.pendingSaveBase = { accounts: [] };
+    const persistAsync = vi.fn(async (index) => index);
+
+    expect(() =>
+      disposeWriteCoordinator(
+        state,
+        () => {
+          const busy = new Error("The shared accounts index write lock is busy");
+          throw Object.assign(new Error("Failed to write to index"), { cause: busy });
+        },
+        persistAsync
+      )
+    ).not.toThrow();
+
+    await vi.waitFor(() => expect(persistAsync).toHaveBeenCalledOnce());
+    expect(state.isDirty).toBe(false);
+    expect(state.pendingSave).toBeNull();
+  });
+
+  it("renews a lease only while its recorded owner is still valid", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "codex-accounts-renewable-lease-test-"));
+    const lockPath = path.join(directory, "shared.lease");
+    try {
+      const first = await tryAcquireSharedFileLease(lockPath, 1_000);
+      expect(first).toBeDefined();
+
+      expect(await first?.renew(1_000)).toBe(true);
+      const owner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8")) as {
+        expiresAt?: number;
+      };
+      expect(owner.expiresAt).toBeGreaterThan(Date.now());
+
+      await first?.release();
+      expect(await first?.renew(1_000)).toBe(false);
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
     }

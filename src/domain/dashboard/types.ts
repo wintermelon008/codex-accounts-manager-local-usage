@@ -500,98 +500,39 @@ export interface DashboardLocalUsageViewModel {
 }
 
 /**
- * A local, opt-in Sub2API transport. It is deliberately not a
- * DashboardAccountViewModel: it has no OAuth identity, no ChatGPT quota
- * windows, and never participates in the OAuth seamless-switch scheduler.
+ * A provider-neutral card contributed by an explicitly installed Manager
+ * integration. The core renders only this sanitized presentation model and
+ * forwards declared actions back to the registered integration.
  */
-export interface DashboardSub2ApiGatewayViewModel {
-  displayName: string;
-  configFile: string;
-  baseUrl?: string;
-  model?: string;
-  credentialRef?: string;
-  credentialPresent: boolean;
-  isActive: boolean;
-  status: "configuration_required" | "configuration_error" | "credential_required" | "ready" | "active" | "degraded";
-  statusMessage: string;
-  health?: {
-    checkedAt: number;
-    status: "healthy" | "failed";
-    exposedModelCount?: number;
-    message?: string;
-  };
-  usage: {
-    /**
-     * This is adapter-observed traffic only.  It deliberately has a distinct
-     * shape and storage path from OAuth account-window token attribution.
-     */
-    today: {
-      date: string;
-      inputTokens: number;
-      outputTokens: number;
-      cachedInputTokens: number;
-      reasoningTokens: number;
-      totalTokens: number;
-      observedSince?: number;
-    };
-    /**
-     * Token consumption in rolling local observation windows.  These are a
-     * transparent fallback when an upstream quota window cannot be read; they
-     * are not percentages and do not imply an upstream allowance.
-     */
-    windows: {
-      fiveHour: DashboardSub2ApiGatewayTokenTotals;
-      sevenDay: DashboardSub2ApiGatewayTokenTotals;
-    };
-    requestCount: number;
-    successfulRequestCount: number;
-    failedRequestCount: number;
-    lastRequestAt?: number;
-    observedAt?: number;
-    lastFailure?: {
-      at: number;
-      origin: "adapter" | "sub2api";
-      statusCode?: number;
-      transportCode?: string;
-      requestMethod?: string;
-      requestPath?: string;
-      contentLength?: number;
-      transferEncoding?: "chunked";
-    };
-  };
-  inventory: {
-    configured: boolean;
-    credentialPresent: boolean;
-    status: "not_configured" | "credential_required" | "ready" | "healthy" | "failed";
-    group?: string;
-    checkedAt?: number;
-    message?: string;
-    eligibleAccountCount?: number;
-    observedAccountCount?: number;
-    fiveHour?: DashboardSub2ApiGatewayQuotaPool;
-    weekly?: DashboardSub2ApiGatewayQuotaPool;
-  };
+export interface DashboardIntegrationViewModel {
+  id: string;
+  title: string;
+  status: "inactive" | "ready" | "active" | "warning" | "error";
+  statusMessage?: string;
+  description?: string;
+  details?: DashboardIntegrationDetail[];
+  metrics?: DashboardIntegrationMetric[];
+  actions: DashboardIntegrationAction[];
 }
 
-export interface DashboardSub2ApiGatewayTokenTotals {
-  inputTokens: number;
-  outputTokens: number;
-  cachedInputTokens: number;
-  reasoningTokens: number;
-  totalTokens: number;
-  observedSince?: number;
+export interface DashboardIntegrationDetail {
+  label: string;
+  value: string;
+  emphasis?: "normal" | "positive" | "warning" | "error";
 }
 
-/**
- * A capacity-weighted aggregate of independent upstream windows.  It is not
- * an OAuth account quota and never becomes an auto-switch input.
- */
-export interface DashboardSub2ApiGatewayQuotaPool {
-  accountCount: number;
-  remainingUnits: number;
-  capacityUnits: number;
-  remainingPercent: number;
-  earliestResetAt?: number;
+export interface DashboardIntegrationMetric {
+  label: string;
+  value: string;
+  description?: string;
+}
+
+export interface DashboardIntegrationAction {
+  id: string;
+  label: string;
+  enabled?: boolean;
+  tooltip?: string;
+  tone?: "primary" | "default" | "danger";
 }
 
 export type DashboardBatchResultKind =
@@ -628,7 +569,7 @@ export interface DashboardState {
   indexHealth: CodexIndexHealthSummary;
   accounts: DashboardAccountViewModel[];
   localUsage?: DashboardLocalUsageViewModel;
-  sub2apiGateway?: DashboardSub2ApiGatewayViewModel;
+  integrations?: DashboardIntegrationViewModel[];
 }
 
 export type DashboardActionName =
@@ -663,12 +604,7 @@ export type DashboardActionName =
   | "batchRemove"
   | "refreshView"
   | "refreshLocalUsage"
-  | "sub2apiGatewayActivate"
-  | "sub2apiGatewayDeactivate"
-  | "sub2apiGatewayRefresh"
-  | "sub2apiGatewayConfigureCredential"
-  | "sub2apiGatewayConfigureObserverCredential"
-  | "sub2apiGatewayOpenConfig"
+  | "integrationAction"
   | "reloadPrompt"
   | "reauthorize"
   | "resyncProfile"
@@ -704,6 +640,8 @@ export interface DashboardActionPayload {
   lockMinutes?: number;
   announcementId?: string;
   privacyMode?: boolean;
+  integrationId?: string;
+  integrationActionId?: string;
 }
 
 export interface DashboardActionResultPayload {

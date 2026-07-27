@@ -8,6 +8,7 @@ import {
   selectManagedAccountForRefresh,
   selectManagedAccountForUsageAttribution
 } from "../src/codex/hotSwitchRuntime";
+import { HotSwitchOperationUncertainError } from "../src/codex/hotSwitchBridge";
 import {
   clearCurrentWindowRuntimeAccountIfMatches,
   getCurrentWindowRuntimeAccountId,
@@ -314,7 +315,8 @@ describe("Codex hot-switch runtime setup", () => {
       {} as vscode.ExtensionContext,
       {
         getAccount: vi.fn(async (id: string) => (id === targetAccount.id ? targetAccount : undefined)),
-        getTokens: vi.fn(async (id: string) => (id === targetAccount.id ? targetTokens : undefined))
+        getTokens: vi.fn(async (id: string) => (id === targetAccount.id ? targetTokens : undefined)),
+        syncActiveAccountFromAuthFile: vi.fn(async () => undefined)
       } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
     );
     (
@@ -346,6 +348,23 @@ describe("Codex hot-switch runtime setup", () => {
     );
     expect(switchAccount.mock.calls[0]?.[0]).not.toHaveProperty("previousLocalAccountId");
     expect(writeAuthFile).not.toHaveBeenCalled();
+
+    switchAccount.mockRejectedValueOnce(
+      new HotSwitchOperationUncertainError("runtime/switch", "the control request timed out", "operation-uncertain")
+    );
+    await expect(runtime.switchAccount(targetAccount.id)).rejects.toThrow("outcome is uncertain");
+    const rollbackContextId = switchAccount.mock.calls[1]?.[0]?.rollbackContextId;
+    expect(rollbackContextId).toEqual(expect.any(String));
+    const runtimeInternals = runtime as unknown as {
+      unmanagedRollbackSnapshots: Map<string, unknown>;
+      restoreUnmanagedAccount(rollbackContextId: string): Promise<void>;
+    };
+    expect(runtimeInternals.unmanagedRollbackSnapshots.has(rollbackContextId)).toBe(true);
+    await runtimeInternals.restoreUnmanagedAccount(rollbackContextId);
+    expect(writeAuthFile).toHaveBeenCalledWith(
+      expect.objectContaining({ accessToken: previousAccessToken, accountId: "workspace-previous" })
+    );
+    expect(runtimeInternals.unmanagedRollbackSnapshots.has(rollbackContextId)).toBe(false);
   });
 
   it("carries a validated auth.json rollback snapshot into a Gateway fallback", async () => {
@@ -401,10 +420,10 @@ describe("Codex hot-switch runtime setup", () => {
     };
     const globalState = new Map<string, unknown>([
       [
-        "sub2apiGateway.runtimeConfig",
+        "gateway.runtimeConfig",
         {
           config: {
-            displayName: "Sub2API Gateway",
+            displayName: "Gateway",
             baseUrl: "http://127.0.0.1:65432/v1",
             model: "gpt-5.5",
             autoFallbackToChatGpt: true
@@ -456,7 +475,7 @@ describe("Codex hot-switch runtime setup", () => {
       fallbackToChatGpt
     };
 
-    await expect(runtime.fallbackSub2ApiGatewayToChatGpt(target.id)).resolves.toMatchObject({ status: "switched" });
+    await expect(runtime.fallbackGatewayToChatGpt(target.id)).resolves.toMatchObject({ status: "switched" });
     expect(fallbackToChatGpt).toHaveBeenCalledWith(
       expect.objectContaining({
         localAccountId: target.id,
@@ -468,7 +487,7 @@ describe("Codex hot-switch runtime setup", () => {
       })
     );
     expect(fallbackToChatGpt.mock.calls[0]?.[0]).not.toHaveProperty("previousLocalAccountId");
-    expect(globalState.get("sub2apiGateway.runtimeConfig")).toMatchObject({ active: false });
+    expect(globalState.get("gateway.runtimeConfig")).toMatchObject({ active: false });
   });
 
   it("clears only the deleted account from the window runtime baseline", () => {

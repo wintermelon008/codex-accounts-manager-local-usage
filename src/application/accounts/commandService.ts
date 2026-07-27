@@ -224,7 +224,9 @@ export class AccountsCommandService {
     const runtimeOutcome = await this.withProgress<RuntimeAccountSwitchOutcome>(
       copy.progressSwitch(account.email),
       async () => {
-        const outcome = (await this.view.switchRuntimeAccount?.(account.id)) ?? { status: "unavailable" as const };
+        const outcome = (await this.view.switchRuntimeAccount?.(account.id, undefined, "manual")) ?? {
+          status: "unavailable" as const
+        };
         if (outcome.status === "unavailable") {
           await this.repo.switchAccount(account.id);
         }
@@ -240,6 +242,12 @@ export class AccountsCommandService {
     }
     if (runtimeOutcome.status === "failed") {
       void vscode.window.showWarningMessage(`Codex account switch was not applied: ${runtimeOutcome.message}`);
+      return;
+    }
+    if (runtimeOutcome.status === "suppressed") {
+      void vscode.window.showInformationMessage(
+        "Codex account switch is waiting for the current runtime transaction to finish."
+      );
       return;
     }
 

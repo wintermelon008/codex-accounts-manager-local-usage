@@ -15,6 +15,7 @@ test/**
 **/*.map
 
 scripts/**
+integrations/**
 coverage/**
 tsconfig.json
 tsconfig.webview.json

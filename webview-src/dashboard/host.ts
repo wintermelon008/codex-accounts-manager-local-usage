@@ -28,7 +28,8 @@ export const BLOCKING_GLOBAL_ACTIONS = new Set<DashboardActionName>([
   "restoreFromBackup",
   "restoreFromAuthJson",
   "importSharedJson",
-  "downloadJsonFile"
+  "downloadJsonFile",
+  "integrationAction"
 ]);
 
 let actionRequestSequence = 0;

@@ -27,7 +27,9 @@ const RECENT_USAGE_LIMITED_THREAD_TTL_MS = USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS;
 const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
-const RUNTIME_PROTOCOL_VERSION = 8;
+const RUNTIME_PROTOCOL_VERSION = 10;
+const MAX_RECENT_SWITCH_OPERATIONS = 64;
+const SWITCH_OPERATION_TTL_MS = 10 * 60 * 1000;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
 const SEAMLESS_HTTP_PROVIDER_CONFIG =
   `model_providers.${SEAMLESS_HTTP_PROVIDER_ID}={ name="OpenAI", wire_api="responses", ` +
@@ -35,11 +37,11 @@ const SEAMLESS_HTTP_PROVIDER_CONFIG =
 // Local .37 Gateway threads were created under this provider ID. Keep it as
 // an internal alias so those threads resume through the currently selected
 // transport, without making it the provider for new threads.
-const LEGACY_SUB2API_PROVIDER_ID = "codex-accounts-sub2api";
-const LEGACY_SUB2API_PROVIDER_CONFIG =
-  `model_providers.${LEGACY_SUB2API_PROVIDER_ID}={ name="OpenAI", wire_api="responses", ` +
+const LEGACY_GATEWAY_PROVIDER_ID = "codex-accounts-gateway";
+const LEGACY_GATEWAY_PROVIDER_CONFIG =
+  `model_providers.${LEGACY_GATEWAY_PROVIDER_ID}={ name="OpenAI", wire_api="responses", ` +
   "requires_openai_auth=true, supports_websockets=false }";
-const SUB2API_ADAPTER_ENV_KEY = "CODEX_ACCOUNTS_SUB2API_ADAPTER_TOKEN";
+const GATEWAY_ADAPTER_ENV_KEY = "CODEX_ACCOUNTS_GATEWAY_ADAPTER_TOKEN";
 const MAX_GATEWAY_API_KEY_LENGTH = 4_096;
 // The adapter starts before the VS Code extension host reconnects and passes
 // the SecretStorage key over its local control socket. Hold a valid early
@@ -47,8 +49,8 @@ const MAX_GATEWAY_API_KEY_LENGTH = 4_096;
 const GATEWAY_CREDENTIAL_WAIT_TIMEOUT_MS = 15_000;
 const MAX_GATEWAY_USAGE_LINE_BYTES = 256 * 1024;
 const MAX_GATEWAY_JSON_USAGE_BYTES = 1024 * 1024;
-const GATEWAY_DIAGNOSTIC_SCHEMA = "codex-accounts-sub2api-gateway-diagnostic/v1";
-const GATEWAY_DIAGNOSTIC_PATH = path.join(path.dirname(CONFIG_PATH), "sub2api-gateway-last-failure.json");
+const GATEWAY_DIAGNOSTIC_SCHEMA = "codex-accounts-gateway-diagnostic/v1";
+const GATEWAY_DIAGNOSTIC_PATH = path.join(path.dirname(CONFIG_PATH), "gateway-last-failure.json");
 const MAX_GATEWAY_DIAGNOSTIC_CONTENT_LENGTH = 512 * 1024 * 1024;
 const MAX_GATEWAY_QUOTA_ERROR_BODY_BYTES = 64 * 1024;
 const CHATGPT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
@@ -57,7 +59,7 @@ const runtimeConfig = process.env.CODEX_ACCOUNTS_REAL_CLI ? {} : readRuntimeConf
 const realCliPath = process.env.CODEX_ACCOUNTS_REAL_CLI || runtimeConfig.realCliPath;
 const forceHttpTransport = runtimeConfig.forceHttpTransport !== false;
 const usageAttributionDirectory = resolveUsageAttributionDirectory(runtimeConfig);
-const sub2apiGatewayConfig = resolveSub2ApiGatewayConfig(runtimeConfig);
+const gatewayConfig = resolveGatewayConfig(runtimeConfig);
 
 if (!realCliPath || !path.isAbsolute(realCliPath)) {
   failStartup("The real Codex CLI path is missing from the hot-switch runtime configuration");
@@ -93,6 +95,7 @@ let socketPath;
 const deferredOfficialLines = [];
 const pendingInternalRequests = new Map();
 const pendingControlRequests = new Map();
+const recentSwitchOperations = new Map();
 const submittedTurnStarts = new Map();
 const activeTurns = new Map();
 const terminalTurnIds = new Set();
@@ -123,16 +126,16 @@ process.on("exit", () => {
 
 async function startRuntime() {
   try {
-    if (sub2apiGatewayConfig && process.argv.includes("app-server")) {
-      gatewayAdapter = await startSub2ApiGatewayAdapter(sub2apiGatewayConfig);
+    if (gatewayConfig && process.argv.includes("app-server")) {
+      gatewayAdapter = await startGatewayAdapter(gatewayConfig);
     }
     const childEnv = { ...process.env };
     if (gatewayAdapter) {
-      if (!sub2apiGatewayConfig.autoFallbackToChatGpt) {
-        childEnv[SUB2API_ADAPTER_ENV_KEY] = gatewayAdapter.token;
+      if (!gatewayConfig.autoFallbackToChatGpt) {
+        childEnv[GATEWAY_ADAPTER_ENV_KEY] = gatewayAdapter.token;
       }
       configureGatewayLoopbackProxyBypass(childEnv);
-      safeLog("Sub2API Gateway loopback proxy bypass configured");
+      safeLog("Gateway loopback proxy bypass configured");
     }
     child = spawn(realCliPath, buildRealCliArgs(process.argv.slice(2)), {
       env: childEnv,
@@ -370,6 +373,7 @@ function startControlServer() {
         pendingSwitch = undefined;
         request.canceled = true;
         clearSwitchGraceTimer(request);
+        recordSwitchOperationFailure(request.operationId, "Manager disconnected before account switch login");
         void recoverPausedGoals(request).catch((error) => {
           safeLog(`failed to resume paused goals after manager disconnect: ${safeErrorMessage(error)}`);
         });
@@ -432,6 +436,16 @@ function handleControlLine(socket, line) {
     return;
   }
 
+  if (message.method === "runtime/operation/status") {
+    const operationId = message.params && message.params.operationId;
+    if (!isValidSwitchOperationId(operationId)) {
+      sendControlError(socket, message.id, "Invalid account switch operation identifier");
+      return;
+    }
+    sendControlResult(socket, message.id, getSwitchOperationStatus(operationId));
+    return;
+  }
+
   if (message.method === "runtime/identity") {
     void readRuntimeIdentity().then(
       (identity) => sendControlResult(socket, message.id, identity),
@@ -459,7 +473,7 @@ function handleControlLine(socket, line) {
 
   if (message.method === "gateway/configure") {
     try {
-      sendControlResult(socket, message.id, configureSub2ApiGatewayAdapter(message.params));
+      sendControlResult(socket, message.id, configureGatewayAdapter(message.params));
     } catch (error) {
       sendControlError(socket, message.id, safeErrorMessage(error));
     }
@@ -468,7 +482,7 @@ function handleControlLine(socket, line) {
 
   if (message.method === "gateway/activate") {
     try {
-      sendControlResult(socket, message.id, activateSub2ApiGatewayAdapter());
+      sendControlResult(socket, message.id, activateGatewayAdapter());
     } catch (error) {
       sendControlError(socket, message.id, safeErrorMessage(error));
     }
@@ -476,7 +490,7 @@ function handleControlLine(socket, line) {
   }
 
   if (message.method === "gateway/status") {
-    sendControlResult(socket, message.id, getSub2ApiGatewayAdapterStatus());
+    sendControlResult(socket, message.id, getGatewayAdapterStatus());
     return;
   }
 
@@ -500,6 +514,7 @@ function handleControlLine(socket, line) {
       pendingSwitch = undefined;
       request.canceled = true;
       clearSwitchGraceTimer(request);
+      recordSwitchOperationFailure(request.operationId, "Account switch canceled before login");
       void recoverPausedGoals(request).catch((error) => {
         safeLog(`failed to resume paused goals after switch cancellation: ${safeErrorMessage(error)}`);
       });
@@ -520,18 +535,30 @@ function queueRuntimeSwitch(socket, id, params) {
 }
 
 function queueGatewayFallback(socket, id, params) {
-  if (!sub2apiGatewayConfig?.autoFallbackToChatGpt || !gatewayAdapter || gatewayAdapter.route !== "sub2api") {
-    sendControlError(socket, id, "The Sub2API Gateway fallback route is not active");
+  if (!gatewayConfig?.autoFallbackToChatGpt || !gatewayAdapter || gatewayAdapter.route !== "gateway") {
+    sendControlError(socket, id, "The Gateway fallback route is not active");
     return;
   }
   if (!isValidGatewayFallbackParams(params)) {
-    sendControlError(socket, id, "Invalid Sub2API Gateway fallback parameters");
+    sendControlError(socket, id, "Invalid Gateway fallback parameters");
     return;
   }
   queueRuntimeSwitchRequest(socket, id, params, true);
 }
 
 function queueRuntimeSwitchRequest(socket, id, params, gatewayFallback) {
+  const operationId = readSwitchOperationId(params) || `request:${requestIdKey(id)}`;
+  const existingOperation = recentSwitchOperations.get(operationId);
+  if (existingOperation) {
+    if (existingOperation.state === "succeeded") {
+      sendControlResult(socket, id, existingOperation.result);
+    } else if (existingOperation.state === "failed") {
+      sendControlError(socket, id, existingOperation.message);
+    } else {
+      sendControlError(socket, id, "This account switch operation is already in progress");
+    }
+    return;
+  }
   if (pendingSwitch || switching || goalPreparationCount > 0 || goalRecoveryCount > 0) {
     sendControlError(socket, id, "Another account switch is already pending");
     return;
@@ -540,6 +567,7 @@ function queueRuntimeSwitchRequest(socket, id, params, gatewayFallback) {
   const request = {
     socket,
     id,
+    operationId,
     params,
     gatewayFallback,
     canceled: false,
@@ -556,6 +584,7 @@ function queueRuntimeSwitchRequest(socket, id, params, gatewayFallback) {
     recoveryThreadIds: new Set(),
     recoveryPromise: undefined
   };
+  recordSwitchOperationPending(operationId);
   pendingSwitch = request;
   goalPreparationCount += 1;
   void prepareGoalsForSwitch(request).finally(() => {
@@ -580,6 +609,7 @@ async function drainPendingSwitch() {
   const request = pendingSwitch;
   pendingSwitch = undefined;
   clearSwitchGraceTimer(request);
+  recordSwitchOperationSwitching(request.operationId);
   switching = true;
   let loginApplied = false;
   let localAccountActivationAttempted = false;
@@ -624,20 +654,22 @@ async function drainPendingSwitch() {
     // prompt the scheduler to repeat the same switch.
     resetUsageLimitExhaustionObservation();
 
-    sendControlResult(request.socket, request.id, {
+    const result = {
       status: "switched",
       accountId: request.params.accountId,
       email: actualEmail,
       activeTurns: getActiveTurnCount(),
       interruptedTurns: request.interruptedTurnCount,
       continuedThreads
-    });
+    };
+    recordSwitchOperationSuccess(request.operationId, result);
+    sendControlResult(request.socket, request.id, result);
   } catch (error) {
     let message = safeErrorMessage(error);
     if (request.gatewayFallback) {
       if (gatewayRouteActivated) {
         try {
-          restoreSub2ApiGatewayRoute();
+          restoreGatewayRoute();
         } catch (routeError) {
           message = `${message}; Gateway route restore failed: ${safeErrorMessage(routeError)}`;
         }
@@ -670,6 +702,7 @@ async function drainPendingSwitch() {
     } catch (resumeError) {
       message = `${message}; goal resume failed: ${safeErrorMessage(resumeError)}`;
     }
+    recordSwitchOperationFailure(request.operationId, message);
     sendControlError(request.socket, request.id, message);
   } finally {
     switching = false;
@@ -730,6 +763,7 @@ async function prepareGoalsForSwitch(request) {
     } catch (resumeError) {
       message = `${message}; goal resume failed: ${safeErrorMessage(resumeError)}`;
     }
+    recordSwitchOperationFailure(request.operationId, message);
     sendControlError(request.socket, request.id, message);
   }
 }
@@ -832,17 +866,17 @@ async function deferPendingSwitch(request, reason) {
   clearSwitchGraceTimer(request);
   try {
     await recoverPausedGoals(request);
-    sendControlResult(request.socket, request.id, {
+    const result = {
       status: "deferred",
       reason,
       activeTurns: getActiveTurnCount()
-    });
+    };
+    recordSwitchOperationSuccess(request.operationId, result);
+    sendControlResult(request.socket, request.id, result);
   } catch (error) {
-    sendControlError(
-      request.socket,
-      request.id,
-      `Account switch was deferred and a paused goal could not be resumed: ${safeErrorMessage(error)}`
-    );
+    const message = `Account switch was deferred and a paused goal could not be resumed: ${safeErrorMessage(error)}`;
+    recordSwitchOperationFailure(request.operationId, message);
+    sendControlError(request.socket, request.id, message);
   }
 }
 
@@ -1071,10 +1105,10 @@ function runtimeStatus() {
     httpTransportForced: forceHttpTransport,
     transportMode: forceHttpTransport ? "http" : "default",
     providerKind:
-      sub2apiGatewayConfig && gatewayRoute === "sub2api" ? "sub2api" : forceHttpTransport ? "chatgpt" : "default",
-    sub2apiGatewayActive: gatewayRoute === "sub2api",
-    sub2apiGatewayConfigured: Boolean(sub2apiGatewayConfig),
-    sub2apiGatewayAutoFallbackEnabled: Boolean(sub2apiGatewayConfig?.autoFallbackToChatGpt),
+      gatewayConfig && gatewayRoute === "gateway" ? "gateway" : forceHttpTransport ? "chatgpt" : "default",
+    gatewayActive: gatewayRoute === "gateway",
+    gatewayConfigured: Boolean(gatewayConfig),
+    gatewayAutoFallbackEnabled: Boolean(gatewayConfig?.autoFallbackToChatGpt),
     usageLimitObservationEnabled,
     recentUsageLimitedThreads: getRecentUsageLimitedThreadIds().size,
     usageLimitExhaustionReady: usageLimitExhaustionBatch?.ready === true,
@@ -1085,6 +1119,62 @@ function runtimeStatus() {
     shimPid: process.pid,
     appServerPid: child?.pid || null
   };
+}
+
+function getSwitchOperationStatus(operationId) {
+  pruneSwitchOperations();
+  const operation = recentSwitchOperations.get(operationId);
+  if (!operation) {
+    return { operationId, state: "unknown" };
+  }
+  if (operation.state === "succeeded") {
+    return { operationId, state: "succeeded", result: operation.result };
+  }
+  if (operation.state === "failed") {
+    return { operationId, state: "failed", message: operation.message };
+  }
+  return { operationId, state: operation.state };
+}
+
+function recordSwitchOperationPending(operationId) {
+  recordSwitchOperation(operationId, { state: "pending" });
+}
+
+function recordSwitchOperationSwitching(operationId) {
+  recordSwitchOperation(operationId, { state: "switching" });
+}
+
+function recordSwitchOperationSuccess(operationId, result) {
+  recordSwitchOperation(operationId, { state: "succeeded", result });
+}
+
+function recordSwitchOperationFailure(operationId, message) {
+  recordSwitchOperation(operationId, { state: "failed", message });
+}
+
+function recordSwitchOperation(operationId, record) {
+  if (!isValidSwitchOperationId(operationId)) {
+    return;
+  }
+  pruneSwitchOperations();
+  recentSwitchOperations.delete(operationId);
+  recentSwitchOperations.set(operationId, { ...record, updatedAt: Date.now() });
+  while (recentSwitchOperations.size > MAX_RECENT_SWITCH_OPERATIONS) {
+    const oldestOperationId = recentSwitchOperations.keys().next().value;
+    if (oldestOperationId === undefined) {
+      return;
+    }
+    recentSwitchOperations.delete(oldestOperationId);
+  }
+}
+
+function pruneSwitchOperations() {
+  const cutoff = Date.now() - SWITCH_OPERATION_TTL_MS;
+  for (const [operationId, operation] of recentSwitchOperations) {
+    if (operation.updatedAt < cutoff) {
+      recentSwitchOperations.delete(operationId);
+    }
+  }
 }
 
 async function readRuntimeIdentity() {
@@ -1213,7 +1303,9 @@ function rejectPendingRequests(error) {
   pendingControlRequests.clear();
   if (pendingSwitch) {
     clearSwitchGraceTimer(pendingSwitch);
-    sendControlError(pendingSwitch.socket, pendingSwitch.id, safeErrorMessage(error));
+    const message = safeErrorMessage(error);
+    recordSwitchOperationFailure(pendingSwitch.operationId, message);
+    sendControlError(pendingSwitch.socket, pendingSwitch.id, message);
     pendingSwitch = undefined;
   }
 }
@@ -1262,6 +1354,7 @@ function isValidSwitchParams(params) {
     params.gracePeriodMs <= 300_000 &&
     (params.recoverRecentUsageLimitedTurns === undefined ||
       typeof params.recoverRecentUsageLimitedTurns === "boolean") &&
+    (params.operationId === undefined || isValidSwitchOperationId(params.operationId)) &&
     (params.longTurnPolicy === "defer" ||
       params.longTurnPolicy === "interrupt" ||
       params.longTurnPolicy === "interruptAndContinue")
@@ -1299,9 +1392,23 @@ function isValidGatewayFallbackParams(params) {
     Number.isInteger(params.gracePeriodMs) &&
     params.gracePeriodMs >= 0 &&
     params.gracePeriodMs <= 300_000 &&
+    (params.operationId === undefined || isValidSwitchOperationId(params.operationId)) &&
     (params.longTurnPolicy === "defer" ||
       params.longTurnPolicy === "interrupt" ||
       params.longTurnPolicy === "interruptAndContinue")
+  );
+}
+
+function readSwitchOperationId(params) {
+  return isValidSwitchOperationId(params?.operationId) ? params.operationId : undefined;
+}
+
+function isValidSwitchOperationId(operationId) {
+  return (
+    typeof operationId === "string" &&
+    operationId.length > 0 &&
+    operationId.length <= 128 &&
+    /^[A-Za-z0-9._:-]+$/u.test(operationId)
   );
 }
 
@@ -1783,12 +1890,12 @@ function buildRealCliArgs(args) {
   if (appServerIndex < 0) {
     return args;
   }
-  if (sub2apiGatewayConfig) {
+  if (gatewayConfig) {
     if (!gatewayAdapter) {
-      failStartup("The Sub2API Gateway adapter was not initialized");
+      failStartup("The Gateway adapter was not initialized");
     }
     const providerConfig = buildGatewayProviderConfig(SEAMLESS_HTTP_PROVIDER_ID);
-    const legacyProviderConfig = buildGatewayProviderConfig(LEGACY_SUB2API_PROVIDER_ID);
+    const legacyProviderConfig = buildGatewayProviderConfig(LEGACY_GATEWAY_PROVIDER_ID);
     return [
       ...args.slice(0, appServerIndex + 1),
       "-c",
@@ -1797,7 +1904,7 @@ function buildRealCliArgs(args) {
       // changing only the transport endpoint must not split their history.
       `model_provider="${SEAMLESS_HTTP_PROVIDER_ID}"`,
       "-c",
-      `model=${tomlString(sub2apiGatewayConfig.model)}`,
+      `model=${tomlString(gatewayConfig.model)}`,
       "-c",
       providerConfig,
       "-c",
@@ -1812,13 +1919,13 @@ function buildRealCliArgs(args) {
     "-c",
     SEAMLESS_HTTP_PROVIDER_CONFIG,
     "-c",
-    LEGACY_SUB2API_PROVIDER_CONFIG,
+    LEGACY_GATEWAY_PROVIDER_CONFIG,
     ...args.slice(appServerIndex + 1)
   ];
 }
 
 function buildGatewayProviderConfig(providerId) {
-  if (sub2apiGatewayConfig.autoFallbackToChatGpt) {
+  if (gatewayConfig.autoFallbackToChatGpt) {
     return (
       `model_providers.${providerId}={ name="OpenAI", ` +
       `base_url=${tomlString(gatewayAdapter.baseUrl)}, wire_api="responses", ` +
@@ -1826,8 +1933,8 @@ function buildGatewayProviderConfig(providerId) {
     );
   }
   return (
-    `model_providers.${providerId}={ name=${tomlString(sub2apiGatewayConfig.displayName)}, ` +
-    `base_url=${tomlString(gatewayAdapter.baseUrl)}, env_key="${SUB2API_ADAPTER_ENV_KEY}", ` +
+    `model_providers.${providerId}={ name=${tomlString(gatewayConfig.displayName)}, ` +
+    `base_url=${tomlString(gatewayAdapter.baseUrl)}, env_key="${GATEWAY_ADAPTER_ENV_KEY}", ` +
     'wire_api="responses", requires_openai_auth=false, supports_websockets=false }'
   );
 }
@@ -1857,32 +1964,32 @@ function configureGatewayLoopbackProxyBypass(environment) {
   environment.no_proxy = value;
 }
 
-function resolveSub2ApiGatewayConfig(config) {
-  const gateway = config && config.sub2apiGateway;
+function resolveGatewayConfig(config) {
+  const gateway = config && config.gateway;
   if (gateway === undefined || gateway === null) {
     return undefined;
   }
   if (!gateway || typeof gateway !== "object" || Array.isArray(gateway)) {
-    failStartup("The Sub2API Gateway runtime configuration is invalid");
+    failStartup("The Gateway runtime configuration is invalid");
   }
   const displayName = readBoundedString(gateway.displayName, 128);
   const baseUrl = readBoundedString(gateway.baseUrl, 2_048);
   const model = readBoundedString(gateway.model, 160);
   if (!displayName || !baseUrl || !model) {
-    failStartup("The Sub2API Gateway runtime configuration is invalid");
+    failStartup("The Gateway runtime configuration is invalid");
   }
   if (gateway.autoFallbackToChatGpt !== undefined && typeof gateway.autoFallbackToChatGpt !== "boolean") {
-    failStartup("The Sub2API Gateway automatic fallback setting is invalid");
+    failStartup("The Gateway automatic fallback setting is invalid");
   }
   if (gateway.active !== undefined && typeof gateway.active !== "boolean") {
-    failStartup("The Sub2API Gateway active route setting is invalid");
+    failStartup("The Gateway active route setting is invalid");
   }
 
   let parsed;
   try {
     parsed = new URL(baseUrl);
   } catch {
-    failStartup("The Sub2API Gateway base URL is invalid");
+    failStartup("The Gateway base URL is invalid");
   }
   if (
     !parsed ||
@@ -1894,7 +2001,7 @@ function resolveSub2ApiGatewayConfig(config) {
     parsed.hash ||
     parsed.pathname.replace(/\/+$/u, "") !== "/v1"
   ) {
-    failStartup("The Sub2API Gateway base URL must end with /v1");
+    failStartup("The Gateway base URL must end with /v1");
   }
   parsed.pathname = "/v1";
   return {
@@ -1906,14 +2013,14 @@ function resolveSub2ApiGatewayConfig(config) {
   };
 }
 
-function startSub2ApiGatewayAdapter(config) {
+function startGatewayAdapter(config) {
   return new Promise((resolve, reject) => {
     const token = randomBytes(32).toString("base64url");
     const adapter = {
       token,
       config,
       apiKey: undefined,
-      route: config.autoFallbackToChatGpt && config.active === false ? "chatgpt" : "sub2api",
+      route: config.autoFallbackToChatGpt && config.active === false ? "chatgpt" : "gateway",
       quotaExhausted: false,
       quotaExhaustionCount: 0,
       lastQuotaExhaustionAt: undefined,
@@ -1943,10 +2050,10 @@ function startSub2ApiGatewayAdapter(config) {
       baseUrl: undefined
     };
     const server = http.createServer((request, response) => {
-      void handleSub2ApiGatewayRequest(adapter, request, response).catch(() => {
+      void handleGatewayRequest(adapter, request, response).catch(() => {
         // The adapter only exposes a fixed request shape. Do not surface an
         // arbitrary Node error here because it could contain request details.
-        safeLog("Sub2API Gateway request handler failed");
+        safeLog("Gateway request handler failed");
         if (!response.headersSent && !response.destroyed) {
           writeGatewayError(response, 502, "The local Gateway request failed");
         } else if (!response.destroyed) {
@@ -1963,65 +2070,65 @@ function startSub2ApiGatewayAdapter(config) {
     server.listen(0, "127.0.0.1", () => {
       server.off("error", failStart);
       server.on("error", (error) => {
-        safeLog(`Sub2API Gateway adapter failed: ${safeErrorMessage(error)}`);
+        safeLog(`Gateway adapter failed: ${safeErrorMessage(error)}`);
       });
       const address = server.address();
       if (!address || typeof address === "string" || !Number.isInteger(address.port) || address.port <= 0) {
-        failStart(new Error("The Sub2API Gateway adapter did not receive a loopback port"));
+        failStart(new Error("The Gateway adapter did not receive a loopback port"));
         return;
       }
       adapter.baseUrl = `http://127.0.0.1:${address.port}/v1`;
-      safeLog("Sub2API Gateway adapter ready");
+      safeLog("Gateway adapter ready");
       resolve(adapter);
     });
   });
 }
 
-function configureSub2ApiGatewayAdapter(params) {
-  if (!gatewayAdapter || !sub2apiGatewayConfig) {
-    throw new Error("The Sub2API Gateway adapter is not active");
+function configureGatewayAdapter(params) {
+  if (!gatewayAdapter || !gatewayConfig) {
+    throw new Error("The Gateway adapter is not active");
   }
   const apiKey = params && typeof params.apiKey === "string" ? params.apiKey.trim() : "";
   if (!apiKey || apiKey.length > MAX_GATEWAY_API_KEY_LENGTH) {
-    throw new Error("The Sub2API Gateway credential is invalid");
+    throw new Error("The Gateway credential is invalid");
   }
   const becameReady = !gatewayAdapter.apiKey;
   gatewayAdapter.apiKey = apiKey;
   releaseGatewayCredentialWaiters(gatewayAdapter);
   if (becameReady) {
-    safeLog("Sub2API Gateway credential configured");
+    safeLog("Gateway credential configured");
   }
-  return getSub2ApiGatewayAdapterStatus();
+  return getGatewayAdapterStatus();
 }
 
-function activateSub2ApiGatewayAdapter() {
-  if (!gatewayAdapter || !sub2apiGatewayConfig?.autoFallbackToChatGpt) {
-    throw new Error("The Sub2API Gateway relay does not support in-place activation");
+function activateGatewayAdapter() {
+  if (!gatewayAdapter || !gatewayConfig?.autoFallbackToChatGpt) {
+    throw new Error("The Gateway relay does not support in-place activation");
   }
   if (!gatewayAdapter.apiKey) {
-    throw new Error("The Sub2API Gateway credential is not ready");
+    throw new Error("The Gateway credential is not ready");
   }
-  gatewayAdapter.route = "sub2api";
+  gatewayAdapter.route = "gateway";
   gatewayAdapter.quotaExhausted = false;
-  return getSub2ApiGatewayAdapterStatus();
+  return getGatewayAdapterStatus();
 }
 
 function activateChatGptGatewayRoute() {
-  if (!gatewayAdapter || !sub2apiGatewayConfig?.autoFallbackToChatGpt || gatewayAdapter.route !== "sub2api") {
-    throw new Error("The Sub2API Gateway fallback route is not active");
+  if (!gatewayAdapter || !gatewayConfig?.autoFallbackToChatGpt || gatewayAdapter.route !== "gateway") {
+    throw new Error("The Gateway fallback route is not active");
   }
   gatewayAdapter.route = "chatgpt";
 }
 
-function restoreSub2ApiGatewayRoute() {
-  if (!gatewayAdapter || !sub2apiGatewayConfig?.autoFallbackToChatGpt) {
-    throw new Error("The Sub2API Gateway relay is unavailable");
+function restoreGatewayRoute() {
+  if (!gatewayAdapter || !gatewayConfig?.autoFallbackToChatGpt) {
+    throw new Error("The Gateway relay is unavailable");
   }
-  gatewayAdapter.route = "sub2api";
+  gatewayAdapter.route = "gateway";
 }
 
-function getSub2ApiGatewayAdapterStatus() {
-  if (!gatewayAdapter || !sub2apiGatewayConfig) {
+function getGatewayAdapterStatus() {
+  if (!gatewayAdapter || !gatewayConfig) {
     return {
       active: false,
       ready: false,
@@ -2037,12 +2144,12 @@ function getSub2ApiGatewayAdapterStatus() {
   }
   ensureGatewayUsageDay(gatewayAdapter);
   return {
-    active: gatewayAdapter.route === "sub2api",
+    active: gatewayAdapter.route === "gateway",
     ready:
       gatewayAdapter.route === "chatgpt" ||
       (typeof gatewayAdapter.apiKey === "string" && gatewayAdapter.apiKey.length > 0),
     route: gatewayAdapter.route,
-    autoFallbackToChatGpt: sub2apiGatewayConfig.autoFallbackToChatGpt,
+    autoFallbackToChatGpt: gatewayConfig.autoFallbackToChatGpt,
     quotaExhaustionCount: gatewayAdapter.quotaExhaustionCount,
     lastQuotaExhaustionAt: gatewayAdapter.lastQuotaExhaustionAt,
     instanceId: gatewayAdapter.instanceId,
@@ -2079,9 +2186,9 @@ function closeGatewayAdapter() {
   gatewayAdapter = undefined;
 }
 
-async function handleSub2ApiGatewayRequest(adapter, request, response) {
+async function handleGatewayRequest(adapter, request, response) {
   if (!hasAuthorizedGatewayRequest(adapter, request.headers.authorization)) {
-    safeLog("Sub2API Gateway request rejected: local authorization mismatch");
+    safeLog("Gateway request rejected: local authorization mismatch");
     writeGatewayError(response, 401, "Invalid local Gateway authorization");
     return;
   }
@@ -2107,7 +2214,7 @@ async function handleSub2ApiGatewayRequest(adapter, request, response) {
   adapter.lastRequestAt = Date.now();
   const requestDiagnostic = summarizeGatewayRequest(request, target);
   if (adapter.quotaExhausted) {
-    writeGatewayError(response, 503, "The Sub2API Gateway is waiting for ChatGPT fallback");
+    writeGatewayError(response, 503, "The Gateway is waiting for ChatGPT fallback");
     return;
   }
   let recorded = false;
@@ -2136,7 +2243,7 @@ async function handleSub2ApiGatewayRequest(adapter, request, response) {
     } else {
       adapter.failedRequestCount += 1;
       adapter.lastFailureAt = Date.now();
-      adapter.lastFailureOrigin = details.origin === "sub2api" ? "sub2api" : "adapter";
+      adapter.lastFailureOrigin = details.origin === "upstream" ? "upstream" : "adapter";
       adapter.lastFailureStatusCode = Number.isInteger(details.statusCode) ? details.statusCode : undefined;
       adapter.lastFailureTransportCode = normalizeGatewayTransportCode(details.transportCode);
       adapter.lastFailureRequestMethod = requestDiagnostic.method;
@@ -2196,7 +2303,7 @@ async function handleSub2ApiGatewayRequest(adapter, request, response) {
         const statusCode = upstreamResponse.statusCode ?? 502;
         adapter.lastUpstreamStatusCode = statusCode;
         recordResult(statusCode >= 200 && statusCode < 300, {
-          origin: "sub2api",
+          origin: "upstream",
           statusCode,
           upstreamStatusCode: statusCode
         });
@@ -2212,7 +2319,7 @@ async function handleSub2ApiGatewayRequest(adapter, request, response) {
       statusCode: 502,
       transportCode: readGatewayTransportCode(error)
     });
-    writeGatewayError(response, 502, "The configured Sub2API endpoint is unavailable");
+    writeGatewayError(response, 502, "The configured Gateway endpoint is unavailable");
     return;
   }
   upstream.on("error", (error) => {
@@ -2225,7 +2332,7 @@ async function handleSub2ApiGatewayRequest(adapter, request, response) {
       transportCode: readGatewayTransportCode(error)
     });
     if (!response.headersSent) {
-      writeGatewayError(response, 502, "The configured Sub2API endpoint is unavailable");
+      writeGatewayError(response, 502, "The configured Gateway endpoint is unavailable");
     } else {
       response.destroy();
     }
@@ -2236,7 +2343,7 @@ async function handleSub2ApiGatewayRequest(adapter, request, response) {
 /**
  * The dual-route relay receives the OAuth bearer generated by Codex. It only
  * checks that a bearer exists locally, then either preserves it for ChatGPT or
- * replaces it with the SecretStorage Key for Sub2API. The relay is loopback
+ * replaces it with the SecretStorage Key for Gateway. The relay is loopback
  * only, so it never needs to persist or log the bearer.
  */
 function hasAuthorizedGatewayRequest(adapter, authorization) {
@@ -2422,7 +2529,7 @@ function readProxyAuthorization(proxy) {
 function observeGatewayQuotaExhaustion(adapter, statusCode, upstreamResponse) {
   if (
     !adapter.config.autoFallbackToChatGpt ||
-    adapter.route !== "sub2api" ||
+    adapter.route !== "gateway" ||
     adapter.quotaExhausted ||
     !isPotentialGatewayQuotaStatus(statusCode)
   ) {
@@ -2451,7 +2558,7 @@ function observeGatewayQuotaExhaustion(adapter, statusCode, upstreamResponse) {
     adapter.quotaExhausted = true;
     adapter.quotaExhaustionCount += 1;
     adapter.lastQuotaExhaustionAt = Date.now();
-    safeLog("Sub2API Gateway quota exhaustion confirmed; waiting for ChatGPT fallback");
+    safeLog("Gateway quota exhaustion confirmed; waiting for ChatGPT fallback");
   });
 }
 
@@ -2539,7 +2646,7 @@ function persistGatewayFailureDiagnostic(adapter, details) {
   const diagnostic = {
     schema: GATEWAY_DIAGNOSTIC_SCHEMA,
     recordedAt: Number.isSafeInteger(details.at) && details.at > 0 ? details.at : Date.now(),
-    origin: details.origin === "sub2api" ? "sub2api" : "adapter",
+    origin: details.origin === "upstream" ? "upstream" : "adapter",
     ...(normalizeGatewayHttpStatus(details.statusCode)
       ? { statusCode: normalizeGatewayHttpStatus(details.statusCode) }
       : {}),
@@ -2563,14 +2670,14 @@ function persistGatewayFailureDiagnostic(adapter, details) {
       // The temporary file may not have been created; failure diagnostics must
       // never disrupt the active forwarding request.
     }
-    safeLog("Sub2API Gateway diagnostic write failed");
+    safeLog("Gateway diagnostic write failed");
   }
 }
 
 function logGatewayForwardingFailure(details) {
   const request = normalizeGatewayDiagnosticRequest(details.request);
   const fields = [
-    `origin=${details.origin === "sub2api" ? "sub2api" : "adapter"}`,
+    `origin=${details.origin === "upstream" ? "upstream" : "adapter"}`,
     ...(normalizeGatewayHttpStatus(details.statusCode)
       ? [`status=${normalizeGatewayHttpStatus(details.statusCode)}`]
       : []),
@@ -2582,12 +2689,12 @@ function logGatewayForwardingFailure(details) {
       : []),
     ...formatGatewayRequestDiagnosticFields(request)
   ];
-  safeLog(`Sub2API Gateway forwarding failed: ${fields.join(" ")}`);
+  safeLog(`Gateway forwarding failed: ${fields.join(" ")}`);
 }
 
 function logGatewayRequestLifecycle(event, request) {
   const fields = formatGatewayRequestDiagnosticFields(request);
-  safeLog(`Sub2API Gateway ${event}${fields.length > 0 ? `: ${fields.join(" ")}` : ""}`);
+  safeLog(`Gateway ${event}${fields.length > 0 ? `: ${fields.join(" ")}` : ""}`);
 }
 
 function formatGatewayRequestDiagnosticFields(value) {

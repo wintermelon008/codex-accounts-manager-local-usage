@@ -218,63 +218,31 @@ describe("buildDashboardStateSignature", () => {
     expect(buildDashboardStateSignature(usageChanged)).not.toBe(baseSignature);
   });
 
-  it("changes when the optional Sub2API Gateway status or usage changes", () => {
+  it("changes when an optional integration changes its status or metrics", () => {
     const base = createState();
     const ready: DashboardState = {
       ...base,
-      sub2apiGateway: {
-        displayName: "Sub2API Gateway",
-        configFile: "sub2api-gateway.json",
-        credentialPresent: true,
-        isActive: false,
-        status: "ready",
-        statusMessage: "Ready",
-        usage: {
-          requestCount: 0,
-          successfulRequestCount: 0,
-          failedRequestCount: 0,
-          today: {
-            date: "2026-07-22",
-            inputTokens: 0,
-            outputTokens: 0,
-            cachedInputTokens: 0,
-            reasoningTokens: 0,
-            totalTokens: 0
-          },
-          windows: {
-            fiveHour: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 0 },
-            sevenDay: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, totalTokens: 0 }
-          }
-        },
-        inventory: {
-          configured: false,
-          credentialPresent: false,
-          status: "not_configured"
+      integrations: [
+        {
+          id: "example.gateway",
+          title: "Example Gateway",
+          status: "ready",
+          statusMessage: "Ready",
+          details: [{ label: "Route", value: "local" }],
+          metrics: [{ label: "Requests", value: "0" }],
+          actions: [{ id: "activate", label: "Activate" }]
         }
-      }
+      ]
     };
     const usedMore: DashboardState = {
       ...ready,
-      sub2apiGateway: {
-        ...ready.sub2apiGateway!,
-        usage: {
-          requestCount: 1,
-          successfulRequestCount: 1,
-          failedRequestCount: 0,
-          today: {
-            date: "2026-07-22",
-            inputTokens: 2,
-            outputTokens: 3,
-            cachedInputTokens: 1,
-            reasoningTokens: 0,
-            totalTokens: 5
-          },
-          windows: {
-            fiveHour: { inputTokens: 2, outputTokens: 3, cachedInputTokens: 1, reasoningTokens: 0, totalTokens: 5 },
-            sevenDay: { inputTokens: 2, outputTokens: 3, cachedInputTokens: 1, reasoningTokens: 0, totalTokens: 5 }
-          }
+      integrations: [
+        {
+          ...ready.integrations![0]!,
+          status: "active",
+          metrics: [{ label: "Requests", value: "1" }]
         }
-      }
+      ]
     };
 
     expect(buildDashboardStateSignature(ready)).not.toBe(buildDashboardStateSignature(base));

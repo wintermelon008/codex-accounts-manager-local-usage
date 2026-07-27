@@ -1,0 +1,15 @@
+[Unit]
+Description=Feishu private account-import bot
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile={{PRIVATE_ENV_FILE}}
+ExecStart={{NODE_BIN}} {{PACKAGE_ROOT}}/src/cli.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

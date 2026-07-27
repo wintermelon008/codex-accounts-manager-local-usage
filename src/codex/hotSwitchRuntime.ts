@@ -20,10 +20,12 @@ import {
   HotSwitchAccountResult,
   HotSwitchIdentity,
   HotSwitchLongTurnPolicy,
+  HotSwitchOperationStatus,
   HotSwitchRefreshRequest,
   HotSwitchRefreshResult,
   HotSwitchStatus,
-  Sub2ApiGatewayRuntimeStatus
+  isHotSwitchOperationUncertainError,
+  GatewayRuntimeStatus
 } from "./hotSwitchBridge";
 import { readAuthFile, writeAuthFile } from "./authFile";
 import { installRemoteCliOverlay, restoreRemoteCliOverlay } from "./remoteCliOverlay";
@@ -39,23 +41,24 @@ const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
 const SHIM_FILE = "codex-app-server-shim.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 8;
-const SUB2API_GATEWAY_RUNTIME_CONFIG_KEY = "sub2apiGateway.runtimeConfig";
+const RUNTIME_PROTOCOL_VERSION = 10;
+const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
+const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 
 /**
- * This structure is safe to persist in VS Code global state. It intentionally
- * contains no API key; the credential is provided to the loopback adapter only
- * after the extension host reconnects to the shim.
+ * Provider-neutral runtime configuration. A registered integration supplies
+ * these values only when it is explicitly activated; no credential is ever
+ * persisted in this structure.
  */
-export type Sub2ApiGatewayRuntimeConfig = {
+export type GatewayRuntimeConfig = {
   displayName: string;
   baseUrl: string;
   model: string;
   autoFallbackToChatGpt?: boolean;
 };
 
-type Sub2ApiGatewayRuntimeState = {
-  config: Sub2ApiGatewayRuntimeConfig;
+type GatewayRuntimeState = {
+  config: GatewayRuntimeConfig;
   active: boolean;
 };
 
@@ -76,11 +79,25 @@ export type RuntimeAccountSwitchOptions = {
   gracePeriodMs?: number;
   longTurnPolicy?: HotSwitchLongTurnPolicy;
   recoverRecentUsageLimitedTurns?: boolean;
+  /** Reserved for RuntimeSwitchCoordinator's timeout reconciliation. */
+  operationId?: string;
+};
+
+type CapturedUnmanagedRollbackSnapshot = {
+  tokens: CodexTokens;
+  accountId: string;
+  email: string;
+  planType: string | null;
+};
+
+type RetainedUnmanagedRollbackSnapshot = {
+  tokens: CodexTokens;
+  cleanupTimer?: NodeJS.Timeout;
 };
 
 export class CodexHotSwitchRuntime implements vscode.Disposable {
   private bridge: CodexHotSwitchBridge | undefined;
-  private readonly unmanagedRollbackSnapshots = new Map<string, CodexTokens>();
+  private readonly unmanagedRollbackSnapshots = new Map<string, RetainedUnmanagedRollbackSnapshot>();
   private disposed = false;
 
   constructor(
@@ -108,50 +125,50 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     return this.configureRuntime();
   }
 
-  isSub2ApiGatewayActive(): boolean {
-    return this.getSub2ApiGatewayRuntimeState()?.active === true;
+  isGatewayActive(): boolean {
+    return this.getGatewayRuntimeState()?.active === true;
   }
 
-  isSub2ApiGatewayConfigured(): boolean {
-    return this.getSub2ApiGatewayRuntimeState() !== undefined;
+  isGatewayConfigured(): boolean {
+    return this.getGatewayRuntimeState() !== undefined;
   }
 
-  async activateSub2ApiGateway(config: Sub2ApiGatewayRuntimeConfig, apiKey?: string): Promise<HotSwitchSetupResult> {
-    const normalized = normalizeSub2ApiGatewayRuntimeConfig(config);
+  async activateGateway(config: GatewayRuntimeConfig, apiKey?: string): Promise<HotSwitchSetupResult> {
+    const normalized = normalizeGatewayRuntimeConfig(config);
     await this.ensureGatewayDoesNotEnableSeamlessScheduling();
     if (!isHotSwitchEnabled()) {
       await getCodexAccountsConfiguration().update(HOT_SWITCH_ENABLED, true, vscode.ConfigurationTarget.Global);
     }
-    const current = this.getSub2ApiGatewayRuntimeState();
+    const current = this.getGatewayRuntimeState();
     if (
       this.bridge &&
       current &&
       current.active === false &&
       current.config.autoFallbackToChatGpt === true &&
       normalized.autoFallbackToChatGpt === true &&
-      sameSub2ApiGatewayRuntimeConfig(current.config, normalized)
+      sameGatewayRuntimeConfig(current.config, normalized)
     ) {
       if (!apiKey) {
-        throw new Error("The Sub2API Gateway API key is required before activating the local transport");
+        throw new Error("The Gateway API key is required before activating the local transport");
       }
-      await this.bridge.configureSub2ApiGatewayCredential(apiKey);
-      const status = await this.bridge.activateSub2ApiGateway();
-      if (!status.active || status.route !== "sub2api") {
-        throw new Error("The Sub2API Gateway relay did not activate its upstream route");
+      await this.bridge.configureGatewayCredential(apiKey);
+      const status = await this.bridge.activateGateway();
+      if (!status.active || status.route !== "gateway") {
+        throw new Error("The Gateway relay did not activate its upstream route");
       }
-      await this.setSub2ApiGatewayRuntimeState({ config: normalized, active: true });
+      await this.setGatewayRuntimeState({ config: normalized, active: true });
       return {
         enabled: true,
         configured: true,
         requiresReload: false
       };
     }
-    await this.setSub2ApiGatewayRuntimeState({ config: normalized, active: true });
+    await this.setGatewayRuntimeState({ config: normalized, active: true });
     return this.configureRuntime();
   }
 
-  async deactivateSub2ApiGateway(): Promise<HotSwitchSetupResult> {
-    await this.setSub2ApiGatewayRuntimeState(undefined);
+  async deactivateGateway(): Promise<HotSwitchSetupResult> {
+    await this.setGatewayRuntimeState(undefined);
     if (!isHotSwitchEnabled()) {
       return {
         enabled: false,
@@ -162,41 +179,42 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     return this.configureRuntime();
   }
 
-  async configureSub2ApiGatewayCredential(apiKey: string): Promise<Sub2ApiGatewayRuntimeStatus> {
-    if (!this.isSub2ApiGatewayConfigured()) {
-      throw new Error("The Sub2API Gateway relay is not configured for this Codex runtime");
+  async configureGatewayCredential(apiKey: string): Promise<GatewayRuntimeStatus> {
+    if (!this.isGatewayConfigured()) {
+      throw new Error("The Gateway relay is not configured for this Codex runtime");
     }
     if (!this.bridge) {
-      throw new Error("The Sub2API Gateway runtime is not ready; reload the VS Code window first");
+      throw new Error("Codex hot switch is not configured");
     }
-    return this.bridge.configureSub2ApiGatewayCredential(apiKey);
+    return this.bridge.configureGatewayCredential(apiKey);
   }
 
-  async getSub2ApiGatewayStatus(): Promise<Sub2ApiGatewayRuntimeStatus> {
-    if (!this.isSub2ApiGatewayConfigured()) {
+  async getGatewayStatus(): Promise<GatewayRuntimeStatus> {
+    if (!this.isGatewayConfigured()) {
       return {
         active: false,
         ready: false,
         requestCount: 0,
         successfulRequestCount: 0,
-        failedRequestCount: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedInputTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 0
+        failedRequestCount: 0
       };
     }
     if (!this.bridge) {
-      throw new Error("The Sub2API Gateway runtime is not ready; reload the VS Code window first");
+      return {
+        active: this.isGatewayActive(),
+        ready: false,
+        requestCount: 0,
+        successfulRequestCount: 0,
+        failedRequestCount: 0
+      };
     }
-    return this.bridge.getSub2ApiGatewayStatus();
+    return this.bridge.getGatewayStatus();
   }
 
   async disable(): Promise<HotSwitchSetupResult> {
     try {
       await getCodexAccountsConfiguration().update(HOT_SWITCH_ENABLED, false, vscode.ConfigurationTarget.Global);
-      await this.setSub2ApiGatewayRuntimeState(undefined);
+      await this.setGatewayRuntimeState(undefined);
       this.bridge?.dispose();
       this.bridge = undefined;
       const runtimeLauncherPath = path.join(
@@ -243,6 +261,13 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     return this.bridge.getStatus();
   }
 
+  async getOperationStatus(operationId: string): Promise<HotSwitchOperationStatus> {
+    if (!this.bridge) {
+      throw new Error("Codex hot switch is not configured");
+    }
+    return this.bridge.getOperationStatus(operationId);
+  }
+
   async getIdentity(): Promise<HotSwitchIdentity> {
     if (!this.bridge) {
       throw new Error("Codex hot switch is not configured");
@@ -264,8 +289,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     if (!this.bridge) {
       throw new Error("Codex hot switch is enabled, but its runtime is not ready; restart the extension host");
     }
-    if (this.isSub2ApiGatewayActive()) {
-      throw new Error("Switch back from the Sub2API Gateway before selecting a ChatGPT Auth account");
+    const bridge = this.bridge;
+    if (this.isGatewayActive()) {
+      throw new Error("Switch back from the Gateway before selecting a ChatGPT Auth account");
     }
 
     const account = await this.repo.getAccount(accountId);
@@ -295,6 +321,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       previousTokens = await this.refreshAccountTokens(previousAccount, previousTokens);
     }
     const baseParams = {
+      operationId: options.operationId,
       accessToken: tokens.accessToken,
       accountId: remoteAccountId,
       localAccountId: account.id,
@@ -307,7 +334,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     const previousRemoteAccountId = previousAccount?.accountId ?? previousTokens?.accountId;
     if (previousLocalAccountId && previousRemoteAccountId && previousAccount && previousTokens?.accessToken) {
       const previousRuntimeIdentity = resolveRuntimeAccessTokenIdentity(previousAccount, previousTokens.accessToken);
-      return this.bridge.switchAccount({
+      return bridge.switchAccount({
         ...baseParams,
         previousAccountId: previousRemoteAccountId,
         previousLocalAccountId,
@@ -315,21 +342,16 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       });
     }
 
-    const snapshot = await this.captureUnmanagedRollbackSnapshot();
-    const rollbackContextId = randomUUID();
-    this.unmanagedRollbackSnapshots.set(rollbackContextId, snapshot.tokens);
-    try {
-      return await this.bridge.switchAccount({
+    return this.withUnmanagedRollbackSnapshot((snapshot, rollbackContextId) =>
+      bridge.switchAccount({
         ...baseParams,
         previousAccountId: snapshot.accountId,
         previousExpectedEmail: snapshot.email,
         previousAccessToken: snapshot.tokens.accessToken,
         previousPlanType: snapshot.planType,
         rollbackContextId
-      });
-    } finally {
-      this.unmanagedRollbackSnapshots.delete(rollbackContextId);
-    }
+      })
+    );
   }
 
   /**
@@ -338,7 +360,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
    * so a failed local account commit cannot strand the live runtime on the
    * target account while the Gateway remains selected.
    */
-  async fallbackSub2ApiGatewayToChatGpt(
+  async fallbackGatewayToChatGpt(
     accountId: string,
     options: RuntimeAccountSwitchOptions = {}
   ): Promise<HotSwitchAccountResult> {
@@ -348,9 +370,10 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     if (!this.bridge) {
       throw new Error("Codex hot switch is enabled, but its runtime is not ready; restart the extension host");
     }
-    const gateway = this.getSub2ApiGatewayRuntimeState();
+    const bridge = this.bridge;
+    const gateway = this.getGatewayRuntimeState();
     if (!gateway?.active || gateway.config.autoFallbackToChatGpt !== true) {
-      throw new Error("The Sub2API Gateway automatic fallback is not active");
+      throw new Error("The Gateway automatic fallback is not active");
     }
 
     const account = await this.repo.getAccount(accountId);
@@ -371,6 +394,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     }
 
     const baseParams = {
+      operationId: options.operationId,
       accessToken: tokens.accessToken,
       accountId: remoteAccountId,
       localAccountId: account.id,
@@ -393,31 +417,26 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     let result: HotSwitchAccountResult;
     if (previousLocalAccountId && previousRemoteAccountId && previousAccount && previousTokens?.accessToken) {
       const previousRuntimeIdentity = resolveRuntimeAccessTokenIdentity(previousAccount, previousTokens.accessToken);
-      result = await this.bridge.fallbackToChatGpt({
+      result = await bridge.fallbackToChatGpt({
         ...baseParams,
         previousAccountId: previousRemoteAccountId,
         previousLocalAccountId,
         previousExpectedEmail: previousRuntimeIdentity.email
       });
     } else {
-      const snapshot = await this.captureUnmanagedRollbackSnapshot();
-      const rollbackContextId = randomUUID();
-      this.unmanagedRollbackSnapshots.set(rollbackContextId, snapshot.tokens);
-      try {
-        result = await this.bridge.fallbackToChatGpt({
+      result = await this.withUnmanagedRollbackSnapshot((snapshot, rollbackContextId) =>
+        bridge.fallbackToChatGpt({
           ...baseParams,
           previousAccountId: snapshot.accountId,
           previousExpectedEmail: snapshot.email,
           previousAccessToken: snapshot.tokens.accessToken,
           previousPlanType: snapshot.planType,
           rollbackContextId
-        });
-      } finally {
-        this.unmanagedRollbackSnapshots.delete(rollbackContextId);
-      }
+        })
+      );
     }
     if (result.status === "switched") {
-      await this.setSub2ApiGatewayRuntimeState({ config: gateway.config, active: false });
+      await this.setGatewayRuntimeState({ config: gateway.config, active: false });
     }
     return result;
   }
@@ -429,6 +448,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     this.disposed = true;
     this.bridge?.dispose();
     this.bridge = undefined;
+    for (const rollbackContextId of this.unmanagedRollbackSnapshots.keys()) {
+      this.releaseUnmanagedRollbackSnapshot(rollbackContextId);
+    }
   }
 
   private async configureRuntime(): Promise<HotSwitchSetupResult> {
@@ -444,9 +466,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const launcherDestination = path.join(runtimeDirectory, SHIM_LAUNCHER_FILE);
       const shimConfigDestination = path.join(runtimeDirectory, SHIM_CONFIG_FILE);
       const usageAttributionDirectory = path.join(runtimeDirectory, USAGE_ATTRIBUTION_DIRECTORY);
-      const sub2apiGatewayState = this.getSub2ApiGatewayRuntimeState();
-      const sub2apiGateway = sub2apiGatewayState
-        ? { ...sub2apiGatewayState.config, active: sub2apiGatewayState.active }
+      const gatewayState = this.getGatewayRuntimeState();
+      const gateway = gatewayState
+        ? { ...gatewayState.config, active: gatewayState.active }
         : undefined;
 
       await fs.mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
@@ -469,7 +491,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const realCliPath = remoteOverlay?.realCliPath ?? cliPath;
       await writeJsonAtomically(
         shimConfigDestination,
-        { realCliPath, forceHttpTransport: true, usageAttributionDirectory, sub2apiGateway },
+        { realCliPath, forceHttpTransport: true, usageAttributionDirectory, gateway },
         0o600
       );
 
@@ -503,9 +525,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
               !status.ready ||
               status.runtimeProtocolVersion !== RUNTIME_PROTOCOL_VERSION ||
               status.httpTransportForced !== true ||
-              status.sub2apiGatewayConfigured !== Boolean(sub2apiGatewayState) ||
-              status.sub2apiGatewayActive !== Boolean(sub2apiGatewayState?.active) ||
-              status.sub2apiGatewayAutoFallbackEnabled !== Boolean(sub2apiGatewayState?.config.autoFallbackToChatGpt);
+              status.gatewayConfigured !== Boolean(gatewayState) ||
+              status.gatewayActive !== Boolean(gatewayState?.active) ||
+              status.gatewayAutoFallbackEnabled !== Boolean(gatewayState?.config.autoFallbackToChatGpt);
           } catch {
             requiresReload = true;
           }
@@ -514,7 +536,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
           candidateBridge.dispose();
         } else {
           this.bridge = candidateBridge;
-          if (!sub2apiGatewayState || sub2apiGatewayState.active === false) {
+          if (!gatewayState || gatewayState.active === false) {
             void this.synchronizeUsageAttribution(candidateBridge);
           }
         }
@@ -608,12 +630,49 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     setCurrentWindowRuntimeAccountId(localAccountId);
   }
 
-  private async captureUnmanagedRollbackSnapshot(): Promise<{
-    tokens: CodexTokens;
-    accountId: string;
-    email: string;
-    planType: string | null;
-  }> {
+  private async withUnmanagedRollbackSnapshot<T>(
+    execute: (snapshot: CapturedUnmanagedRollbackSnapshot, rollbackContextId: string) => Promise<T>
+  ): Promise<T> {
+    const snapshot = await this.captureUnmanagedRollbackSnapshot();
+    const rollbackContextId = randomUUID();
+    this.unmanagedRollbackSnapshots.set(rollbackContextId, { tokens: snapshot.tokens });
+    try {
+      const result = await execute(snapshot, rollbackContextId);
+      this.releaseUnmanagedRollbackSnapshot(rollbackContextId);
+      return result;
+    } catch (error) {
+      if (isHotSwitchOperationUncertainError(error)) {
+        this.retainUnmanagedRollbackSnapshot(rollbackContextId);
+      } else {
+        this.releaseUnmanagedRollbackSnapshot(rollbackContextId);
+      }
+      throw error;
+    }
+  }
+
+  private retainUnmanagedRollbackSnapshot(rollbackContextId: string): void {
+    const snapshot = this.unmanagedRollbackSnapshots.get(rollbackContextId);
+    if (!snapshot || snapshot.cleanupTimer) {
+      return;
+    }
+    snapshot.cleanupTimer = setTimeout(() => {
+      this.releaseUnmanagedRollbackSnapshot(rollbackContextId);
+    }, UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS);
+    snapshot.cleanupTimer.unref?.();
+  }
+
+  private releaseUnmanagedRollbackSnapshot(rollbackContextId: string): void {
+    const snapshot = this.unmanagedRollbackSnapshots.get(rollbackContextId);
+    if (!snapshot) {
+      return;
+    }
+    if (snapshot.cleanupTimer) {
+      clearTimeout(snapshot.cleanupTimer);
+    }
+    this.unmanagedRollbackSnapshots.delete(rollbackContextId);
+  }
+
+  private async captureUnmanagedRollbackSnapshot(): Promise<CapturedUnmanagedRollbackSnapshot> {
     const auth = await readAuthFile();
     if (!auth?.tokens?.id_token || !auth.tokens.access_token) {
       throw new Error("The current Codex auth.json has no usable OAuth credentials for safe rollback");
@@ -664,13 +723,14 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
   }
 
   private async restoreUnmanagedAccount(rollbackContextId: string): Promise<void> {
-    const tokens = this.unmanagedRollbackSnapshots.get(rollbackContextId);
-    if (!tokens) {
+    const snapshot = this.unmanagedRollbackSnapshots.get(rollbackContextId);
+    if (!snapshot) {
       throw new Error("The unmanaged Codex rollback snapshot is no longer available");
     }
-    await writeAuthFile(tokens);
+    await writeAuthFile(snapshot.tokens);
     await this.repo.syncActiveAccountFromAuthFile();
     setCurrentWindowRuntimeAccountId(undefined);
+    this.releaseUnmanagedRollbackSnapshot(rollbackContextId);
   }
 
   private async refreshAccountTokens(account: CodexAccountRecord, tokens: CodexTokens): Promise<CodexTokens> {
@@ -686,7 +746,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     return effectiveTokens;
   }
 
-  private getSub2ApiGatewayRuntimeState(): Sub2ApiGatewayRuntimeState | undefined {
+  private getGatewayRuntimeState(): GatewayRuntimeState | undefined {
     // Some narrow test/embedding hosts only provide the parts of
     // ExtensionContext needed for OAuth switching. Gateway state is optional,
     // so absence of globalState must remain equivalent to Gateway being off.
@@ -694,22 +754,22 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     if (!globalState || typeof globalState.get !== "function") {
       return undefined;
     }
-    const stored = globalState.get<unknown>(SUB2API_GATEWAY_RUNTIME_CONFIG_KEY);
+    const stored = globalState.get<unknown>(GATEWAY_RUNTIME_CONFIG_KEY);
     try {
-      return stored === undefined ? undefined : normalizeSub2ApiGatewayRuntimeState(stored);
+      return stored === undefined ? undefined : normalizeGatewayRuntimeState(stored);
     } catch {
       return undefined;
     }
   }
 
-  private async setSub2ApiGatewayRuntimeState(state: Sub2ApiGatewayRuntimeState | undefined): Promise<void> {
+  private async setGatewayRuntimeState(state: GatewayRuntimeState | undefined): Promise<void> {
     const globalState = this.context.globalState;
     if (!globalState || typeof globalState.update !== "function") {
-      throw new Error("The VS Code global state is unavailable for the Sub2API Gateway runtime");
+      throw new Error("The VS Code global state is unavailable for the Gateway runtime");
     }
     await globalState.update(
-      SUB2API_GATEWAY_RUNTIME_CONFIG_KEY,
-      state === undefined ? undefined : normalizeSub2ApiGatewayRuntimeState(state)
+      GATEWAY_RUNTIME_CONFIG_KEY,
+      state === undefined ? undefined : normalizeGatewayRuntimeState(state)
     );
   }
 
@@ -843,27 +903,27 @@ export function getHotSwitchLongTurnPolicy(): HotSwitchLongTurnPolicy {
   );
 }
 
-function normalizeSub2ApiGatewayRuntimeConfig(value: unknown): Sub2ApiGatewayRuntimeConfig {
+function normalizeGatewayRuntimeConfig(value: unknown): GatewayRuntimeConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Invalid Sub2API Gateway runtime configuration");
+    throw new Error("Invalid Gateway runtime configuration");
   }
   const record = value as Record<string, unknown>;
   const displayName = readRuntimeString(record["displayName"], 128);
   const baseUrl = readRuntimeString(record["baseUrl"], 2_048);
   const model = readRuntimeString(record["model"], 160);
   if (!displayName || !baseUrl || !model) {
-    throw new Error("Invalid Sub2API Gateway runtime configuration");
+    throw new Error("Invalid Gateway runtime configuration");
   }
   const autoFallbackToChatGpt = record["autoFallbackToChatGpt"];
   if (autoFallbackToChatGpt !== undefined && typeof autoFallbackToChatGpt !== "boolean") {
-    throw new Error("Invalid Sub2API Gateway runtime configuration");
+    throw new Error("Invalid Gateway runtime configuration");
   }
 
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
   } catch {
-    throw new Error("Invalid Sub2API Gateway runtime configuration");
+    throw new Error("Invalid Gateway runtime configuration");
   }
   if (
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
@@ -874,7 +934,7 @@ function normalizeSub2ApiGatewayRuntimeConfig(value: unknown): Sub2ApiGatewayRun
     parsed.hash ||
     parsed.pathname.replace(/\/+$/u, "") !== "/v1"
   ) {
-    throw new Error("Invalid Sub2API Gateway runtime configuration");
+    throw new Error("Invalid Gateway runtime configuration");
   }
 
   return {
@@ -885,32 +945,24 @@ function normalizeSub2ApiGatewayRuntimeConfig(value: unknown): Sub2ApiGatewayRun
   };
 }
 
-/**
- * `.42` persisted the Gateway config directly. Treat that shape as an active
- * route so existing installations keep their current behavior after upgrade.
- */
-function normalizeSub2ApiGatewayRuntimeState(value: unknown): Sub2ApiGatewayRuntimeState {
+/** Safe persisted state for an explicitly activated generic Gateway. */
+function normalizeGatewayRuntimeState(value: unknown): GatewayRuntimeState {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Invalid Sub2API Gateway runtime state");
+    throw new Error("Invalid Gateway runtime state");
   }
   const record = value as Record<string, unknown>;
-  const hasEnvelope =
-    Object.prototype.hasOwnProperty.call(record, "config") || Object.prototype.hasOwnProperty.call(record, "active");
-  if (!hasEnvelope) {
-    return { config: normalizeSub2ApiGatewayRuntimeConfig(record), active: true };
-  }
-  if (typeof record["active"] !== "boolean") {
-    throw new Error("Invalid Sub2API Gateway runtime state");
+  if (typeof record["active"] !== "boolean" || !Object.prototype.hasOwnProperty.call(record, "config")) {
+    throw new Error("Invalid Gateway runtime state");
   }
   return {
-    config: normalizeSub2ApiGatewayRuntimeConfig(record["config"]),
+    config: normalizeGatewayRuntimeConfig(record["config"]),
     active: record["active"]
   };
 }
 
-function sameSub2ApiGatewayRuntimeConfig(
-  left: Sub2ApiGatewayRuntimeConfig,
-  right: Sub2ApiGatewayRuntimeConfig
+function sameGatewayRuntimeConfig(
+  left: GatewayRuntimeConfig,
+  right: GatewayRuntimeConfig
 ): boolean {
   return (
     left.displayName === right.displayName &&

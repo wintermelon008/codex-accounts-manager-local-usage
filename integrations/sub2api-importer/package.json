@@ -1,0 +1,31 @@
+{
+  "name": "codex-accounts-sub2api-importer",
+  "version": "0.1.3",
+  "private": true,
+  "description": "Optional private queue consumer for Sub2API account imports.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wintermelon008/codex-accounts-manager-local-usage.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "codex-accounts-sub2api-importer": "src/cli.cjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "audit:portability": "node scripts/audit-portability.cjs",
+    "package:check": "npm test && npm run audit:portability && npm pack --dry-run",
+    "package": "npm run package:check && node scripts/prepare-dist.cjs && npm pack --pack-destination dist"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "src",
+    "scripts",
+    "templates",
+    "LICENSE"
+  ]
+}
