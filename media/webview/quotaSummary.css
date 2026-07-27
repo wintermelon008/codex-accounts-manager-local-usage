@@ -4294,6 +4294,106 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
   overflow-wrap: anywhere;
 }
 
+.integration-cards-section {
+  min-width: 0;
+}
+.integration-cards {
+  display: grid;
+  gap: 10px;
+}
+.integration-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+}
+.integration-card.integration-status-active {
+  border-color: var(--border-accent);
+}
+.integration-card.integration-status-warning {
+  border-color: rgba(224, 168, 0, 0.72);
+}
+.integration-card.integration-status-error {
+  border-color: rgba(255, 96, 96, 0.72);
+}
+.integration-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.integration-card-title {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 800;
+}
+.integration-card-description,
+.integration-card-status {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.integration-card-status {
+  flex: 0 1 42%;
+  margin-top: 0;
+  text-align: right;
+}
+.integration-card-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+}
+.integration-card-detail,
+.integration-card-metric {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg);
+}
+.integration-card-detail dt,
+.integration-card-metric div {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+.integration-card-detail dd,
+.integration-card-metric strong {
+  display: block;
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.integration-card-detail.is-positive dd {
+  color: var(--accent-green);
+}
+.integration-card-detail.is-warning dd {
+  color: var(--accent-yellow);
+}
+.integration-card-detail.is-error dd {
+  color: var(--accent-red);
+}
+.integration-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.integration-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.integration-card-action.is-danger {
+  --button-accent: var(--accent-red);
+}
+
 @media (max-width: 1400px) {
   .local-usage-cards {
     grid-template-columns: repeat(3, minmax(0, 1fr));

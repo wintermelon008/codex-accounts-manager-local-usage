@@ -79,7 +79,7 @@ describe("extension manifest configuration", () => {
     expect(property?.markdownDescription).toContain("does not create, watch, or import");
   });
 
-  it("keeps the local Sub2API Gateway opt-in and portable", () => {
+  it("keeps optional provider configuration out of the Manager manifest", () => {
     const manifestPath = path.resolve(__dirname, "../package.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
       contributes?: {
@@ -90,13 +90,9 @@ describe("extension manifest configuration", () => {
     };
     const properties = manifest.contributes?.configuration?.properties;
 
-    expect(properties?.["codexAccounts.sub2apiGatewayEnabled"]).toMatchObject({ type: "boolean", default: false });
-    expect(properties?.["codexAccounts.sub2apiGatewayEnabled"]?.markdownDescription).toContain("does not read");
-    expect(properties?.["codexAccounts.sub2apiGatewayConfigFile"]).toMatchObject({
-      type: "string",
-      default: "sub2api-gateway.json"
-    });
-    expect(properties?.["codexAccounts.sub2apiGatewayConfigFile"]?.markdownDescription).toContain("Absolute paths");
+    const vendorMarker = ["sub2", "api"].join("");
+
+    expect(Object.keys(properties ?? {}).some((key) => key.toLowerCase().includes(vendorMarker))).toBe(false);
   });
 
   it("declares seamless behavior, runtime installation, quota-band balancing, and rollback commands", () => {

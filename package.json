@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.49",
+  "version": "0.1.16-local.52",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -104,16 +104,6 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Opt in to a private local inbox written by a separately configured Feishu command bot. When disabled, Codex Accounts Manager does not create, watch, or import from the inbox."
-        },
-        "codexAccounts.sub2apiGatewayEnabled": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Opt in to the local Sub2API Gateway card and loopback adapter. When disabled, Codex Accounts Manager does not read Gateway configuration, resolve its credential, start an adapter, poll it, or add it to account scheduling."
-        },
-        "codexAccounts.sub2apiGatewayConfigFile": {
-          "type": "string",
-          "default": "sub2api-gateway.json",
-          "markdownDescription": "Relative JSON file name inside this extension's VS Code global storage. Absolute paths and paths outside global storage are rejected. The file describes the local Sub2API endpoint, model, and logical credential reference; the API key remains in VS Code SecretStorage."
         },
         "codexAccounts.autoSwitchEnabled": {
           "type": "boolean",
@@ -363,7 +353,8 @@
     "watch:webview": "vite build --watch --config vite.webview.config.mts",
     "compile": "npm run typecheck:webview && npm run build:webview && tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "npm run verify:customization && npm run compile && vsce package",
+    "package": "npm run verify:customization && npm run audit:integration-portability && npm run compile && vsce package",
+    "audit:integration-portability": "node scripts/audit-integration-portability.mjs",
     "verify:customization": "node scripts/verify-customization-baseline.mjs",
     "verify:seamless-auth": "node scripts/verify-seamless-http-auth.mjs",
     "lint": "eslint src webview-src --ext ts,tsx",

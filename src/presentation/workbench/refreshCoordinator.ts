@@ -12,6 +12,7 @@ import { needsWindowReloadForAccount, setCurrentWindowRuntimeAccountId } from ".
 import { buildWorkbenchRefreshSignature } from "./refreshSignature";
 import { getTokenAutomationSnapshot } from "./tokenAutomationState";
 import { promptWindowReloadForAccount } from "../../application/accounts/switchEffects";
+import type { RuntimeSwitchSource } from "../../application/accounts/runtimeSwitchCoordinator";
 
 const EXTERNAL_RUNTIME_RETRY_DELAY_MS = 1_000;
 export const EXTERNAL_STATE_POLL_INTERVAL_MS = 2_000;
@@ -21,7 +22,8 @@ type RefreshView = {
   markObservedAuthIdentity: (accountId?: string) => void;
   switchRuntimeAccount?: (
     accountId: string,
-    options?: RuntimeAccountSwitchOptions
+    options?: RuntimeAccountSwitchOptions,
+    source?: RuntimeSwitchSource
   ) => Promise<RuntimeAccountSwitchOutcome>;
 };
 
@@ -267,7 +269,9 @@ export class WorkbenchRefreshCoordinator {
         return false;
       }
 
-      const runtimeOutcome = (await view.switchRuntimeAccount?.(nextActive.id)) ?? { status: "unavailable" as const };
+      const runtimeOutcome = (await view.switchRuntimeAccount?.(nextActive.id, undefined, "external")) ?? {
+        status: "unavailable" as const
+      };
       if (runtimeOutcome.status === "switched") {
         return false;
       }
@@ -284,6 +288,13 @@ export class WorkbenchRefreshCoordinator {
           runtimeOutcome.message
         );
         return false;
+      }
+      if (runtimeOutcome.status === "suppressed") {
+        // A separate local or cross-host transaction may have won the lease
+        // between observing the auth file and reaching this handoff. Retry
+        // once that transaction has had time to settle; the Gateway route is
+        // intentionally a stable owner and must not cause a retry loop.
+        return runtimeOutcome.reason === "operationInProgress";
       }
 
       const copy = getExternalAuthSyncCopy();

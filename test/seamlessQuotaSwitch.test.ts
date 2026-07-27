@@ -5,7 +5,6 @@ import { FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS } from "../src/application/accou
 import type { CodexAccountRecord } from "../src/core/types";
 import type { AccountsRepository } from "../src/storage";
 import { initSeamlessSwitchRuntimeState } from "../src/presentation/workbench/seamlessSwitchState";
-import { routeRuntimeAccountSwitch } from "../src/presentation/workbench/accountsWorkbench";
 
 describe("seamless 5-hour quota-band switching", () => {
   beforeEach(() => {
@@ -283,7 +282,7 @@ describe("seamless 5-hour quota-band switching", () => {
     });
   });
 
-  it("keeps a Free account on the highest fresh same-Free quota at the selected threshold", async () => {
+  it("ranks a Free account's windowed targets by five-hour quota before plan tier", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
@@ -299,7 +298,7 @@ describe("seamless 5-hour quota-band switching", () => {
     const higherPlus = account("plus", false, 100);
     higherPlus.planType = "plus";
     const repo = repository(active, lowerFree, higherPlus, higherFree);
-    const switchRuntimeAccount = vi.fn(async () => switched(higherFree));
+    const switchRuntimeAccount = vi.fn(async () => switched(higherPlus));
 
     await expect(
       maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, {
@@ -308,13 +307,13 @@ describe("seamless 5-hour quota-band switching", () => {
       })
     ).resolves.toBe(true);
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(higherFree.id, {
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(higherPlus.id, {
       gracePeriodMs: 0,
       recoverRecentUsageLimitedTurns: true
     });
   });
 
-  it("falls back to the normal mixed selector when no safe Free peer remains", async () => {
+  it("uses a fresh Free reserve candidate when no pool target has a five-hour window", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
@@ -323,15 +322,12 @@ describe("seamless 5-hour quota-band switching", () => {
     });
     const active = account("active", true, 3);
     active.planType = "free";
-    const exhaustedFree = account("free-exhausted", false, 3);
-    exhaustedFree.planType = "free";
-    const staleFree = account("free-stale", false, 100);
-    staleFree.planType = "free";
-    staleFree.lastQuotaAt = Date.now() - FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS - 1;
-    const plus = account("plus", false, 90);
-    plus.planType = "plus";
-    const repo = repository(active, exhaustedFree, staleFree, plus);
-    const switchRuntimeAccount = vi.fn(async () => switched(plus));
+    const freeReserve = reserveAccount("free-reserve", false, 100);
+    freeReserve.planType = "ChatGPT K-12 Plan";
+    const plusReserve = reserveAccount("plus-reserve", false, 90);
+    plusReserve.planType = "plus";
+    const repo = repository(active, plusReserve, freeReserve);
+    const switchRuntimeAccount = vi.fn(async () => switched(freeReserve));
 
     await expect(
       maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, {
@@ -340,7 +336,7 @@ describe("seamless 5-hour quota-band switching", () => {
       })
     ).resolves.toBe(true);
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(plus.id, {
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(freeReserve.id, {
       gracePeriodMs: 0,
       recoverRecentUsageLimitedTurns: true
     });
@@ -418,6 +414,37 @@ describe("seamless 5-hour quota-band switching", () => {
     ).resolves.toBe(true);
 
     expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      recoverRecentUsageLimitedTurns: true
+    });
+  });
+
+  it("uses a fresh Free reserve target after all conversations exhaust when no target has a five-hour window", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: false,
+      seamlessSwitchLowQuotaEnabled: true,
+      seamlessSwitchThreshold: 0,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 74);
+    active.planType = "free";
+    const freeReserve = reserveAccount("free-reserve", false, 100);
+    freeReserve.planType = "k12";
+    const plusReserve = reserveAccount("plus-reserve", false, 90);
+    plusReserve.planType = "plus";
+    const repo = repository(active, plusReserve, freeReserve);
+    const switchRuntimeAccount = vi.fn(async () => switched(freeReserve));
+
+    await expect(
+      maybeSeamlessBalanceSwitchForActiveQuota(
+        repo as unknown as AccountsRepository,
+        { refresh: vi.fn(), switchRuntimeAccount },
+        { trigger: "runtimeUsageLimitExhaustion", activeAccountId: active.id }
+      )
+    ).resolves.toBe(true);
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(freeReserve.id, {
       gracePeriodMs: 0,
       recoverRecentUsageLimitedTurns: true
     });
@@ -674,6 +701,36 @@ describe("seamless 5-hour quota-band switching", () => {
     });
   });
 
+  it("keeps Free/K12 reserve candidates within the two-minute freshness window for a Free reserve source", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: true,
+      seamlessSwitchThreshold: 3,
+      hotSwitchEnabled: true
+    });
+    const active = reserveAccount("active", true, 3);
+    active.planType = "free";
+    const staleK12Reserve = reserveAccount("stale-k12", false, 100);
+    staleK12Reserve.planType = "k12";
+    staleK12Reserve.lastQuotaAt = Date.now() - FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS - 1;
+    const plusReserve = reserveAccount("plus", false, 90);
+    plusReserve.planType = "plus";
+    const repo = repository(active, staleK12Reserve, plusReserve);
+    const switchRuntimeAccount = vi.fn(async () => switched(plusReserve));
+
+    await expect(
+      maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, {
+        refresh: vi.fn(),
+        switchRuntimeAccount
+      })
+    ).resolves.toBe(true);
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(plusReserve.id, {
+      gracePeriodMs: 0,
+      recoverRecentUsageLimitedTurns: true
+    });
+  });
+
   it("does not force-switch to another account at or below the selected threshold", async () => {
     configure({
       seamlessSwitchEnabled: true,
@@ -761,37 +818,6 @@ describe("seamless 5-hour quota-band switching", () => {
 
     expect(repo.switchAccount).toHaveBeenCalledWith(candidate.id);
     expect(view.switchRuntimeAccount).not.toHaveBeenCalled();
-  });
-
-  it("only exposes the original switch fallback when the seamless master switch is off", async () => {
-    const runtime = {
-      isEnabled: vi.fn(() => false),
-      switchAccount: vi.fn()
-    };
-
-    await expect(routeRuntimeAccountSwitch("candidate", runtime, false)).resolves.toEqual({
-      status: "unavailable"
-    });
-    await expect(routeRuntimeAccountSwitch("candidate", runtime, true)).resolves.toMatchObject({
-      status: "failed",
-      message: expect.stringContaining("not installed")
-    });
-    expect(runtime.switchAccount).not.toHaveBeenCalled();
-  });
-
-  it("keeps manual seamless routing available without applying automatic quota eligibility", async () => {
-    const target = account("manually-selected", false, 0);
-    target.lastQuotaAt = undefined;
-    target.quotaSummary = undefined;
-    const runtime = {
-      isEnabled: vi.fn(() => true),
-      switchAccount: vi.fn(async () => switched(target))
-    };
-
-    await expect(routeRuntimeAccountSwitch(target.id, runtime, true)).resolves.toMatchObject({
-      status: "switched"
-    });
-    expect(runtime.switchAccount).toHaveBeenCalledWith(target.id);
   });
 });
 

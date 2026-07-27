@@ -1,0 +1,17 @@
+{
+  "name": "@codex-accounts/session-ingress",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Portable, credential-safe session normalization and local ingress protocol for optional Codex Accounts integrations.",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "npm test"
+  }
+}

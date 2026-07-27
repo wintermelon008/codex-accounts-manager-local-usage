@@ -18,10 +18,10 @@ export type HotSwitchStatus = {
   switching: boolean;
   httpTransportForced: boolean;
   transportMode: "http" | "default";
-  providerKind: "chatgpt" | "sub2api" | "default";
-  sub2apiGatewayActive: boolean;
-  sub2apiGatewayConfigured: boolean;
-  sub2apiGatewayAutoFallbackEnabled: boolean;
+  providerKind: "chatgpt" | "gateway" | "default";
+  gatewayActive: boolean;
+  gatewayConfigured: boolean;
+  gatewayAutoFallbackEnabled: boolean;
   /** Whether the shim records low-quota signals for automatic switching/recovery. */
   usageLimitObservationEnabled: boolean;
   recentUsageLimitedThreads: number;
@@ -36,10 +36,16 @@ export type HotSwitchStatus = {
   appServerPid: number | null;
 };
 
-export type Sub2ApiGatewayRuntimeStatus = {
+/**
+ * Public, provider-neutral view of the one local OpenAI-compatible Gateway
+ * route supported by the seamless runtime. Provider integrations own their
+ * endpoint configuration and credentials; the runtime only owns the local
+ * route and its safe ChatGPT fallback transaction.
+ */
+export type GatewayRuntimeStatus = {
   active: boolean;
   ready: boolean;
-  route?: "sub2api" | "chatgpt";
+  route?: "gateway" | "chatgpt";
   autoFallbackToChatGpt?: boolean;
   quotaExhaustionCount?: number;
   lastQuotaExhaustionAt?: number;
@@ -50,11 +56,9 @@ export type Sub2ApiGatewayRuntimeStatus = {
   failedRequestCount: number;
   lastRequestAt?: number;
   lastFailureAt?: number;
-  lastFailureOrigin?: "adapter" | "sub2api";
+  lastFailureOrigin?: "adapter" | "upstream";
   lastFailureStatusCode?: number;
-  /** A bounded Node transport code (for example ECONNRESET), never an error message. */
   lastFailureTransportCode?: string;
-  /** Sanitized request metadata; never contains a query string, header, or body. */
   lastFailureRequestMethod?: string;
   lastFailureRequestPath?: string;
   lastFailureContentLength?: number;
@@ -97,6 +101,8 @@ type HotSwitchSnapshotRollbackParams = {
 };
 
 export type HotSwitchAccountParams = {
+  /** Coordinator-owned opaque ID used only to reconcile a disconnected transaction. */
+  operationId?: string;
   accessToken: string;
   accountId: string;
   localAccountId: string;
@@ -109,11 +115,13 @@ export type HotSwitchAccountParams = {
 
 /**
  * Gateway fallback is also a transactional auth switch.  The adapter keeps
- * serving Sub2API until the target identity and local active-account commit
+ * serving Gateway until the target identity and local active-account commit
  * both succeed; if either fails, the previous ChatGPT credentials are restored
  * before the relay is left on its original route.
  */
 export type HotSwitchGatewayFallbackParams = {
+  /** Coordinator-owned opaque ID used only to reconcile a disconnected transaction. */
+  operationId?: string;
   accessToken: string;
   accountId: string;
   localAccountId: string;
@@ -138,10 +146,21 @@ export type HotSwitchAccountResult =
       activeTurns: number;
     };
 
+export type HotSwitchOperationStatus =
+  | { operationId: string; state: "unknown" | "pending" | "switching" }
+  | { operationId: string; state: "succeeded"; result: HotSwitchAccountResult }
+  | { operationId: string; state: "failed"; message: string };
+
 export type RuntimeAccountSwitchOutcome =
   | HotSwitchAccountResult
   | { status: "unavailable" }
-  | { status: "failed"; message: string };
+  | { status: "failed"; message: string }
+  /**
+   * The request was intentionally not sent to the runtime. This is used for
+   * stale automatic work while another host owns a switch, or while the
+   * Gateway route deliberately owns the provider.
+   */
+  | { status: "suppressed"; reason: "gatewayActive" | "operationInProgress" };
 
 export type HotSwitchRefreshResult = {
   accessToken: string;
@@ -170,6 +189,8 @@ type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  method: string;
+  operationId?: string;
 };
 
 type RpcMessage = {
@@ -179,6 +200,26 @@ type RpcMessage = {
   result?: unknown;
   error?: { message?: string };
 };
+
+/**
+ * The manager no longer knows whether the shim committed after a control
+ * socket timeout or disconnect. Callers with an operation ID can reconcile
+ * through the shim before releasing their shared runtime lease.
+ */
+export class HotSwitchOperationUncertainError extends Error {
+  constructor(
+    readonly method: "runtime/switch" | "runtime/gateway/fallback",
+    reason: string,
+    readonly operationId?: string
+  ) {
+    super(`${method} outcome is uncertain: ${reason}`);
+    this.name = "HotSwitchOperationUncertainError";
+  }
+}
+
+export function isHotSwitchOperationUncertainError(error: unknown): error is HotSwitchOperationUncertainError {
+  return error instanceof HotSwitchOperationUncertainError;
+}
 
 export class CodexHotSwitchBridge {
   private socket: net.Socket | undefined;
@@ -212,16 +253,16 @@ export class CodexHotSwitchBridge {
     return this.request<HotSwitchUsageAttributionResult>("runtime/usage/activate", params, REQUEST_TIMEOUT_MS);
   }
 
-  async configureSub2ApiGatewayCredential(apiKey: string): Promise<Sub2ApiGatewayRuntimeStatus> {
-    return this.request<Sub2ApiGatewayRuntimeStatus>("gateway/configure", { apiKey }, REQUEST_TIMEOUT_MS);
+  async configureGatewayCredential(apiKey: string): Promise<GatewayRuntimeStatus> {
+    return this.request<GatewayRuntimeStatus>("gateway/configure", { apiKey }, REQUEST_TIMEOUT_MS);
   }
 
-  async activateSub2ApiGateway(): Promise<Sub2ApiGatewayRuntimeStatus> {
-    return this.request<Sub2ApiGatewayRuntimeStatus>("gateway/activate", {}, REQUEST_TIMEOUT_MS);
+  async activateGateway(): Promise<GatewayRuntimeStatus> {
+    return this.request<GatewayRuntimeStatus>("gateway/activate", {}, REQUEST_TIMEOUT_MS);
   }
 
-  async getSub2ApiGatewayStatus(): Promise<Sub2ApiGatewayRuntimeStatus> {
-    return this.request<Sub2ApiGatewayRuntimeStatus>("gateway/status", {}, REQUEST_TIMEOUT_MS);
+  async getGatewayStatus(): Promise<GatewayRuntimeStatus> {
+    return this.request<GatewayRuntimeStatus>("gateway/status", {}, REQUEST_TIMEOUT_MS);
   }
 
   async switchAccount(params: HotSwitchAccountParams): Promise<HotSwitchAccountResult> {
@@ -232,6 +273,10 @@ export class CodexHotSwitchBridge {
   async fallbackToChatGpt(params: HotSwitchGatewayFallbackParams): Promise<HotSwitchAccountResult> {
     const timeoutMs = Math.max(REQUEST_TIMEOUT_MS, params.gracePeriodMs + SWITCH_COMPLETION_BUFFER_MS);
     return this.request<HotSwitchAccountResult>("runtime/gateway/fallback", params, timeoutMs);
+  }
+
+  async getOperationStatus(operationId: string): Promise<HotSwitchOperationStatus> {
+    return this.request<HotSwitchOperationStatus>("runtime/operation/status", { operationId }, REQUEST_TIMEOUT_MS);
   }
 
   dispose(): void {
@@ -252,10 +297,11 @@ export class CodexHotSwitchBridge {
 
     const socket = await this.connect();
     const id = `manager:${++this.requestSequence}`;
+    const operationId = readOperationId(params);
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        if (!socket.destroyed && (method === "runtime/switch" || method === "runtime/gateway/fallback")) {
+        if (!socket.destroyed && isRuntimeMutationMethod(method)) {
           socket.write(
             `${JSON.stringify({
               id: `cancel:${id}`,
@@ -264,12 +310,18 @@ export class CodexHotSwitchBridge {
             })}\n`
           );
         }
-        reject(new Error(`${method} timed out`));
+        reject(
+          isRuntimeMutationMethod(method)
+            ? new HotSwitchOperationUncertainError(method, "the control request timed out", operationId)
+            : new Error(`${method} timed out`)
+        );
       }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
-        timer
+        timer,
+        method,
+        operationId
       });
       socket.write(`${JSON.stringify({ id, method, params })}\n`);
     });
@@ -434,10 +486,23 @@ export class CodexHotSwitchBridge {
   private rejectPending(error: Error): void {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
-      pending.reject(error);
+      pending.reject(
+        isRuntimeMutationMethod(pending.method)
+          ? new HotSwitchOperationUncertainError(pending.method, error.message, pending.operationId)
+          : error
+      );
     }
     this.pending.clear();
   }
+}
+
+function isRuntimeMutationMethod(method: string): method is "runtime/switch" | "runtime/gateway/fallback" {
+  return method === "runtime/switch" || method === "runtime/gateway/fallback";
+}
+
+function readOperationId(params: object): string | undefined {
+  const operationId = (params as Record<string, unknown>)["operationId"];
+  return typeof operationId === "string" && operationId.length > 0 ? operationId : undefined;
 }
 
 export function getHotSwitchSocketPath(extensionHostPid: number): string {

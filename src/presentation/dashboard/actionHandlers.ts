@@ -21,7 +21,7 @@ import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchStat
 import { promptForTags } from "../tagEditor";
 import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from "./actionUtils";
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
-import { getSub2ApiGatewayController } from "../../local/sub2apiGateway/registry";
+import { getActiveManagerIntegrationHost } from "../../integrations";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -131,28 +131,11 @@ async function runDashboardAction(
     case "refreshLocalUsage":
       await ctx.refreshLocalUsage?.();
       return undefined;
-    case "sub2apiGatewayActivate":
-      await requireSub2ApiGatewayController().activate();
-      ctx.schedulePublishState();
-      return undefined;
-    case "sub2apiGatewayDeactivate":
-      await requireSub2ApiGatewayController().deactivate();
-      ctx.schedulePublishState();
-      return undefined;
-    case "sub2apiGatewayRefresh":
-      await requireSub2ApiGatewayController().refresh();
-      ctx.schedulePublishState();
-      return undefined;
-    case "sub2apiGatewayConfigureCredential":
-      await requireSub2ApiGatewayController().configureCredential();
-      ctx.schedulePublishState();
-      return undefined;
-    case "sub2apiGatewayConfigureObserverCredential":
-      await requireSub2ApiGatewayController().configureObserverCredential();
-      ctx.schedulePublishState();
-      return undefined;
-    case "sub2apiGatewayOpenConfig":
-      await requireSub2ApiGatewayController().openConfiguration();
+    case "integrationAction":
+      await requireManagerIntegrationHost().runDashboardAction(
+        requireDashboardIntegrationPayload(payload, "integrationId"),
+        requireDashboardIntegrationPayload(payload, "integrationActionId")
+      );
       ctx.schedulePublishState();
       return undefined;
     case "updateTags":
@@ -232,12 +215,23 @@ async function runDashboardAction(
   }
 }
 
-function requireSub2ApiGatewayController() {
-  const gateway = getSub2ApiGatewayController();
-  if (!gateway) {
-    throw new Error("The local Sub2API Gateway feature is disabled");
+function requireManagerIntegrationHost() {
+  const integrationHost = getActiveManagerIntegrationHost();
+  if (!integrationHost) {
+    throw new Error("No optional Manager integration is currently available");
   }
-  return gateway;
+  return integrationHost;
+}
+
+function requireDashboardIntegrationPayload(
+  payload: DashboardActionPayload | undefined,
+  key: "integrationId" | "integrationActionId"
+): string {
+  const value = payload?.[key];
+  if (!value?.trim()) {
+    throw new Error("The requested Manager integration action is incomplete");
+  }
+  return value;
 }
 
 async function handleShareTokens(

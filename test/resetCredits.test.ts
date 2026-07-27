@@ -3,6 +3,7 @@ import { fetchResetCredits } from "../src/services/quota";
 
 describe("fetchResetCredits", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -60,6 +61,7 @@ describe("fetchResetCredits", () => {
   });
 
   it("derives next expiry from ISO expires_at values in available credits", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-26T00:00:00.000Z"));
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>

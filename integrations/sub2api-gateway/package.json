@@ -1,0 +1,33 @@
+{
+  "name": "codex-accounts-sub2api-gateway",
+  "displayName": "Codex Accounts Sub2API Gateway",
+  "description": "Optional local Sub2API Gateway integration for Codex Accounts Manager.",
+  "version": "0.1.2",
+  "publisher": "codex-accounts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wintermelon008/codex-accounts-manager-local-usage.git"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./src/extension.cjs",
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "audit:portability": "node scripts/audit-portability.cjs",
+    "package": "npm test && npm run audit:portability && node scripts/prepare-dist.cjs && npx --no-install vsce package --no-dependencies --out dist/codex-accounts-sub2api-gateway.vsix"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "2.32.0"
+  }
+}

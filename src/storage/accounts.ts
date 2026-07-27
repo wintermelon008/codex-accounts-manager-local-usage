@@ -217,9 +217,13 @@ export class AccountsRepository {
       return;
     }
     this.disposed = true;
-    disposeWriteCoordinator(this.state, (index, baseIndex) => {
-      return this.persistIndexSync(index, baseIndex);
-    });
+    disposeWriteCoordinator(
+      this.state,
+      (index, baseIndex) => {
+        return this.persistIndexSync(index, baseIndex);
+      },
+      (index, baseIndex) => this.persistIndex(index, baseIndex)
+    );
   }
 
   /**
@@ -587,6 +591,8 @@ export class AccountsRepository {
       persistImmediately?: boolean;
       restoreSource?: CodexAccountsRestoreResult["source"];
       addedVia?: CodexAccountRecord["addedVia"];
+      disableBalancePool?: boolean;
+      flushImmediately?: boolean;
     } = {}
   ): Promise<CodexAccountRecord> {
     const claims = extractClaims(tokens.idToken, tokens.accessToken);
@@ -599,6 +605,28 @@ export class AccountsRepository {
       ...claims,
       email: claims.email
     };
+    const id = buildAccountStorageId(claimsWithEmail.email, claims.accountId, claims.organizationId);
+
+    // A local command import can replace credentials for an account that is
+    // already eligible for seamless switching. Persist the quarantine before
+    // any remote profile request so another scheduler pass cannot select the
+    // stale credentials during that request.
+    if (options.disableBalancePool) {
+      const quarantineIndex = options.allowRecoveryWrite ? await this.readIndexForRecovery() : await this.readIndex();
+      const existing = quarantineIndex.accounts.find((item) => item.id === id);
+      if (existing?.balancePoolEnabled) {
+        existing.balancePoolEnabled = false;
+        existing.updatedAt = Date.now();
+        if (options.allowRecoveryWrite) {
+          markRecoveryPending(this.state, quarantineIndex);
+        } else {
+          this.writeIndex(quarantineIndex);
+        }
+        if (options.flushImmediately) {
+          await this.flushPendingSave();
+        }
+      }
+    }
 
     // 异步获取远程配置，不阻塞主要流程
     let remoteProfile;
@@ -610,7 +638,6 @@ export class AccountsRepository {
 
     const index = options.allowRecoveryWrite ? await this.readIndexForRecovery() : await this.readIndex();
     const previousActiveId = index.currentAccountId;
-    const id = buildAccountStorageId(claimsWithEmail.email, claims.accountId, claims.organizationId);
     const existing = index.accounts.find((item) => item.id === id);
     const now = Date.now();
     const account = buildAccountRecordDraft({
@@ -624,6 +651,9 @@ export class AccountsRepository {
       forceActive,
       now
     });
+    if (options.disableBalancePool) {
+      account.balancePoolEnabled = false;
+    }
 
     // 替换或添加账号
     index.accounts = index.accounts.filter((item) => item.id !== id);
@@ -716,6 +746,20 @@ export class AccountsRepository {
     return this.importSharedAccountsInternal(input);
   }
 
+  /**
+   * Credentials arriving through the local command inbox must complete a live
+   * quota validation before they can be selected. This also quarantines an
+   * existing pool member while its credentials are being replaced.
+   */
+  async importSharedAccountsForLocalInbox(
+    input: SharedCodexAccountJson | SharedCodexAccountJson[]
+  ): Promise<CodexAccountRecord[]> {
+    return this.importSharedAccountsInternal(input, {
+      disableBalancePool: true,
+      flushImmediately: true
+    });
+  }
+
   async importSharedAccountsWithSummary(
     input: SharedCodexAccountJson | SharedCodexAccountJson[]
   ): Promise<CodexImportResultSummary> {
@@ -756,6 +800,8 @@ export class AccountsRepository {
       allowRecoveryWrite?: boolean;
       persistImmediately?: boolean;
       restoreSource?: CodexAccountsRestoreResult["source"];
+      disableBalancePool?: boolean;
+      flushImmediately?: boolean;
     } = {}
   ): Promise<CodexAccountRecord[]> {
     const entries = toSharedEntries(input);
@@ -766,7 +812,9 @@ export class AccountsRepository {
       const created = await this.upsertFromTokensInternal(restoredTokens, false, {
         allowRecoveryWrite: options.allowRecoveryWrite,
         persistImmediately: false,
-        addedVia: "json"
+        addedVia: "json",
+        disableBalancePool: options.disableBalancePool,
+        flushImmediately: options.flushImmediately
       });
       const index = options.allowRecoveryWrite ? await this.readIndexForRecovery() : await this.readIndex();
       const account = index.accounts.find((item) => item.id === created.id);
@@ -775,6 +823,10 @@ export class AccountsRepository {
       }
 
       applySharedAccountEntry(account, entry);
+      if (options.disableBalancePool) {
+        account.balancePoolEnabled = false;
+        account.updatedAt = Math.max(account.updatedAt, Date.now());
+      }
 
       const storedTokens = {
         ...restoredTokens,
@@ -788,6 +840,9 @@ export class AccountsRepository {
         await this.persistRecoveredIndex(index, options.restoreSource ?? "shared_json");
       } else {
         this.writeIndex(index);
+        if (options.flushImmediately) {
+          await this.flushPendingSave();
+        }
       }
       imported.push({ ...account });
     }

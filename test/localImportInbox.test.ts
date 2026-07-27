@@ -16,21 +16,41 @@ vi.mock("../src/application/accounts/balanceScheduler", () => ({
   getBalanceQuotaCapability: getBalanceQuotaCapabilityMock
 }));
 
-import { LocalImportInbox } from "../src/presentation/workbench/localImportInbox";
+import { getLocalImportInboxPath, LocalImportInbox } from "../src/presentation/workbench/localImportInbox";
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
 
 describe("LocalImportInbox", () => {
   let temporaryDirectory: string;
+  let previousManagerQueueDirectory: string | undefined;
+  let previousLegacyQueueDirectory: string | undefined;
 
   beforeEach(async () => {
     temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "codex-import-inbox-test-"));
+    previousManagerQueueDirectory = process.env["MANAGER_IMPORT_QUEUE_DIR"];
+    previousLegacyQueueDirectory = process.env["CODEX_IMPORT_QUEUE_DIR"];
+    delete process.env["MANAGER_IMPORT_QUEUE_DIR"];
+    delete process.env["CODEX_IMPORT_QUEUE_DIR"];
     refreshImportedAccountQuotaMock.mockReset();
     getBalanceQuotaCapabilityMock.mockReset();
   });
 
   afterEach(async () => {
+    restoreEnvironment("MANAGER_IMPORT_QUEUE_DIR", previousManagerQueueDirectory);
+    restoreEnvironment("CODEX_IMPORT_QUEUE_DIR", previousLegacyQueueDirectory);
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  });
+
+  it("uses the private-bot queue variable before the legacy compatibility variable", () => {
+    const managerQueue = path.join(temporaryDirectory, "manager-inbox");
+    const legacyQueue = path.join(temporaryDirectory, "legacy-inbox");
+    process.env["MANAGER_IMPORT_QUEUE_DIR"] = managerQueue;
+    process.env["CODEX_IMPORT_QUEUE_DIR"] = legacyQueue;
+
+    expect(getLocalImportInboxPath()).toBe(managerQueue);
+
+    process.env["MANAGER_IMPORT_QUEUE_DIR"] = "relative-inbox";
+    expect(() => getLocalImportInboxPath()).toThrow("must be absolute");
   });
 
   it("imports through the repository, refreshes quota, and enables only an eligible pool account", async () => {
@@ -40,7 +60,7 @@ describe("LocalImportInbox", () => {
     const account = { id: "account-1", email: "one@example.test", isActive: false, createdAt: 1, updatedAt: 1 };
     const repo = {
       tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release }),
-      importSharedAccounts: vi.fn().mockResolvedValue([account]),
+      importSharedAccountsForLocalInbox: vi.fn().mockResolvedValue([account]),
       getAccount: vi.fn().mockResolvedValue(account),
       setBalancePoolMembership: vi.fn().mockResolvedValue(account)
     };
@@ -52,7 +72,7 @@ describe("LocalImportInbox", () => {
     await inbox.processPendingJobs();
     inbox.dispose();
 
-    expect(repo.importSharedAccounts).toHaveBeenCalledOnce();
+    expect(repo.importSharedAccountsForLocalInbox).toHaveBeenCalledOnce();
     expect(refreshImportedAccountQuotaMock).toHaveBeenCalledWith(repo, account.id);
     expect(repo.setBalancePoolMembership).toHaveBeenCalledWith(account.id, true);
     expect(release).toHaveBeenCalledOnce();
@@ -73,7 +93,7 @@ describe("LocalImportInbox", () => {
     const account = { id: "account-401", email: "expired@example.test", isActive: false, createdAt: 1, updatedAt: 1 };
     const repo = {
       tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release }),
-      importSharedAccounts: vi.fn().mockResolvedValue([account]),
+      importSharedAccountsForLocalInbox: vi.fn().mockResolvedValue([account]),
       getAccount: vi.fn().mockResolvedValue(account),
       setBalancePoolMembership: vi.fn().mockResolvedValue(account)
     };
@@ -89,7 +109,13 @@ describe("LocalImportInbox", () => {
     const result = JSON.parse(
       await fs.readFile(path.join(temporaryDirectory, "results", `${JOB_ID}.json`), "utf8")
     ) as Record<string, unknown>;
-    expect(result).toMatchObject({ status: "partial", imported: 1, pool_enabled: 0, refresh_failed: 1, auth_failed: 1 });
+    expect(result).toMatchObject({
+      status: "partial",
+      imported: 1,
+      pool_enabled: 0,
+      refresh_failed: 1,
+      auth_failed: 1
+    });
   });
 });
 
@@ -113,4 +139,12 @@ async function writeJob(queuePath: string, jobId: string): Promise<void> {
     }),
     { encoding: "utf8", mode: 0o600 }
   );
+}
+
+function restoreEnvironment(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
 }

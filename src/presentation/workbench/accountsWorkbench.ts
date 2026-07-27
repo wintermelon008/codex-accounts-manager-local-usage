@@ -1,11 +1,11 @@
 import * as vscode from "vscode";
 import { maybeSeamlessBalanceSwitchForActiveQuota, refreshSingleQuota } from "../../application/accounts/quota";
+import { RuntimeSwitchCoordinator, RuntimeSwitchSource } from "../../application/accounts/runtimeSwitchCoordinator";
 import { registerCommands } from "../../commands";
 import {
   getCodexAccountsConfiguration,
   isLocalImportInboxEnabled,
-  isSeamlessSwitchEnabled,
-  isSub2ApiGatewayEnabled
+  isSeamlessSwitchEnabled
 } from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
@@ -14,9 +14,12 @@ import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitc
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
 import { LocalImportInbox } from "./localImportInbox";
-import { Sub2ApiGatewayController } from "../../local/sub2apiGateway/controller";
-import { selectFreshSub2ApiGatewayFallbackCandidate } from "../../local/sub2apiGateway/fallbackSelection";
-import { setSub2ApiGatewayController } from "../../local/sub2apiGateway/registry";
+import { selectFreshGatewayFallbackCandidate } from "../../application/accounts/gatewayFallbackSelection";
+import {
+  ManagerIntegrationHost,
+  setActiveManagerIntegrationHost,
+  type CodexAccountsIntegrationApi
+} from "../../integrations";
 import { refreshQuotaSummaryPanel } from "../dashboard/panel";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
 import {
@@ -33,14 +36,27 @@ export class AccountsWorkbench {
   private readonly statusBar: AccountsStatusBarProvider;
   private readonly refreshCoordinator: WorkbenchRefreshCoordinator;
   private readonly hotSwitchRuntime: CodexHotSwitchRuntime;
+  private readonly runtimeSwitchCoordinator: RuntimeSwitchCoordinator;
   private readonly localImportInbox: LocalImportInbox | undefined;
-  private sub2apiGateway: Sub2ApiGatewayController | undefined;
+  private readonly integrationHost: ManagerIntegrationHost;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.repo = new AccountsRepository(context);
     this.statusBar = new AccountsStatusBarProvider(context, this.repo);
     this.refreshCoordinator = new WorkbenchRefreshCoordinator(context, this.repo, this.statusBar);
     this.hotSwitchRuntime = new CodexHotSwitchRuntime(context, this.repo);
+    this.runtimeSwitchCoordinator = new RuntimeSwitchCoordinator(this.repo, this.hotSwitchRuntime, () =>
+      isSeamlessSwitchEnabled()
+    );
+    this.integrationHost = new ManagerIntegrationHost({
+      isActive: () => this.hotSwitchRuntime.isGatewayActive(),
+      isConfigured: () => this.hotSwitchRuntime.isGatewayConfigured(),
+      activate: (config, credential) => this.hotSwitchRuntime.activateGateway(config, credential),
+      deactivate: () => this.hotSwitchRuntime.deactivateGateway(),
+      configureCredential: (credential) => this.hotSwitchRuntime.configureGatewayCredential(credential),
+      getStatus: () => this.hotSwitchRuntime.getGatewayStatus(),
+      fallbackToChatGpt: () => this.fallbackGatewayToChatGpt()
+    });
     this.localImportInbox = isLocalImportInboxEnabled()
       ? new LocalImportInbox(this.repo, () => {
           void this.statusBar.refresh();
@@ -76,28 +92,24 @@ export class AccountsWorkbench {
     this.context.subscriptions.push({ dispose: () => this.repo.dispose() });
     this.context.subscriptions.push({ dispose: () => this.refreshCoordinator.dispose() });
     this.context.subscriptions.push(this.hotSwitchRuntime);
+    setActiveManagerIntegrationHost(this.integrationHost);
+    this.context.subscriptions.push(this.integrationHost);
+    this.context.subscriptions.push(
+      this.integrationHost.onDidChange(() => {
+        void refreshQuotaSummaryPanel();
+      })
+    );
     if (this.localImportInbox) {
       this.context.subscriptions.push(this.localImportInbox);
     }
-    await measureStep("sub2apiGateway.initialize", () => this.updateSub2ApiGatewayFeature());
-    this.context.subscriptions.push(
-      vscode.workspace.onDidChangeConfiguration((event) => {
-        if (
-          event.affectsConfiguration("codexAccounts.sub2apiGatewayEnabled") ||
-          event.affectsConfiguration("codexAccounts.sub2apiGatewayConfigFile")
-        ) {
-          void this.updateSub2ApiGatewayFeature();
-        }
-      })
-    );
 
     const refreshers = {
       ...this.refreshCoordinator.createRefreshView(),
       switchRuntimeAccount: (
         accountId: string,
-        options?: RuntimeAccountSwitchOptions
-      ): Promise<RuntimeAccountSwitchOutcome> =>
-        routeRuntimeAccountSwitch(accountId, this.hotSwitchRuntime, isSeamlessSwitchEnabled(), options)
+        options?: RuntimeAccountSwitchOptions,
+        source: RuntimeSwitchSource = "automatic"
+      ): Promise<RuntimeAccountSwitchOutcome> => this.runtimeSwitchCoordinator.switchAccount(accountId, options, source)
     };
     await measureStep("registerCommands", () => {
       registerCommands(this.context, this.repo, refreshers, this.hotSwitchRuntime);
@@ -177,50 +189,23 @@ export class AccountsWorkbench {
     this.refreshCoordinator.dispose();
     this.hotSwitchRuntime.dispose();
     this.localImportInbox?.dispose();
-    this.sub2apiGateway?.dispose();
-    this.sub2apiGateway = undefined;
-    setSub2ApiGatewayController(undefined);
+    setActiveManagerIntegrationHost(undefined);
+    this.integrationHost.dispose();
     this.repo.dispose();
   }
 
-  private async updateSub2ApiGatewayFeature(): Promise<void> {
-    if (!isSub2ApiGatewayEnabled()) {
-      const previous = this.sub2apiGateway;
-      this.sub2apiGateway = undefined;
-      setSub2ApiGatewayController(undefined);
-      if (previous) {
-        await previous.disableFeature();
-      }
-      await refreshQuotaSummaryPanel();
-      return;
-    }
-
-    const previous = this.sub2apiGateway;
-    if (previous) {
-      previous.dispose();
-    }
-    const gateway = new Sub2ApiGatewayController(
-      this.context,
-      this.hotSwitchRuntime,
-      () => {
-        void refreshQuotaSummaryPanel();
-      },
-      () => this.fallbackSub2ApiGatewayToChatGpt()
-    );
-    this.sub2apiGateway = gateway;
-    setSub2ApiGatewayController(gateway);
-    await gateway.initialize();
-    await refreshQuotaSummaryPanel();
+  getIntegrationApi(): CodexAccountsIntegrationApi {
+    return this.integrationHost.api;
   }
 
-  private async fallbackSub2ApiGatewayToChatGpt(): Promise<RuntimeAccountSwitchOutcome> {
+  private async fallbackGatewayToChatGpt(): Promise<RuntimeAccountSwitchOutcome> {
     const excludedAccountIds = new Set<string>();
     const refreshedAccountIds = new Set<string>();
     let lastCandidateFailure: string | undefined;
     try {
       const maximumCandidateAttempts = (await this.repo.listAccounts()).length;
       for (let candidateAttempt = 0; candidateAttempt < maximumCandidateAttempts; candidateAttempt += 1) {
-        const candidate = await selectFreshSub2ApiGatewayFallbackCandidate(
+        const candidate = await selectFreshGatewayFallbackCandidate(
           {
             listAccounts: () => this.repo.listAccounts(),
             refreshQuota: (accountId) =>
@@ -244,7 +229,7 @@ export class AccountsWorkbench {
             lastCandidateFailure = "The selected fallback account has no usable Codex credentials";
             continue;
           }
-          return await this.hotSwitchRuntime.fallbackSub2ApiGatewayToChatGpt(candidate.id);
+          return await this.runtimeSwitchCoordinator.fallbackGatewayToChatGpt(candidate.id);
         } catch (error) {
           lastCandidateFailure = error instanceof Error ? error.message : String(error);
         }
@@ -257,7 +242,7 @@ export class AccountsWorkbench {
       status: "failed",
       message:
         lastCandidateFailure === undefined
-          ? "No eligible ChatGPT Auth account completed the mandatory quota refresh for Sub2API fallback"
+          ? "No eligible ChatGPT Auth account completed the mandatory quota refresh for Gateway fallback"
           : `No eligible ChatGPT Auth fallback completed safely: ${lastCandidateFailure}`
     };
   }
@@ -273,29 +258,5 @@ export class AccountsWorkbench {
     if (summary.status === "corrupted_unrecoverable") {
       void vscode.window.showWarningMessage(translate("message.indexRecoveryFailed"));
     }
-  }
-}
-
-export async function routeRuntimeAccountSwitch(
-  accountId: string,
-  runtime: Pick<CodexHotSwitchRuntime, "isEnabled" | "switchAccount">,
-  seamlessSwitchEnabled: boolean,
-  options?: RuntimeAccountSwitchOptions
-): Promise<RuntimeAccountSwitchOutcome> {
-  if (!seamlessSwitchEnabled) {
-    return { status: "unavailable" };
-  }
-  if (!runtime.isEnabled()) {
-    return {
-      status: "failed",
-      message: "Seamless Switching is enabled, but its runtime is not installed"
-    };
-  }
-  try {
-    return options ? await runtime.switchAccount(accountId, options) : await runtime.switchAccount(accountId);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn("[codexAccounts] hot switch failed without changing the persisted active account:", message);
-    return { status: "failed", message };
   }
 }

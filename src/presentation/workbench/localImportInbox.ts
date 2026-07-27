@@ -201,7 +201,7 @@ export class LocalImportInbox {
     for (const entry of job.accounts) {
       let account: CodexAccountRecord;
       try {
-        const accounts = await this.repo.importSharedAccounts(entry);
+        const accounts = await this.repo.importSharedAccountsForLocalInbox(entry);
         const importedAccount = accounts[0];
         if (!importedAccount) {
           throw new Error("empty import result");
@@ -235,7 +235,11 @@ export class LocalImportInbox {
     }
 
     const status =
-      imported === 0 ? "failed" : imported === job.accounts.length && poolEnabled === imported ? "completed" : "partial";
+      imported === 0
+        ? "failed"
+        : imported === job.accounts.length && poolEnabled === imported
+          ? "completed"
+          : "partial";
     return {
       schema: IMPORT_RESULT_SCHEMA,
       id: job.id,
@@ -253,9 +257,14 @@ export class LocalImportInbox {
 }
 
 export function getLocalImportInboxPath(): string {
-  const configured = process.env["CODEX_IMPORT_QUEUE_DIR"]?.trim();
-  if (configured && path.isAbsolute(configured)) {
-    return configured;
+  const managerQueuePath = process.env["MANAGER_IMPORT_QUEUE_DIR"]?.trim();
+  const configured =
+    managerQueuePath && managerQueuePath.length > 0 ? managerQueuePath : process.env["CODEX_IMPORT_QUEUE_DIR"]?.trim();
+  if (configured) {
+    if (!path.isAbsolute(configured)) {
+      throw new Error("local import queue path must be absolute");
+    }
+    return path.normalize(configured);
   }
   const configuredStateHome = process.env["XDG_STATE_HOME"]?.trim();
   const stateHome =

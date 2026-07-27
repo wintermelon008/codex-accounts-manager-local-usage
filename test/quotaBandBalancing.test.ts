@@ -6,8 +6,7 @@ import {
   getBalanceQuotaCapability,
   getFiveHourQuotaBand,
   isFreePlanType,
-  selectBalanceCandidate,
-  selectFreeExhaustionCandidate
+  selectBalanceCandidate
 } from "../src/application/accounts/balanceScheduler";
 import type { CodexAccountRecord } from "../src/core/types";
 import {
@@ -136,7 +135,7 @@ describe("5-hour quota band balancing", () => {
     ).toBeUndefined();
   });
 
-  it("prioritizes weekly quota during a weekly threshold switch", () => {
+  it("prioritizes five-hour quota during a weekly threshold switch", () => {
     const now = 10_000_000;
     const active = account("active", 100, now);
     active.quotaSummary!.weeklyPercentage = 1;
@@ -155,7 +154,7 @@ describe("5-hour quota band balancing", () => {
         lastSelectedAt: {},
         now
       })?.id
-    ).toBe("lower-hourly-healthy-weekly");
+    ).toBe("high-hourly-low-weekly");
   });
 
   it("rejects malformed percentages and quota timestamps outside the freshness window", () => {
@@ -254,55 +253,56 @@ describe("5-hour quota band balancing", () => {
     expect(selectBalanceCandidate(params)?.id).toBe("reserve");
   });
 
-  it("prioritizes the highest fresh same-Free five-hour quota at the configured threshold", () => {
+  it("prioritizes higher five-hour quota before plan tier and recognizes K12 as Free", () => {
     const now = 10_000_000;
     const active = account("active", 1, now);
     active.planType = "free";
-    const lowerFree = account("free-low", 22, now);
-    lowerFree.planType = "free";
-    const higherFree = account("free-high", 84, now);
-    higherFree.planType = "chatgpt_free_plan";
-    const reserve = reserveAccount("reserve", 100, now);
-    reserve.planType = "plus";
+    const k12 = account("k12", 80, now);
+    k12.planType = "ChatGPT K-12 Plan";
+    const plus = account("plus", 81, now);
+    plus.planType = "plus";
+    const pro = account("pro", 80, now);
+    pro.planType = "pro";
+    const params = {
+      accounts: [active, k12, plus, pro],
+      activeAccountId: active.id,
+      activeBand: 1,
+      switchThreshold: 1 as const,
+      requireFreshFreeCandidates: true,
+      lastSelectedAt: {},
+      now
+    };
 
-    expect(
-      selectFreeExhaustionCandidate({
-        accounts: [active, lowerFree, reserve, higherFree],
-        activeAccountId: active.id,
-        switchThreshold: 1,
-        lastSelectedAt: {},
-        now
-      })?.id
-    ).toBe("free-high");
+    expect(selectBalanceCandidate(params)?.id).toBe("plus");
+    plus.quotaSummary!.hourlyPercentage = 80;
+    expect(selectBalanceCandidate(params)?.id).toBe("k12");
     expect(isFreePlanType("ChatGPT Free Plan")).toBe(true);
+    expect(isFreePlanType("ChatGPT K-12 Plan")).toBe(true);
   });
 
-  it("keeps Free threshold candidates fresh and above the unified safety floor", () => {
+  it("uses fresh Free/K12 reserve candidates by weekly quota when no five-hour target exists", () => {
     const now = 10_000_000;
     const active = account("active", 1, now);
     active.planType = "free";
-    const eligible = account("eligible", 25, now);
-    eligible.planType = "free";
-    eligible.quotaSummary!.weeklyPercentage = 4;
-    const depleted = account("depleted", 1, now);
-    depleted.planType = "free";
-    const weeklyDepleted = account("weekly-depleted", 100, now);
-    weeklyDepleted.planType = "free";
-    weeklyDepleted.quotaSummary!.weeklyPercentage = 3;
-    const stale = account("stale", 100, now - FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS - 1);
-    stale.planType = "free";
-    const plus = account("plus", 100, now);
-    plus.planType = "plus";
+    const freeReserve = reserveAccount("free-reserve", 100, now);
+    freeReserve.planType = "free";
+    const staleK12Reserve = reserveAccount("stale-k12-reserve", 100, now - FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS - 1);
+    staleK12Reserve.planType = "k12";
+    const plusReserve = reserveAccount("plus-reserve", 99, now);
+    plusReserve.planType = "plus";
+    const params = {
+      accounts: [active, freeReserve, staleK12Reserve, plusReserve],
+      activeAccountId: active.id,
+      activeBand: 1,
+      switchThreshold: 1 as const,
+      requireFreshFreeCandidates: true,
+      lastSelectedAt: {},
+      now
+    };
 
-    expect(
-      selectFreeExhaustionCandidate({
-        accounts: [active, depleted, weeklyDepleted, stale, plus, eligible],
-        activeAccountId: active.id,
-        switchThreshold: 3,
-        lastSelectedAt: {},
-        now
-      })?.id
-    ).toBe("eligible");
+    expect(selectBalanceCandidate(params)?.id).toBe("free-reserve");
+    freeReserve.lastQuotaAt = now - FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS - 1;
+    expect(selectBalanceCandidate(params)?.id).toBe("plus-reserve");
   });
 
   it("keeps a dropped band pending until a candidate switch is acknowledged", () => {

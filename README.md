@@ -24,8 +24,8 @@
 | 直接可用   | 本机 Codex token 用量、Free/Plus/Pro 多选筛选                              | 有本机 session 和已导入账号后自动显示；只读本地元数据，不读取会话正文。                                                                          |
 | 设置后启用 | 官方自动切号、低额度提醒、配额定时刷新、Codex App 重启                     | 在 Dashboard 设置中显式打开相应开关；默认不会自动切号。                                                                                          |
 | 一次性安装 | 实验性无感切号与额度分档                                                   | Linux/macOS 运行安装命令、按提示 reload 一次、准备至少两个新鲜账号并在 Dashboard 配置账号池。Windows 目前不支持。                                |
-| 外部服务   | 飞书本地导入收件箱                                                         | 另行部署受限的飞书命令机器人，并打开 `codexAccounts.localImportInboxEnabled`。默认关闭且不创建/轮询收件箱。                                      |
-| 外部服务   | Sub2API Gateway                                                            | 先有可访问的 Sub2API 下游 API，再打开 `codexAccounts.sub2apiGatewayEnabled` 并保存密钥到 VS Code SecretStorage。默认关闭且不读取相关配置或凭据。 |
+| 可选包     | 飞书私聊 M+/S+ 导入                                                        | 单独安装受限的飞书私聊机器人；M+ 仍需显式打开 Manager 本地收件箱，S+ 仅在另行启动导入器后消费。                                                   |
+| 可选包     | Sub2API Gateway                                                            | 单独安装 Gateway VSIX，再由其 Dashboard 卡片配置和保存密钥。核心 Manager 没有该供应商的设置、配置或 SecretStorage 访问。                        |
 
 ## 无感切号（实验性）
 
@@ -41,8 +41,8 @@
 
 ## 可选本地集成
 
-- [本地文本导入收件箱](docs/LOCAL_IMPORT_INBOX.md)：只消费本机私有队列，适合由受限飞书机器人代为投递 Shared JSON；不开启时没有目录、轮询、导入或网络副作用。
-- [本地 Sub2API Gateway](docs/LOCAL_SUB2API_GATEWAY.md)：一个 Gateway 卡片代表一个下游 API，不伪造 OAuth 账号，也不混入普通 ChatGPT 的额度或 token 统计。无法读取真实上游额度时，卡片只显示被动观察到的 Gateway token 用量；可选的 Gateway → ChatGPT Auth 回退只在明确的额度耗尽信号下触发，且默认关闭。
+- [飞书私聊 M+/S+ 导入包](docs/integrations/feishu-private-import.md)：仅接收管理员一对一文本消息；M+ 写入 Manager 的显式本地收件箱，S+ 只写入独立私有队列。
+- [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；不伪造 OAuth 账号，也不加入普通账号池。
 
 ## 安装与更新
 
@@ -67,6 +67,8 @@ npm run package
 
 `npm run package` 会先执行本地定制完整性校验，再生成 `.vsix`。详细文档会一并打进该 VSIX，安装后 README 中的相对链接仍可用。
 
+可选包不包含在核心 VSIX 中。分别进入 `integrations/feishu-private-import`、`integrations/sub2api-gateway` 或 `integrations/sub2api-importer` 按各自 README 构建和配置；它们不会自动复制旧服务、凭据、账号或设备路径。
+
 ### 使用上游 Marketplace 版本
 
 如只需要上游核心账号管理功能，可在扩展市场搜索发布者 `wannanbigpig` 的 **Codex Accounts Manager**。它与本 fork 独立发布；不要假设其包含本机用量、飞书收件箱、Sub2API Gateway 或本地无感切号增强。
@@ -74,8 +76,10 @@ npm run package
 ## 文档索引
 
 - [无感切号、额度分档与阈值](docs/HOT_SWITCH.md)
-- [Sub2API Gateway 配置、统计与回退](docs/LOCAL_SUB2API_GATEWAY.md)
-- [飞书本地导入收件箱](docs/LOCAL_IMPORT_INBOX.md)
+- [独立 Sub2API Gateway、S+ 导入器与迁移](docs/integrations/sub2api-gateway.md)
+- [飞书私聊 M+/S+ 导入机器人](docs/integrations/feishu-private-import.md)
+- [核心与可选组件的独立交付、停用和迁移](docs/integrations/README.md)
+- [核心本地文本导入收件箱](docs/LOCAL_IMPORT_INBOX.md)
 - [本地定制、更新与构建安全](docs/LOCAL_CUSTOMIZATION.md)
 - [变更日志](docs/CHANGELOG.md)
 

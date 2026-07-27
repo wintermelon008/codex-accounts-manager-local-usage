@@ -66,8 +66,78 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
       () => false
     );
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(account.id);
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(account.id, undefined, "external");
     expect(shouldRetry).toBe(true);
+  });
+
+  it("retries the same observed identity when another runtime transaction holds the lease", async () => {
+    const account = {
+      id: "account-b",
+      email: "b@example.invalid",
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const repo = {
+      syncFromAideckMirror: vi.fn().mockResolvedValue([]),
+      syncActiveAccountFromAuthFile: vi.fn().mockResolvedValue(undefined),
+      listAccounts: vi.fn().mockResolvedValue([account])
+    };
+    const coordinator = new WorkbenchRefreshCoordinator(
+      { subscriptions: [] } as never,
+      repo as never,
+      { refresh: vi.fn() } as never
+    ) as unknown as TestableCoordinator;
+    coordinator.lastObservedAuthIdentity = account.id;
+    coordinator.readObservedAuthIdentity = vi.fn().mockResolvedValue(account.id);
+    setCurrentWindowRuntimeAccountId("account-a");
+
+    const shouldRetry = await coordinator.syncActiveAccountFromExternalChange(
+      {
+        refresh: vi.fn(),
+        switchRuntimeAccount: vi.fn().mockResolvedValue({ status: "suppressed", reason: "operationInProgress" })
+      },
+      vi.fn(),
+      vi.fn(),
+      () => false
+    );
+
+    expect(shouldRetry).toBe(true);
+  });
+
+  it("does not retry an external auth convergence while the Gateway owns the runtime", async () => {
+    const account = {
+      id: "account-b",
+      email: "b@example.invalid",
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const repo = {
+      syncFromAideckMirror: vi.fn().mockResolvedValue([]),
+      syncActiveAccountFromAuthFile: vi.fn().mockResolvedValue(undefined),
+      listAccounts: vi.fn().mockResolvedValue([account])
+    };
+    const coordinator = new WorkbenchRefreshCoordinator(
+      { subscriptions: [] } as never,
+      repo as never,
+      { refresh: vi.fn() } as never
+    ) as unknown as TestableCoordinator;
+    coordinator.lastObservedAuthIdentity = account.id;
+    coordinator.readObservedAuthIdentity = vi.fn().mockResolvedValue(account.id);
+    setCurrentWindowRuntimeAccountId("account-a");
+
+    const shouldRetry = await coordinator.syncActiveAccountFromExternalChange(
+      {
+        refresh: vi.fn(),
+        switchRuntimeAccount: vi.fn().mockResolvedValue({ status: "suppressed", reason: "gatewayActive" })
+      },
+      vi.fn(),
+      vi.fn(),
+      () => false
+    );
+
+    expect(shouldRetry).toBe(false);
   });
 
   it("schedules another convergence attempt after a deferred result", async () => {

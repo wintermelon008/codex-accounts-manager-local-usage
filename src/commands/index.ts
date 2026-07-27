@@ -4,6 +4,7 @@ export { refreshImportedAccountQuota } from "../application/accounts/quota";
 import { CodexAccountRecord } from "../core/types";
 import { AccountsRepository } from "../storage";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../codex";
+import type { RuntimeSwitchSource } from "../application/accounts/runtimeSwitchCoordinator";
 
 /**
  * 注册所有命令
@@ -16,7 +17,8 @@ export function registerCommands(
     markObservedAuthIdentity?: (accountId?: string) => void;
     switchRuntimeAccount?: (
       accountId: string,
-      options?: RuntimeAccountSwitchOptions
+      options?: RuntimeAccountSwitchOptions,
+      source?: RuntimeSwitchSource
     ) => Promise<RuntimeAccountSwitchOutcome>;
   },
   hotSwitchRuntime: CodexHotSwitchRuntime

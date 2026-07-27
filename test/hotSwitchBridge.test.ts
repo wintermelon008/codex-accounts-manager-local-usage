@@ -78,7 +78,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 8,
+      runtimeProtocolVersion: 10,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -91,7 +91,7 @@ describe("CodexHotSwitchBridge", () => {
       params: {
         args: expect.arrayContaining([
           'model_provider="codex-accounts-seamless-http"',
-          expect.stringContaining("model_providers.codex-accounts-sub2api="),
+          expect.stringContaining("model_providers.codex-accounts-gateway="),
           expect.stringContaining("supports_websockets=false")
         ])
       }
@@ -171,11 +171,11 @@ describe("CodexHotSwitchBridge", () => {
     });
   }, 15_000);
 
-  it("keeps the real Sub2API key in memory and forwards it only through the loopback adapter", async () => {
+  it("keeps the real Gateway key in memory and forwards it only through the loopback adapter", async () => {
     const root = path.resolve(__dirname, "..");
-    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-sub2api-runtime-"));
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-gateway-runtime-"));
     const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
-    const diagnosticPath = path.join(runtimeDirectory, "sub2api-gateway-last-failure.json");
+    const diagnosticPath = path.join(runtimeDirectory, "gateway-last-failure.json");
     const upstreamRequests: Array<{ authorization?: string; method?: string; url?: string }> = [];
     const shimStderr: string[] = [];
     let failNextResponse = false;
@@ -214,8 +214,8 @@ describe("CodexHotSwitchBridge", () => {
         JSON.stringify({
           realCliPath: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
           forceHttpTransport: true,
-          sub2apiGateway: {
-            displayName: "Sub2API Gateway",
+          gateway: {
+            displayName: "Gateway",
             baseUrl: gatewayBaseUrl,
             model: "gateway-test-model"
           }
@@ -223,7 +223,7 @@ describe("CodexHotSwitchBridge", () => {
         "utf8"
       );
       const runtimeConfigText = await readFile(path.join(runtimeDirectory, "codex-app-server-shim.json"), "utf8");
-      expect(runtimeConfigText).not.toContain("real-sub2api-key");
+      expect(runtimeConfigText).not.toContain("real-gateway-key");
 
       shim = childProcess.spawn(shimPath, ["app-server"], {
         cwd: root,
@@ -242,17 +242,17 @@ describe("CodexHotSwitchBridge", () => {
       }));
       await waitForSocket(getHotSwitchSocketPath(process.pid));
       await expect(bridge.getStatus()).resolves.toMatchObject({
-        sub2apiGatewayActive: true,
-        providerKind: "sub2api"
+        gatewayActive: true,
+        providerKind: "gateway"
       });
-      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({ active: true, ready: false });
+      await expect(bridge.getGatewayStatus()).resolves.toMatchObject({ active: true, ready: false });
       await expect(messages.next((message) => message.method === "test/runtimeArgs")).resolves.toMatchObject({
         params: {
           hasLoopbackNoProxyBypass: true,
           args: expect.arrayContaining([
             'model_provider="codex-accounts-seamless-http"',
             'model="gateway-test-model"',
-            expect.stringContaining("model_providers.codex-accounts-sub2api="),
+            expect.stringContaining("model_providers.codex-accounts-gateway="),
             expect.stringContaining('base_url="http://127.0.0.1:')
           ])
         }
@@ -263,21 +263,21 @@ describe("CodexHotSwitchBridge", () => {
         (message) => message.method === "test/gatewayProbe" && message.params?.statusCode === 200
       );
       await waitFor(() =>
-        shimStderr.join("").includes("Sub2API Gateway request is waiting for credential: method=GET path=/v1/models")
+        shimStderr.join("").includes("Gateway request is waiting for credential: method=GET path=/v1/models")
       );
       expect(upstreamRequests).toEqual([]);
 
-      await expect(bridge.configureSub2ApiGatewayCredential("real-sub2api-key")).resolves.toMatchObject({
+      await expect(bridge.configureGatewayCredential("real-gateway-key")).resolves.toMatchObject({
         active: true,
         ready: true
       });
       await expect(delayedGatewayProbe).resolves.toMatchObject({ params: { hasAdapterToken: true } });
       expect(upstreamRequests).toEqual([
-        { authorization: "Bearer real-sub2api-key", method: "GET", url: "/v1/models" }
+        { authorization: "Bearer real-gateway-key", method: "GET", url: "/v1/models" }
       ]);
-      await waitFor(() => shimStderr.join("").includes("Sub2API Gateway credential configured"));
+      await waitFor(() => shimStderr.join("").includes("Gateway credential configured"));
       const credentialLogText = shimStderr.join("");
-      expect(credentialLogText).not.toContain("real-sub2api-key");
+      expect(credentialLogText).not.toContain("real-gateway-key");
       expect(credentialLogText).not.toContain('"input"');
       shim.stdin.write(
         `${JSON.stringify({ id: "gateway-response-probe", method: "test/probeGatewayResponse", params: {} })}\n`
@@ -286,8 +286,8 @@ describe("CodexHotSwitchBridge", () => {
         messages.next((message) => message.method === "test/gatewayResponseProbe" && message.params?.statusCode === 200)
       ).resolves.toMatchObject({ params: { hasAdapterToken: true } });
       expect(upstreamRequests).toEqual([
-        { authorization: "Bearer real-sub2api-key", method: "GET", url: "/v1/models" },
-        { authorization: "Bearer real-sub2api-key", method: "POST", url: "/v1/responses" }
+        { authorization: "Bearer real-gateway-key", method: "GET", url: "/v1/models" },
+        { authorization: "Bearer real-gateway-key", method: "POST", url: "/v1/responses" }
       ]);
       failNextResponse = true;
       shim.stdin.write(
@@ -296,11 +296,11 @@ describe("CodexHotSwitchBridge", () => {
       await expect(
         messages.next((message) => message.method === "test/gatewayResponseProbe" && message.params?.statusCode === 502)
       ).resolves.toMatchObject({ params: { hasAdapterToken: true } });
-      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({
+      await expect(bridge.getGatewayStatus()).resolves.toMatchObject({
         requestCount: 3,
         successfulRequestCount: 2,
         failedRequestCount: 1,
-        lastFailureOrigin: "sub2api",
+        lastFailureOrigin: "upstream",
         lastFailureStatusCode: 502,
         inputTokens: 11,
         outputTokens: 7,
@@ -310,8 +310,8 @@ describe("CodexHotSwitchBridge", () => {
       });
       const upstreamDiagnosticText = await readFile(diagnosticPath, "utf8");
       expect(JSON.parse(upstreamDiagnosticText)).toMatchObject({
-        schema: "codex-accounts-sub2api-gateway-diagnostic/v1",
-        origin: "sub2api",
+        schema: "codex-accounts-gateway-diagnostic/v1",
+        origin: "upstream",
         statusCode: 502,
         upstreamStatusCode: 502,
         request: {
@@ -320,12 +320,12 @@ describe("CodexHotSwitchBridge", () => {
           contentLength: expect.any(Number)
         }
       });
-      expect(upstreamDiagnosticText).not.toContain("real-sub2api-key");
+      expect(upstreamDiagnosticText).not.toContain("real-gateway-key");
       expect(upstreamDiagnosticText).not.toContain('"input"');
-      await waitFor(() => shimStderr.join("").includes("Sub2API Gateway forwarding failed: origin=sub2api status=502"));
+      await waitFor(() => shimStderr.join("").includes("Gateway forwarding failed: origin=upstream status=502"));
       const upstreamLogText = shimStderr.join("");
       expect(upstreamLogText).toContain("upstreamStatus=502 method=POST path=/v1/responses");
-      expect(upstreamLogText).not.toContain("real-sub2api-key");
+      expect(upstreamLogText).not.toContain("real-gateway-key");
       expect(upstreamLogText).not.toContain('"input"');
 
       (upstream as http.Server & { closeAllConnections?: () => void }).closeAllConnections?.();
@@ -353,7 +353,7 @@ describe("CodexHotSwitchBridge", () => {
       expect(messages.all.filter((message) => message.method === "test/gatewayResponseProbe").at(-1)).toMatchObject({
         params: { statusCode: 502, hasAdapterToken: true }
       });
-      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({
+      await expect(bridge.getGatewayStatus()).resolves.toMatchObject({
         requestCount: 4,
         successfulRequestCount: 2,
         failedRequestCount: 2,
@@ -365,17 +365,17 @@ describe("CodexHotSwitchBridge", () => {
       });
       const adapterDiagnosticText = await readFile(diagnosticPath, "utf8");
       expect(JSON.parse(adapterDiagnosticText)).toMatchObject({
-        schema: "codex-accounts-sub2api-gateway-diagnostic/v1",
+        schema: "codex-accounts-gateway-diagnostic/v1",
         origin: "adapter",
         statusCode: 502,
         transportCode: expect.stringMatching(/^[A-Z][A-Z0-9_]+$/u),
         request: { method: "POST", path: "/v1/responses" }
       });
-      expect(adapterDiagnosticText).not.toContain("real-sub2api-key");
+      expect(adapterDiagnosticText).not.toContain("real-gateway-key");
       expect(adapterDiagnosticText).not.toContain('"input"');
-      await waitFor(() => shimStderr.join("").includes("Sub2API Gateway forwarding failed: origin=adapter status=502"));
+      await waitFor(() => shimStderr.join("").includes("Gateway forwarding failed: origin=adapter status=502"));
       expect(shimStderr.join("")).toMatch(
-        /Sub2API Gateway forwarding failed: origin=adapter status=502 transport=[A-Z][A-Z0-9_]+ method=POST path=\/v1\/responses/u
+        /Gateway forwarding failed: origin=adapter status=502 transport=[A-Z][A-Z0-9_]+ method=POST path=\/v1\/responses/u
       );
     } finally {
       bridge?.dispose();
@@ -389,9 +389,9 @@ describe("CodexHotSwitchBridge", () => {
     }
   }, 15_000);
 
-  it("falls back only after a semantic Sub2API quota-exhaustion signal and keeps the same HTTP provider", async () => {
+  it("falls back only after a semantic Gateway quota-exhaustion signal and keeps the same HTTP provider", async () => {
     const root = path.resolve(__dirname, "..");
-    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-sub2api-fallback-"));
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-gateway-fallback-"));
     const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
     let emitQuotaExhaustion = false;
     const upstream = http.createServer((request, response) => {
@@ -418,8 +418,8 @@ describe("CodexHotSwitchBridge", () => {
         JSON.stringify({
           realCliPath: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
           forceHttpTransport: true,
-          sub2apiGateway: {
-            displayName: "Sub2API Gateway",
+          gateway: {
+            displayName: "Gateway",
             baseUrl: `http://127.0.0.1:${upstreamAddress.port}/v1`,
             model: "gateway-test-model",
             autoFallbackToChatGpt: true
@@ -445,17 +445,17 @@ describe("CodexHotSwitchBridge", () => {
         }
       );
       await waitForSocket(getHotSwitchSocketPath(process.pid));
-      await bridge.configureSub2ApiGatewayCredential("real-sub2api-key");
+      await bridge.configureGatewayCredential("real-gateway-key");
 
       await expect(postGatewayResponse(adapterBaseUrl)).resolves.toMatchObject({ statusCode: 502 });
-      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({
+      await expect(bridge.getGatewayStatus()).resolves.toMatchObject({
         quotaExhaustionCount: 0,
-        route: "sub2api"
+        route: "gateway"
       });
 
       emitQuotaExhaustion = true;
       await expect(postGatewayResponse(adapterBaseUrl)).resolves.toMatchObject({ statusCode: 429 });
-      await waitFor(async () => (await bridge!.getSub2ApiGatewayStatus()).quotaExhaustionCount === 1);
+      await waitFor(async () => (await bridge!.getGatewayStatus()).quotaExhaustionCount === 1);
 
       await expect(
         bridge.fallbackToChatGpt({
@@ -472,7 +472,7 @@ describe("CodexHotSwitchBridge", () => {
         })
       ).resolves.toMatchObject({ status: "switched", accountId: "account-b", email: "b@example.invalid" });
       expect(activatedLocalAccounts).toEqual(["local-b"]);
-      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({
+      await expect(bridge.getGatewayStatus()).resolves.toMatchObject({
         active: false,
         ready: true,
         route: "chatgpt",
@@ -480,9 +480,9 @@ describe("CodexHotSwitchBridge", () => {
       });
       await expect(bridge.getStatus()).resolves.toMatchObject({
         providerKind: "chatgpt",
-        sub2apiGatewayActive: false,
-        sub2apiGatewayConfigured: true,
-        sub2apiGatewayAutoFallbackEnabled: true
+        gatewayActive: false,
+        gatewayConfigured: true,
+        gatewayAutoFallbackEnabled: true
       });
     } finally {
       bridge?.dispose();
@@ -496,7 +496,7 @@ describe("CodexHotSwitchBridge", () => {
 
   it("rolls a failed Gateway fallback back to the previous auth identity and Gateway route", async () => {
     const root = path.resolve(__dirname, "..");
-    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-sub2api-fallback-rollback-"));
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-gateway-fallback-rollback-"));
     const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
     const upstream = http.createServer((request, response) => {
       request.resume();
@@ -516,8 +516,8 @@ describe("CodexHotSwitchBridge", () => {
         JSON.stringify({
           realCliPath: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
           forceHttpTransport: true,
-          sub2apiGateway: {
-            displayName: "Sub2API Gateway",
+          gateway: {
+            displayName: "Gateway",
             baseUrl: `http://127.0.0.1:${upstreamAddress.port}/v1`,
             model: "gateway-test-model",
             autoFallbackToChatGpt: true
@@ -544,7 +544,7 @@ describe("CodexHotSwitchBridge", () => {
         }
       );
       await waitForSocket(getHotSwitchSocketPath(process.pid));
-      await bridge.configureSub2ApiGatewayCredential("real-sub2api-key");
+      await bridge.configureGatewayCredential("real-gateway-key");
 
       await expect(
         bridge.fallbackToChatGpt({
@@ -563,7 +563,7 @@ describe("CodexHotSwitchBridge", () => {
         })
       ).rejects.toThrow("local account commit failed");
       expect(restoredContexts).toEqual(["snapshot-a"]);
-      await expect(bridge.getSub2ApiGatewayStatus()).resolves.toMatchObject({ active: true, route: "sub2api" });
+      await expect(bridge.getGatewayStatus()).resolves.toMatchObject({ active: true, route: "gateway" });
       await expect(bridge.getIdentity()).resolves.toMatchObject({
         email: "a@example.invalid",
         managedAccountId: null,
@@ -750,6 +750,7 @@ describe("CodexHotSwitchBridge", () => {
 
     await expect(
       bridge.switchAccount({
+        operationId: "managed-rollback-status",
         accessToken: "access-token-b",
         accountId: "account-b",
         localAccountId: "local-b",
@@ -763,6 +764,11 @@ describe("CodexHotSwitchBridge", () => {
       })
     ).rejects.toThrow("local commit failed");
     expect(activations).toEqual(["local-b", "local-a"]);
+    await expect(bridge.getOperationStatus("managed-rollback-status")).resolves.toMatchObject({
+      operationId: "managed-rollback-status",
+      state: "failed",
+      message: expect.stringContaining("local commit failed")
+    });
     const loginAccountIds = messages.all
       .filter((message) => message.method === "test/received" && message.params?.method === "account/login/start")
       .map((message) => message.params?.accountId);

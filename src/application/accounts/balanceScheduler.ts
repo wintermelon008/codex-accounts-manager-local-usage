@@ -34,6 +34,11 @@ export function selectBalanceCandidate(params: {
   switchThreshold?: SeamlessSwitchThreshold;
   thresholdQuota?: "hourly" | "weekly";
   forceRecoveryMode?: boolean;
+  /**
+   * A Free/K12 source has a shorter safety window for another Free/K12 target.
+   * Reserve accounts remain eligible, but their quota must be freshly observed.
+   */
+  requireFreshFreeCandidates?: boolean;
   lastSelectedAt: Readonly<Record<string, number | undefined>>;
   now?: number;
 }): CodexAccountRecord | undefined {
@@ -55,6 +60,9 @@ export function selectBalanceCandidate(params: {
       !account.isHidden &&
       account.balancePoolEnabled === true &&
       getBalanceQuotaCapability(account, now) !== "unknown" &&
+      (!params.requireFreshFreeCandidates ||
+        !isFreePlanType(account.planType) ||
+        hasFreshFreeSwitchThresholdQuota(account, now)) &&
       account.quotaSummary!.weeklyPercentage > switchThreshold
   );
   const windowedCandidates = candidates.filter((account) => getBalanceQuotaCapability(account, now) === "windowed");
@@ -76,9 +84,7 @@ export function selectBalanceCandidate(params: {
   if (thresholdRecoveryMode) {
     const recoveredWindowed = windowedCandidates
       .filter((account) => account.quotaSummary!.hourlyPercentage > switchThreshold)
-      .sort((left, right) =>
-        compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.thresholdQuota)
-      )[0];
+      .sort((left, right) => compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize))[0];
     if (recoveredWindowed) {
       return recoveredWindowed;
     }
@@ -90,13 +96,6 @@ export function selectBalanceCandidate(params: {
       return reserve;
     }
 
-    if (params.thresholdQuota) {
-      return windowedCandidates
-        .filter((account) => account.quotaSummary!.hourlyPercentage > switchThreshold)
-        .sort((left, right) =>
-          compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.thresholdQuota)
-        )[0];
-    }
     return undefined;
   }
 
@@ -110,43 +109,7 @@ export function selectBalanceCandidate(params: {
         getFiveHourQuotaBand(account.quotaSummary!.hourlyPercentage, params.quotaBandSize) >= params.activeBand &&
         account.quotaSummary!.hourlyPercentage > activeQuota.hourlyPercentage
     )
-    .sort((left, right) =>
-      compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize, params.thresholdQuota)
-    )[0];
-}
-
-/**
- * Select a same-Free peer for the configured threshold path. Plan metadata alone is not
- * sufficient: both the source and target must still expose fresh, valid
- * five-hour and weekly windows. This keeps a stale/misreported plan label from
- * routing a threshold switch to an unusable account.
- */
-export function selectFreeExhaustionCandidate(params: {
-  accounts: CodexAccountRecord[];
-  activeAccountId: string;
-  switchThreshold?: SeamlessSwitchThreshold;
-  lastSelectedAt: Readonly<Record<string, number | undefined>>;
-  now?: number;
-}): CodexAccountRecord | undefined {
-  const now = params.now ?? Date.now();
-  const active = params.accounts.find((account) => account.id === params.activeAccountId);
-  if (!active || active.isHidden || !isVerifiedFreeWindowedAccount(active, now)) {
-    return undefined;
-  }
-
-  const switchThreshold = params.switchThreshold ?? DEFAULT_SEAMLESS_SWITCH_THRESHOLD;
-  return params.accounts
-    .filter(
-      (account) =>
-        account.id !== active.id &&
-        !account.isHidden &&
-        account.balancePoolEnabled === true &&
-        isVerifiedFreeWindowedAccount(account, now) &&
-        hasFreshFreeSwitchThresholdQuota(account, now) &&
-        account.quotaSummary!.hourlyPercentage > switchThreshold &&
-        account.quotaSummary!.weeklyPercentage > switchThreshold
-    )
-    .sort((left, right) => compareFreeExhaustionCandidates(left, right, params.lastSelectedAt))[0];
+    .sort((left, right) => compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize))[0];
 }
 
 export function isVerifiedFreeWindowedAccount(account: CodexAccountRecord, now = Date.now()): boolean {
@@ -162,7 +125,11 @@ export function isFreePlanType(planType: string | undefined): boolean {
     normalized === "free" ||
     normalized === "freeplan" ||
     normalized === "chatgptfree" ||
-    normalized === "chatgptfreeplan"
+    normalized === "chatgptfreeplan" ||
+    normalized === "k12" ||
+    normalized === "k12plan" ||
+    normalized === "chatgptk12" ||
+    normalized === "chatgptk12plan"
   );
 }
 
@@ -213,17 +180,10 @@ function compareBalanceCandidates(
   left: CodexAccountRecord,
   right: CodexAccountRecord,
   lastSelectedAt: Readonly<Record<string, number | undefined>>,
-  quotaBandSize: SeamlessQuotaBandSize = QUOTA_BAND_SIZE,
-  thresholdQuota?: "hourly" | "weekly"
+  quotaBandSize: SeamlessQuotaBandSize = QUOTA_BAND_SIZE
 ): number {
   const leftQuota = left.quotaSummary!;
   const rightQuota = right.quotaSummary!;
-  if (thresholdQuota === "weekly") {
-    const weeklyPercentageDifference = rightQuota.weeklyPercentage - leftQuota.weeklyPercentage;
-    if (weeklyPercentageDifference !== 0) {
-      return weeklyPercentageDifference;
-    }
-  }
   const bandDifference =
     getFiveHourQuotaBand(rightQuota.hourlyPercentage, quotaBandSize) -
     getFiveHourQuotaBand(leftQuota.hourlyPercentage, quotaBandSize);
@@ -234,6 +194,16 @@ function compareBalanceCandidates(
   const percentageDifference = rightQuota.hourlyPercentage - leftQuota.hourlyPercentage;
   if (percentageDifference !== 0) {
     return percentageDifference;
+  }
+
+  const weeklyPercentageDifference = rightQuota.weeklyPercentage - leftQuota.weeklyPercentage;
+  if (weeklyPercentageDifference !== 0) {
+    return weeklyPercentageDifference;
+  }
+
+  const planPriorityDifference = getQuotaPlanPriority(left.planType) - getQuotaPlanPriority(right.planType);
+  if (planPriorityDifference !== 0) {
+    return planPriorityDifference;
   }
 
   const leftReset = leftQuota.hourlyResetTime ?? Number.POSITIVE_INFINITY;
@@ -256,36 +226,6 @@ function hasFreshFreeSwitchThresholdQuota(account: CodexAccountRecord, now: numb
   );
 }
 
-function compareFreeExhaustionCandidates(
-  left: CodexAccountRecord,
-  right: CodexAccountRecord,
-  lastSelectedAt: Readonly<Record<string, number | undefined>>
-): number {
-  const leftQuota = left.quotaSummary!;
-  const rightQuota = right.quotaSummary!;
-  const hourlyDifference = rightQuota.hourlyPercentage - leftQuota.hourlyPercentage;
-  if (hourlyDifference !== 0) {
-    return hourlyDifference;
-  }
-
-  const weeklyDifference = rightQuota.weeklyPercentage - leftQuota.weeklyPercentage;
-  if (weeklyDifference !== 0) {
-    return weeklyDifference;
-  }
-
-  const leftReset = leftQuota.hourlyResetTime ?? Number.POSITIVE_INFINITY;
-  const rightReset = rightQuota.hourlyResetTime ?? Number.POSITIVE_INFINITY;
-  if (leftReset !== rightReset) {
-    return leftReset - rightReset;
-  }
-
-  const lastSelectedDifference = (lastSelectedAt[left.id] ?? 0) - (lastSelectedAt[right.id] ?? 0);
-  if (lastSelectedDifference !== 0) {
-    return lastSelectedDifference;
-  }
-  return left.id.localeCompare(right.id);
-}
-
 function compareReserveCandidates(
   left: CodexAccountRecord,
   right: CodexAccountRecord,
@@ -296,9 +236,42 @@ function compareReserveCandidates(
     return weeklyDifference;
   }
 
+  const planPriorityDifference = getQuotaPlanPriority(left.planType) - getQuotaPlanPriority(right.planType);
+  if (planPriorityDifference !== 0) {
+    return planPriorityDifference;
+  }
+
   const lastSelectedDifference = (lastSelectedAt[left.id] ?? 0) - (lastSelectedAt[right.id] ?? 0);
   if (lastSelectedDifference !== 0) {
     return lastSelectedDifference;
   }
   return left.id.localeCompare(right.id);
+}
+
+export function getQuotaPlanPriority(planType: string | undefined): number {
+  if (isFreePlanType(planType)) {
+    return 0;
+  }
+
+  const normalized = planType
+    ?.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/gu, "");
+  if (
+    normalized === "plus" ||
+    normalized === "plusplan" ||
+    normalized === "chatgptplus" ||
+    normalized === "chatgptplusplan"
+  ) {
+    return 1;
+  }
+  if (
+    normalized === "pro" ||
+    normalized === "proplan" ||
+    normalized === "chatgptpro" ||
+    normalized === "chatgptproplan"
+  ) {
+    return 2;
+  }
+  return 3;
 }

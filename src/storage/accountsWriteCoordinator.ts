@@ -23,12 +23,19 @@ const WRITE_LOCK_WAIT_MS = 5_000;
 const LOCK_RETRY_MS = 25;
 
 export type SharedFileLease = {
+  /**
+   * Extend the lease while the caller is still the recorded owner. A failed
+   * renewal means ownership may have been lost and the caller must not start
+   * another shared transaction from the same decision.
+   */
+  renew(leaseMs?: number): Promise<boolean>;
   release(): Promise<void>;
 };
 
 export function disposeWriteCoordinator(
   state: AccountsRepositoryState,
-  persistSync: (index: CodexAccountsIndex, baseIndex: CodexAccountsIndex) => CodexAccountsIndex
+  persistSync: (index: CodexAccountsIndex, baseIndex: CodexAccountsIndex) => CodexAccountsIndex,
+  persistAsync?: (index: CodexAccountsIndex, baseIndex: CodexAccountsIndex) => Promise<CodexAccountsIndex>
 ): void {
   if (state.saveDebounceTimer) {
     clearTimeout(state.saveDebounceTimer);
@@ -42,12 +49,41 @@ export function disposeWriteCoordinator(
   const latestIndex = state.pendingSave ?? state.cache?.data;
   if (latestIndex) {
     const baseIndex = state.pendingSaveBase ?? state.cache?.data ?? createEmptyIndex();
-    const persisted = persistSync(latestIndex, baseIndex);
-    state.cache = { data: cloneIndex(persisted), timestamp: Date.now() };
+    try {
+      const persisted = persistSync(latestIndex, baseIndex);
+      state.cache = { data: cloneIndex(persisted), timestamp: Date.now() };
+    } catch (error) {
+      if (!persistAsync || !isSharedWriteLockBusy(error)) {
+        throw error;
+      }
+
+      // VS Code does not await Disposable.dispose(). If another extension host
+      // is finishing an async write, synchronously spinning would block that
+      // very host from releasing the lock. Queue one merged retry instead.
+      const retryIndex = cloneIndex(latestIndex);
+      const retryBaseIndex = cloneIndex(baseIndex);
+      void persistAsync(retryIndex, retryBaseIndex).catch((retryError: unknown) => {
+        console.error("[codexAccounts] failed to persist the final accounts index retry:", retryError);
+      });
+    }
   }
   state.pendingSave = null;
   state.pendingSaveBase = null;
   state.isDirty = false;
+}
+
+function isSharedWriteLockBusy(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (current instanceof Error && current.message === "The shared accounts index write lock is busy") {
+      return true;
+    }
+    if (!current || typeof current !== "object" || !("cause" in current)) {
+      return false;
+    }
+    current = current.cause;
+  }
+  return false;
 }
 
 export function readPendingOrCachedIndex(
@@ -327,6 +363,8 @@ export async function tryAcquireSharedFileLease(
         throw error;
       }
       return {
+        renew: async (nextLeaseMs = effectiveLeaseMs) =>
+          renewSharedFileLease(lockPath, token, Math.max(50, Math.floor(nextLeaseMs))),
         release: async () => releaseSharedFileLease(lockPath, token)
       };
     } catch (error) {
@@ -342,6 +380,42 @@ export async function tryAcquireSharedFileLease(
       return undefined;
     }
     await delay(Math.min(LOCK_RETRY_MS, Math.max(1, deadline - Date.now())));
+  }
+}
+
+async function renewSharedFileLease(lockPath: string, token: string, leaseMs: number): Promise<boolean> {
+  const ownerPath = path.join(lockPath, "owner.json");
+  let handle: fs.FileHandle | undefined;
+  try {
+    // Keep the descriptor for the full read/write sequence. If another host
+    // has already reaped and replaced the directory, this descriptor still
+    // refers to the old owner file instead of accidentally extending the new
+    // owner's lease through the reused path.
+    handle = await fs.open(ownerPath, "r+");
+    const raw = await handle.readFile("utf8");
+    const owner = JSON.parse(raw) as { token?: unknown; expiresAt?: unknown };
+    if (
+      owner.token !== token ||
+      typeof owner.expiresAt !== "number" ||
+      !Number.isFinite(owner.expiresAt) ||
+      owner.expiresAt <= Date.now()
+    ) {
+      return false;
+    }
+
+    const next = JSON.stringify({ token, pid: process.pid, expiresAt: Date.now() + leaseMs });
+    await handle.truncate(0);
+    await handle.write(next, 0, "utf8");
+    return true;
+  } catch (error) {
+    if (isFileNotFoundError(error)) {
+      return false;
+    }
+    throw error;
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => undefined);
+    }
   }
 }
 

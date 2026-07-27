@@ -1,0 +1,33 @@
+{
+  "name": "@codex-accounts/feishu-private-import",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone Feishu one-to-one M+/S+ account-import bot for Codex Accounts Manager.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wintermelon008/codex-accounts-manager-local-usage.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "feishu-private-import": "./src/cli.mjs"
+  },
+  "files": [
+    "src",
+    "vendor",
+    "templates",
+    "LICENSE",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "pretest": "node scripts/sync-session-ingress.mjs --check",
+    "test": "node --test test/*.test.mjs",
+    "sync:protocol": "node scripts/sync-session-ingress.mjs",
+    "package:check": "npm run sync:protocol && npm test && node scripts/audit-portability.mjs && npm pack --dry-run",
+    "package": "npm run package:check && node scripts/prepare-dist.mjs && npm pack --pack-destination dist"
+  }
+}
