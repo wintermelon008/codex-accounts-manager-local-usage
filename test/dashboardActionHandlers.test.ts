@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
 import type { DashboardActionContext } from "../src/presentation/dashboard/actionHandlers";
 
-const { consumeResetCreditMock } = vi.hoisted(() => ({
-  consumeResetCreditMock: vi.fn().mockResolvedValue(undefined)
+const { consumeResetCreditMock, startQuotaCountdownMock } = vi.hoisted(() => ({
+  consumeResetCreditMock: vi.fn().mockResolvedValue(undefined),
+  startQuotaCountdownMock: vi.fn().mockResolvedValue("started")
 }));
 
 vi.mock("../src/services/quota", async () => {
@@ -13,6 +14,10 @@ vi.mock("../src/services/quota", async () => {
     consumeResetCredit: consumeResetCreditMock
   };
 });
+
+vi.mock("../src/application/accounts/quotaCountdown", () => ({
+  startQuotaCountdownForAccount: startQuotaCountdownMock
+}));
 
 import { executeDashboardActionMessage } from "../src/presentation/dashboard/actionHandlers";
 
@@ -113,6 +118,37 @@ describe("executeDashboardActionMessage", () => {
       "codexAccounts.refreshQuota",
       expect.objectContaining({ id: "account-1" })
     );
+    expect(result.status).toBe("completed");
+  });
+
+  it("starts one account quota countdown and republishes the card state", async () => {
+    const schedulePublishState = vi.fn();
+    const account = { id: "account-1", email: "dev@example.com" };
+    const repo = {
+      getAccount: vi.fn().mockResolvedValue(account)
+    } as unknown as DashboardActionContext["repo"];
+
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo,
+        resolveLanguage: () => "zh",
+        schedulePublishState,
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "startQuotaCountdown",
+        requestId: "req-start-countdown",
+        accountId: account.id
+      }
+    );
+
+    expect(startQuotaCountdownMock).toHaveBeenCalledWith(repo, account.id);
+    expect(schedulePublishState).toHaveBeenCalledOnce();
     expect(result.status).toBe("completed");
   });
 

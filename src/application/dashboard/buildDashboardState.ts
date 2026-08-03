@@ -16,6 +16,7 @@ import { getTokenAutomationSnapshot } from "../../presentation/workbench/tokenAu
 import { getAutoSwitchRuntimeSnapshot } from "../../presentation/workbench/autoSwitchState";
 import { getAccountAutomationState, isHealthDismissed, resolveAccountHealth } from "../accounts/health";
 import { getActiveManagerIntegrationHost } from "../../integrations";
+import { isQuotaCountdownStartAvailable } from "../accounts/quotaCountdown";
 
 export async function buildDashboardState(
   repo: AccountsRepository,
@@ -191,6 +192,7 @@ function mapAccount(
     lastQuotaAt: account.lastQuotaAt,
     resetCreditsAvailable,
     resetCreditsNextExpiresAt,
+    quotaCountdownStartAvailable: isQuotaCountdownStartAvailable(account),
     tokenUsage: resolveAccountTokenUsage(account, accountTokenUsage),
     autoSwitchLockedUntil:
       autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
@@ -247,6 +249,7 @@ function buildMetrics(account: CodexAccountRecord, copy: DashboardState["copy"])
       label: copy.hourlyLabel,
       percentage: quota?.hourlyPercentage,
       resetAt: quota?.hourlyResetTime,
+      windowMinutes: quota?.hourlyWindowMinutes,
       requestsLeft: quota?.hourlyRequestsLeft,
       requestsLimit: quota?.hourlyRequestsLimit,
       visible: quota ? Boolean(quota.hourlyWindowPresent) : true
@@ -258,6 +261,7 @@ function buildMetrics(account: CodexAccountRecord, copy: DashboardState["copy"])
     label: copy.weeklyLabel,
     percentage: quota?.weeklyPercentage,
     resetAt: quota?.weeklyResetTime,
+    windowMinutes: quota?.weeklyWindowMinutes,
     requestsLeft: quota?.weeklyRequestsLeft,
     requestsLimit: quota?.weeklyRequestsLimit,
     visible: quota ? Boolean(quota.weeklyWindowPresent) : true
@@ -270,6 +274,7 @@ function buildMetrics(account: CodexAccountRecord, copy: DashboardState["copy"])
         label: `${limit.limitName} ${copy.hourlyLabel}`,
         percentage: limit.hourlyPercentage,
         resetAt: limit.hourlyResetTime,
+        windowMinutes: limit.hourlyWindowMinutes,
         requestsLeft: limit.hourlyRequestsLeft,
         requestsLimit: limit.hourlyRequestsLimit,
         visible: true
@@ -281,6 +286,7 @@ function buildMetrics(account: CodexAccountRecord, copy: DashboardState["copy"])
         label: `${limit.limitName} ${copy.weeklyLabel}`,
         percentage: limit.weeklyPercentage,
         resetAt: limit.weeklyResetTime,
+        windowMinutes: limit.weeklyWindowMinutes,
         requestsLeft: limit.weeklyRequestsLeft,
         requestsLimit: limit.weeklyRequestsLimit,
         visible: true

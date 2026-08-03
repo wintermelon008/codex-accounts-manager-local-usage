@@ -22,6 +22,7 @@ import { promptForTags } from "../tagEditor";
 import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from "./actionUtils";
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { getActiveManagerIntegrationHost } from "../../integrations";
+import { startQuotaCountdownForAccount } from "../../application/accounts/quotaCountdown";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -196,6 +197,19 @@ async function runDashboardAction(
         await vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
       }
       return undefined;
+    case "startQuotaCountdown":
+      if (account) {
+        try {
+          const result = await startQuotaCountdownForAccount(ctx.repo, account.id);
+          ctx.schedulePublishState();
+          void vscode.window.showInformationMessage(resolveQuotaCountdownResultMessage(ctx.resolveLanguage(), result));
+        } catch (error) {
+          const message = toFailureMessage(error);
+          void vscode.window.showErrorMessage(resolveQuotaCountdownErrorMessage(ctx.resolveLanguage(), message));
+          throw error;
+        }
+      }
+      return undefined;
     case "remove":
       if (account) {
         await vscode.commands.executeCommand("codexAccounts.removeAccount", account);
@@ -213,6 +227,31 @@ async function runDashboardAction(
     default:
       return undefined;
   }
+}
+
+function resolveQuotaCountdownResultMessage(
+  language: DashboardLanguage,
+  result: "started" | "already-started"
+): string {
+  if (language === "zh") {
+    return result === "started" ? "已发送短消息并刷新额度倒计时。" : "额度倒计时已经启动，无需重复发送。";
+  }
+  if (language === "zh-hant") {
+    return result === "started" ? "已傳送短訊息並重新整理額度倒數。" : "額度倒數已經啟動，無需重複傳送。";
+  }
+  return result === "started"
+    ? "A short message was sent and the quota countdown was refreshed."
+    : "The quota countdown is already running; no message was sent.";
+}
+
+function resolveQuotaCountdownErrorMessage(language: DashboardLanguage, message: string): string {
+  if (language === "zh") {
+    return `启动额度倒计时失败：${message}`;
+  }
+  if (language === "zh-hant") {
+    return `啟動額度倒數失敗：${message}`;
+  }
+  return `Failed to start the quota countdown: ${message}`;
 }
 
 function requireManagerIntegrationHost() {

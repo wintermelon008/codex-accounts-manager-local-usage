@@ -163,6 +163,19 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain("text-overflow: ellipsis");
   });
 
+  it("places a conditional quota countdown starter beside the manual refresh action", () => {
+    const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
+    const refreshIndex = card.indexOf('onAction("refresh", account.id)');
+    const starterIndex = card.indexOf('onAction("startQuotaCountdown", account.id)');
+
+    expect(card).toContain("account.quotaCountdownStartAvailable");
+    expect(card).toContain("isQuotaCountdownWindowFresh");
+    expect(card).toContain("showQuotaCountdownStart");
+    expect(card).toContain("quotaCountdownStartPending");
+    expect(refreshIndex).toBeGreaterThan(-1);
+    expect(starterIndex).toBeGreaterThan(refreshIndex);
+  });
+
   it("supports hiding selected accounts and filtering them from the saved-account grid", () => {
     const accountViews = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/accountViews.tsx"), "utf8");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");

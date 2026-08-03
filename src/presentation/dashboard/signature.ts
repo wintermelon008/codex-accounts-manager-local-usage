@@ -23,6 +23,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
         account.lastQuotaAt ?? 0,
         account.resetCreditsAvailable ?? "",
         account.resetCreditsNextExpiresAt ?? "",
+        account.quotaCountdownStartAvailable ? "1" : "0",
         account.tokenUsage
           ? [
               account.tokenUsage.status,
@@ -46,7 +47,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
           .filter((metric) => metric.visible)
           .map(
             (metric) =>
-              `${metric.key}:${metric.percentage ?? ""}:${metric.requestsLeft ?? ""}:${metric.requestsLimit ?? ""}:${metric.resetAt ?? ""}`
+              `${metric.key}:${metric.percentage ?? ""}:${metric.requestsLeft ?? ""}:${metric.requestsLimit ?? ""}:${metric.resetAt ?? ""}:${metric.windowMinutes ?? ""}`
           )
           .join(",")
       ].join(":")

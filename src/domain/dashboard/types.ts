@@ -373,6 +373,7 @@ export interface DashboardMetricViewModel {
   label: string;
   percentage?: number;
   resetAt?: number;
+  windowMinutes?: number;
   requestsLeft?: number;
   requestsLimit?: number;
   visible: boolean;
@@ -422,6 +423,7 @@ export interface DashboardAccountViewModel {
   lastQuotaAt?: number;
   resetCreditsAvailable?: number;
   resetCreditsNextExpiresAt?: number;
+  quotaCountdownStartAvailable: boolean;
   tokenUsage?: DashboardAccountTokenUsageViewModel;
   autoSwitchLockedUntil?: number;
   metrics: DashboardMetricViewModel[];
@@ -612,6 +614,7 @@ export type DashboardActionName =
   | "details"
   | "switch"
   | "refresh"
+  | "startQuotaCountdown"
   | "remove"
   | "toggleStatusBar"
   | "getResetCredits"
