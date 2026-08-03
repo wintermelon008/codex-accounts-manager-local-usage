@@ -586,6 +586,7 @@ function App() {
                   reauthorizePending={isActionPending("reauthorize", account.id)}
                   resyncProfilePending={isActionPending("resyncProfile", account.id)}
                   refreshPending={isActionPending("refresh", account.id)}
+                  quotaCountdownStartPending={isActionPending("startQuotaCountdown", account.id)}
                   detailsPending={isActionPending("details", account.id)}
                   removePending={isActionPending("remove", account.id)}
                   togglePending={isActionPending("toggleStatusBar", account.id)}

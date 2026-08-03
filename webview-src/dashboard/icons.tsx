@@ -21,6 +21,17 @@ export function renderRefreshIcon() {
   );
 }
 
+export function renderQuotaCountdownStartIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="M12 7.5v5l3 1.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path d="M4.4 4.8 6.8 2.9M19.6 4.8l-2.4-1.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path d="m10.2 16.2 4.1 2.4-4.1 2.4Z" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function renderResyncProfileIcon() {
   return (
     <svg viewBox="0 0 1024 1024" aria-hidden="true">

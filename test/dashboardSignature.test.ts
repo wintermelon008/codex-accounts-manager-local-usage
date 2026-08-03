@@ -9,6 +9,8 @@ function createState(overrides?: {
   accountGroup?: "A" | "B" | "C";
   planType?: string;
   tokenUsage?: { totalTokens: number; resetAt: number };
+  quotaCountdownStartAvailable?: boolean;
+  metricWindowMinutes?: number;
 }): DashboardState {
   return {
     lang: "zh",
@@ -75,7 +77,20 @@ function createState(overrides?: {
         showInStatusBar: false,
         healthKind: "healthy",
         dismissedHealth: false,
-        metrics: [],
+        metrics:
+          overrides?.metricWindowMinutes == null
+            ? []
+            : [
+                {
+                  key: "weekly",
+                  label: "Weekly",
+                  percentage: 100,
+                  resetAt: 1_800_000_000,
+                  windowMinutes: overrides.metricWindowMinutes,
+                  visible: true
+                }
+              ],
+        quotaCountdownStartAvailable: overrides?.quotaCountdownStartAvailable ?? false,
         resetCreditsAvailable: overrides?.resetCreditsAvailable,
         resetCreditsNextExpiresAt: overrides?.resetCreditsNextExpiresAt,
         tokenUsage: overrides?.tokenUsage
@@ -126,6 +141,18 @@ describe("buildDashboardStateSignature", () => {
   it("changes when an account's raw plan type changes", () => {
     expect(buildDashboardStateSignature(createState({ planType: "free" }))).not.toBe(
       buildDashboardStateSignature(createState({ planType: "pro_20x" }))
+    );
+  });
+
+  it("changes when the quota countdown starter becomes unavailable", () => {
+    expect(buildDashboardStateSignature(createState({ quotaCountdownStartAvailable: true }))).not.toBe(
+      buildDashboardStateSignature(createState({ quotaCountdownStartAvailable: false }))
+    );
+  });
+
+  it("changes when a quota window reports a different duration", () => {
+    expect(buildDashboardStateSignature(createState({ metricWindowMinutes: 7 * 24 * 60 }))).not.toBe(
+      buildDashboardStateSignature(createState({ metricWindowMinutes: 30 * 24 * 60 }))
     );
   });
 

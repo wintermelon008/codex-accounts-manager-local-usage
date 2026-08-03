@@ -6,10 +6,12 @@ import type {
   DashboardSettings,
   DashboardState
 } from "../../src/domain/dashboard/types";
+import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCountdown";
 import { getSensitiveDisplayValue, renderTagList } from "./helpers";
 import {
   EditTagsIcon,
   renderDetailsIcon,
+  renderQuotaCountdownStartIcon,
   renderRefreshIcon,
   renderReauthorizeIcon,
   renderReloadIcon,
@@ -34,6 +36,7 @@ export function SavedAccountCard(props: {
   reauthorizePending: boolean;
   resyncProfilePending: boolean;
   refreshPending: boolean;
+  quotaCountdownStartPending: boolean;
   detailsPending: boolean;
   removePending: boolean;
   togglePending: boolean;
@@ -51,6 +54,7 @@ export function SavedAccountCard(props: {
       | "reauthorize"
       | "resyncProfile"
       | "refresh"
+      | "startQuotaCountdown"
       | "remove"
       | "toggleStatusBar"
       | "toggleBalancePool"
@@ -105,6 +109,22 @@ export function SavedAccountCard(props: {
     .filter(Boolean)
     .join(" ");
   const visibleMetrics = account.metrics.filter((metric) => metric.visible);
+  const quotaCountdownStartLabel =
+    props.lang === "zh" ? "启动额度倒计时" : props.lang === "zh-hant" ? "啟動額度倒數" : "Start quota countdown";
+  const showQuotaCountdownStart =
+    account.quotaCountdownStartAvailable &&
+    account.metrics.some(
+      (metric) =>
+        metric.visible &&
+        (metric.key === "hourly" || metric.key === "weekly") &&
+        isQuotaCountdownWindowFresh(metric.key, metric.resetAt, now, metric.windowMinutes)
+    ) &&
+    account.metrics.every(
+      (metric) =>
+        !metric.visible ||
+        (metric.key !== "hourly" && metric.key !== "weekly") ||
+        isQuotaCountdownWindowFresh(metric.key, metric.resetAt, now, metric.windowMinutes)
+    );
   const stopFlip = (event: Event): void => {
     event.stopPropagation();
   };
@@ -305,6 +325,16 @@ export function SavedAccountCard(props: {
               disabled={props.busy}
               onClick={() => onAction("refresh", account.id)}
             />
+            {showQuotaCountdownStart ? (
+              <ActionButton
+                icon={renderQuotaCountdownStartIcon()}
+                iconOnly
+                label={quotaCountdownStartLabel}
+                pending={props.quotaCountdownStartPending}
+                disabled={props.busy}
+                onClick={() => onAction("startQuotaCountdown", account.id)}
+              />
+            ) : null}
             {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
               <ActionButton
                 icon={renderResetCreditsIcon()}
