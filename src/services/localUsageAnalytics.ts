@@ -7,8 +7,6 @@ import type {
   DashboardLocalUsageDayModelViewModel,
   DashboardLocalUsageDayViewModel,
   DashboardLocalUsageModelViewModel,
-  DashboardLocalUsageThreeHourModelViewModel,
-  DashboardLocalUsageThreeHourViewModel,
   DashboardLocalUsageTokenTotals,
   DashboardLocalUsageViewModel
 } from "../domain/dashboard/types";
@@ -16,17 +14,16 @@ import { tryAcquireSharedFileLease } from "../storage/accountsWriteCoordinator";
 
 export const LOCAL_USAGE_CACHE_TTL_MS = 15 * 60 * 1000;
 export const LOCAL_USAGE_PERIOD_DAYS = 14;
-export const LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT = 8;
 export const LOCAL_USAGE_SCAN_LEASE_MS = 60 * 1000;
 export const ACCOUNT_TOKEN_USAGE_RETENTION_DAYS = 31;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const CACHE_FILE_NAME = "local-usage-analytics-v5.json";
-export const ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME = "account-token-usage-v1.json";
+const CACHE_FILE_NAME = "local-usage-analytics-v6.json";
+export const ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME = "account-token-usage-v2.json";
 export const ACCOUNT_USAGE_ATTRIBUTION_DIRECTORY_NAME = "account-usage-attribution";
 export const LOCAL_USAGE_SCAN_LEASE_FILE_NAME = `${CACHE_FILE_NAME}.scan-lease`;
-const CACHE_SCHEMA_VERSION = 5;
-const ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION = 1;
+const CACHE_SCHEMA_VERSION = 6;
+const ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION = 2;
 const UNKNOWN_MODEL = "unknown";
 const PEER_REFRESH_WAIT_MS = 2_000;
 const PEER_REFRESH_POLL_MS = 50;
@@ -59,6 +56,7 @@ export type LocalUsageScanInput = {
 export type LocalUsageScanner = (input: LocalUsageScanInput) => Promise<DashboardLocalUsageViewModel>;
 
 export type AccountTokenUsageWindow = DashboardLocalUsageTokenTotals & {
+  byModel: DashboardLocalUsageModelViewModel[];
   window: "hourly" | "weekly";
   resetAt: number;
   eventCount: number;
@@ -93,6 +91,7 @@ export type LocalUsageAnalyticsOptions = {
   scanner?: LocalUsageScanner;
   combinedScanner?: LocalUsageCombinedScanner;
   usageAttributionDirectory?: string;
+  backgroundRefreshEnabled?: boolean;
 };
 
 type LocalUsageCache = {
@@ -155,12 +154,14 @@ export class LocalUsageAnalyticsService {
   private readonly now: () => number;
   private readonly combinedScanner: LocalUsageCombinedScanner;
   private readonly usageAttributionDirectory: string;
+  private readonly backgroundRefreshEnabled: boolean;
 
   constructor(private readonly options: LocalUsageAnalyticsOptions) {
     this.sessionsPath = options.sessionsPath ?? defaultSessionsPath();
     this.periodDays = options.periodDays ?? LOCAL_USAGE_PERIOD_DAYS;
     this.timeZone = options.timeZone ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
     this.now = options.now ?? Date.now;
+    this.backgroundRefreshEnabled = options.backgroundRefreshEnabled ?? true;
     this.usageAttributionDirectory =
       options.usageAttributionDirectory ??
       path.join(options.globalStoragePath, "hot-switch-runtime", ACCOUNT_USAGE_ATTRIBUTION_DIRECTORY_NAME);
@@ -191,7 +192,9 @@ export class LocalUsageAnalyticsService {
     await this.syncSnapshotsFromCache();
 
     if (!this.snapshot) {
-      void this.startRefresh(onRefreshed);
+      if (this.backgroundRefreshEnabled) {
+        void this.startRefresh(onRefreshed);
+      }
       const now = this.now();
       return {
         localUsage: createEmptySnapshot("loading", this.periodDays, this.timeZone, now),
@@ -208,15 +211,17 @@ export class LocalUsageAnalyticsService {
       };
     }
 
-    void this.startRefresh(onRefreshed);
+    if (this.backgroundRefreshEnabled) {
+      void this.startRefresh(onRefreshed);
+    }
     return {
       localUsage: {
         ...this.snapshot,
-        isRefreshing: true
+        isRefreshing: this.backgroundRefreshEnabled
       },
       accountTokenUsage: {
         ...(this.accountTokenUsage ?? createEmptyAccountTokenUsageSnapshot("unavailable", this.now())),
-        isRefreshing: true
+        isRefreshing: this.backgroundRefreshEnabled
       }
     };
   }
@@ -451,7 +456,6 @@ async function scanLocalUsageSessionsInternal(
   attribution: UsageAttributionIndex
 ): Promise<LocalUsageSnapshots> {
   const empty = createEmptySnapshot("unavailable", input.periodDays, input.timeZone, input.now);
-  const localNow = zonedDateTimeParts(input.now, input.timeZone);
   const accountUsageWindows = new Map<string, Map<string, AccountTokenUsageWindow>>();
   const tracksAccountUsage = attribution.recordCount > 0;
   if (!(await isDirectory(input.sessionsPath))) {
@@ -472,8 +476,6 @@ async function scanLocalUsageSessionsInternal(
   const byDate = new Map(empty.byDay.map((row) => [row.date, row]));
   const byModel = new Map<string, DashboardLocalUsageModelViewModel>();
   const byDayAndModel = new Map<string, DashboardLocalUsageDayModelViewModel>();
-  const byThreeHour = empty.byThreeHour;
-  const byThreeHourAndModel = new Map<string, DashboardLocalUsageThreeHourModelViewModel>();
   const sourceFiles = new Set<string>();
   const total = empty.total;
   let eventCount = 0;
@@ -567,11 +569,13 @@ async function scanLocalUsageSessionsInternal(
           continue;
         }
 
+        const model = currentModel || UNKNOWN_MODEL;
+
         if (includesAccountUsage) {
           const attributionRecord = findUsageAttribution(sessionThreadIds, timestamp, attribution.byThread);
           const quotaWindows = readTokenUsageQuotaWindows(payload);
           if (attributionRecord && quotaWindows.length > 0) {
-            addAccountTokenUsage(accountUsageWindows, attributionRecord.a, quotaWindows, usage, timestamp);
+            addAccountTokenUsage(accountUsageWindows, attributionRecord.a, quotaWindows, model, usage, timestamp);
             attributedEventCount += 1;
           }
         }
@@ -585,7 +589,6 @@ async function scanLocalUsageSessionsInternal(
           continue;
         }
 
-        const model = currentModel || UNKNOWN_MODEL;
         const modelBucket = getOrCreateModelBucket(byModel, model);
         const dayModelBucket = getOrCreateDayModelBucket(byDayAndModel, date, model);
         addTotals(total, usage);
@@ -593,19 +596,6 @@ async function scanLocalUsageSessionsInternal(
         addTotals(modelBucket, usage);
         addTotals(dayModelBucket, usage);
         day.eventCount += 1;
-
-        const threeHourBucket =
-          localTimestamp.date === localNow.date ? byThreeHour[Math.floor(localTimestamp.hour / 3)] : undefined;
-        if (threeHourBucket) {
-          const threeHourModelBucket = getOrCreateThreeHourModelBucket(
-            byThreeHourAndModel,
-            threeHourBucket.startAt,
-            model
-          );
-          addTotals(threeHourBucket, usage);
-          addTotals(threeHourModelBucket, usage);
-          threeHourBucket.eventCount += 1;
-        }
 
         eventCount += 1;
         fileHasLocalUsage = true;
@@ -636,10 +626,6 @@ async function scanLocalUsageSessionsInternal(
       byModel: [...byModel.values()].sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)),
       byDayAndModel: [...byDayAndModel.values()].sort(
         (a, b) => a.date.localeCompare(b.date) || b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)
-      ),
-      byThreeHour: [...byThreeHour],
-      byThreeHourAndModel: [...byThreeHourAndModel.values()].sort(
-        (a, b) => a.startAt - b.startAt || b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)
       )
     },
     input.now,
@@ -686,13 +672,19 @@ export function findAccountTokenUsageWindow(
     resetAt: targetResetAt,
     eventCount: 0,
     lastObservedAt: 0,
+    byModel: [],
     ...emptyTotals()
   };
+  const modelBuckets = new Map<string, DashboardLocalUsageModelViewModel>();
   for (const candidate of matchingWindows) {
     addTotals(aggregate, candidate);
+    for (const modelUsage of candidate.byModel) {
+      addTotals(getOrCreateModelBucket(modelBuckets, modelUsage.model), modelUsage);
+    }
     aggregate.eventCount += candidate.eventCount;
     aggregate.lastObservedAt = Math.max(aggregate.lastObservedAt, candidate.lastObservedAt);
   }
+  aggregate.byModel = sortModelBuckets(modelBuckets);
   return aggregate;
 }
 
@@ -720,9 +712,7 @@ function createEmptySnapshot(
       ...emptyTotals()
     })),
     byModel: [],
-    byDayAndModel: [],
-    byThreeHour: currentDayThreeHourBuckets(now, timeZone),
-    byThreeHourAndModel: []
+    byDayAndModel: []
   };
 }
 
@@ -759,7 +749,10 @@ function createAccountTokenUsageSnapshot(
   const serializedWindows: Record<string, AccountTokenUsageWindow[]> = {};
   for (const [accountId, windows] of windowsByAccount) {
     serializedWindows[accountId] = [...windows.values()]
-      .map((window) => ({ ...window }))
+      .map((window) => ({
+        ...window,
+        byModel: [...window.byModel].sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model))
+      }))
       .sort((a, b) => a.window.localeCompare(b.window) || a.resetAt - b.resetAt);
   }
   return {
@@ -936,6 +929,7 @@ function addAccountTokenUsage(
   windowsByAccount: Map<string, Map<string, AccountTokenUsageWindow>>,
   accountId: string,
   quotaWindows: readonly Pick<AccountTokenUsageWindow, "window" | "resetAt">[],
+  model: string,
   usage: DashboardLocalUsageTokenTotals,
   observedAt: number
 ): void {
@@ -953,11 +947,13 @@ function addAccountTokenUsage(
         resetAt: quotaWindow.resetAt,
         eventCount: 0,
         lastObservedAt: observedAt,
+        byModel: [],
         ...emptyTotals()
       };
       accountWindows.set(key, target);
     }
     addTotals(target, usage);
+    addTotals(getOrCreateAccountModelBucket(target.byModel, model), usage);
     target.eventCount += 1;
     target.lastObservedAt = Math.max(target.lastObservedAt, observedAt);
   }
@@ -1103,6 +1099,29 @@ function getOrCreateModelBucket(
   return created;
 }
 
+function getOrCreateAccountModelBucket(
+  buckets: DashboardLocalUsageModelViewModel[],
+  model: string
+): DashboardLocalUsageModelViewModel {
+  const existing = buckets.find((bucket) => bucket.model === model);
+  if (existing) {
+    return existing;
+  }
+
+  const created: DashboardLocalUsageModelViewModel = {
+    model,
+    ...emptyTotals()
+  };
+  buckets.push(created);
+  return created;
+}
+
+function sortModelBuckets(
+  buckets: Map<string, DashboardLocalUsageModelViewModel>
+): DashboardLocalUsageModelViewModel[] {
+  return [...buckets.values()].sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model));
+}
+
 function getOrCreateDayModelBucket(
   buckets: Map<string, DashboardLocalUsageDayModelViewModel>,
   date: string,
@@ -1116,26 +1135,6 @@ function getOrCreateDayModelBucket(
 
   const created: DashboardLocalUsageDayModelViewModel = {
     date,
-    model,
-    ...emptyTotals()
-  };
-  buckets.set(key, created);
-  return created;
-}
-
-function getOrCreateThreeHourModelBucket(
-  buckets: Map<string, DashboardLocalUsageThreeHourModelViewModel>,
-  startAt: number,
-  model: string
-): DashboardLocalUsageThreeHourModelViewModel {
-  const key = `${startAt}\u0000${model}`;
-  const existing = buckets.get(key);
-  if (existing) {
-    return existing;
-  }
-
-  const created: DashboardLocalUsageThreeHourModelViewModel = {
-    startAt,
     model,
     ...emptyTotals()
   };
@@ -1316,29 +1315,6 @@ function timestampFromEvent(value: unknown): number | undefined {
 
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : undefined;
-}
-
-function currentDayThreeHourBuckets(now: number, timeZone: string): DashboardLocalUsageThreeHourViewModel[] {
-  const localNow = zonedDateTimeParts(now, timeZone);
-  const count = Math.min(LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT, Math.floor(localNow.hour / 3) + 1);
-  return Array.from({ length: count }, (_, index) => {
-    const startHour = index * 3;
-    const isLastBucket = index === LOCAL_USAGE_THREE_HOUR_BUCKET_COUNT - 1;
-    const endDate = isLastBucket ? shiftLocalDate(localNow, 1) : localNow;
-    const endHour = isLastBucket ? 0 : startHour + 3;
-    return {
-      startAt: localDateTimeToTimestamp(
-        { year: localNow.year, month: localNow.month, day: localNow.day, hour: startHour },
-        timeZone
-      ),
-      endAt: localDateTimeToTimestamp(
-        { year: endDate.year, month: endDate.month, day: endDate.day, hour: endHour },
-        timeZone
-      ),
-      eventCount: 0,
-      ...emptyTotals()
-    };
-  });
 }
 
 function nextLocalUsageRefreshAt(calculatedAt: number, timeZone: string): number {
@@ -1549,11 +1525,7 @@ function isUsageSnapshot(value: unknown): value is DashboardLocalUsageViewModel 
     Array.isArray(candidate["byModel"]) &&
     candidate["byModel"].every(isUsageModel) &&
     Array.isArray(candidate["byDayAndModel"]) &&
-    candidate["byDayAndModel"].every(isUsageDayModel) &&
-    Array.isArray(candidate["byThreeHour"]) &&
-    candidate["byThreeHour"].every(isUsageThreeHour) &&
-    Array.isArray(candidate["byThreeHourAndModel"]) &&
-    candidate["byThreeHourAndModel"].every(isUsageThreeHourModel)
+    candidate["byDayAndModel"].every(isUsageDayModel)
   );
 }
 
@@ -1594,7 +1566,9 @@ function isAccountTokenUsageWindow(value: unknown): value is AccountTokenUsageWi
     candidate["eventCount"] >= 0 &&
     isFiniteNumber(candidate["lastObservedAt"]) &&
     candidate["lastObservedAt"] > 0 &&
-    isTokenTotals(candidate)
+    isTokenTotals(candidate) &&
+    Array.isArray(candidate["byModel"]) &&
+    candidate["byModel"].every(isUsageModel)
   );
 }
 
@@ -1618,28 +1592,6 @@ function isUsageDayModel(value: unknown): value is DashboardLocalUsageDayModelVi
   return Boolean(
     candidate &&
     typeof candidate["date"] === "string" &&
-    typeof candidate["model"] === "string" &&
-    isTokenTotals(candidate)
-  );
-}
-
-function isUsageThreeHour(value: unknown): value is DashboardLocalUsageThreeHourViewModel {
-  const candidate = asRecord(value);
-  return Boolean(
-    candidate &&
-    isFiniteNumber(candidate["startAt"]) &&
-    isFiniteNumber(candidate["endAt"]) &&
-    candidate["endAt"] > candidate["startAt"] &&
-    isFiniteNumber(candidate["eventCount"]) &&
-    isTokenTotals(candidate)
-  );
-}
-
-function isUsageThreeHourModel(value: unknown): value is DashboardLocalUsageThreeHourModelViewModel {
-  const candidate = asRecord(value);
-  return Boolean(
-    candidate &&
-    isFiniteNumber(candidate["startAt"]) &&
     typeof candidate["model"] === "string" &&
     isTokenTotals(candidate)
   );

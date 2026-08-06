@@ -44,9 +44,7 @@ const localUsage = {
   },
   byDay: [],
   byModel: [],
-  byDayAndModel: [],
-  byThreeHour: [],
-  byThreeHourAndModel: []
+  byDayAndModel: []
 };
 
 const accountTokenUsage = {

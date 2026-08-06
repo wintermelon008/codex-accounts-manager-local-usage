@@ -233,6 +233,7 @@ function resolveAccountTokenUsage(
     resetAt: quotaWindow.resetAt,
     calculatedAt: snapshot.calculatedAt,
     status: snapshot.status === "loading" ? "loading" : "waiting",
+    byModel: [],
     inputTokens: 0,
     cachedInputTokens: 0,
     outputTokens: 0,

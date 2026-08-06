@@ -83,7 +83,7 @@ export interface DashboardSettings {
 
 export type DashboardThemeOption = "auto" | "dark" | "light";
 
-export type DashboardLocalUsageRange = "24h" | "7d" | "14d";
+export type DashboardLocalUsageRange = "7d" | "14d";
 
 export interface DashboardCopy {
   panelTitle: string;
@@ -197,7 +197,6 @@ export interface DashboardCopy {
   localUsageCached: string;
   localUsageByModel: string;
   localUsageDaily: string;
-  localUsageThreeHour: string;
   localUsageUpdated: string;
   localUsageRefreshBtn: string;
   localUsageRefreshing: string;
@@ -207,7 +206,6 @@ export interface DashboardCopy {
   localUsageModelUnknown: string;
   localUsageNote: string;
   localUsagePriceNote: string;
-  localUsageRange24Hours: string;
   localUsageRange7Days: string;
   localUsageRange14Days: string;
   localUsageSameRange: string;
@@ -215,7 +213,6 @@ export interface DashboardCopy {
   localUsageSettingsSub: string;
   localUsageDefaultRangeTitle: string;
   localUsageDefaultRangeSub: string;
-  localUsageRange24HoursDesc: string;
   localUsageRange7DaysDesc: string;
   localUsageRange14DaysDesc: string;
   localUsagePriceSettingsTitle: string;
@@ -434,6 +431,7 @@ export interface DashboardAccountViewModel {
  * Codex token counters, not a conversion of the service's quota percentage.
  */
 export interface DashboardAccountTokenUsageViewModel extends DashboardLocalUsageTokenTotals {
+  byModel: DashboardLocalUsageModelViewModel[];
   window: "hourly" | "weekly";
   resetAt: number;
   calculatedAt?: number;
@@ -470,17 +468,6 @@ export interface DashboardLocalUsageDayModelViewModel extends DashboardLocalUsag
   model: string;
 }
 
-export interface DashboardLocalUsageThreeHourViewModel extends DashboardLocalUsageTokenTotals {
-  startAt: number;
-  endAt: number;
-  eventCount: number;
-}
-
-export interface DashboardLocalUsageThreeHourModelViewModel extends DashboardLocalUsageTokenTotals {
-  startAt: number;
-  model: string;
-}
-
 /**
  * A sanitized, machine-local view of Codex session usage. It deliberately has
  * no account identifiers, credentials, paths, or conversation content.
@@ -497,8 +484,6 @@ export interface DashboardLocalUsageViewModel {
   byDay: DashboardLocalUsageDayViewModel[];
   byModel: DashboardLocalUsageModelViewModel[];
   byDayAndModel: DashboardLocalUsageDayModelViewModel[];
-  byThreeHour: DashboardLocalUsageThreeHourViewModel[];
-  byThreeHourAndModel: DashboardLocalUsageThreeHourModelViewModel[];
 }
 
 /**

@@ -79,7 +79,6 @@ class DashboardPanelController {
   private configWatcher: vscode.Disposable | undefined;
   private webviewReady = false;
   private publishTimer: NodeJS.Timeout | undefined;
-  private localUsageRefreshTimer: NodeJS.Timeout | undefined;
   private lastPublishedStateSignature: string | undefined;
   private usageAnalytics: LocalUsageAnalyticsService | undefined;
   private usageAnalyticsCompatibility: Promise<boolean> | undefined;
@@ -112,10 +111,6 @@ class DashboardPanelController {
         if (this.publishTimer) {
           clearTimeout(this.publishTimer);
           this.publishTimer = undefined;
-        }
-        if (this.localUsageRefreshTimer) {
-          clearTimeout(this.localUsageRefreshTimer);
-          this.localUsageRefreshTimer = undefined;
         }
         this.oauth.dispose();
         this.configWatcher?.dispose();
@@ -196,21 +191,6 @@ class DashboardPanelController {
     }, delayMs);
   }
 
-  private scheduleLocalUsageRefresh(nextRefreshAt: number): void {
-    if (!this.panel) {
-      return;
-    }
-
-    if (this.localUsageRefreshTimer) {
-      clearTimeout(this.localUsageRefreshTimer);
-    }
-
-    this.localUsageRefreshTimer = setTimeout(() => {
-      this.localUsageRefreshTimer = undefined;
-      this.schedulePublishState();
-    }, getDashboardLocalUsageRefreshDelay(nextRefreshAt));
-  }
-
   private async publishState(force = false): Promise<void> {
     if (!this.panel || !this.webviewReady) {
       return;
@@ -231,7 +211,6 @@ class DashboardPanelController {
       },
       postMessage: (message) => this.panel!.webview.postMessage(message),
       schedulePublishState: () => this.schedulePublishState(),
-      scheduleLocalUsageRefresh: (nextRefreshAt) => this.scheduleLocalUsageRefresh(nextRefreshAt),
       usageAnalytics: await this.getUsageAnalytics(),
       lastPublishedStateSignature: this.lastPublishedStateSignature,
       force
@@ -330,7 +309,10 @@ class DashboardPanelController {
     }
 
     this.usageAnalytics ??= new LocalUsageAnalyticsService({
-      globalStoragePath: this.context.globalStorageUri.fsPath
+      globalStoragePath: this.context.globalStorageUri.fsPath,
+      // Keep the Dashboard read-only at startup. The local session scan can
+      // cover hundreds of megabytes and is intentionally user-triggered.
+      backgroundRefreshEnabled: false
     });
     return this.usageAnalytics;
   }

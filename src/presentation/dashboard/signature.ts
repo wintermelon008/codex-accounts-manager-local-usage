@@ -34,7 +34,8 @@ export function buildDashboardStateSignature(state: DashboardState): string {
               account.tokenUsage.cachedInputTokens,
               account.tokenUsage.outputTokens,
               account.tokenUsage.reasoningOutputTokens,
-              account.tokenUsage.totalTokens
+              account.tokenUsage.totalTokens,
+              JSON.stringify(account.tokenUsage.byModel)
             ].join(",")
           : "",
         account.healthKind,
@@ -75,9 +76,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
         total: state.localUsage.total,
         byDay: state.localUsage.byDay,
         byModel: state.localUsage.byModel,
-        byDayAndModel: state.localUsage.byDayAndModel,
-        byThreeHour: state.localUsage.byThreeHour,
-        byThreeHourAndModel: state.localUsage.byThreeHourAndModel
+        byDayAndModel: state.localUsage.byDayAndModel
       })
     : "";
   const integrationsSignature = JSON.stringify(state.integrations ?? []);

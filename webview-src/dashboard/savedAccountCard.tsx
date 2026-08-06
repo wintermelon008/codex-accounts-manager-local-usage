@@ -22,6 +22,7 @@ import {
 } from "./icons";
 import { ActionButton } from "./primitives";
 import { MetricRow, renderHealthPill } from "./accountMetricPrimitives";
+import { estimateStandardApiCost } from "./localUsageInsights";
 
 export function SavedAccountCard(props: {
   account: DashboardAccountViewModel;
@@ -493,16 +494,14 @@ function formatAccountTokenUsage(account: DashboardAccountViewModel, lang: Dashb
     return `${label}: ${lang === "zh" ? "等待受管会话" : lang === "zh-hant" ? "等待受管會話" : "Waiting for a managed turn"}`;
   }
 
-  const input = formatCompactTokenCount(usage.inputTokens);
-  const output = formatCompactTokenCount(usage.outputTokens);
-  const cached = formatCompactTokenCount(usage.cachedInputTokens);
+  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
   if (lang === "zh") {
-    return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · 入 ${input} · 出 ${output} · 缓存 ${cached}`;
+    return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
   }
   if (lang === "zh-hant") {
-    return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · 入 ${input} · 出 ${output} · 快取 ${cached}`;
+    return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
   }
-  return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · in ${input} · out ${output} · cache ${cached}`;
+  return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
 }
 
 function formatAccountTokenUsageTitle(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
@@ -511,13 +510,27 @@ function formatAccountTokenUsageTitle(account: DashboardAccountViewModel, lang: 
     return formatAccountTokenUsage(account, lang);
   }
   const label = resolveTokenUsageLabel(lang, usage.window);
+  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
   if (lang === "zh") {
-    return `${label}: ${usage.totalTokens.toLocaleString()} Token（输入 ${usage.inputTokens.toLocaleString()}，输出 ${usage.outputTokens.toLocaleString()}，缓存 ${usage.cachedInputTokens.toLocaleString()}，推理 ${usage.reasoningOutputTokens.toLocaleString()}）`;
+    return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}`;
   }
   if (lang === "zh-hant") {
-    return `${label}: ${usage.totalTokens.toLocaleString()} Token（輸入 ${usage.inputTokens.toLocaleString()}，輸出 ${usage.outputTokens.toLocaleString()}，快取 ${usage.cachedInputTokens.toLocaleString()}，推理 ${usage.reasoningOutputTokens.toLocaleString()}）`;
+    return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}`;
   }
-  return `${label}: ${usage.totalTokens.toLocaleString()} tokens (input ${usage.inputTokens.toLocaleString()}, output ${usage.outputTokens.toLocaleString()}, cached ${usage.cachedInputTokens.toLocaleString()}, reasoning ${usage.reasoningOutputTokens.toLocaleString()})`;
+  return `${label}: ${usage.totalTokens.toLocaleString()} tokens · ${price}`;
+}
+
+function formatAccountTokenUsagePrice(
+  byModel: NonNullable<DashboardAccountViewModel["tokenUsage"]>["byModel"],
+  lang: DashboardState["lang"]
+): string {
+  const price = estimateStandardApiCost(byModel);
+  const label = lang === "zh" ? "价格" : lang === "zh-hant" ? "價格" : "Price";
+  const value =
+    price.pricedTokens > 0
+      ? `US$${new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(price.amountUsd)}`
+      : "—";
+  return `${label}: ${value}`;
 }
 
 function resolveTokenUsageLabel(

@@ -98,6 +98,7 @@ function createState(overrides?: {
               status: "tracking",
               window: "hourly",
               resetAt: overrides.tokenUsage.resetAt,
+              byModel: [],
               inputTokens: overrides.tokenUsage.totalTokens,
               cachedInputTokens: 0,
               outputTokens: 0,
@@ -206,29 +207,6 @@ describe("buildDashboardStateSignature", () => {
         byDayAndModel: [
           {
             date: "2026-07-14",
-            model: "gpt-5.6-sol",
-            inputTokens: 10,
-            cachedInputTokens: 2,
-            outputTokens: 3,
-            reasoningOutputTokens: 1,
-            totalTokens: 13
-          }
-        ],
-        byThreeHour: [
-          {
-            startAt: 100,
-            endAt: 10_800_100,
-            eventCount: 1,
-            inputTokens: 10,
-            cachedInputTokens: 2,
-            outputTokens: 3,
-            reasoningOutputTokens: 1,
-            totalTokens: 13
-          }
-        ],
-        byThreeHourAndModel: [
-          {
-            startAt: 100,
             model: "gpt-5.6-sol",
             inputTokens: 10,
             cachedInputTokens: 2,

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type {
   DashboardLocalUsageDayViewModel,
   DashboardLocalUsageModelViewModel,
-  DashboardLocalUsageThreeHourViewModel,
   DashboardLocalUsageViewModel
 } from "../src/domain/dashboard/types";
 import { deriveLocalUsageRange, estimateStandardApiCost } from "../webview-src/dashboard/localUsageInsights";
@@ -23,20 +22,6 @@ describe("deriveLocalUsageRange", () => {
     expect(range.byModel.some((row) => row.model === "gpt-5.5")).toBe(false);
   });
 
-  it("uses the available fixed 3-hour rows and the matching model aggregate for the 24-hour view", () => {
-    const range = deriveLocalUsageRange(usageSnapshot(), "24h");
-
-    expect(range.range).toBe("24h");
-    expect(range.bars).toHaveLength(7);
-    expect(range.eventCount).toBe(2);
-    expect(range.total.totalTokens).toBe(1_100_050);
-    expect(range.byModel).toEqual([
-      expect.objectContaining({ model: "gpt-5.6-terra", totalTokens: 1_100_000 }),
-      expect.objectContaining({ model: "unknown", totalTokens: 50 })
-    ]);
-    expect(range.bars[5]?.price).toMatchObject({ pricedTokens: 1_100_000, unpricedTokens: 0 });
-    expect(range.bars[6]?.price).toMatchObject({ pricedTokens: 0, unpricedTokens: 50 });
-  });
 });
 
 describe("estimateStandardApiCost", () => {
@@ -48,6 +33,12 @@ describe("estimateStandardApiCost", () => {
         outputTokens: 100_000,
         totalTokens: 1_100_000
       }),
+      modelUsage("gpt-5.6-terra", {
+        inputTokens: 1_000_000,
+        cachedInputTokens: 500_000,
+        outputTokens: 100_000,
+        totalTokens: 1_100_000
+      }),
       modelUsage("unknown", {
         inputTokens: 40,
         cachedInputTokens: 0,
@@ -56,8 +47,8 @@ describe("estimateStandardApiCost", () => {
       })
     ]);
 
-    expect(price.amountUsd).toBeCloseTo(7.1, 8);
-    expect(price.pricedTokens).toBe(1_100_000);
+    expect(price.amountUsd).toBeCloseTo(9.975, 8);
+    expect(price.pricedTokens).toBe(2_200_000);
     expect(price.unpricedTokens).toBe(50);
   });
 });
@@ -76,19 +67,6 @@ function usageSnapshot(): DashboardLocalUsageViewModel {
     }
     return dayUsage(date, 0, 0);
   });
-  const startAt = 1_784_000_000_000;
-  const threeHourMs = 3 * 60 * 60 * 1000;
-  const byThreeHour: DashboardLocalUsageThreeHourViewModel[] = Array.from({ length: 7 }, (_, index) => {
-    const bucketStartAt = startAt + index * threeHourMs;
-    if (index === 5) {
-      return threeHourUsage(bucketStartAt, 1, 1_100_000);
-    }
-    if (index === 6) {
-      return threeHourUsage(bucketStartAt, 1, 50);
-    }
-    return threeHourUsage(bucketStartAt, 0, 0);
-  });
-
   return {
     status: "ready",
     isRefreshing: false,
@@ -104,22 +82,6 @@ function usageSnapshot(): DashboardLocalUsageViewModel {
       { date: "2026-07-01", ...modelUsage("gpt-5.5", { totalTokens: 999 }) },
       { date: "2026-07-08", ...modelUsage("gpt-5.6-terra", { totalTokens: 200 }) },
       { date: "2026-07-14", ...modelUsage("gpt-5.6-sol", { totalTokens: 100 }) }
-    ],
-    byThreeHour,
-    byThreeHourAndModel: [
-      {
-        startAt: byThreeHour[5]!.startAt,
-        ...modelUsage("gpt-5.6-terra", {
-          inputTokens: 1_000_000,
-          cachedInputTokens: 200_000,
-          outputTokens: 100_000,
-          totalTokens: 1_100_000
-        })
-      },
-      {
-        startAt: byThreeHour[6]!.startAt,
-        ...modelUsage("unknown", { inputTokens: 40, outputTokens: 10, totalTokens: 50 })
-      }
     ]
   };
 }
@@ -127,15 +89,6 @@ function usageSnapshot(): DashboardLocalUsageViewModel {
 function dayUsage(date: string, eventCount: number, totalTokens: number): DashboardLocalUsageDayViewModel {
   return {
     date,
-    eventCount,
-    ...totals(totalTokens)
-  };
-}
-
-function threeHourUsage(startAt: number, eventCount: number, totalTokens: number): DashboardLocalUsageThreeHourViewModel {
-  return {
-    startAt,
-    endAt: startAt + 3 * 60 * 60 * 1000,
     eventCount,
     ...totals(totalTokens)
   };
