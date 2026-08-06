@@ -55,7 +55,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(cards.indexOf("copy.localUsagePrice")).toBeLessThan(cards.indexOf("copy.localUsageInput"));
     expect(section).toContain("<RangeSelector");
     expect(section).toContain("formatTokenAndPrice");
-    expect(section).toContain("formatThreeHourRange");
+    expect(section).toContain("label: row.date");
     expect(section).toContain("local-usage-title-row");
     expect(section).toContain("copy.localUsageRefreshBtn");
     expect(section).toContain('const visibleModels = range.byModel.filter((row) => row.model !== "unknown")');
@@ -153,12 +153,17 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain("margin-right: auto");
   });
 
-  it("renders a compact quota-window token counter in the paginated account card", () => {
+  it("renders only the quota-window token total and price in the paginated account card", () => {
     const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
     const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
 
     expect(card).toContain("saved-token-usage-line");
     expect(card).toContain("formatAccountTokenUsage");
+    expect(card).toContain("formatAccountTokenUsagePrice");
+    expect(card).not.toContain("usage.inputTokens");
+    expect(card).not.toContain("usage.outputTokens");
+    expect(card).not.toContain("usage.cachedInputTokens");
+    expect(card).not.toContain("usage.reasoningOutputTokens");
     expect(stylesheet).toContain(".saved-token-usage-line");
     expect(stylesheet).toContain("text-overflow: ellipsis");
   });

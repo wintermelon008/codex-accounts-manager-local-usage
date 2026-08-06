@@ -5,7 +5,7 @@ import type {
   DashboardLocalUsageViewModel
 } from "../../src/domain/dashboard/types";
 
-export const LOCAL_USAGE_RANGE_OPTIONS: readonly DashboardLocalUsageRange[] = ["24h", "7d", "14d"];
+export const LOCAL_USAGE_RANGE_OPTIONS: readonly DashboardLocalUsageRange[] = ["7d", "14d"];
 
 export type LocalUsagePriceEstimate = {
   amountUsd: number;
@@ -15,9 +15,7 @@ export type LocalUsagePriceEstimate = {
 
 export type LocalUsageRangeBar = {
   key: string;
-  date?: string;
-  startAt?: number;
-  endAt?: number;
+  date: string;
   eventCount: number;
   total: DashboardLocalUsageTokenTotals;
   price: LocalUsagePriceEstimate;
@@ -60,10 +58,6 @@ export function deriveLocalUsageRange(
   usage: DashboardLocalUsageViewModel,
   requestedRange: DashboardLocalUsageRange
 ): LocalUsageRangeViewModel {
-  if (requestedRange === "24h") {
-    return deriveThreeHourRange(usage);
-  }
-
   const days = requestedRange === "14d" ? 14 : 7;
   const byDay = usage.byDay.slice(-days);
   const includedDates = new Set(byDay.map((day) => day.date));
@@ -125,35 +119,6 @@ export function estimateStandardApiCost(
   }
 
   return { amountUsd, pricedTokens, unpricedTokens };
-}
-
-function deriveThreeHourRange(usage: DashboardLocalUsageViewModel): LocalUsageRangeViewModel {
-  const modelsByBucket = new Map<number, DashboardLocalUsageModelViewModel[]>();
-  for (const row of usage.byThreeHourAndModel) {
-    const bucket = modelsByBucket.get(row.startAt) ?? [];
-    bucket.push(row);
-    modelsByBucket.set(row.startAt, bucket);
-  }
-
-  const bars = usage.byThreeHour.map((bucket) => {
-    const modelUsage = aggregateModelUsage(modelsByBucket.get(bucket.startAt) ?? []);
-    return {
-      key: `three-hour-${bucket.startAt}`,
-      startAt: bucket.startAt,
-      endAt: bucket.endAt,
-      eventCount: bucket.eventCount,
-      total: copyTotals(bucket),
-      price: estimateStandardApiCost(modelUsage)
-    };
-  });
-
-  return {
-    range: "24h",
-    eventCount: bars.reduce((count, bar) => count + bar.eventCount, 0),
-    total: sumTotals(bars.map((bar) => bar.total)),
-    bars,
-    byModel: aggregateModelUsage(usage.byThreeHourAndModel)
-  };
 }
 
 function aggregateModelUsage(

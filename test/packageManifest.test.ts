@@ -53,7 +53,7 @@ describe("extension manifest configuration", () => {
     expect(properties?.["codexAccounts.localUsageDefaultRange"]).toMatchObject({
       type: "string",
       default: "7d",
-      enum: ["24h", "7d", "14d"]
+      enum: ["7d", "14d"]
     });
     expect(properties?.["codexAccounts.localUsageShowEquivalentPrice"]).toMatchObject({
       type: "boolean",

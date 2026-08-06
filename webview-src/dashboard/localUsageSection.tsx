@@ -90,10 +90,10 @@ export function LocalUsageSection(props: {
 
           <div class="local-usage-layout">
             <UsageBars
-              title={range.range === "24h" ? copy.localUsageThreeHour : copy.localUsageDaily}
+              title={copy.localUsageDaily}
               rows={range.bars.map((row) => ({
                 key: row.key,
-                label: row.startAt != null && row.endAt != null ? formatThreeHourRange(row.startAt, row.endAt) : row.date ?? "",
+                label: row.date,
                 value: row.total.totalTokens,
                 price: row.price
               }))}
@@ -229,8 +229,6 @@ function UsageBars(props: {
 
 function rangeLabel(copy: DashboardCopy, range: DashboardLocalUsageRange): string {
   switch (range) {
-    case "24h":
-      return copy.localUsageRange24Hours;
     case "14d":
       return copy.localUsageRange14Days;
     default:
@@ -270,19 +268,6 @@ function formatUsd(value: number): string {
 
 function formatCompactUsd(value: number): string {
   return `US$${new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)}`;
-}
-
-function formatThreeHourRange(startAt: number, endAt: number): string {
-  const start = new Date(startAt);
-  const end = new Date(endAt);
-  const timeFormatter = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
-  const startTime = timeFormatter.format(start);
-  const endTime = timeFormatter.format(end);
-  return `${startTime}–${endTime === "00:00" ? "24:00" : endTime}`;
 }
 
 function formatTimestamp(timestamp: number): string {

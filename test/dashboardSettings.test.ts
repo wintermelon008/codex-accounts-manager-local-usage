@@ -38,7 +38,7 @@ describe("handleDashboardSettingUpdate", () => {
     expect(update).toHaveBeenCalledWith("autoSwitchReloadWindowEnabled", true, vscode.ConfigurationTarget.Global);
   });
 
-  it("persists a supported local usage range and normalizes unsupported values", async () => {
+  it("migrates the removed local usage range and normalizes unsupported values", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
       get: vi.fn(),
@@ -52,7 +52,7 @@ describe("handleDashboardSettingUpdate", () => {
     await expect(handleDashboardSettingUpdate("localUsageDefaultRange", "24h")).resolves.toBe(true);
     await expect(handleDashboardSettingUpdate("localUsageDefaultRange", "unsupported")).resolves.toBe(true);
 
-    expect(update).toHaveBeenNthCalledWith(1, "localUsageDefaultRange", "24h", vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(1, "localUsageDefaultRange", "7d", vscode.ConfigurationTarget.Global);
     expect(update).toHaveBeenNthCalledWith(2, "localUsageDefaultRange", "7d", vscode.ConfigurationTarget.Global);
   });
 

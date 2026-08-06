@@ -96,26 +96,6 @@ describe("scanLocalUsageSessions", () => {
       expect.objectContaining({ date: "2026-07-13", model: "gpt-5.6-sol", totalTokens: 140 }),
       expect.objectContaining({ date: "2026-07-14", model: "gpt-5.6-luna", totalTokens: 70 })
     ]);
-    expect(result.byThreeHour).toHaveLength(7);
-    expect(result.byThreeHour[0]).toMatchObject({
-      startAt: Date.parse("2026-07-13T16:00:00.000Z"),
-      endAt: Date.parse("2026-07-13T19:00:00.000Z")
-    });
-    expect(result.byThreeHour[3]).toMatchObject({
-      startAt: Date.parse("2026-07-14T01:00:00.000Z"),
-      endAt: Date.parse("2026-07-14T04:00:00.000Z"),
-      totalTokens: 70
-    });
-    expect(result.byThreeHour[6]).toMatchObject({
-      startAt: Date.parse("2026-07-14T10:00:00.000Z"),
-      endAt: Date.parse("2026-07-14T13:00:00.000Z")
-    });
-    expect(result.byThreeHour.some((bucket) => bucket.startAt === Date.parse("2026-07-14T13:00:00.000Z"))).toBe(
-      false
-    );
-    expect(result.byThreeHour.reduce((sum, bucket) => sum + bucket.totalTokens, 0)).toBe(70);
-    expect(result.byThreeHour.reduce((sum, bucket) => sum + bucket.eventCount, 0)).toBe(1);
-    expect(result.byThreeHourAndModel).toEqual([expect.objectContaining({ model: "gpt-5.6-luna", totalTokens: 70 })]);
   });
 
   it("uses cumulative high-water deltas instead of repeated last-token reports", async () => {
@@ -381,6 +361,7 @@ describe("scanLocalUsageSessions", () => {
     const attributionDirectory = path.join(root, "usage-attribution");
     await writeSession(sessionsPath, "2026/07/14/attributed.jsonl", [
       { type: "session_meta", payload: { id: "thread-a", session_id: "thread-a" } },
+      { type: "turn_context", payload: { model: "gpt-5.6-sol" } },
       cumulativeTokenCountEvent(
         "2026-07-14T01:00:00.000Z",
         {
@@ -396,6 +377,7 @@ describe("scanLocalUsageSessions", () => {
           secondary: { resets_at: 1_800_604_800 }
         }
       ),
+      { type: "turn_context", payload: { model: "gpt-5.6-terra" } },
       cumulativeTokenCountEvent(
         "2026-07-14T01:01:00.000Z",
         {
@@ -435,13 +417,23 @@ describe("scanLocalUsageSessions", () => {
     expect(result.accountTokenUsage.status).toBe("ready");
     expect(result.accountTokenUsage.windowsByAccount["local-account-a"]).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ window: "hourly", resetAt: 1_800_000_000, totalTokens: 100 }),
+        expect.objectContaining({
+          window: "hourly",
+          resetAt: 1_800_000_000,
+          totalTokens: 100,
+          byModel: [expect.objectContaining({ model: "gpt-5.6-sol", totalTokens: 100 })]
+        }),
         expect.objectContaining({ window: "weekly", resetAt: 1_800_604_800, totalTokens: 100 })
       ])
     );
     expect(result.accountTokenUsage.windowsByAccount["local-account-b"]).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ window: "hourly", resetAt: 1_800_001_000, totalTokens: 50 }),
+        expect.objectContaining({
+          window: "hourly",
+          resetAt: 1_800_001_000,
+          totalTokens: 50,
+          byModel: [expect.objectContaining({ model: "gpt-5.6-terra", totalTokens: 50 })]
+        }),
         expect.objectContaining({ window: "weekly", resetAt: 1_800_605_000, totalTokens: 50 })
       ])
     );
@@ -495,6 +487,72 @@ describe("scanLocalUsageSessions", () => {
     expect(
       findAccountTokenUsageWindow(result.accountTokenUsage, "local-account-plus", "weekly", 1_800_604_800)
     ).toMatchObject({ totalTokens: 100 });
+  });
+
+  it("keeps per-model totals when one account uses multiple models in one quota window", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const attributionDirectory = path.join(root, "usage-attribution");
+    const rateLimits = {
+      primary: { resets_at: 1_800_000_000 },
+      secondary: { resets_at: 1_800_604_800 }
+    };
+    await writeSession(sessionsPath, "2026/07/14/multi-model.jsonl", [
+      { type: "session_meta", payload: { id: "thread-multi-model" } },
+      { type: "turn_context", payload: { model: "gpt-5.6-sol" } },
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:00:00.000Z",
+        {
+          inputTokens: 80,
+          cachedInputTokens: 20,
+          outputTokens: 20,
+          reasoningOutputTokens: 3,
+          totalTokens: 100
+        },
+        undefined,
+        rateLimits
+      ),
+      { type: "turn_context", payload: { model: "gpt-5.6-terra" } },
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:01:00.000Z",
+        {
+          inputTokens: 120,
+          cachedInputTokens: 30,
+          outputTokens: 30,
+          reasoningOutputTokens: 5,
+          totalTokens: 150
+        },
+        {
+          inputTokens: 40,
+          cachedInputTokens: 10,
+          outputTokens: 10,
+          reasoningOutputTokens: 2,
+          totalTokens: 50
+        },
+        rateLimits
+      )
+    ]);
+    await writeUsageAttribution(attributionDirectory, [
+      { v: 1, t: Date.parse("2026-07-14T00:59:00.000Z"), th: "thread-multi-model", a: "local-account" }
+    ]);
+
+    const result = await scanLocalUsageAndAccountTokenUsage({
+      sessionsPath,
+      usageAttributionDirectory: attributionDirectory,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(
+      findAccountTokenUsageWindow(result.accountTokenUsage, "local-account", "hourly", 1_800_000_000)
+    ).toMatchObject({
+      totalTokens: 150,
+      byModel: [
+        expect.objectContaining({ model: "gpt-5.6-sol", totalTokens: 100 }),
+        expect.objectContaining({ model: "gpt-5.6-terra", totalTokens: 50 })
+      ]
+    });
   });
 
   it("keeps the full current account quota window despite local-range trimming and reset timestamp jitter", async () => {
@@ -594,7 +652,7 @@ describe("LocalUsageAnalyticsService", () => {
     const firstCached = await service.getSnapshot();
     expect(firstCached.total.totalTokens).toBe(100);
     expect(scanner).toHaveBeenCalledTimes(1);
-    await expect(readFile(path.join(storagePath, "local-usage-analytics-v5.json"), "utf8")).resolves.toContain(
+    await expect(readFile(path.join(storagePath, "local-usage-analytics-v6.json"), "utf8")).resolves.toContain(
       '"totalTokens":100'
     );
 
@@ -648,6 +706,42 @@ describe("LocalUsageAnalyticsService", () => {
 
     expect(scanner).toHaveBeenCalledTimes(2);
     expect((await service.getSnapshot()).total.totalTokens).toBe(200);
+  });
+
+  it("keeps the Dashboard cache read-only until an explicit refresh", async () => {
+    const root = await createTempDirectory();
+    const storagePath = path.join(root, "storage");
+    let scanCount = 0;
+    const scanner: LocalUsageScanner = vi.fn(async ({ periodDays, now: scannedAt }) => {
+      scanCount += 1;
+      return readySnapshot(periodDays, scannedAt, scanCount * 100);
+    });
+    const service = new LocalUsageAnalyticsService({
+      globalStoragePath: storagePath,
+      sessionsPath: path.join(root, "sessions"),
+      timeZone: TIME_ZONE,
+      now: () => NOW,
+      scanner,
+      backgroundRefreshEnabled: false
+    });
+
+    expect((await service.getSnapshot()).status).toBe("loading");
+    expect(scanner).not.toHaveBeenCalled();
+
+    await service.refresh();
+    expect(scanner).toHaveBeenCalledOnce();
+    expect((await service.getSnapshot()).total.totalTokens).toBe(100);
+
+    const stale = await new LocalUsageAnalyticsService({
+      globalStoragePath: storagePath,
+      sessionsPath: path.join(root, "sessions"),
+      timeZone: TIME_ZONE,
+      now: () => NOW + LOCAL_USAGE_CACHE_TTL_MS + 1,
+      scanner,
+      backgroundRefreshEnabled: false
+    }).getSnapshot();
+    expect(stale.isRefreshing).toBe(false);
+    expect(scanner).toHaveBeenCalledOnce();
   });
 
   it("adopts a newer shared cache snapshot after its first in-memory load", async () => {
@@ -808,7 +902,7 @@ describe("LocalUsageAnalyticsService", () => {
     await service.getSnapshot(refreshed.resolve);
     await refreshed.promise;
 
-    const persisted = await readFile(path.join(storagePath, "local-usage-analytics-v5.json"), "utf8");
+    const persisted = await readFile(path.join(storagePath, "local-usage-analytics-v6.json"), "utf8");
     expect(persisted).toContain('"totalTokens":13');
     expect(persisted).not.toContain(secretMessage);
     expect(persisted).not.toContain(secretAccountId);
@@ -846,9 +940,7 @@ function readySnapshot(periodDays: number, calculatedAt: number, totalTokens: nu
     },
     byDay: [],
     byModel: [],
-    byDayAndModel: [],
-    byThreeHour: [],
-    byThreeHourAndModel: []
+    byDayAndModel: []
   };
 }
 

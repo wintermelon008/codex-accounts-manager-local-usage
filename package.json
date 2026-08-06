@@ -75,12 +75,11 @@
         "codexAccounts.localUsageDefaultRange": {
           "type": "string",
           "enum": [
-            "24h",
             "7d",
             "14d"
           ],
           "default": "7d",
-          "markdownDescription": "Default range for the local Codex usage dashboard. `24h` means the current local calendar day, with fixed 00:00-based 3-hour rows shown only after each row begins. Changing the range only filters the cached local aggregate and does not trigger an additional scan."
+          "markdownDescription": "Default range for the local Codex usage dashboard. Usage is aggregated by local calendar day. Changing the range only filters the cached local aggregate and does not trigger an additional scan."
         },
         "codexAccounts.localUsageShowEquivalentPrice": {
           "type": "boolean",

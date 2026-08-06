@@ -75,13 +75,6 @@ export function SettingsOverlay(props: {
             sub={props.copy.localUsageSettingsSub}
             options={[
               {
-                key: "local-usage-24h",
-                title: props.copy.localUsageRange24Hours,
-                description: props.copy.localUsageRange24HoursDesc,
-                active: props.settings.localUsageDefaultRange === "24h",
-                onClick: () => patchAndSend("localUsageDefaultRange", "24h")
-              },
-              {
                 key: "local-usage-7d",
                 title: props.copy.localUsageRange7Days,
                 description: props.copy.localUsageRange7DaysDesc,

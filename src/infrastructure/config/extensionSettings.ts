@@ -77,12 +77,11 @@ export function normalizeDashboardTheme(value: string | undefined): DashboardThe
 }
 
 export function normalizeLocalUsageRange(value: unknown): DashboardLocalUsageRange {
-  if (value === "24h" || value === "7d" || value === "14d") {
+  if (value === "7d" || value === "14d") {
     return value;
   }
 
-  // Preserve the dashboard selection for installations that used the
-  // pre-24h numeric setting, without retaining the retired 30-day view.
+  // Migrate the removed 24-hour/three-hour view and the old numeric setting.
   return value === 14 ? "14d" : "7d";
 }
 
