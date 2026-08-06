@@ -1,6 +1,6 @@
 # Local extension customizations
 
-This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.55`.
+This fork is pinned to upstream `v0.1.16` / commit `4b1689deafd2d303700c5cc26e6fd285979634e4` and packages as `0.1.16-local.59`.
 
 The root README is the short user guide. The detailed local-integration, seamless-switch, and changelog documents are included in every local VSIX so those links remain available after installation.
 
