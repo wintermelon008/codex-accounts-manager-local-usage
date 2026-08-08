@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { AccountsRepository } from "../storage";
-import { CodexAccountRecord } from "../core/types";
+import { CodexAccountRecord, isSub2ApiAccount } from "../core/types";
 import { getCurrentWindowRuntimeAccountId } from "../presentation/workbench/windowRuntimeAccount";
 import { formatRelativeReset } from "../utils/time";
 import { t } from "../utils";
@@ -37,7 +37,8 @@ export class AccountsStatusBarProvider {
     const accounts = await this.repo.listAccounts();
     const active = accounts.find((item) => item.isActive);
     const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
-    const primary = accounts.find((item) => item.id === currentWindowAccountId) ?? active ?? accounts[0];
+    const providerActive = accounts.find((item) => item.providerActive);
+    const primary = providerActive ?? accounts.find((item) => item.id === currentWindowAccountId) ?? active ?? accounts[0];
     const _t = t();
 
     if (!primary) {
@@ -58,6 +59,9 @@ export class AccountsStatusBarProvider {
 }
 
 function buildStatusText(account: CodexAccountRecord): string {
+  if (isSub2ApiAccount(account)) {
+    return `${STATUS_BAR_ICON} Sub2API Gateway`;
+  }
   const hourly = account.quotaSummary?.hourlyPercentage;
   const weekly = account.quotaSummary?.weeklyPercentage;
   if (typeof hourly === "number" && typeof weekly === "number") {
@@ -98,7 +102,8 @@ function renderAccountPanel(
 ): string {
   const _t = t();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
-  const plan = (account.planType ?? "team").toUpperCase();
+  const virtual = isSub2ApiAccount(account);
+  const plan = virtual ? "GATEWAY" : (account.planType ?? "team").toUpperCase();
   const markers = [
     current ? _t("account.current") : undefined,
     primary ? _t("account.primary") : undefined,
@@ -108,15 +113,15 @@ function renderAccountPanel(
 
   const lines = [
     header,
-    ...(account.quotaSummary?.hourlyWindowPresent
+    ...(!virtual && account.quotaSummary?.hourlyWindowPresent
       ? [renderMetricRow(_t("quota.hourly"), account.quotaSummary?.hourlyPercentage, account.quotaSummary?.hourlyResetTime)]
       : []),
-    ...(account.quotaSummary?.weeklyWindowPresent
+    ...(!virtual && account.quotaSummary?.weeklyWindowPresent
       ? [renderMetricRow(_t("quota.weekly"), account.quotaSummary?.weeklyPercentage, account.quotaSummary?.weeklyResetTime)]
       : [])
   ];
 
-  for (const limit of account.quotaSummary?.additionalRateLimits ?? []) {
+  for (const limit of virtual ? [] : account.quotaSummary?.additionalRateLimits ?? []) {
     if (limit.hourlyWindowPresent) {
       lines.push(renderMetricRow(`${limit.limitName} ${_t("quota.hourly")}`, limit.hourlyPercentage, limit.hourlyResetTime));
     }

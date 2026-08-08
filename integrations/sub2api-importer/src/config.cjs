@@ -5,10 +5,7 @@ const path = require("node:path");
 
 function loadConfiguration(env = process.env) {
   const adminBaseUrl = normalizeAdminBaseUrl(required(env, "SUB2API_ADMIN_BASE_URL"));
-  const adminToken = required(env, "SUB2API_ADMIN_TOKEN");
-  const adminRefreshToken = optionalSecret(env.SUB2API_ADMIN_REFRESH_TOKEN);
-  const adminSessionStateFile =
-    optionalPrivateStateFile(env.SUB2API_ADMIN_SESSION_STATE_FILE, "SUB2API_ADMIN_SESSION_STATE_FILE") ?? resolveDefaultAdminSessionStateFile(env);
+  const adminApiKey = required(env, "SUB2API_ADMIN_API_KEY");
   const queueDirectory = optionalAbsolutePath(env.SUB2API_IMPORT_QUEUE_DIR, "SUB2API_IMPORT_QUEUE_DIR") ?? resolveDefaultOutbox(env);
   const pollSeconds = normalizePollSeconds(env.SUB2API_IMPORT_POLL_SECONDS ?? "5");
   const importProxyName = normalizeLabel(env.SUB2API_IMPORT_PROXY_NAME ?? "default", "SUB2API_IMPORT_PROXY_NAME");
@@ -16,9 +13,7 @@ function loadConfiguration(env = process.env) {
   const importConcurrency = normalizeImportConcurrency(env.SUB2API_IMPORT_CONCURRENCY ?? "2");
   return {
     adminBaseUrl,
-    adminToken,
-    adminRefreshToken,
-    adminSessionStateFile,
+    adminApiKey,
     queueDirectory,
     pollSeconds,
     importProxyName,
@@ -30,11 +25,6 @@ function loadConfiguration(env = process.env) {
 function resolveDefaultOutbox(env = process.env) {
   const stateDirectory = optionalAbsolutePath(env.SESSION_INGRESS_STATE_DIR, "SESSION_INGRESS_STATE_DIR") ?? path.join(resolveStateHome(env), "codex-account-integrations");
   return path.join(stateDirectory, "sub2api-import", "outbox");
-}
-
-function resolveDefaultAdminSessionStateFile(env = process.env) {
-  const stateDirectory = optionalAbsolutePath(env.SESSION_INGRESS_STATE_DIR, "SESSION_INGRESS_STATE_DIR") ?? path.join(resolveStateHome(env), "codex-account-integrations");
-  return path.join(stateDirectory, "sub2api-import", "admin-session.json");
 }
 
 function normalizeAdminBaseUrl(value) {
@@ -58,11 +48,6 @@ function required(env, key) {
   return value;
 }
 
-function optionalSecret(value) {
-  const candidate = typeof value === "string" ? value.trim() : "";
-  return candidate || undefined;
-}
-
 function optionalAbsolutePath(value, key) {
   const candidate = typeof value === "string" ? value.trim() : "";
   if (!candidate) return undefined;
@@ -70,15 +55,6 @@ function optionalAbsolutePath(value, key) {
     throw new Error(`${key} must be an absolute private directory.`);
   }
   return path.normalize(candidate);
-}
-
-function optionalPrivateStateFile(value, key) {
-  const candidate = optionalAbsolutePath(value, key);
-  if (!candidate) return undefined;
-  if (path.dirname(candidate) === path.parse(candidate).root) {
-    throw new Error(`${key} must not place private state directly in the filesystem root.`);
-  }
-  return candidate;
 }
 
 function resolveStateHome(env) {
@@ -110,4 +86,4 @@ function normalizeLabel(value, key) {
   return label;
 }
 
-module.exports = { loadConfiguration, normalizeAdminBaseUrl, resolveDefaultAdminSessionStateFile, resolveDefaultOutbox };
+module.exports = { loadConfiguration, normalizeAdminBaseUrl, resolveDefaultOutbox };

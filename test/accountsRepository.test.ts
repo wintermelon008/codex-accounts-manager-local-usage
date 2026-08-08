@@ -108,6 +108,74 @@ describe("AccountsRepository token persistence", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("persists a virtual Gateway route without OAuth secrets or auth.json writes", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: { fsPath: tempDir },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        currentAccountId: "oauth-account",
+        accounts: [
+          {
+            id: "oauth-account",
+            email: "oauth@example.com",
+            isActive: true,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+
+    const repo = new AccountsRepository(context);
+    const virtual = await repo.upsertVirtualAccount({
+      integrationId: "sub2api-gateway",
+      baseUrl: "https://gateway.example.invalid/v1",
+      model: "gpt-5",
+      credentialRef: "primary"
+    });
+
+    expect(virtual).toMatchObject({
+      id: "virtual:sub2api-gateway",
+      accountKind: "sub2api",
+      manualOnly: true,
+      quotaMode: "none",
+      virtualRoute: {
+        baseUrl: "https://gateway.example.invalid/v1",
+        model: "gpt-5",
+        credentialRef: "primary"
+      }
+    });
+    expect(await repo.getTokens(virtual.id)).toBeUndefined();
+    expect(context.secrets.get).not.toHaveBeenCalledWith("codex.account.virtual:sub2api-gateway");
+
+    await repo.switchProviderRoute(virtual.id);
+    expect((await repo.getAccount("oauth-account"))?.isActive).toBe(true);
+    expect((await repo.getAccount("oauth-account"))?.providerActive).toBe(false);
+    expect((await repo.getAccount(virtual.id))?.providerActive).toBe(true);
+    expect((await repo.getAccount(virtual.id))?.quotaSummary).toBeUndefined();
+    await expect(repo.switchAccount(virtual.id)).rejects.toThrow("Gateway runtime");
+    expect(writeAuthFileMock).not.toHaveBeenCalled();
+
+    await repo.switchProviderRoute();
+    expect((await repo.getAccount("oauth-account"))?.providerActive).toBe(true);
+    await repo.removeAccount(virtual.id);
+    expect(context.secrets.delete).not.toHaveBeenCalledWith("codex.account.virtual:sub2api-gateway");
+    repo.dispose();
+  });
+
   it("syncs active auth.json when quota refresh produces updated tokens", async () => {
     const secrets = new Map<string, string>();
     const context = {

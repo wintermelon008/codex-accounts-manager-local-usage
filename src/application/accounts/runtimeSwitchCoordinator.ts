@@ -41,7 +41,7 @@ export class RuntimeSwitchCoordinator {
     options: RuntimeAccountSwitchOptions | undefined,
     source: RuntimeSwitchSource
   ): Promise<RuntimeAccountSwitchOutcome> {
-    if (!this.isSeamlessSwitchEnabled()) {
+    if (!this.isSeamlessSwitchEnabled() && options?.allowManualWhenSeamlessDisabled !== true) {
       return { status: "unavailable" };
     }
     if (!this.runtime.isEnabled()) {
@@ -63,6 +63,21 @@ export class RuntimeSwitchCoordinator {
     const operationId = randomUUID();
     return this.runSharedRuntimeTransaction(operationId, () =>
       this.runtime.switchAccount(accountId, { ...(options ?? {}), operationId })
+    );
+  }
+
+  /**
+   * Runs an integration-owned provider handoff behind the same cross-window
+   * runtime lease used by OAuth switches. The integration callback owns its
+   * credential lookup; the coordinator only serializes the transaction.
+   */
+  async runProviderSwitch(
+    options: RuntimeAccountSwitchOptions | undefined,
+    execute: (options: RuntimeAccountSwitchOptions) => Promise<RuntimeAccountSwitchOutcome>
+  ): Promise<RuntimeAccountSwitchOutcome> {
+    const operationId = randomUUID();
+    return this.runSharedRuntimeTransaction(operationId, () =>
+      execute({ ...(options ?? {}), operationId })
     );
   }
 

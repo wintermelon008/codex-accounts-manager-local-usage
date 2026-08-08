@@ -1,4 +1,4 @@
-import type { CodexAccountRecord } from "../../core/types";
+import { isAutomaticAccount, type CodexAccountRecord } from "../../core/types";
 import { getSeamlessSwitchThreshold } from "../../infrastructure/config/extensionSettings";
 import { getBalanceQuotaCapability, getQuotaPlanPriority } from "./balanceScheduler";
 
@@ -36,7 +36,13 @@ export function selectGatewayFallbackCandidates(
   const switchThreshold = getSeamlessSwitchThreshold(configuration);
   return accounts
     .filter((account) => {
-      if (account.isHidden || account.balancePoolEnabled !== true || !isGroupVisible(account, configuration)) {
+      if (
+        !isAutomaticAccount(account) ||
+        account.quotaMode === "none" ||
+        account.isHidden ||
+        account.balancePoolEnabled !== true ||
+        !isGroupVisible(account, configuration)
+      ) {
         return false;
       }
       const capability = getBalanceQuotaCapability(account, now);

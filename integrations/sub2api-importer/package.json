@@ -1,6 +1,6 @@
 {
   "name": "codex-accounts-sub2api-importer",
-  "version": "0.1.3",
+  "version": "0.1.6",
   "private": true,
   "description": "Optional private queue consumer for Sub2API account imports.",
   "license": "MIT",
@@ -12,10 +12,12 @@
     "node": ">=20"
   },
   "bin": {
-    "codex-accounts-sub2api-importer": "src/cli.cjs"
+    "codex-accounts-sub2api-importer": "src/cli.cjs",
+    "sub2api-repair": "scripts/repair-local-service.cjs"
   },
   "scripts": {
     "test": "node --test test/*.test.cjs",
+    "repair": "node scripts/repair-local-service.cjs",
     "audit:portability": "node scripts/audit-portability.cjs",
     "package:check": "npm test && npm run audit:portability && npm pack --dry-run",
     "package": "npm run package:check && node scripts/prepare-dist.cjs && npm pack --pack-destination dist"

@@ -8,7 +8,8 @@ test("requires the public Manager API instead of importing Manager source", asyn
   const api = {
     apiVersion: 1,
     registerGateway() {},
-    registerDashboardIntegration() {}
+    registerDashboardIntegration() {},
+    registerVirtualAccount() {}
   };
   const vscode = { extensions: { getExtension: (id) => (id === MANAGER_EXTENSION_ID ? { activate: async () => api } : undefined) } };
   assert.equal(await resolveManagerIntegrationApi(vscode), api);

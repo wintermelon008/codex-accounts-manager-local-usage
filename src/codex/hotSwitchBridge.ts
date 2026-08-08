@@ -24,6 +24,10 @@ export type HotSwitchStatus = {
   gatewayAutoFallbackEnabled: boolean;
   /** Whether the shim records low-quota signals for automatic switching/recovery. */
   usageLimitObservationEnabled: boolean;
+  /** Number of conversations waiting for model-capacity recovery. */
+  capacityRecoveryThreads: number;
+  /** Subset of capacity recovery conversations whose one-minute timer is armed. */
+  capacityRecoveryWaitingThreads: number;
   recentUsageLimitedThreads: number;
   /** A bounded batch of active conversations has reached actual quota exhaustion. */
   usageLimitExhaustionReady: boolean;
@@ -131,6 +135,22 @@ export type HotSwitchGatewayFallbackParams = {
   longTurnPolicy: HotSwitchLongTurnPolicy;
 } & (HotSwitchManagedRollbackParams | HotSwitchSnapshotRollbackParams);
 
+export type HotSwitchGatewayRouteParams = {
+  /** Coordinator-owned opaque ID used to reconcile a disconnected transaction. */
+  operationId?: string;
+  route: "gateway" | "chatgpt";
+  accountId?: string;
+  /** Existing OAuth bearer used transiently by the non-fallback relay route. */
+  chatgptAccessToken?: string;
+  /** OAuth identity carried with a provider-only return route. */
+  chatgptAccountId?: string;
+  chatgptLocalAccountId?: string;
+  chatgptExpectedEmail?: string;
+  chatgptPlanType?: string | null;
+  gracePeriodMs: number;
+  longTurnPolicy: HotSwitchLongTurnPolicy;
+};
+
 export type HotSwitchAccountResult =
   | {
       status: "switched";
@@ -208,7 +228,7 @@ type RpcMessage = {
  */
 export class HotSwitchOperationUncertainError extends Error {
   constructor(
-    readonly method: "runtime/switch" | "runtime/gateway/fallback",
+    readonly method: "runtime/switch" | "runtime/gateway/fallback" | "runtime/gateway/switch",
     reason: string,
     readonly operationId?: string
   ) {
@@ -273,6 +293,11 @@ export class CodexHotSwitchBridge {
   async fallbackToChatGpt(params: HotSwitchGatewayFallbackParams): Promise<HotSwitchAccountResult> {
     const timeoutMs = Math.max(REQUEST_TIMEOUT_MS, params.gracePeriodMs + SWITCH_COMPLETION_BUFFER_MS);
     return this.request<HotSwitchAccountResult>("runtime/gateway/fallback", params, timeoutMs);
+  }
+
+  async switchGatewayRoute(params: HotSwitchGatewayRouteParams): Promise<HotSwitchAccountResult> {
+    const timeoutMs = Math.max(REQUEST_TIMEOUT_MS, params.gracePeriodMs + SWITCH_COMPLETION_BUFFER_MS);
+    return this.request<HotSwitchAccountResult>("runtime/gateway/switch", params, timeoutMs);
   }
 
   async getOperationStatus(operationId: string): Promise<HotSwitchOperationStatus> {
@@ -496,8 +521,10 @@ export class CodexHotSwitchBridge {
   }
 }
 
-function isRuntimeMutationMethod(method: string): method is "runtime/switch" | "runtime/gateway/fallback" {
-  return method === "runtime/switch" || method === "runtime/gateway/fallback";
+function isRuntimeMutationMethod(
+  method: string
+): method is "runtime/switch" | "runtime/gateway/fallback" | "runtime/gateway/switch" {
+  return method === "runtime/switch" || method === "runtime/gateway/fallback" || method === "runtime/gateway/switch";
 }
 
 function readOperationId(params: object): string | undefined {

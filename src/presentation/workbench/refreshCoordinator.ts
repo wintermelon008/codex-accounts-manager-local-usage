@@ -11,6 +11,7 @@ import { AccountsStatusBarProvider, refreshDetailsPanel } from "../../ui";
 import { needsWindowReloadForAccount, setCurrentWindowRuntimeAccountId } from "./windowRuntimeAccount";
 import { buildWorkbenchRefreshSignature } from "./refreshSignature";
 import { getTokenAutomationSnapshot } from "./tokenAutomationState";
+import { isCurrentProviderAccount, isSub2ApiAccount } from "../../core/types";
 import { promptWindowReloadForAccount } from "../../application/accounts/switchEffects";
 import type { RuntimeSwitchSource } from "../../application/accounts/runtimeSwitchCoordinator";
 
@@ -90,7 +91,7 @@ export class WorkbenchRefreshCoordinator {
 
   async promptImportCurrentAccountIfNeeded(view: RefreshView): Promise<void> {
     const accounts = await this.repo.listAccounts();
-    if (accounts.length > 0 && accounts.some((account) => account.isActive)) {
+    if (accounts.length > 0 && accounts.some((account) => isCurrentProviderAccount(account))) {
       return;
     }
 
@@ -245,7 +246,7 @@ export class WorkbenchRefreshCoordinator {
     view.refresh();
 
     const afterAccounts = await this.repo.listAccounts();
-    const nextActive = afterAccounts.find((account) => account.isActive);
+    const nextActive = afterAccounts.find((account) => isCurrentProviderAccount(account));
 
     if (isVisible()) {
       return false;
@@ -262,6 +263,11 @@ export class WorkbenchRefreshCoordinator {
       }
 
       if (!nextActive) {
+        return false;
+      }
+
+      if (isSub2ApiAccount(nextActive)) {
+        // auth.json changes cannot displace a manually selected provider route.
         return false;
       }
 

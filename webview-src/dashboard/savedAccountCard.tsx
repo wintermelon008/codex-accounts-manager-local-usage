@@ -6,6 +6,7 @@ import type {
   DashboardSettings,
   DashboardState
 } from "../../src/domain/dashboard/types";
+import type { DashboardProviderUsageViewModel } from "../../src/domain/dashboard/types";
 import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCountdown";
 import { getSensitiveDisplayValue, renderTagList } from "./helpers";
 import {
@@ -44,6 +45,7 @@ export function SavedAccountCard(props: {
   poolTogglePending: boolean;
   updateTagsPending: boolean;
   consumeResetCreditPending: boolean;
+  providerActionPending: boolean;
   selected: boolean;
   onToggleSelected: () => void;
   onEditTags: () => void;
@@ -60,12 +62,14 @@ export function SavedAccountCard(props: {
       | "toggleStatusBar"
       | "toggleBalancePool"
       | "consumeResetCredit"
+      | "integrationAction"
       | "openExternalUrl",
     accountId?: string,
     payload?: DashboardActionPayload
   ) => void;
 }) {
   const { account, copy, settings, now, onAction, privacyMode } = props;
+  const virtual = account.accountKind === "sub2api" || account.manualOnly === true;
   const userIdDisplay = getSensitiveDisplayValue(account.userId, privacyMode, "id", "-");
   const emailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const backEmailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
@@ -87,9 +91,9 @@ export function SavedAccountCard(props: {
         : props.lang === "zh-hant"
           ? "加入無感切換池"
           : "Add to seamless-switch pool";
-  const showReauthorizeButton = account.healthKind === "reauthorize" && !account.dismissedHealth;
+  const showReauthorizeButton = !virtual && account.healthKind === "reauthorize" && !account.dismissedHealth;
   const [flipped, setFlipped] = useState(false);
-  const showResyncButton = account.healthKind !== "reauthorize";
+  const showResyncButton = !virtual && account.healthKind !== "reauthorize";
   const resyncButtonLabel =
     (account.healthKind === "disabled" || account.healthKind === "quota") && !account.dismissedHealth
       ? copy.resyncProfileBtn
@@ -100,8 +104,11 @@ export function SavedAccountCard(props: {
       account.healthKind === "disabled" ||
       account.healthKind === "refresh_failed" ||
       account.healthKind === "quota");
+  const gatewayActive = virtual && account.providerActive;
+  const providerCard = virtual ? account.providerCard : undefined;
   const cardStateClass = [
-    account.isActive ? "active" : "",
+    account.isActive || account.providerActive ? "active" : "",
+    gatewayActive ? "gateway-active" : "",
     account.isHidden ? "is-hidden-account" : "",
     props.busy ? "is-busy" : "",
     props.selected ? "selected" : "",
@@ -109,7 +116,7 @@ export function SavedAccountCard(props: {
   ]
     .filter(Boolean)
     .join(" ");
-  const visibleMetrics = account.metrics.filter((metric) => metric.visible);
+  const visibleMetrics = virtual ? [] : account.metrics.filter((metric) => metric.visible);
   const quotaCountdownStartLabel =
     props.lang === "zh" ? "启动额度倒计时" : props.lang === "zh-hant" ? "啟動額度倒數" : "Start quota countdown";
   const showQuotaCountdownStart =
@@ -151,7 +158,7 @@ export function SavedAccountCard(props: {
         >
           <div class="saved-head">
             <div class="saved-top-actions" onClick={stopFlip}>
-              {!account.isActive ? (
+              {!account.isActive && !account.providerActive ? (
                 <button
                   class={`saved-control saved-status-toggle ${account.canToggleStatusBar ? "" : "disabled"} ${account.showInStatusBar ? "is-checked" : ""}`}
                   type="button"
@@ -222,19 +229,34 @@ export function SavedAccountCard(props: {
                   </span>
                 ) : null}
                 {account.isActive ? <span class="pill active">{copy.primaryAccount}</span> : null}
-                {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
-                {account.balancePoolEnabled ? (
+                {virtual ? <span class="pill gateway-active">{gatewayActive ? "Gateway · 手动 · 当前" : "Gateway · 手动"}</span> : null}
+                {account.isCurrentWindowAccount && !virtual ? <span class="pill active">{copy.current}</span> : null}
+                {account.balancePoolEnabled && !virtual ? (
                   <span class="pill active">
                     {props.lang === "zh" ? "无感切号池" : props.lang === "zh-hant" ? "無感切換池" : "Seamless Pool"}
                   </span>
                 ) : null}
-                {renderHealthPill(account)}
+                {!virtual ? renderHealthPill(account) : null}
               </div>
             </div>
           </div>
 
           <div class="saved-progress">
-            {visibleMetrics.length > 0 ? (
+            {virtual && providerCard?.usage ? (
+              <div class="saved-provider-usage">
+                <div class="saved-token-usage-line" title={formatProviderUsageTitle(providerCard.usage, props.lang)}>
+                  {formatProviderUsage(providerCard.usage, props.lang)}
+                </div>
+                {providerCard.metrics?.map((metric) => (
+                  <div class="saved-provider-metric" key={`${metric.label}:${metric.value}`} title={metric.description}>
+                    <span>{metric.label}</span>
+                    <strong>{metric.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : virtual ? (
+              <div class="quota-empty-placeholder">{props.lang === "zh" ? "Gateway · 仅手动切换" : "Gateway · Manual only"}</div>
+            ) : visibleMetrics.length > 0 ? (
               visibleMetrics.map((metric) => (
                 <MetricRow
                   key={metric.key}
@@ -265,7 +287,7 @@ export function SavedAccountCard(props: {
           ) : null}
           <div class="saved-card-divider"></div>
           <div class="saved-actions" onClick={stopFlip}>
-            <button
+            {!virtual ? <button
               class={`saved-control saved-status-toggle saved-pool-toggle ${account.balancePoolEnabled ? "is-checked" : ""} ${props.poolTogglePending ? "is-pending" : ""} ${account.isHidden ? "disabled" : ""}`}
               type="button"
               aria-label={poolToggleLabel}
@@ -279,8 +301,8 @@ export function SavedAccountCard(props: {
               <span class="saved-control-tip align-left" aria-hidden="true">
                 {poolToggleLabel}
               </span>
-            </button>
-            {account.isActive && !account.isCurrentWindowAccount ? (
+            </button> : null}
+            {!virtual && account.isActive && !account.isCurrentWindowAccount ? (
               <ActionButton
                 icon={renderReloadIcon()}
                 iconOnly
@@ -318,15 +340,32 @@ export function SavedAccountCard(props: {
               disabled={props.busy || account.isHidden}
               onClick={() => onAction("switch", account.id)}
             />
-            <ActionButton
+            {providerCard?.actions?.map((action) => (
+              <ActionButton
+                key={action.id}
+                iconOnly={false}
+                label={action.label}
+                pending={props.providerActionPending}
+                disabled={props.busy || action.enabled === false}
+                onClick={() =>
+                  onAction("integrationAction", account.id, {
+                    integrationId: providerCard.integrationId,
+                    integrationActionId: action.id
+                  })
+                }
+              >
+                {action.label}
+              </ActionButton>
+            ))}
+            {!virtual ? <ActionButton
               icon={renderRefreshIcon()}
               iconOnly
               label={copy.refreshBtn}
               pending={props.refreshPending}
               disabled={props.busy}
               onClick={() => onAction("refresh", account.id)}
-            />
-            {showQuotaCountdownStart ? (
+            /> : null}
+            {!virtual && showQuotaCountdownStart ? (
               <ActionButton
                 icon={renderQuotaCountdownStartIcon()}
                 iconOnly
@@ -336,7 +375,7 @@ export function SavedAccountCard(props: {
                 onClick={() => onAction("startQuotaCountdown", account.id)}
               />
             ) : null}
-            {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
+            {!virtual && account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
               <ActionButton
                 icon={renderResetCreditsIcon()}
                 iconOnly
@@ -380,12 +419,20 @@ export function SavedAccountCard(props: {
             </div>
             <div class="saved-detail-list">
               <CardDetailRow label={resolveBackLabel("workspace", props.lang)} value={account.workspaceLabel} />
-              <CardDetailRow
+              {providerCard?.details?.map((detail) => (
+                <CardDetailRow
+                  key={`${detail.label}:${detail.value}`}
+                  label={detail.label}
+                  value={detail.value}
+                  color={detail.emphasis === "positive" ? "var(--accent-green)" : detail.emphasis === "warning" ? "#f59e0b" : undefined}
+                />
+              ))}
+              {!virtual ? <CardDetailRow
                 label={resolveBackLabel("subscription", props.lang)}
                 value={account.subscriptionText}
                 title={account.subscriptionTitle}
                 color={account.subscriptionColor}
-              />
+              /> : null}
               <CardDetailRow label={resolveBackLabel("addMethod", props.lang)} value={account.addMethodLabel} />
               <CardDetailRow label={resolveBackLabel("createdAt", props.lang)} value={account.addedAtLabel} />
               <CardDetailRow
@@ -393,7 +440,7 @@ export function SavedAccountCard(props: {
                 value={resolveBackStatus(account, props.lang)}
                 color={account.statusColor}
               />
-              <CardDetailRow label={copy.userId} value={userIdDisplay} />
+              {!virtual ? <CardDetailRow label={copy.userId} value={userIdDisplay} /> : null}
             </div>
             <div class="saved-back-tags">
               <div class="account-tag-row">
@@ -424,6 +471,9 @@ function resolveBackLabel(
 }
 
 function resolveBackStatus(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
+  if (account.accountKind === "sub2api" || account.manualOnly) {
+    return account.providerActive ? "Gateway · 手动" : "Gateway · 可手动切换";
+  }
   if (account.isActive) {
     return lang === "zh" ? "当前激活" : lang === "zh-hant" ? "目前啟用" : "Current active";
   }
@@ -502,6 +552,34 @@ function formatAccountTokenUsage(account: DashboardAccountViewModel, lang: Dashb
     return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
   }
   return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
+}
+
+function formatProviderUsage(usage: DashboardProviderUsageViewModel, lang: DashboardState["lang"]): string {
+  const label = resolveProviderUsageLabel(lang, usage.range);
+  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
+  if (usage.status === "waiting") {
+    return `${label}: ${lang === "zh" ? "尚未观察到完成 Token" : lang === "zh-hant" ? "尚未觀察到完成 Token" : "No completed tokens observed"} · ${price}`;
+  }
+  return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
+}
+
+function formatProviderUsageTitle(usage: DashboardProviderUsageViewModel, lang: DashboardState["lang"]): string {
+  const label = resolveProviderUsageLabel(lang, usage.range);
+  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
+  return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}`;
+}
+
+function resolveProviderUsageLabel(
+  lang: DashboardState["lang"],
+  range: DashboardProviderUsageViewModel["range"]
+): string {
+  if (lang === "zh") {
+    return range === "today" ? "今日 Gateway 用量" : range === "5h" ? "5 小时 Gateway 用量" : "7 天 Gateway 用量";
+  }
+  if (lang === "zh-hant") {
+    return range === "today" ? "今日 Gateway 用量" : range === "5h" ? "5 小時 Gateway 用量" : "7 天 Gateway 用量";
+  }
+  return range === "today" ? "Today's Gateway usage" : range === "5h" ? "5-hour Gateway usage" : "7-day Gateway usage";
 }
 
 function formatAccountTokenUsageTitle(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {

@@ -74,7 +74,9 @@ import {
   CodexIndexHealthSummary,
   CodexQuotaSummary,
   CodexTokens,
-  SharedCodexAccountJson
+  SharedCodexAccountJson,
+  isSub2ApiAccount,
+  CodexVirtualRouteDescriptor
 } from "../core/types";
 import { fetchRemoteAccountProfile } from "../services/profile";
 import { clearQuotaCacheForAccount } from "../services/quota";
@@ -372,6 +374,13 @@ export class AccountsRepository {
    */
   async getTokens(accountId: string, options: { syncExternal?: boolean } = {}): Promise<CodexTokens | undefined> {
     try {
+      const index = await this.readIndex();
+      const account = index.accounts.find((item) => item.id === accountId);
+      if (account && isSub2ApiAccount(account)) {
+        // Virtual providers own their credentials. Never probe Manager's
+        // SecretStorage or the Aideck mirror for a synthetic OAuth token.
+        return undefined;
+      }
       const syncExternal = options.syncExternal !== false;
       const mirrorRevision = syncExternal ? await getAideckCodexAccountRevision(accountId) : undefined;
       // 内存缓存命中时仍核对共享镜像 revision，避免另一宿主的新 token 被 30s TTL 遮蔽。
@@ -391,8 +400,6 @@ export class AccountsRepository {
         return storedTokens;
       }
 
-      const index = await this.readIndex();
-      const account = index.accounts.find((item) => item.id === accountId);
       if (!account) {
         return storedTokens;
       }
@@ -430,6 +437,11 @@ export class AccountsRepository {
 
     if (!account) {
       throw createError.accountNotFound(accountId);
+    }
+    if (isSub2ApiAccount(account)) {
+      throw new AccountError("Virtual provider accounts do not have Manager OAuth tokens", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
     }
 
     const effectiveTokens = {
@@ -475,6 +487,11 @@ export class AccountsRepository {
     const account = index.accounts.find((item) => item.id === accountId);
     if (!account) {
       throw createError.accountNotFound(accountId);
+    }
+    if (isSub2ApiAccount(account)) {
+      throw new AccountError("Virtual provider accounts do not expose OAuth profile metadata", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
     }
     const tokens = await this.getTokens(accountId);
     if (!tokens) {
@@ -583,6 +600,81 @@ export class AccountsRepository {
     return this.upsertFromTokensInternal(tokens, forceActive);
   }
 
+  /**
+   * Registers only the opaque downstream route supplied by an integration.
+   * No provider credential or OAuth token is accepted or written here.
+   */
+  async upsertVirtualAccount(
+    descriptor: CodexVirtualRouteDescriptor,
+    displayName = "Sub2API Gateway"
+  ): Promise<CodexAccountRecord> {
+    const integrationId = descriptor.integrationId.trim();
+    const baseUrl = descriptor.baseUrl.trim().replace(/\/+$/u, "");
+    const model = descriptor.model.trim();
+    const credentialRef = descriptor.credentialRef.trim();
+    if (!integrationId || !baseUrl || !model || !credentialRef) {
+      throw new AccountError("The virtual Gateway route is incomplete", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
+    }
+    const id = `virtual:${integrationId}`;
+    const index = await this.readIndex();
+    const existing = index.accounts.find((item) => item.id === id);
+    if (existing && !isSub2ApiAccount(existing)) {
+      throw new AccountError("The virtual provider ID conflicts with a saved OAuth account", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
+    }
+    const now = Date.now();
+    const account: CodexAccountRecord = {
+      id,
+      email: displayName.trim() || "Sub2API Gateway",
+      accountKind: "sub2api",
+      manualOnly: true,
+      quotaMode: "none",
+      virtualRoute: { integrationId, baseUrl, model, credentialRef },
+      isActive: false,
+      providerActive: index.currentProviderRoute === "sub2api" && index.currentProviderAccountId === id,
+      showInStatusBar: existing?.showInStatusBar ?? false,
+      isHidden: false,
+      balancePoolEnabled: false,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    index.accounts = index.accounts.filter((item) => item.id !== id);
+    index.accounts.push(account);
+    this.writeIndex(index);
+    return account;
+  }
+
+  /** Selects the provider route without changing the OAuth current account. */
+  async switchProviderRoute(accountId?: string): Promise<CodexAccountRecord | undefined> {
+    const index = await this.readIndex();
+    if (accountId) {
+      const account = index.accounts.find((item) => item.id === accountId);
+      if (!account || !isSub2ApiAccount(account) || !account.virtualRoute) {
+        throw new AccountError("The selected virtual provider is unavailable", {
+          code: ErrorCode.ACCOUNT_INVALID_DATA
+        });
+      }
+      index.currentProviderRoute = "sub2api";
+      index.currentProviderAccountId = account.id;
+      for (const item of index.accounts) {
+        item.providerActive = item.id === account.id;
+      }
+      this.writeIndex(index);
+      return account;
+    }
+
+    index.currentProviderRoute = "chatgpt";
+    index.currentProviderAccountId = index.currentAccountId;
+    for (const item of index.accounts) {
+      item.providerActive = item.id === index.currentAccountId;
+    }
+    this.writeIndex(index);
+    return index.accounts.find((item) => item.id === index.currentAccountId);
+  }
+
   private async upsertFromTokensInternal(
     tokens: CodexTokens,
     forceActive = false,
@@ -638,6 +730,8 @@ export class AccountsRepository {
 
     const index = options.allowRecoveryWrite ? await this.readIndexForRecovery() : await this.readIndex();
     const previousActiveId = index.currentAccountId;
+    const previousProviderRoute = index.currentProviderRoute;
+    const previousProviderAccountId = index.currentProviderAccountId;
     const existing = index.accounts.find((item) => item.id === id);
     const now = Date.now();
     const account = buildAccountRecordDraft({
@@ -661,6 +755,15 @@ export class AccountsRepository {
 
     if (forceActive) {
       markActive(index, id);
+      if (previousProviderRoute === "sub2api") {
+        // Importing or restoring a new OAuth identity must not implicitly
+        // displace a manually selected Gateway route.
+        index.currentProviderRoute = "sub2api";
+        index.currentProviderAccountId = previousProviderAccountId;
+        for (const item of index.accounts) {
+          item.providerActive = item.id === previousProviderAccountId;
+        }
+      }
       reconcileStatusBarSelections(index, id, previousActiveId);
     }
 
@@ -727,7 +830,7 @@ export class AccountsRepository {
     }
 
     const index = await this.readIndex();
-    const accounts = index.accounts.filter((account) => uniqueIds.includes(account.id));
+    const accounts = index.accounts.filter((account) => uniqueIds.includes(account.id) && !isSub2ApiAccount(account));
     const sharedAccounts: SharedCodexAccountJson[] = [];
 
     for (const account of accounts) {
@@ -868,6 +971,11 @@ export class AccountsRepository {
     if (!account) {
       throw createError.accountNotFound(accountId);
     }
+    if (isSub2ApiAccount(account)) {
+      throw new AccountError("Virtual provider accounts must be switched through the Gateway runtime", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
+    }
     if (account.isHidden && !account.isActive) {
       throw new AccountError("Hidden accounts cannot be activated. Unhide the account first.", {
         code: ErrorCode.ACCOUNT_INVALID_DATA
@@ -915,14 +1023,17 @@ export class AccountsRepository {
    */
   async removeAccount(accountId: string): Promise<void> {
     const index = await this.readIndex();
+    const removed = index.accounts.find((item) => item.id === accountId);
     if (!removeAccountFromIndex(index, accountId)) {
       return;
     }
 
-    await this.secretStore.deleteTokens(accountId);
-    this.invalidateTokenCache();
-    clearQuotaCacheForAccount(accountId);
-    await removeAideckCodexAccount(accountId);
+    if (!removed || !isSub2ApiAccount(removed)) {
+      await this.secretStore.deleteTokens(accountId);
+      this.invalidateTokenCache();
+      clearQuotaCacheForAccount(accountId);
+      await removeAideckCodexAccount(accountId);
+    }
     this.writeIndex(index);
   }
 
@@ -954,7 +1065,7 @@ export class AccountsRepository {
         accountIds.find((id) => !index.accounts.some((account) => account.id === id)) ?? ""
       );
     }
-    const eligibleAccounts = selectedAccounts.filter((account) => !account.isHidden);
+    const eligibleAccounts = selectedAccounts.filter((account) => !account.isHidden && !isSub2ApiAccount(account));
     if (eligibleAccounts.length < 2) {
       throw new AccountError("Select at least two non-hidden accounts for the seamless-switch pool.", {
         code: ErrorCode.ACCOUNT_INVALID_DATA
@@ -963,7 +1074,7 @@ export class AccountsRepository {
 
     let changed = false;
     for (const account of index.accounts) {
-      const enabled = selectedIds.has(account.id) && !account.isHidden;
+      const enabled = selectedIds.has(account.id) && !account.isHidden && !isSub2ApiAccount(account);
       if (Boolean(account.balancePoolEnabled) !== enabled) {
         account.balancePoolEnabled = enabled;
         account.updatedAt = Date.now();
@@ -973,7 +1084,10 @@ export class AccountsRepository {
     if (changed) {
       this.writeIndex(index);
     }
-    return selectedAccounts.map((account) => ({ ...account, balancePoolEnabled: !account.isHidden }));
+    return selectedAccounts.map((account) => ({
+      ...account,
+      balancePoolEnabled: !account.isHidden && !isSub2ApiAccount(account)
+    }));
   }
 
   async setBalancePoolMembership(accountId: string, enabled: boolean): Promise<CodexAccountRecord> {
@@ -982,7 +1096,7 @@ export class AccountsRepository {
     if (!account) {
       throw createError.accountNotFound(accountId);
     }
-    const nextEnabled = enabled && !account.isHidden;
+    const nextEnabled = enabled && !account.isHidden && !isSub2ApiAccount(account);
     if (Boolean(account.balancePoolEnabled) !== nextEnabled) {
       account.balancePoolEnabled = nextEnabled;
       account.updatedAt = Date.now();
@@ -1062,6 +1176,9 @@ export class AccountsRepository {
     const updatedAt = Date.now();
     let changed = false;
     for (const account of selectedAccounts) {
+      if (isSub2ApiAccount(account)) {
+        continue;
+      }
       if (!account.isHidden || account.balancePoolEnabled === true) {
         account.isHidden = true;
         account.balancePoolEnabled = false;
@@ -1095,6 +1212,9 @@ export class AccountsRepository {
     const updatedAt = Date.now();
     let changed = false;
     for (const account of selectedAccounts) {
+      if (isSub2ApiAccount(account)) {
+        continue;
+      }
       const shouldClearAccountGroup = options.clearAccountGroup === true && account.accountGroup !== undefined;
       if (account.isHidden || account.balancePoolEnabled !== true || shouldClearAccountGroup) {
         account.isHidden = false;
@@ -1112,7 +1232,7 @@ export class AccountsRepository {
     return selectedAccounts.map((account) => ({
       ...account,
       isHidden: false,
-      balancePoolEnabled: true,
+      balancePoolEnabled: isSub2ApiAccount(account) ? false : true,
       accountGroup: options.clearAccountGroup === true ? undefined : account.accountGroup
     }));
   }
@@ -1140,6 +1260,11 @@ export class AccountsRepository {
 
     if (!account) {
       throw createError.accountNotFound(accountId);
+    }
+    if (isSub2ApiAccount(account)) {
+      throw new AccountError("Virtual provider accounts do not expose quota", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
     }
 
     const now = Date.now();
@@ -1212,6 +1337,9 @@ export class AccountsRepository {
   async syncActiveAccountFromAuthFile(): Promise<void> {
     const auth = await readAuthFile();
     const index = await this.readIndex();
+    if (index.currentProviderRoute === "sub2api") {
+      return;
+    }
     const previousActiveId = index.currentAccountId;
 
     const claims = auth?.tokens ? extractClaims(auth.tokens.id_token, auth.tokens.access_token) : undefined;
@@ -1270,6 +1398,9 @@ export class AccountsRepository {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
     if (!account) {
+      return;
+    }
+    if (isSub2ApiAccount(account)) {
       return;
     }
 
@@ -1355,7 +1486,7 @@ export class AccountsRepository {
   async updateResetCreditsSnapshot(accountId: string, availableCount: number, nextExpiresAt?: number): Promise<void> {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
-    if (!account?.quotaSummary) {
+    if (!account || isSub2ApiAccount(account) || !account.quotaSummary) {
       return;
     }
     const previousNextExpiresAt = account.quotaSummary.resetCreditsNextExpiresAt;
@@ -1384,7 +1515,7 @@ export class AccountsRepository {
   async updateResetCreditsExpiry(accountId: string, nextExpiresAt: number): Promise<void> {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
-    if (!account?.quotaSummary) {
+    if (!account || isSub2ApiAccount(account) || !account.quotaSummary) {
       return;
     }
     await this.updateResetCreditsSnapshot(accountId, account.quotaSummary.resetCreditsAvailable ?? 0, nextExpiresAt);

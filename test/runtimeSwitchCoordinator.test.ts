@@ -63,6 +63,37 @@ describe("RuntimeSwitchCoordinator", () => {
     expect(runtime.switchAccount).not.toHaveBeenCalled();
   });
 
+  it("runs a manual provider handoff behind the same renewable lease", async () => {
+    const lease = { renew: vi.fn(async () => true), release: vi.fn(async () => undefined) };
+    const runtime = createRuntime({ gatewayActive: false });
+    const repo = { tryAcquireSchedulerLease: vi.fn(async () => lease) };
+    const coordinator = new RuntimeSwitchCoordinator(repo as never, runtime as never, () => false);
+    const execute = vi.fn(async (options: { operationId?: string }) => switched("virtual:sub2api-gateway"));
+
+    await expect(coordinator.runProviderSwitch(undefined, execute)).resolves.toMatchObject({
+      status: "switched",
+      accountId: "virtual:sub2api-gateway"
+    });
+    expect(execute).toHaveBeenCalledWith({ operationId: expect.any(String) });
+    expect(repo.tryAcquireSchedulerLease).toHaveBeenCalledWith("runtime-switch", 60_000);
+    expect(lease.release).toHaveBeenCalledOnce();
+  });
+
+  it("permits the manual OAuth handoff immediately after Gateway deactivation", async () => {
+    const lease = { renew: vi.fn(async () => true), release: vi.fn(async () => undefined) };
+    const runtime = createRuntime({ gatewayActive: false });
+    const repo = { tryAcquireSchedulerLease: vi.fn(async () => lease) };
+    const coordinator = new RuntimeSwitchCoordinator(repo as never, runtime as never, () => false);
+
+    await expect(
+      coordinator.switchAccount("account-b", { allowManualWhenSeamlessDisabled: true }, "manual")
+    ).resolves.toMatchObject({ status: "switched", accountId: "account-b" });
+    expect(runtime.switchAccount).toHaveBeenCalledWith(
+      "account-b",
+      expect.objectContaining({ allowManualWhenSeamlessDisabled: true, operationId: expect.any(String) })
+    );
+  });
+
   it("does not start a second local transaction while one is still active", async () => {
     const lease = { renew: vi.fn(async () => true), release: vi.fn(async () => undefined) };
     let complete: ((value: ReturnType<typeof switched>) => void) | undefined;

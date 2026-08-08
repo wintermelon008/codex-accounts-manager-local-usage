@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { loginWithOAuth } from "../../auth";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOutcome, getCodexHome } from "../../codex";
 import { getErrorMessage } from "../../core";
-import { CodexAccountRecord, SharedCodexAccountJson } from "../../core/types";
+import { CodexAccountRecord, SharedCodexAccountJson, isSub2ApiAccount } from "../../core/types";
 import { AccountsRepository } from "../../storage";
 import { buildAccountStorageId } from "../../utils/accountIdentity";
 import { extractClaims } from "../../utils/jwt";
@@ -156,6 +156,10 @@ export class AccountsCommandService {
     if (!account) {
       return;
     }
+    if (isSub2ApiAccount(account)) {
+      void vscode.window.showInformationMessage("Sub2API Gateway is manual-only and has no OAuth token to refresh.");
+      return;
+    }
 
     await this.withProgress(
       copy.progressAddAccount,
@@ -212,7 +216,9 @@ export class AccountsCommandService {
       return;
     }
 
-    if (account.isActive) {
+    const virtualAccount = isSub2ApiAccount(account);
+    const gatewayRouteActive = this.hotSwitchRuntime.isGatewayActive();
+    if (account.providerActive || (account.isActive && !gatewayRouteActive)) {
       void vscode.window.showInformationMessage(copy.alreadyActive(formatAccountToastLabel(account)));
       return;
     }
@@ -221,18 +227,54 @@ export class AccountsCommandService {
       return;
     }
 
+    let returnedFromGateway = false;
+    let previousGatewayAccountId: string | undefined;
+    let oauthCommittedWithoutRuntime = false;
+    if (!virtualAccount && gatewayRouteActive) {
+      previousGatewayAccountId = (await this.repo.listAccounts()).find(
+        (candidate) => isSub2ApiAccount(candidate) && candidate.providerActive
+      )?.id;
+      const routeResult = await this.hotSwitchRuntime.deactivateGateway();
+      if (routeResult.error) {
+        void vscode.window.showWarningMessage(`Unable to return to ChatGPT Auth: ${routeResult.error}`);
+        return;
+      }
+      if (routeResult.requiresReload) {
+        void vscode.window.showWarningMessage("Returning to ChatGPT Auth requires one runtime reload before switching.");
+        return;
+      }
+      returnedFromGateway = true;
+    }
+
     const runtimeOutcome = await this.withProgress<RuntimeAccountSwitchOutcome>(
       copy.progressSwitch(account.email),
       async () => {
-        const outcome = (await this.view.switchRuntimeAccount?.(account.id, undefined, "manual")) ?? {
+          const outcome = (await this.view.switchRuntimeAccount?.(
+            account.id,
+            returnedFromGateway ? { allowManualWhenSeamlessDisabled: true } : undefined,
+            "manual"
+          )) ?? {
           status: "unavailable" as const
         };
-        if (outcome.status === "unavailable") {
-          await this.repo.switchAccount(account.id);
+        if (outcome.status === "unavailable" && !virtualAccount) {
+          try {
+            await this.repo.switchAccount(account.id);
+            oauthCommittedWithoutRuntime = true;
+          } catch (error) {
+            const restoreError = await this.restoreGatewayProvider(previousGatewayAccountId);
+            throw restoreError ? new Error(`${getErrorMessage(error)}; ${restoreError}`) : error;
+          }
         }
         return outcome;
       }
     );
+
+    if (returnedFromGateway && runtimeOutcome.status !== "switched" && !oauthCommittedWithoutRuntime) {
+      const restoreError = await this.restoreGatewayProvider(previousGatewayAccountId);
+      if (restoreError) {
+        void vscode.window.showWarningMessage(restoreError);
+      }
+    }
 
     if (runtimeOutcome.status === "deferred") {
       void vscode.window.showInformationMessage(
@@ -251,7 +293,9 @@ export class AccountsCommandService {
       return;
     }
 
-    this.view.markObservedAuthIdentity?.(account.id);
+    if (!virtualAccount) {
+      this.view.markObservedAuthIdentity?.(account.id);
+    }
     if (runtimeOutcome.status === "switched") {
       this.view.refresh();
       void vscode.window.showInformationMessage(`Switched to ${formatAccountToastLabel(account)} without reloading.`);
@@ -270,6 +314,11 @@ export class AccountsCommandService {
       return;
     }
 
+    if (isSub2ApiAccount(account)) {
+      void vscode.window.showInformationMessage("Sub2API Gateway does not expose ChatGPT quota.");
+      return;
+    }
+
     await refreshSingleQuota(this.repo, this.view, account.id);
   }
 
@@ -278,9 +327,9 @@ export class AccountsCommandService {
     const allAccounts = await this.repo.listAccounts();
     const requestedAccountIds = options?.accountIds;
     const requestedAccountIdSet = requestedAccountIds ? new Set(requestedAccountIds) : undefined;
-    const accounts = requestedAccountIdSet
+    const accounts = (requestedAccountIdSet
       ? allAccounts.filter((account) => requestedAccountIdSet.has(account.id))
-      : allAccounts;
+      : allAccounts).filter((account) => !isSub2ApiAccount(account));
     let success = 0;
     let failed = 0;
     // The individual quota refresh path also updates reset-credit details in
@@ -358,6 +407,14 @@ export class AccountsCommandService {
       return;
     }
 
+    if (isSub2ApiAccount(account) && account.providerActive && this.hotSwitchRuntime.isGatewayActive()) {
+      const routeResult = await this.hotSwitchRuntime.deactivateGateway();
+      if (routeResult.error || routeResult.requiresReload) {
+        void vscode.window.showWarningMessage(routeResult.error ?? "Return to ChatGPT Auth and reload once before removing the Gateway.");
+        return;
+      }
+    }
+
     await this.repo.removeAccount(account.id);
     clearCurrentWindowRuntimeAccountIfMatches(account.id);
     this.view.refresh();
@@ -370,7 +427,7 @@ export class AccountsCommandService {
       return;
     }
 
-    if (account.isActive) {
+    if (account.isActive || account.providerActive) {
       void vscode.window.showInformationMessage(copy.activeAlwaysInStatus);
       return;
     }
@@ -544,6 +601,22 @@ export class AccountsCommandService {
       callback
     );
   }
+
+  private async restoreGatewayProvider(accountId: string | undefined): Promise<string | undefined> {
+    if (!accountId || !this.view.switchRuntimeAccount) {
+      return undefined;
+    }
+    try {
+      const outcome = await this.view.switchRuntimeAccount(accountId, undefined, "manual");
+      if (outcome.status === "switched") {
+        return undefined;
+      }
+      const reason = outcome.status === "failed" ? outcome.message : `status=${outcome.status}`;
+      return `The previous Gateway route could not be restored: ${reason}`;
+    } catch (error) {
+      return `The previous Gateway route could not be restored: ${getErrorMessage(error)}`;
+    }
+  }
 }
 
 function isOauthCancelled(error: unknown): boolean {
@@ -551,6 +624,9 @@ function isOauthCancelled(error: unknown): boolean {
 }
 
 function buildSwitchPickerDescription(account: CodexAccountRecord, currentLabel: string): string {
+  if (isSub2ApiAccount(account)) {
+    return account.providerActive ? "Gateway · 手动 · 当前" : "Gateway · 手动";
+  }
   const parts = [account.accountName?.trim(), account.planType?.trim()];
   if (account.isActive) {
     parts.push(currentLabel);
@@ -560,6 +636,9 @@ function buildSwitchPickerDescription(account: CodexAccountRecord, currentLabel:
 }
 
 function buildSwitchPickerDetail(account: CodexAccountRecord, hourlyLabel: string, weeklyLabel: string): string {
+  if (isSub2ApiAccount(account)) {
+    return "Sub2API Gateway · 仅手动切换";
+  }
   const quota = account.quotaSummary;
   const parts = [
     ...(quota?.hourlyWindowPresent ? [`${hourlyLabel} ${formatQuickPickQuota(quota.hourlyPercentage)}`] : []),

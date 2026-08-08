@@ -6,6 +6,19 @@
 - 历史版本正文统一写在本文件，按版本追加条目，不做删除。
 - 详情可按 `releaseVersion` 反查本次发布公告对应的 `id` 与变更内容。
 
+## 0.1.16-local.60（2026-08-08）
+
+### 修复
+
+- 模型容量错误 `Selected model is at capacity. Please try a different model.` 现在按 thread 独立排队，每个会话等待 60 秒后自动发送一次 `Continue.`；重复容量错误会重新进入该会话队列。
+- 无感 OAuth 切号优先领取等待中的容量恢复任务，领取后清理原计时器和队列；切号后的新容量错误仍按新的 60 秒周期恢复。Gateway 路由切换不抢占该队列。
+- 修复扩展启动时 Gateway adapter 已配置但 ChatGPT 路由未完成 OAuth 注入的问题，避免将 shim 内部 Bearer token 错误转发到 ChatGPT 上游。
+- 完成 Gateway 虚拟账号、可选集成隔离以及相关账号卡片、导入器和 Dashboard 的同步修复。
+
+### 验证说明
+
+- 通过 `npm run verify`、`npm test`、`npm run verify:customization`、`npm run audit:integration-portability` 和 `npm run package`。
+
 ## 0.1.16-local.59（2026-08-06）
 
 ### 发布修复

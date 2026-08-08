@@ -16,13 +16,12 @@ async function migrateLegacyEnvironment(options) {
   const destinationPath = requireAbsolutePath(options.destinationPath, "--destination");
   const source = parseEnvironment(await readPrivateRegularFile(sourcePath));
   const adminBaseUrl = normalizeAdminBaseUrl(source.SUB2API_ADMIN_BASE_URL ?? source.SUB2API_BASE_URL ?? "");
-  const adminToken = required(source.SUB2API_ADMIN_TOKEN, "legacy SUB2API_ADMIN_TOKEN");
+  const adminApiKey = required(source.SUB2API_ADMIN_API_KEY, "legacy SUB2API_ADMIN_API_KEY");
   const pollSeconds = normalizePollSeconds(options.pollSeconds ?? "5");
   const importConcurrency = normalizeImportConcurrency(source.SUB2API_IMPORT_CONCURRENCY ?? "2");
   const values = {
     SUB2API_ADMIN_BASE_URL: adminBaseUrl,
-    SUB2API_ADMIN_TOKEN: adminToken,
-    ...(optional(source.SUB2API_ADMIN_REFRESH_TOKEN) ? { SUB2API_ADMIN_REFRESH_TOKEN: optional(source.SUB2API_ADMIN_REFRESH_TOKEN) } : {}),
+    SUB2API_ADMIN_API_KEY: adminApiKey,
     SUB2API_IMPORT_PROXY_NAME: optional(source.SUB2API_IMPORT_PROXY_NAME) ?? "default",
     SUB2API_IMPORT_GROUP_NAME: optional(source.SUB2API_IMPORT_GROUP_NAME) ?? "test",
     SUB2API_IMPORT_CONCURRENCY: String(importConcurrency),

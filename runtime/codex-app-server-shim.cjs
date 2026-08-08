@@ -15,9 +15,14 @@ const { spawn } = require("node:child_process");
 const INTERNAL_ID_PREFIX = "__codex_accounts_manager__";
 const INTERNAL_REQUEST_TIMEOUT_MS = 30_000;
 const REFRESH_REQUEST_TIMEOUT_MS = 30_000;
+const ACCOUNT_IDENTITY_SETTLE_TIMEOUT_MS = 5_000;
+const ACCOUNT_IDENTITY_POLL_INTERVAL_MS = 100;
+const ACCOUNT_LOGIN_COMPLETION_TIMEOUT_MS = 30_000;
 const RECOVERY_CONTEXT_KEY = "codex-account-manager/recovery";
 const CONFIG_PATH = path.join(__dirname, "codex-app-server-shim.json");
 const MAX_TERMINAL_TURN_IDS = 2_048;
+const MAX_CAPACITY_RECOVERY_THREADS = 2_048;
+const CAPACITY_RECOVERY_DELAY_MS = readCapacityRecoveryDelayMs();
 const MAX_RECENT_USAGE_LIMITED_THREADS = 2_048;
 const USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 // A quota-exhaustion batch may wait for other active conversations to reach a
@@ -27,7 +32,7 @@ const RECENT_USAGE_LIMITED_THREAD_TTL_MS = USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS;
 const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
-const RUNTIME_PROTOCOL_VERSION = 10;
+const RUNTIME_PROTOCOL_VERSION = 11;
 const MAX_RECENT_SWITCH_OPERATIONS = 64;
 const SWITCH_OPERATION_TTL_MS = 10 * 60 * 1000;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
@@ -85,8 +90,10 @@ let usageLimitExhaustionObservationSuppressed = false;
 let usageLimitObservationEnabled = true;
 let externalAuthActive = false;
 let activeManagedAccount;
+let runtimeOAuthIdentity;
 let usageAttributionAccount;
 let pendingSwitch;
+let activeSwitchRequest;
 let internalSequence = 0;
 let controlSequence = 0;
 let latestControlSocket;
@@ -94,11 +101,16 @@ let controlServer;
 let socketPath;
 const deferredOfficialLines = [];
 const pendingInternalRequests = new Map();
+let pendingLoginCompletion;
 const pendingControlRequests = new Map();
 const recentSwitchOperations = new Map();
 const submittedTurnStarts = new Map();
 const activeTurns = new Map();
 const terminalTurnIds = new Set();
+const turnWorkGenerations = new Map();
+const latestWorkGenerations = new Map();
+const submittedTurnStartGenerations = new Map();
+const capacityRecoveryThreads = new Map();
 const recentUsageLimitedThreads = new Map();
 const initializeRequests = new Set();
 const controlSockets = new Set();
@@ -161,6 +173,7 @@ async function startRuntime() {
 
     child.on("exit", (code, signal) => {
       childExited = true;
+      clearAllCapacityRecoveryThreads();
       flushUsageAttributionRecords();
       rejectPendingRequests(new Error("Codex app-server exited"));
       closeControlServer();
@@ -185,11 +198,17 @@ function handleOfficialLine(line) {
   }
 
   if (isWorkStartMethod(message.method)) {
+    const threadId = readThreadId(message.params);
     // New work demonstrates that the current runtime is still usable (or that
     // the user intentionally moved on), so it must not inherit an older
     // all-conversations-exhausted decision.
     resetUsageLimitExhaustionObservation();
-    clearRecentUsageLimitedThread(readThreadId(message.params));
+    clearRecentUsageLimitedThread(threadId);
+    clearCapacityRecoveryThread(threadId, { force: true });
+    const workGeneration = advanceWorkGeneration(threadId);
+    if (workGeneration !== undefined && Object.prototype.hasOwnProperty.call(message, "id")) {
+      submittedTurnStartGenerations.set(requestIdKey(message.id), workGeneration);
+    }
   }
 
   if ((isWorkStartMethod(message.method) || isGoalMutationMethod(message.method)) && isSwitchBarrierActive()) {
@@ -221,6 +240,10 @@ function handleCodexLine(line) {
     return;
   }
 
+  if (message.method === "account/login/completed") {
+    settleLoginCompletion(message.params);
+  }
+
   if (message.method === "account/chatgptAuthTokens/refresh" && externalAuthActive) {
     void handleAuthRefreshRequest(message);
     return;
@@ -233,6 +256,9 @@ function handleCodexLine(line) {
       pendingInternalRequests.delete(key);
       clearTimeout(pendingInternal.timer);
       if (message.error) {
+        if (pendingInternal.recoveryTurn) {
+          observeRecoveryTurnFailure(pendingInternal, message.error);
+        }
         pendingInternal.reject(new Error(safeRpcError(message.error)));
       } else {
         pendingInternal.resolve(message.result);
@@ -247,12 +273,14 @@ function handleCodexLine(line) {
 
     if (submittedTurnStarts.has(key)) {
       const submittedThreadId = submittedTurnStarts.get(key);
+      const submittedWorkGeneration = submittedTurnStartGenerations.get(key);
       submittedTurnStarts.delete(key);
+      submittedTurnStartGenerations.delete(key);
       if (!message.error) {
         const turnId = readTurnId(message.result);
         if (turnId) {
           if (!terminalTurnIds.has(turnId)) {
-            rememberActiveTurn(turnId, submittedThreadId);
+            rememberActiveTurn(turnId, submittedThreadId, submittedWorkGeneration);
           }
         } else {
           anonymousActiveTurnCount += 1;
@@ -261,7 +289,12 @@ function handleCodexLine(line) {
         // A rejected turn/start has no following turn/completed event. It is
         // therefore already terminal when it becomes part of an exhaustion
         // batch.
+        clearCapacityRecoveryThread(submittedThreadId, { force: true });
         captureUsageLimitedThread(submittedThreadId, { terminal: true });
+      } else if (isModelCapacityError(message.error)) {
+        scheduleCapacityRecovery(submittedThreadId, {
+          workGeneration: submittedWorkGeneration
+        });
       } else {
         observeUsageLimitExhaustionTerminal(submittedThreadId, "rejected", false);
       }
@@ -279,12 +312,18 @@ function handleCodexLine(line) {
     }
   }
 
-  if (
-    message.method === "error" &&
-    message.params?.willRetry === false &&
-    isUsageLimitExceededError(message.params.error)
-  ) {
-    captureUsageLimitedThread(readThreadId(message.params));
+  if (message.method === "error" && message.params?.willRetry === false) {
+    const threadId = readThreadId(message.params);
+    const turnId = readNotificationTurnId(message.params);
+    const workGeneration = readWorkGeneration(threadId, turnId);
+    if (isUsageLimitExceededError(message.params.error)) {
+      clearCapacityRecoveryThread(threadId, { force: true });
+      captureUsageLimitedThread(threadId);
+    } else if (isModelCapacityError(message.params.error)) {
+      scheduleCapacityRecovery(threadId, { sourceTurnId: turnId, workGeneration });
+    } else {
+      clearCapacityRecoveryThread(threadId, { turnId, workGeneration });
+    }
   }
 
   if (message.method === "turn/completed") {
@@ -295,11 +334,16 @@ function handleCodexLine(line) {
     }
     const request = pendingSwitch;
     const usageLimitExceeded = Boolean(threadId && isUsageLimitExceededTurn(message.params));
+    const modelCapacity = Boolean(threadId && isModelCapacityTurn(message.params));
+    const workGeneration = readWorkGeneration(threadId, turnId);
     if (usageLimitExceeded) {
       // Remember the recovery candidate while the completed turn is still in
       // the active snapshot. Terminal classification happens after removing
       // it below, so a contradictory normal completion cancels only the batch.
+      clearCapacityRecoveryThread(threadId, { force: true });
       captureUsageLimitedThread(threadId);
+    } else if (modelCapacity) {
+      scheduleCapacityRecovery(threadId, { sourceTurnId: turnId, workGeneration });
     }
     if (turnId && request && request.interruptedTurnIds.delete(turnId)) {
       request.interruptedTurnCount += 1;
@@ -320,6 +364,9 @@ function handleCodexLine(line) {
       anonymousActiveTurnCount = Math.max(0, anonymousActiveTurnCount - 1);
     }
     observeUsageLimitExhaustionTerminal(threadId, readTurnStatus(message.params), usageLimitExceeded);
+    if (!usageLimitExceeded && !modelCapacity) {
+      clearCapacityRecoveryThread(threadId, { turnId, workGeneration });
+    }
     void drainPendingSwitch();
   }
 
@@ -373,6 +420,7 @@ function startControlServer() {
         pendingSwitch = undefined;
         request.canceled = true;
         clearSwitchGraceTimer(request);
+        restoreClaimedCapacityRecoveryEntries(request);
         recordSwitchOperationFailure(request.operationId, "Manager disconnected before account switch login");
         void recoverPausedGoals(request).catch((error) => {
           safeLog(`failed to resume paused goals after manager disconnect: ${safeErrorMessage(error)}`);
@@ -504,6 +552,11 @@ function handleControlLine(socket, line) {
     return;
   }
 
+  if (message.method === "runtime/gateway/switch") {
+    queueGatewayRouteSwitch(socket, message.id, message.params);
+    return;
+  }
+
   if (message.method === "runtime/cancel") {
     const requestId = message.params && message.params.requestId;
     const canceled = Boolean(
@@ -514,6 +567,7 @@ function handleControlLine(socket, line) {
       pendingSwitch = undefined;
       request.canceled = true;
       clearSwitchGraceTimer(request);
+      restoreClaimedCapacityRecoveryEntries(request);
       recordSwitchOperationFailure(request.operationId, "Account switch canceled before login");
       void recoverPausedGoals(request).catch((error) => {
         safeLog(`failed to resume paused goals after switch cancellation: ${safeErrorMessage(error)}`);
@@ -546,7 +600,23 @@ function queueGatewayFallback(socket, id, params) {
   queueRuntimeSwitchRequest(socket, id, params, true);
 }
 
-function queueRuntimeSwitchRequest(socket, id, params, gatewayFallback) {
+function queueGatewayRouteSwitch(socket, id, params) {
+  if (!gatewayConfig || !gatewayAdapter) {
+    sendControlError(socket, id, "The Gateway runtime is not configured");
+    return;
+  }
+  if (!isValidGatewayRouteParams(params)) {
+    sendControlError(socket, id, "Invalid Gateway route parameters");
+    return;
+  }
+  if (params.route === "gateway" && !gatewayAdapter.apiKey) {
+    sendControlError(socket, id, "The Gateway downstream credential is not configured");
+    return;
+  }
+  queueRuntimeSwitchRequest(socket, id, params, false, true);
+}
+
+function queueRuntimeSwitchRequest(socket, id, params, gatewayFallback, routeSwitch = false) {
   const operationId = readSwitchOperationId(params) || `request:${requestIdKey(id)}`;
   const existingOperation = recentSwitchOperations.get(operationId);
   if (existingOperation) {
@@ -570,6 +640,9 @@ function queueRuntimeSwitchRequest(socket, id, params, gatewayFallback) {
     operationId,
     params,
     gatewayFallback,
+    routeSwitch,
+    previousGatewayRoute: gatewayAdapter?.route,
+    previousGatewayAccessToken: gatewayAdapter?.chatgptAccessToken,
     canceled: false,
     goalsPrepared: false,
     graceExpired: false,
@@ -582,10 +655,14 @@ function queueRuntimeSwitchRequest(socket, id, params, gatewayFallback) {
       params.recoverRecentUsageLimitedTurns === true ? getRecentUsageLimitedThreadIds() : new Set(),
     recentUsageLimitedGoalThreadIds: new Set(),
     recoveryThreadIds: new Set(),
+    capacityRecoveryEntries: new Map(),
+    capacityRecoveryGoalThreadIds: new Set(),
+    capacityAddedRecoveryThreadIds: new Set(),
     recoveryPromise: undefined
   };
   recordSwitchOperationPending(operationId);
   pendingSwitch = request;
+  claimCapacityRecoveryThreads(request);
   goalPreparationCount += 1;
   void prepareGoalsForSwitch(request).finally(() => {
     goalPreparationCount = Math.max(0, goalPreparationCount - 1);
@@ -608,47 +685,82 @@ async function drainPendingSwitch() {
 
   const request = pendingSwitch;
   pendingSwitch = undefined;
+  activeSwitchRequest = request;
   clearSwitchGraceTimer(request);
   recordSwitchOperationSwitching(request.operationId);
   switching = true;
   let loginApplied = false;
   let localAccountActivationAttempted = false;
   let gatewayRouteActivated = false;
+  let routeChanged = false;
   try {
-    await sendInternalRequest("account/login/start", {
-      type: "chatgptAuthTokens",
-      accessToken: request.params.accessToken,
-      chatgptAccountId: request.params.accountId,
-      chatgptPlanType: request.params.planType || null
-    });
-    loginApplied = true;
-    externalAuthActive = true;
+    let actualEmail = null;
+    if (request.routeSwitch) {
+      if (request.params.route === "gateway") {
+        activateGatewayAdapter();
+      } else {
+        activateChatGptGatewayRoute(request.params.chatgptAccessToken);
+        if (request.params.chatgptAccountId && request.params.chatgptExpectedEmail) {
+          runtimeOAuthIdentity = {
+            accountId: request.params.chatgptAccountId,
+            localAccountId: request.params.chatgptLocalAccountId,
+            expectedEmail: request.params.chatgptExpectedEmail,
+            planType: request.params.chatgptPlanType || null
+          };
+        }
+      }
+      routeChanged = request.previousGatewayRoute !== gatewayAdapter?.route;
+    } else {
+      await sendChatGptLogin({
+        type: "chatgptAuthTokens",
+        accessToken: request.params.accessToken,
+        chatgptAccountId: request.params.accountId,
+        chatgptPlanType: request.params.planType || null
+      });
+      loginApplied = true;
+      externalAuthActive = true;
 
-    const accountResult = await sendInternalRequest("account/read", { refreshToken: false });
-    const actualEmail =
-      accountResult && accountResult.account && accountResult.account.type === "chatgpt"
-        ? accountResult.account.email
-        : null;
-    if (request.params.expectedEmail && normalizeEmail(actualEmail) !== normalizeEmail(request.params.expectedEmail)) {
-      throw new Error("The app-server reported a different account after hot switch");
+      actualEmail = await waitForChatGptAccountIdentity(
+        request.params.expectedEmail,
+        "The app-server reported a different account after hot switch"
+      );
+
+      if (
+        !request.gatewayFallback &&
+        request.previousGatewayRoute === "chatgpt" &&
+        gatewayConfig &&
+        gatewayConfig.autoFallbackToChatGpt !== true
+      ) {
+        // The non-fallback relay owns its upstream bearer because the child
+        // provider deliberately disables OpenAI auth. Update it only after the
+        // app-server has committed the same OAuth login.
+        activateChatGptGatewayRoute(request.params.accessToken);
+      }
+
+      if (request.gatewayFallback) {
+        activateChatGptGatewayRoute();
+        gatewayRouteActivated = true;
+      }
+
+      localAccountActivationAttempted = true;
+      await sendControlRequest("account/activate", { localAccountId: request.params.localAccountId });
+      activeManagedAccount = {
+        accountId: request.params.accountId,
+        localAccountId: request.params.localAccountId,
+        expectedEmail: request.params.expectedEmail
+      };
+      usageAttributionAccount = activeManagedAccount;
+      runtimeOAuthIdentity = {
+        accountId: request.params.accountId,
+        localAccountId: request.params.localAccountId,
+        expectedEmail: request.params.expectedEmail,
+        planType: request.params.planType || null
+      };
     }
-
-    if (request.gatewayFallback) {
-      activateChatGptGatewayRoute();
-      gatewayRouteActivated = true;
-    }
-
-    localAccountActivationAttempted = true;
-    await sendControlRequest("account/activate", { localAccountId: request.params.localAccountId });
-    activeManagedAccount = {
-      accountId: request.params.accountId,
-      localAccountId: request.params.localAccountId,
-      expectedEmail: request.params.expectedEmail
-    };
-    usageAttributionAccount = activeManagedAccount;
     const resumedPausedGoalThreadIds = await resumePausedGoals(request);
     await resumeRecentUsageLimitedGoals(request, resumedPausedGoalThreadIds);
     const continuedThreads = await startRecoveryTurns(request);
+    settleClaimedCapacityRecoveryEntries(request);
     // The recovery request above owns its captured recent threads. Once the
     // transactional switch commits, a previous exhaustion batch must not
     // prompt the scheduler to repeat the same switch.
@@ -666,7 +778,17 @@ async function drainPendingSwitch() {
     sendControlResult(request.socket, request.id, result);
   } catch (error) {
     let message = safeErrorMessage(error);
-    if (request.gatewayFallback) {
+    if (request.routeSwitch && routeChanged) {
+      try {
+        if (request.previousGatewayRoute === "gateway") {
+          activateGatewayAdapter();
+        } else {
+          activateChatGptGatewayRoute(request.previousGatewayAccessToken);
+        }
+      } catch (routeError) {
+        message = `${message}; Gateway route restore failed: ${safeErrorMessage(routeError)}`;
+      }
+    } else if (request.gatewayFallback) {
       if (gatewayRouteActivated) {
         try {
           restoreGatewayRoute();
@@ -702,9 +824,13 @@ async function drainPendingSwitch() {
     } catch (resumeError) {
       message = `${message}; goal resume failed: ${safeErrorMessage(resumeError)}`;
     }
+    restoreClaimedCapacityRecoveryEntries(request);
     recordSwitchOperationFailure(request.operationId, message);
     sendControlError(request.socket, request.id, message);
   } finally {
+    if (activeSwitchRequest === request) {
+      activeSwitchRequest = undefined;
+    }
     switching = false;
     flushDeferredOfficialLines();
   }
@@ -712,7 +838,11 @@ async function drainPendingSwitch() {
 
 async function prepareGoalsForSwitch(request) {
   try {
-    const threadIds = new Set([...getActiveThreadIds(), ...request.recentUsageLimitedThreadIds]);
+    const threadIds = new Set([
+      ...getActiveThreadIds(),
+      ...request.recentUsageLimitedThreadIds,
+      ...request.capacityRecoveryEntries.keys()
+    ]);
     for (const threadId of threadIds) {
       if (request.canceled) {
         return;
@@ -723,6 +853,15 @@ async function prepareGoalsForSwitch(request) {
       }
       const goal = readGoal(goalResult);
       if (!goal || goal.status !== "active") {
+        if (request.capacityRecoveryEntries.has(threadId)) {
+          if (goal?.status === "usageLimited") {
+            request.capacityRecoveryGoalThreadIds.add(threadId);
+            request.capacityAddedRecoveryThreadIds.delete(threadId);
+            request.recoveryThreadIds.delete(threadId);
+          } else {
+            addCapacityRecoveryToRequest(request, threadId);
+          }
+        }
         if (request.recentUsageLimitedThreadIds.has(threadId)) {
           if (goal?.status === "usageLimited") {
             request.recentUsageLimitedGoalThreadIds.add(threadId);
@@ -739,6 +878,11 @@ async function prepareGoalsForSwitch(request) {
         throw new Error("Codex did not pause an active goal before account switch");
       }
       request.pausedGoalThreadIds.add(threadId);
+      if (request.capacityRecoveryEntries.has(threadId)) {
+        request.capacityRecoveryGoalThreadIds.add(threadId);
+        request.recoveryThreadIds.delete(threadId);
+        request.capacityAddedRecoveryThreadIds.delete(threadId);
+      }
       if (request.recentUsageLimitedThreadIds.has(threadId)) {
         request.recentUsageLimitedGoalThreadIds.add(threadId);
         request.recoveryThreadIds.delete(threadId);
@@ -763,6 +907,7 @@ async function prepareGoalsForSwitch(request) {
     } catch (resumeError) {
       message = `${message}; goal resume failed: ${safeErrorMessage(resumeError)}`;
     }
+    restoreClaimedCapacityRecoveryEntries(request);
     recordSwitchOperationFailure(request.operationId, message);
     sendControlError(request.socket, request.id, message);
   }
@@ -866,6 +1011,7 @@ async function deferPendingSwitch(request, reason) {
   clearSwitchGraceTimer(request);
   try {
     await recoverPausedGoals(request);
+    restoreClaimedCapacityRecoveryEntries(request);
     const result = {
       status: "deferred",
       reason,
@@ -874,6 +1020,7 @@ async function deferPendingSwitch(request, reason) {
     recordSwitchOperationSuccess(request.operationId, result);
     sendControlResult(request.socket, request.id, result);
   } catch (error) {
+    restoreClaimedCapacityRecoveryEntries(request);
     const message = `Account switch was deferred and a paused goal could not be resumed: ${safeErrorMessage(error)}`;
     recordSwitchOperationFailure(request.operationId, message);
     sendControlError(request.socket, request.id, message);
@@ -883,38 +1030,67 @@ async function deferPendingSwitch(request, reason) {
 async function startRecoveryTurns(request) {
   let continuedThreads = 0;
   for (const threadId of request.recoveryThreadIds) {
+    const capacityEntry = request.capacityRecoveryEntries.get(threadId);
     try {
       if (await isSubagentThread(threadId)) {
+        if (capacityEntry) {
+          settleClaimedCapacityRecoveryEntry(request, threadId, capacityEntry);
+        }
         continue;
       }
-      const result = await sendInternalRequest("turn/start", {
-        threadId,
-        input: [{ type: "text", text: "Continue.", text_elements: [] }],
-        responsesapiClientMetadata: {
-          codex_account_manager_recovery: "true"
-        },
-        additionalContext: {
-          [RECOVERY_CONTEXT_KEY]: {
-            kind: "application",
-            value:
-              "This is a one-shot continuation after the previous turn was interrupted for an account switch or stopped by quota exhaustion immediately before an emergency switch. First inspect the thread history, current workspace state, and completed tool results. Continue only unfinished work and do not repeat non-idempotent actions that already succeeded."
-          }
-        }
+      const result = await startRecoveryTurn(threadId, {
+        workGeneration: capacityEntry?.workGeneration,
+        capacityEntry
       });
-      const turnId = readTurnId(result);
-      if (turnId) {
-        rememberActiveTurn(turnId, threadId);
-      }
       if (request.recentUsageLimitedThreadIds.has(threadId)) {
         recoveredUsageLimitedThreads += 1;
       }
       clearRecentUsageLimitedThread(threadId);
+      if (capacityEntry) {
+        settleClaimedCapacityRecoveryEntry(request, threadId, capacityEntry);
+      }
       continuedThreads += 1;
     } catch (error) {
+      if (capacityEntry && request.capacityRecoveryEntries.get(threadId) === capacityEntry) {
+        // A capacity rejection is re-queued by observeRecoveryTurnFailure.
+        // Other failures must not leave a claimed entry without a timer.
+        clearCapacityRecoveryThread(threadId, { generation: capacityEntry.generation, force: true });
+        removeCapacityRecoveryFromRequest(request, threadId);
+      }
       safeLog(`failed to start a switched thread continuation: ${safeErrorMessage(error)}`);
     }
   }
   return continuedThreads;
+}
+
+async function startRecoveryTurn(threadId, options = {}) {
+  const result = await sendInternalRequest(
+    "turn/start",
+    {
+      threadId,
+      input: [{ type: "text", text: "Continue.", text_elements: [] }],
+      responsesapiClientMetadata: {
+        codex_account_manager_recovery: "true"
+      },
+      additionalContext: {
+        [RECOVERY_CONTEXT_KEY]: {
+          kind: "application",
+          value:
+            "This is a one-shot continuation after the previous turn was interrupted for an account switch or stopped by quota exhaustion immediately before an emergency switch. First inspect the thread history, current workspace state, and completed tool results. Continue only unfinished work and do not repeat non-idempotent actions that already succeeded."
+        }
+      }
+    },
+    {
+      recoveryTurn: true,
+      threadId,
+      workGeneration: options.workGeneration
+    }
+  );
+  const turnId = readTurnId(result);
+  if (turnId) {
+    rememberActiveTurn(turnId, threadId, options.workGeneration);
+  }
+  return result;
 }
 
 async function isSubagentThread(threadId) {
@@ -942,6 +1118,10 @@ async function resumePausedGoals(request) {
       throw new Error("Codex did not resume a goal after account switch");
     }
     request.pausedGoalThreadIds.delete(threadId);
+    if (request.capacityRecoveryGoalThreadIds.has(threadId)) {
+      settleClaimedCapacityRecoveryEntry(request, threadId, request.capacityRecoveryEntries.get(threadId));
+      request.capacityRecoveryGoalThreadIds.delete(threadId);
+    }
     resumedThreadIds.add(threadId);
   }
   return resumedThreadIds;
@@ -957,6 +1137,10 @@ async function resumeRecentUsageLimitedGoals(request, resumedPausedGoalThreadIds
       }
     }
     resumedUsageLimitedGoals += 1;
+    if (request.capacityRecoveryGoalThreadIds.has(threadId)) {
+      settleClaimedCapacityRecoveryEntry(request, threadId, request.capacityRecoveryEntries.get(threadId));
+      request.capacityRecoveryGoalThreadIds.delete(threadId);
+    }
     clearRecentUsageLimitedThread(threadId);
   }
 }
@@ -991,19 +1175,22 @@ async function restorePreviousAccount(request) {
   if (!isValidRefreshResult(credentials) || credentials.chatgptAccountId !== request.params.previousAccountId) {
     throw new Error("The account manager returned invalid rollback credentials");
   }
-  await sendInternalRequest("account/login/start", {
+  await sendChatGptLogin({
     type: "chatgptAuthTokens",
     accessToken: credentials.accessToken,
     chatgptAccountId: credentials.chatgptAccountId,
     chatgptPlanType: credentials.chatgptPlanType
   });
-  const accountResult = await sendInternalRequest("account/read", { refreshToken: false });
-  const actualEmail =
-    accountResult && accountResult.account && accountResult.account.type === "chatgpt"
-      ? accountResult.account.email
-      : null;
-  if (normalizeEmail(actualEmail) !== normalizeEmail(request.params.previousExpectedEmail)) {
-    throw new Error("The app-server reported a different account after hot-switch rollback");
+  await waitForChatGptAccountIdentity(
+    request.params.previousExpectedEmail,
+    "The app-server reported a different account after hot-switch rollback"
+  );
+  if (
+    request.previousGatewayRoute === "chatgpt" &&
+    gatewayConfig &&
+    gatewayConfig.autoFallbackToChatGpt !== true
+  ) {
+    activateChatGptGatewayRoute(credentials.accessToken);
   }
   externalAuthActive = true;
   activeManagedAccount = snapshotRollback
@@ -1014,6 +1201,50 @@ async function restorePreviousAccount(request) {
         expectedEmail: request.params.previousExpectedEmail
       };
   usageAttributionAccount = activeManagedAccount;
+  runtimeOAuthIdentity = {
+    accountId: request.params.previousAccountId,
+    localAccountId: request.params.previousLocalAccountId,
+    expectedEmail: request.params.previousExpectedEmail,
+    planType: request.params.previousPlanType || null
+  };
+}
+
+async function waitForChatGptAccountIdentity(expectedEmail, mismatchMessage) {
+  const normalizedExpectedEmail = normalizeEmail(expectedEmail);
+  const deadline = Date.now() + ACCOUNT_IDENTITY_SETTLE_TIMEOUT_MS;
+  let lastReadError;
+  let lastActualEmail;
+
+  while (Date.now() <= deadline) {
+    try {
+      const accountResult = await sendInternalRequest("account/read", { refreshToken: false });
+      const account = accountResult && typeof accountResult.account === "object" ? accountResult.account : null;
+      if (accountResult && accountResult.requiresOpenaiAuth === false) {
+        // Manual Gateway mode intentionally disables OpenAI auth on the child
+        // provider, so account/read has no account object. The login completion
+        // event awaited by sendChatGptLogin is the authoritative commit signal.
+        return expectedEmail;
+      }
+      const actualEmail = account && account.type === "chatgpt" && typeof account.email === "string" ? account.email : null;
+      lastActualEmail = actualEmail;
+      if (actualEmail && normalizeEmail(actualEmail) === normalizedExpectedEmail) {
+        return actualEmail;
+      }
+    } catch (error) {
+      lastReadError = safeErrorMessage(error);
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(ACCOUNT_IDENTITY_POLL_INTERVAL_MS, remaining)));
+  }
+
+  if (lastReadError && !lastActualEmail) {
+    throw new Error(`${mismatchMessage}: ${lastReadError}`);
+  }
+  throw new Error(mismatchMessage);
 }
 
 async function handleAuthRefreshRequest(message) {
@@ -1046,16 +1277,67 @@ async function handleAuthRefreshRequest(message) {
   }
 }
 
-function sendInternalRequest(method, params) {
+function sendInternalRequest(method, params, options = {}) {
   const id = `${INTERNAL_ID_PREFIX}:${++internalSequence}`;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingInternalRequests.delete(requestIdKey(id));
       reject(new Error(`${method} timed out`));
     }, INTERNAL_REQUEST_TIMEOUT_MS);
-    pendingInternalRequests.set(requestIdKey(id), { resolve, reject, timer });
+    pendingInternalRequests.set(requestIdKey(id), { resolve, reject, timer, ...options });
     writeChildMessage({ id, method, params });
   });
+}
+
+function sendChatGptLogin(params) {
+  const completion = waitForLoginCompletion();
+  const response = sendInternalRequest("account/login/start", params);
+  return Promise.all([response, completion]).then(
+    ([result]) => result,
+    (error) => {
+      cancelLoginCompletion(error);
+      throw error;
+    }
+  );
+}
+
+function waitForLoginCompletion() {
+  if (pendingLoginCompletion) {
+    return Promise.reject(new Error("Another ChatGPT login is already pending"));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingLoginCompletion = undefined;
+      reject(new Error("account/login/completed timed out"));
+    }, ACCOUNT_LOGIN_COMPLETION_TIMEOUT_MS);
+    pendingLoginCompletion = { resolve, reject, timer };
+  });
+}
+
+function settleLoginCompletion(params) {
+  const pending = pendingLoginCompletion;
+  if (!pending) {
+    return;
+  }
+  pendingLoginCompletion = undefined;
+  clearTimeout(pending.timer);
+  if (params && params.success === false) {
+    const error = params.error;
+    const message = error && typeof error.message === "string" ? error.message : "ChatGPT login failed";
+    pending.reject(new Error(message));
+    return;
+  }
+  pending.resolve();
+}
+
+function cancelLoginCompletion(cause) {
+  const pending = pendingLoginCompletion;
+  if (!pending) {
+    return;
+  }
+  pendingLoginCompletion = undefined;
+  clearTimeout(pending.timer);
+  pending.reject(cause instanceof Error ? cause : new Error(String(cause || "ChatGPT login failed")));
 }
 
 function sendControlRequest(method, params) {
@@ -1110,6 +1392,8 @@ function runtimeStatus() {
     gatewayConfigured: Boolean(gatewayConfig),
     gatewayAutoFallbackEnabled: Boolean(gatewayConfig?.autoFallbackToChatGpt),
     usageLimitObservationEnabled,
+    capacityRecoveryThreads: capacityRecoveryThreads.size,
+    capacityRecoveryWaitingThreads: countCapacityRecoveryWaitingThreads(),
     recentUsageLimitedThreads: getRecentUsageLimitedThreadIds().size,
     usageLimitExhaustionReady: usageLimitExhaustionBatch?.ready === true,
     usageLimitExhaustionBatchId: usageLimitExhaustionBatch?.ready === true ? usageLimitExhaustionBatch.id : 0,
@@ -1180,13 +1464,30 @@ function pruneSwitchOperations() {
 async function readRuntimeIdentity() {
   const accountResult = await sendInternalRequest("account/read", { refreshToken: false });
   const account = accountResult && typeof accountResult.account === "object" ? accountResult.account : null;
+  const hiddenAuthIdentity =
+    !account &&
+    accountResult &&
+    accountResult.requiresOpenaiAuth === false &&
+    gatewayAdapter?.route === "chatgpt" &&
+    runtimeOAuthIdentity;
   return {
-    accountType: account && typeof account.type === "string" ? account.type : null,
-    email: account && typeof account.email === "string" ? account.email : null,
-    planType: account && typeof account.planType === "string" ? account.planType : null,
+    accountType:
+      account && typeof account.type === "string" ? account.type : hiddenAuthIdentity ? "chatgpt" : null,
+    email:
+      account && typeof account.email === "string"
+        ? account.email
+        : hiddenAuthIdentity
+          ? hiddenAuthIdentity.expectedEmail
+          : null,
+    planType:
+      account && typeof account.planType === "string"
+        ? account.planType
+        : hiddenAuthIdentity && typeof hiddenAuthIdentity.planType === "string"
+          ? hiddenAuthIdentity.planType
+          : null,
     externalAuthActive,
-    managedAccountId: activeManagedAccount ? activeManagedAccount.accountId : null,
-    managedLocalAccountId: activeManagedAccount ? activeManagedAccount.localAccountId : null,
+    managedAccountId: activeManagedAccount?.accountId || hiddenAuthIdentity?.accountId || null,
+    managedLocalAccountId: activeManagedAccount?.localAccountId || hiddenAuthIdentity?.localAccountId || null,
     httpTransportForced: forceHttpTransport
   };
 }
@@ -1203,6 +1504,20 @@ async function activateUsageAttribution(params) {
   const accountResult = await sendInternalRequest("account/read", { refreshToken: false });
   const account = accountResult && typeof accountResult.account === "object" ? accountResult.account : null;
   const actualEmail = account && account.type === "chatgpt" && typeof account.email === "string" ? account.email : null;
+  if (
+    !actualEmail &&
+    accountResult?.requiresOpenaiAuth === false &&
+    activeManagedAccount &&
+    activeManagedAccount.accountId === params.accountId &&
+    normalizeEmail(activeManagedAccount.expectedEmail) === normalizeEmail(params.expectedEmail)
+  ) {
+    usageAttributionAccount = {
+      accountId: params.accountId,
+      localAccountId: params.localAccountId,
+      expectedEmail: params.expectedEmail
+    };
+    return { active: true, localAccountId: usageAttributionAccount.localAccountId };
+  }
   if (!actualEmail || normalizeEmail(actualEmail) !== normalizeEmail(params.expectedEmail)) {
     throw new Error("The app-server reported a different account for usage attribution");
   }
@@ -1291,6 +1606,7 @@ function closeControlServer() {
 }
 
 function rejectPendingRequests(error) {
+  cancelLoginCompletion(error);
   for (const pending of pendingInternalRequests.values()) {
     clearTimeout(pending.timer);
     pending.reject(error);
@@ -1399,6 +1715,41 @@ function isValidGatewayFallbackParams(params) {
   );
 }
 
+function isValidGatewayRouteParams(params) {
+  return Boolean(
+    params &&
+    (params.route === "gateway" || params.route === "chatgpt") &&
+    (params.accountId === undefined ||
+      (typeof params.accountId === "string" && params.accountId.length > 0 && params.accountId.length <= 256)) &&
+    (params.chatgptAccessToken === undefined ||
+      (typeof params.chatgptAccessToken === "string" &&
+        params.chatgptAccessToken.length > 0 &&
+        params.chatgptAccessToken.length <= 16_384)) &&
+    (params.chatgptAccountId === undefined ||
+      (typeof params.chatgptAccountId === "string" &&
+        params.chatgptAccountId.length > 0 &&
+        params.chatgptAccountId.length <= 256)) &&
+    (params.chatgptLocalAccountId === undefined ||
+      (typeof params.chatgptLocalAccountId === "string" &&
+        params.chatgptLocalAccountId.length > 0 &&
+        params.chatgptLocalAccountId.length <= 256)) &&
+    (params.chatgptExpectedEmail === undefined ||
+      (typeof params.chatgptExpectedEmail === "string" &&
+        params.chatgptExpectedEmail.length > 0 &&
+        params.chatgptExpectedEmail.length <= 320)) &&
+    (params.chatgptPlanType === undefined ||
+      params.chatgptPlanType === null ||
+      (typeof params.chatgptPlanType === "string" && params.chatgptPlanType.length <= 128)) &&
+    Number.isInteger(params.gracePeriodMs) &&
+    params.gracePeriodMs >= 0 &&
+    params.gracePeriodMs <= 300_000 &&
+    (params.operationId === undefined || isValidSwitchOperationId(params.operationId)) &&
+    (params.longTurnPolicy === "defer" ||
+      params.longTurnPolicy === "interrupt" ||
+      params.longTurnPolicy === "interruptAndContinue")
+  );
+}
+
 function readSwitchOperationId(params) {
   return isValidSwitchOperationId(params?.operationId) ? params.operationId : undefined;
 }
@@ -1465,7 +1816,7 @@ function getActiveThreadIds() {
   return threadIds;
 }
 
-function rememberActiveTurn(turnId, threadId) {
+function rememberActiveTurn(turnId, threadId, workGeneration) {
   if (typeof threadId === "string" && threadId.length > 0) {
     for (const [knownTurnId, knownThreadId] of activeTurns) {
       if (knownTurnId !== turnId && knownThreadId === threadId) {
@@ -1473,6 +1824,7 @@ function rememberActiveTurn(turnId, threadId) {
       }
     }
   }
+  rememberTurnWorkGeneration(turnId, threadId, workGeneration);
   activeTurns.set(turnId, threadId);
   recordUsageAttribution(threadId);
 }
@@ -1548,6 +1900,301 @@ function flushUsageAttributionRecords() {
       safeLog(`unable to persist usage attribution: ${safeErrorMessage(error)}`);
     }
   }
+}
+
+function readCapacityRecoveryDelayMs() {
+  const configured = Number(process.env.CODEX_ACCOUNTS_CAPACITY_RECOVERY_DELAY_MS);
+  return Number.isInteger(configured) && configured > 0 && configured <= 6 * 60 * 60 * 1000
+    ? configured
+    : 60_000;
+}
+
+function advanceWorkGeneration(threadId) {
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return undefined;
+  }
+  const generation = (latestWorkGenerations.get(threadId) || 0) + 1;
+  latestWorkGenerations.delete(threadId);
+  latestWorkGenerations.set(threadId, generation);
+  while (latestWorkGenerations.size > MAX_CAPACITY_RECOVERY_THREADS) {
+    const oldestThreadId = latestWorkGenerations.keys().next().value;
+    if (oldestThreadId === undefined) {
+      break;
+    }
+    latestWorkGenerations.delete(oldestThreadId);
+  }
+  return generation;
+}
+
+function ensureWorkGeneration(threadId) {
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return undefined;
+  }
+  return latestWorkGenerations.get(threadId) ?? advanceWorkGeneration(threadId);
+}
+
+function readWorkGeneration(threadId, turnId) {
+  if (typeof turnId === "string" && turnWorkGenerations.has(turnId)) {
+    return turnWorkGenerations.get(turnId);
+  }
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return undefined;
+  }
+  return latestWorkGenerations.get(threadId);
+}
+
+function rememberTurnWorkGeneration(turnId, threadId, workGeneration) {
+  const generation = workGeneration ?? latestWorkGenerations.get(threadId);
+  if (typeof turnId !== "string" || typeof generation !== "number") {
+    return;
+  }
+  turnWorkGenerations.delete(turnId);
+  turnWorkGenerations.set(turnId, generation);
+  while (turnWorkGenerations.size > MAX_TERMINAL_TURN_IDS) {
+    const oldestTurnId = turnWorkGenerations.keys().next().value;
+    if (oldestTurnId === undefined) {
+      break;
+    }
+    turnWorkGenerations.delete(oldestTurnId);
+  }
+}
+
+function readNotificationTurnId(value) {
+  return value && typeof value === "object" && typeof value.turnId === "string" ? value.turnId : undefined;
+}
+
+function countCapacityRecoveryWaitingThreads() {
+  let count = 0;
+  for (const entry of capacityRecoveryThreads.values()) {
+    if (entry.state === "waiting") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function claimCapacityRecoveryThreads(request) {
+  // Gateway route changes deliberately do not consume ChatGPT recovery work.
+  if (request.routeSwitch || request.gatewayFallback) {
+    return;
+  }
+  for (const [threadId, entry] of capacityRecoveryThreads) {
+    if (entry.state !== "waiting") {
+      continue;
+    }
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+      entry.timer = undefined;
+    }
+    entry.state = "claimedBySwitch";
+    request.capacityRecoveryEntries.set(threadId, entry);
+    addCapacityRecoveryToRequest(request, threadId);
+  }
+}
+
+function addCapacityRecoveryToRequest(request, threadId) {
+  if (!request.capacityRecoveryEntries.has(threadId)) {
+    return;
+  }
+  if (!request.recoveryThreadIds.has(threadId)) {
+    request.capacityAddedRecoveryThreadIds.add(threadId);
+  }
+  request.recoveryThreadIds.add(threadId);
+}
+
+function removeCapacityRecoveryFromRequest(request, threadId, options = {}) {
+  const entry = request.capacityRecoveryEntries.get(threadId);
+  if (!options.keepEntry) {
+    request.capacityRecoveryEntries.delete(threadId);
+  }
+  request.capacityRecoveryGoalThreadIds.delete(threadId);
+  if (request.capacityAddedRecoveryThreadIds.delete(threadId)) {
+    request.recoveryThreadIds.delete(threadId);
+  }
+  return entry;
+}
+
+function settleClaimedCapacityRecoveryEntry(request, threadId, entry) {
+  if (!entry) {
+    return;
+  }
+  if (capacityRecoveryThreads.get(threadId) === entry) {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+    capacityRecoveryThreads.delete(threadId);
+  }
+  removeCapacityRecoveryFromRequest(request, threadId);
+}
+
+function settleClaimedCapacityRecoveryEntries(request) {
+  for (const [threadId, entry] of [...request.capacityRecoveryEntries]) {
+    settleClaimedCapacityRecoveryEntry(request, threadId, entry);
+  }
+}
+
+function restoreClaimedCapacityRecoveryEntries(request) {
+  for (const [threadId, entry] of [...request.capacityRecoveryEntries]) {
+    if (capacityRecoveryThreads.get(threadId) === entry && entry.state === "claimedBySwitch") {
+      entry.state = "waiting";
+      entry.retryAt = Math.max(entry.retryAt, Date.now());
+      armCapacityRecoveryTimer(threadId, entry);
+    }
+    removeCapacityRecoveryFromRequest(request, threadId);
+  }
+}
+
+function clearCapacityRecoveryThread(threadId, options = {}) {
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return;
+  }
+  const entry = capacityRecoveryThreads.get(threadId);
+  if (!entry) {
+    return;
+  }
+  if (!options.force) {
+    if (options.workGeneration !== undefined && entry.workGeneration !== options.workGeneration) {
+      return;
+    }
+    if (options.turnId) {
+      if (!entry.sourceTurnId || entry.sourceTurnId !== options.turnId) {
+        return;
+      }
+      // A terminal notification may follow the capacity error notification for
+      // the same turn. Keep the original one-minute deadline in that case.
+      if (entry.state === "waiting") {
+        return;
+      }
+    }
+  }
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+  }
+  capacityRecoveryThreads.delete(threadId);
+  for (const request of [pendingSwitch, activeSwitchRequest]) {
+    if (request?.capacityRecoveryEntries.get(threadId) === entry) {
+      removeCapacityRecoveryFromRequest(request, threadId);
+    }
+  }
+}
+
+function scheduleCapacityRecovery(threadId, options = {}) {
+  if (typeof threadId !== "string" || threadId.length === 0 || childExited) {
+    return;
+  }
+  const workGeneration = options.workGeneration ?? ensureWorkGeneration(threadId);
+  if (workGeneration === undefined || latestWorkGenerations.get(threadId) !== workGeneration) {
+    return;
+  }
+  const sourceTurnId = typeof options.sourceTurnId === "string" ? options.sourceTurnId : undefined;
+  const existing = capacityRecoveryThreads.get(threadId);
+  const sameWaitingFailure =
+    existing &&
+    existing.state === "waiting" &&
+    existing.workGeneration === workGeneration &&
+    (existing.sourceTurnId === sourceTurnId || !existing.sourceTurnId || !sourceTurnId);
+  if (sameWaitingFailure) {
+    if (!existing.sourceTurnId && sourceTurnId) {
+      existing.sourceTurnId = sourceTurnId;
+    }
+    return;
+  }
+
+  if (existing) {
+    if (existing.timer) {
+      clearTimeout(existing.timer);
+    }
+    capacityRecoveryThreads.delete(threadId);
+    for (const request of [pendingSwitch, activeSwitchRequest]) {
+      if (request?.capacityRecoveryEntries.get(threadId) === existing) {
+        removeCapacityRecoveryFromRequest(request, threadId);
+      }
+    }
+  }
+
+  const entry = {
+    timer: undefined,
+    retryAt: Date.now() + CAPACITY_RECOVERY_DELAY_MS,
+    generation: `${process.pid}:${++internalSequence}`,
+    workGeneration,
+    sourceTurnId,
+    state: "waiting"
+  };
+  capacityRecoveryThreads.set(threadId, entry);
+  while (capacityRecoveryThreads.size > MAX_CAPACITY_RECOVERY_THREADS) {
+    const oldestThreadId = capacityRecoveryThreads.keys().next().value;
+    if (oldestThreadId === undefined) {
+      break;
+    }
+    clearCapacityRecoveryThread(oldestThreadId, { force: true });
+  }
+  armCapacityRecoveryTimer(threadId, entry);
+}
+
+function armCapacityRecoveryTimer(threadId, entry) {
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+  }
+  entry.timer = setTimeout(() => {
+    entry.timer = undefined;
+    if (capacityRecoveryThreads.get(threadId) !== entry || entry.state !== "waiting") {
+      return;
+    }
+    entry.state = "running";
+    void runCapacityRecoveryTurn(threadId, entry);
+  }, Math.max(0, entry.retryAt - Date.now()));
+}
+
+async function runCapacityRecoveryTurn(threadId, entry) {
+  if (capacityRecoveryThreads.get(threadId) !== entry || entry.state !== "running") {
+    return;
+  }
+  try {
+    if (await isSubagentThread(threadId)) {
+      clearCapacityRecoveryThread(threadId, { force: true });
+      return;
+    }
+    await startRecoveryTurn(threadId, { workGeneration: entry.workGeneration });
+    if (capacityRecoveryThreads.get(threadId) === entry) {
+      clearCapacityRecoveryThread(threadId, { force: true });
+    }
+  } catch (error) {
+    if (capacityRecoveryThreads.get(threadId) === entry) {
+      clearCapacityRecoveryThread(threadId, { force: true });
+    }
+    safeLog(`failed to continue a model-capacity thread: ${safeErrorMessage(error)}`);
+  }
+}
+
+function observeRecoveryTurnFailure(pending, error) {
+  const threadId = pending.threadId;
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return;
+  }
+  if (isUsageLimitExceededError(error)) {
+    clearCapacityRecoveryThread(threadId, { force: true });
+    captureUsageLimitedThread(threadId, { terminal: true });
+    return;
+  }
+  if (isModelCapacityError(error)) {
+    scheduleCapacityRecovery(threadId, {
+      workGeneration: pending.workGeneration
+    });
+    return;
+  }
+  clearCapacityRecoveryThread(threadId, {
+    workGeneration: pending.workGeneration,
+    force: true
+  });
+}
+
+function clearAllCapacityRecoveryThreads() {
+  for (const entry of capacityRecoveryThreads.values()) {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+  }
+  capacityRecoveryThreads.clear();
 }
 
 function rememberTerminalTurnId(turnId) {
@@ -1842,15 +2489,50 @@ function isUsageLimitExceededTurn(value) {
   return Array.isArray(turn.items) && turn.items.some((item) => isUsageLimitExceededError(item));
 }
 
+function isModelCapacityTurn(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const turn = value.turn;
+  if (!turn || typeof turn !== "object") {
+    return false;
+  }
+  if (isModelCapacityError(turn.error)) {
+    return true;
+  }
+  return Array.isArray(turn.items) && turn.items.some((item) => isModelCapacityError(item));
+}
+
 function isUsageLimitExceededError(value) {
   if (!value || typeof value !== "object") {
     return false;
   }
   return (
     value.codexErrorInfo === "usageLimitExceeded" ||
+    value.codex_error_info === "usageLimitExceeded" ||
     value.errorInfo === "usageLimitExceeded" ||
+    value.error_info === "usageLimitExceeded" ||
     isUsageLimitExceededError(value.data) ||
     isUsageLimitExceededError(value.error)
+  );
+}
+
+function isModelCapacityError(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (isUsageLimitExceededError(value)) {
+    return false;
+  }
+  const message = typeof value.message === "string" ? value.message.trim() : "";
+  return (
+    value.codexErrorInfo === "server_overloaded" ||
+    value.codex_error_info === "server_overloaded" ||
+    value.errorInfo === "server_overloaded" ||
+    value.error_info === "server_overloaded" ||
+    message === "Selected model is at capacity. Please try a different model." ||
+    isModelCapacityError(value.data) ||
+    isModelCapacityError(value.error)
   );
 }
 
@@ -2020,7 +2702,8 @@ function startGatewayAdapter(config) {
       token,
       config,
       apiKey: undefined,
-      route: config.autoFallbackToChatGpt && config.active === false ? "chatgpt" : "gateway",
+      chatgptAccessToken: undefined,
+      route: config.active === false ? "chatgpt" : "gateway",
       quotaExhausted: false,
       quotaExhaustionCount: 0,
       lastQuotaExhaustionAt: undefined,
@@ -2102,8 +2785,8 @@ function configureGatewayAdapter(params) {
 }
 
 function activateGatewayAdapter() {
-  if (!gatewayAdapter || !gatewayConfig?.autoFallbackToChatGpt) {
-    throw new Error("The Gateway relay does not support in-place activation");
+  if (!gatewayAdapter || !gatewayConfig) {
+    throw new Error("The Gateway relay is unavailable");
   }
   if (!gatewayAdapter.apiKey) {
     throw new Error("The Gateway credential is not ready");
@@ -2113,15 +2796,21 @@ function activateGatewayAdapter() {
   return getGatewayAdapterStatus();
 }
 
-function activateChatGptGatewayRoute() {
-  if (!gatewayAdapter || !gatewayConfig?.autoFallbackToChatGpt || gatewayAdapter.route !== "gateway") {
-    throw new Error("The Gateway fallback route is not active");
+function activateChatGptGatewayRoute(accessToken) {
+  if (!gatewayAdapter || !gatewayConfig) {
+    throw new Error("The Gateway relay is unavailable");
+  }
+  if (accessToken !== undefined) {
+    if (typeof accessToken !== "string" || !accessToken.trim() || accessToken.length > 16_384) {
+      throw new Error("The ChatGPT route credential is invalid");
+    }
+    gatewayAdapter.chatgptAccessToken = accessToken;
   }
   gatewayAdapter.route = "chatgpt";
 }
 
 function restoreGatewayRoute() {
-  if (!gatewayAdapter || !gatewayConfig?.autoFallbackToChatGpt) {
+  if (!gatewayAdapter || !gatewayConfig) {
     throw new Error("The Gateway relay is unavailable");
   }
   gatewayAdapter.route = "gateway";
@@ -2371,6 +3060,9 @@ async function handleChatGptGatewayRequest(adapter, request, response) {
   const headers = { ...request.headers };
   delete headers["x-api-key"];
   delete headers.host;
+  if (adapter.config.autoFallbackToChatGpt !== true && adapter.chatgptAccessToken) {
+    headers.authorization = `Bearer ${adapter.chatgptAccessToken}`;
+  }
   headers.host = target.host;
   let upstream;
   let proxyAgent;

@@ -25,7 +25,7 @@
 | 设置后启用 | 官方自动切号、低额度提醒、配额定时刷新、Codex App 重启                     | 在 Dashboard 设置中显式打开相应开关；默认不会自动切号。                                                                                          |
 | 一次性安装 | 实验性无感切号与额度分档                                                   | Linux/macOS 运行安装命令、按提示 reload 一次、准备至少两个新鲜账号并在 Dashboard 配置账号池。Windows 目前不支持。                                |
 | 可选包     | 飞书私聊 M+/S+ 导入                                                        | 单独安装受限的飞书私聊机器人；M+ 仍需显式打开 Manager 本地收件箱，S+ 仅在另行启动导入器后消费。                                                   |
-| 可选包     | Sub2API Gateway                                                            | 单独安装 Gateway VSIX，再由其 Dashboard 卡片配置和保存密钥。核心 Manager 没有该供应商的设置、配置或 SecretStorage 访问。                        |
+| 可选包     | Sub2API Gateway                                                            | 单独安装 Gateway VSIX；它会把下游注册为已保存账号中的虚拟账号，配置、保存密钥和刷新动作都在账号卡片内。核心 Manager 没有该供应商的 SecretStorage 访问。 |
 
 ## 无感切号（实验性）
 
@@ -37,12 +37,12 @@
 4. 在 Dashboard 打开“无感切号（实验性）”，按需分别启用“分档切号”和“低额度切号”；建议配合 `1` 分钟配额刷新。
 5. “分档切号”下选择分档方式和等待时间；“低额度切号”下选择“耗尽后切换”、`1%`、`3%`（默认）或 `5%`；再选择通用的“切换策略”。
 
-关闭“低额度切号”后，低额度、结构化 `usageLimitExceeded` 和耗尽批次都不会发起新的自动切换，分档切号保持独立。选择“耗尽后切换”时，同一档位会等待当前活跃会话全部实际因额度耗尽终止，最长 6 小时。自动继续仍可能重复非幂等外部操作。完整规则见 [无感切号说明](docs/HOT_SWITCH.md)。
+关闭“低额度切号”后，低额度、结构化 `usageLimitExceeded` 和耗尽批次都不会发起新的自动切换，分档切号保持独立。选择“耗尽后切换”时，同一档位会等待当前活跃会话全部实际因额度耗尽终止，最长 6 小时。对 `Selected model is at capacity. Please try a different model.`，runtime 会按会话独立等待 1 分钟后自动发送 `Continue.`；无感切号会优先领取等待中的容量恢复。自动继续仍可能重复非幂等外部操作。完整规则见 [无感切号说明](docs/HOT_SWITCH.md)。
 
 ## 可选本地集成
 
 - [飞书私聊 M+/S+ 导入包](docs/integrations/feishu-private-import.md)：仅接收管理员一对一文本消息；M+ 写入 Manager 的显式本地收件箱，S+ 只写入独立私有队列。
-- [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；不伪造 OAuth 账号，也不加入普通账号池。
+- [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；Gateway 以“手动 / Gateway”虚拟账号出现在已保存账号和手动切换列表，卡片内显示 tracker 用量/估算价格和配置动作，但不伪造 OAuth 账号或进入任何自动账号池。
 
 ## 安装与更新
 

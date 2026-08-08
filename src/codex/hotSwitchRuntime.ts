@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { needsRefresh, refreshTokens } from "../auth/oauth";
-import type { CodexAccountRecord, CodexTokens } from "../core/types";
+import { isSub2ApiAccount, type CodexAccountRecord, type CodexTokens } from "../core/types";
 import { decodeJwtPayload, extractClaims } from "../utils/jwt";
 import {
   getCodexAccountsConfiguration,
@@ -41,7 +41,7 @@ const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
 const SHIM_FILE = "codex-app-server-shim.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 10;
+const RUNTIME_PROTOCOL_VERSION = 11;
 const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
 const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 
@@ -81,6 +81,8 @@ export type RuntimeAccountSwitchOptions = {
   recoverRecentUsageLimitedTurns?: boolean;
   /** Reserved for RuntimeSwitchCoordinator's timeout reconciliation. */
   operationId?: string;
+  /** Allows a manual OAuth handoff immediately after returning from Gateway. */
+  allowManualWhenSeamlessDisabled?: boolean;
 };
 
 type CapturedUnmanagedRollbackSnapshot = {
@@ -133,41 +135,47 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     return this.getGatewayRuntimeState() !== undefined;
   }
 
-  async activateGateway(config: GatewayRuntimeConfig, apiKey?: string): Promise<HotSwitchSetupResult> {
+  async activateGateway(
+    config: GatewayRuntimeConfig,
+    apiKey?: string,
+    options: RuntimeAccountSwitchOptions = {}
+  ): Promise<HotSwitchSetupResult> {
     const normalized = normalizeGatewayRuntimeConfig(config);
     await this.ensureGatewayDoesNotEnableSeamlessScheduling();
     if (!isHotSwitchEnabled()) {
       await getCodexAccountsConfiguration().update(HOT_SWITCH_ENABLED, true, vscode.ConfigurationTarget.Global);
     }
     const current = this.getGatewayRuntimeState();
-    if (
-      this.bridge &&
-      current &&
-      current.active === false &&
-      current.config.autoFallbackToChatGpt === true &&
-      normalized.autoFallbackToChatGpt === true &&
-      sameGatewayRuntimeConfig(current.config, normalized)
-    ) {
-      if (!apiKey) {
-        throw new Error("The Gateway API key is required before activating the local transport");
+    if (this.bridge && current && sameGatewayRuntimeConfig(current.config, normalized)) {
+      if (apiKey) {
+        await this.bridge.configureGatewayCredential(apiKey);
       }
-      await this.bridge.configureGatewayCredential(apiKey);
-      const status = await this.bridge.activateGateway();
-      if (!status.active || status.route !== "gateway") {
-        throw new Error("The Gateway relay did not activate its upstream route");
+      const result = await this.switchGatewayRoute("gateway", undefined, options);
+      if (result.status !== "switched") {
+        throw new Error(`The Gateway relay could not activate its route (${result.activeTurns} active turn(s))`);
       }
       await this.setGatewayRuntimeState({ config: normalized, active: true });
-      return {
-        enabled: true,
-        configured: true,
-        requiresReload: false
-      };
+      return { enabled: true, configured: true, requiresReload: false };
     }
     await this.setGatewayRuntimeState({ config: normalized, active: true });
     return this.configureRuntime();
   }
 
-  async deactivateGateway(): Promise<HotSwitchSetupResult> {
+  async deactivateGateway(options: RuntimeAccountSwitchOptions = {}): Promise<HotSwitchSetupResult> {
+    const current = this.getGatewayRuntimeState();
+    if (this.bridge && current) {
+      const result = await this.switchGatewayRoute("chatgpt", undefined, options);
+      if (result.status !== "switched") {
+        return {
+          enabled: true,
+          configured: true,
+          requiresReload: false,
+          error: `Gateway route switch was deferred with ${result.activeTurns} active turn(s)`
+        };
+      }
+      await this.setGatewayRuntimeState({ config: current.config, active: false });
+      return { enabled: true, configured: true, requiresReload: false };
+    }
     await this.setGatewayRuntimeState(undefined);
     if (!isHotSwitchEnabled()) {
       return {
@@ -290,11 +298,20 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("Codex hot switch is enabled, but its runtime is not ready; restart the extension host");
     }
     const bridge = this.bridge;
+    const account = await this.repo.getAccount(accountId);
+    if (account && isSub2ApiAccount(account)) {
+      if (!this.getGatewayRuntimeState()) {
+        throw new Error("The Gateway runtime is not configured");
+      }
+      const result = await this.switchGatewayRoute("gateway", accountId, options);
+      if (result.status === "switched") {
+        await this.repo.switchProviderRoute(accountId);
+      }
+      return result;
+    }
     if (this.isGatewayActive()) {
       throw new Error("Switch back from the Gateway before selecting a ChatGPT Auth account");
     }
-
-    const account = await this.repo.getAccount(accountId);
     let tokens = await this.repo.getTokens(accountId);
     if (!account || !tokens?.accessToken) {
       throw new Error("The selected account has no usable Codex credentials");
@@ -441,6 +458,79 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     return result;
   }
 
+  /** Performs a provider-only route transaction; it never reads or writes auth.json. */
+  async switchGatewayRoute(
+    route: "gateway" | "chatgpt",
+    accountId?: string,
+    options: RuntimeAccountSwitchOptions = {}
+  ): Promise<HotSwitchAccountResult> {
+    if (!isHotSwitchEnabled()) {
+      throw new Error("Codex hot switch is not enabled");
+    }
+    if (!this.bridge) {
+      throw new Error("Codex hot switch is enabled, but its runtime is not ready; reload once before switching providers");
+    }
+    let chatgptAccessToken: string | undefined;
+    let chatgptAccountId: string | undefined;
+    let chatgptLocalAccountId: string | undefined;
+    let chatgptExpectedEmail: string | undefined;
+    let chatgptPlanType: string | null | undefined;
+    const state = this.getGatewayRuntimeState();
+    if (route === "chatgpt" && state?.config.autoFallbackToChatGpt !== true) {
+      // The non-fallback provider uses a private adapter bearer for Gateway
+      // requests. When returning to ChatGPT, hand the already-preserved OAuth
+      // bearer to the resident shim transiently; it is never persisted there.
+      const accounts = await this.repo.listAccounts();
+      const oauthAccount = accounts.find((account) => account.isActive && !isSub2ApiAccount(account));
+      if (oauthAccount) {
+        const tokens = await this.repo.getTokens(oauthAccount.id, { syncExternal: false });
+        chatgptAccessToken = tokens?.accessToken;
+        chatgptLocalAccountId = oauthAccount.id;
+        chatgptAccountId = oauthAccount.accountId ?? tokens?.accountId;
+        chatgptExpectedEmail = oauthAccount.email;
+        chatgptPlanType = oauthAccount.planType ?? null;
+      } else {
+        // An unmanaged auth.json session may still be the preserved OAuth
+        // route when the user has not imported it into the saved account list.
+        // Carry that bearer only for the return transaction; never persist it
+        // as a virtual account token.
+        const auth = await readAuthFile();
+        chatgptAccessToken = auth?.tokens?.access_token;
+        if (auth?.tokens) {
+          const claims = extractClaims(auth.tokens.id_token, auth.tokens.access_token);
+          chatgptAccountId = auth.tokens.account_id ?? claims?.accountId;
+          chatgptExpectedEmail = claims?.email;
+          chatgptPlanType = claims?.planType ?? null;
+        }
+      }
+      if (!chatgptAccessToken) {
+        throw new Error("The preserved ChatGPT Auth account has no usable access token for the return route");
+      }
+    }
+    const result = await this.bridge.switchGatewayRoute({
+      operationId: options.operationId,
+      route,
+      accountId,
+      chatgptAccessToken,
+      chatgptAccountId,
+      chatgptLocalAccountId,
+      chatgptExpectedEmail,
+      chatgptPlanType,
+      gracePeriodMs: options.gracePeriodMs ?? getHotSwitchGraceSeconds() * 1_000,
+      longTurnPolicy: options.longTurnPolicy ?? getHotSwitchLongTurnPolicy()
+    });
+    if (result.status === "switched") {
+      const state = this.getGatewayRuntimeState();
+      if (state) {
+        await this.setGatewayRuntimeState({ config: state.config, active: route === "gateway" });
+      }
+      if (route === "chatgpt") {
+        await this.repo.switchProviderRoute();
+      }
+    }
+    return result;
+  }
+
   dispose(): void {
     if (this.disposed) {
       return;
@@ -537,6 +627,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         } else {
           this.bridge = candidateBridge;
           if (!gatewayState || gatewayState.active === false) {
+            if (gatewayState?.config.autoFallbackToChatGpt !== true && gatewayState?.active === false) {
+              await this.synchronizeChatGptRoute();
+            }
             void this.synchronizeUsageAttribution(candidateBridge);
           }
         }
@@ -559,6 +652,27 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         requiresReload: false,
         error: error instanceof Error ? error.message : String(error)
       };
+    }
+  }
+
+  /**
+   * Rehydrates the transient OAuth handoff after the app-server is restarted.
+   * The non-fallback Gateway adapter uses its own bearer, so leaving the
+   * adapter on the ChatGPT route would forward that bearer to chatgpt.com.
+   */
+  private async synchronizeChatGptRoute(): Promise<void> {
+    try {
+      const result = await this.switchGatewayRoute("chatgpt", undefined, {
+        gracePeriodMs: 0,
+        longTurnPolicy: "defer"
+      });
+      if (result.status !== "switched") {
+        console.warn(
+          `[codexAccounts] ChatGPT route initialization deferred with ${result.activeTurns} active turn(s)`
+        );
+      }
+    } catch (error) {
+      console.warn("[codexAccounts] ChatGPT route initialization skipped", error);
     }
   }
 

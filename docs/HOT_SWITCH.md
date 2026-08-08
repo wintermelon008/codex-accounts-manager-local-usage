@@ -31,11 +31,17 @@
 
 这不是“多个账号在同一时刻分别运行不同对话”。当前 app-server 的认证是进程级状态，`turn/start` 没有逐 turn 账号字段，所以只能在所有在途 turn 的安全边界上切换全局账号。
 
+## 模型负载过大时的自动恢复
+
+当某个 thread 收到精确错误 `Selected model is at capacity. Please try a different model.`，或结构化错误标识为 `server_overloaded`（兼容 `codex_error_info` 与 `codexErrorInfo`）时，runtime 只为这个 thread 建立独立的内存计时器，等待固定 `60` 秒后发送一次带恢复上下文的 `Continue.`。它不改变模型、不主动切号，也不把其他 thread 放入同一队列；Continue 再次容量失败时重新等待 `60` 秒。正常完成、非容量错误、手动中断或同一 thread 开始新的 `turn/start` 会清除这条等待记录；runtime 退出时队列不持久化。
+
+这条恢复优先级低于无感切号：无感 ChatGPT 账号切换事务开始时会领取仍处于等待状态的容量条目，取消其计时器，并由切号后的现有恢复事务发送一次 Continue。切号被延后、取消或失败时，条目恢复为原来的等待状态；切号后的 Continue 若再次容量失败，则重新建立新的 `60` 秒计时器。Gateway 路由切换不会领取 ChatGPT 容量队列。额度耗尽 `usageLimitExceeded` 仍走独立的额度恢复/切号流程，且优先于容量错误判断。
+
 ## 为什么 runtime 强制使用 HTTP
 
 仅调用 `account/login/start` 不足以保证已有 thread 的下一轮请求改用新账号。已验证的 Codex `0.144.2` 会为每个已加载 thread 缓存 Responses WebSocket；登录接口会更新共享认证状态，`account/read` 也会显示新账号，但旧 thread 仍可能复用由旧账号建立的 WebSocket。这会造成 Manager 显示切换成功、实际却继续扣旧账号额度。
 
-runtime protocol v10 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v10 保留无旧 Manager 账号的内存回滚快照、只读账号用量归因和有界耗尽批次，并新增每笔热切换的临时 `operationId` 终态查询；控制 socket 超时或断开时，Manager 会在仍持有共享事务租约的情况下回查 shim，而不会立即启动第二笔切换。未托管旧账号的回滚快照只在结果不确定时保留最多十分钟，成功、确定失败或完成回滚后立即清除。关闭低额度切号不会让旧批次在重新开启后重放。可选 Gateway 的双路由仅在安装集成后、显式启用且语义确认额度耗尽时，才会原地回退到 ChatGPT Auth。
+runtime protocol v11 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v11 保留无旧 Manager 账号的内存回滚快照、只读账号用量归因和有界耗尽批次，并新增每笔热切换的临时 `operationId` 终态查询；控制 socket 超时或断开时，Manager 会在仍持有共享事务租约的情况下回查 shim，而不会立即启动第二笔切换。未托管旧账号的回滚快照只在结果不确定时保留最多十分钟，成功、确定失败或完成回滚后立即清除。关闭低额度切号不会让旧批次在重新开启后重放。可选 Gateway 的双路由仅在安装集成后、显式启用且语义确认额度耗尽时，才会原地回退到 ChatGPT Auth。
 
 Codex 会把创建会话时的 provider ID 写入本地 thread 元数据，官方界面的 `thread/list` 默认又只查询当前 provider。无感 runtime 若不处理这层过滤，安装前的 `openai` 会话和安装后的 HTTP provider 会话就会像两套独立历史。shim 只把 `thread/list` 中显式的 `modelProviders: null` 改成协议定义的空数组（所有 provider），保留显式 provider 列表不变；它不修改 rollout、`session_index.jsonl` 或 SQLite。官方界面恢复旧 thread 时会传入当前无感 provider，因此后续 turn 仍使用 HTTP transport。
 
@@ -45,7 +51,9 @@ Dashboard 中关闭`无感切号（实验性）`会立即恢复 Manager 原有�
 
 ## 与可选 Gateway 集成的关系
 
-Gateway 是安装后才注册的可选传输，不是 OAuth 账号池成员。核心运行时只提供供应商无关的本地回环生命周期；独立集成负责下游配置、SecretStorage、只读库存观察和用量观察。Gateway 不会调用 `account/login/start`、写入 OAuth `auth.json`、写入普通账号的五小时/周额度，或参与无感分档、储备账号和耗尽恢复。只有集成配置显式启用 `autoFallbackToChatGpt` 时，已确认额度耗尽才会单向触发 Gateway → ChatGPT Auth 的无 reload 事务；目标仍从现有新鲜无感池选择，普通调度不会反向切回 Gateway。交接前会强制刷新并重验排名目标；未完成时使用有界退避，绝不继续相信旧额度快照。任一步失败都会保持失败关闭，已经返回耗尽错误的请求不会被自动重放。安装、停用、卸载与不迁移边界见 [独立 Sub2API Gateway 与 S+ 导入器](integrations/sub2api-gateway.md)。
+Gateway 是安装后才注册的可选传输，并以一个 `accountKind: "sub2api"` 的虚拟账号出现在已保存账号和手动切换列表。虚拟账号只持久化下游 `baseUrl`、`model`、`credentialRef` 描述；下游 API Key 仍只在集成自己的 SecretStorage 中，Manager 不读取或映射 Sub2API 上游账号。它标记为 `manualOnly`/`quotaMode: "none"`，不会进入自动切号、额度候选、额度刷新、token refresh、usage-limit recovery 或 Gateway fallback 候选。独立 Gateway 面板已移除，账号卡片接收集成提供的脱敏 Base URL、模型、密钥状态、保存/刷新/打开配置动作，以及 tracker 的真实 token 用量和按配置模型估算价格；不显示 OAuth 额度、订阅或 token 健康状态。安装集成后设置中才会出现“显示 Sub2API 账号卡片”开关。
+
+核心运行时保留常驻 Gateway adapter，并通过 `runtime/gateway/switch` 在 ChatGPT Auth 与 Gateway 路由之间切换；该事务复用同一 turn barrier、Goal 暂停/恢复和 operation lease。账号卡片手动切换提交到这条事务，不绕过 barrier；设置中的“显示 Sub2API 账号卡片”开关只控制 Dashboard 卡片可见性，不切换路由。首次安装 runtime 仍需 reload 一次，runtime 已运行后两向手动切换均不 reload。路由字段与 OAuth `currentAccountId` 分离，auth watcher 不会在 Gateway 路由期间覆盖原 OAuth 状态；切回 ChatGPT Auth 不写入虚拟账号 token 或伪造 `auth.json`。只有集成配置显式启用 `autoFallbackToChatGpt` 时，已确认额度耗尽才会单向触发现有 Gateway → ChatGPT Auth 自动回退；普通调度不会反向切回 Gateway。活动 turn/stream 中途不能迁移，必须等安全边界或按既有策略中断后再切换。安装、停用、卸载与不迁移边界见 [独立 Sub2API Gateway 与 S+ 导入器](integrations/sub2api-gateway.md)。
 
 ## 启用步骤
 
@@ -126,7 +134,7 @@ shim 以真实 `turn.id` 跟踪 app-server 中的活动 turn：
    - 仍活动的 Goal turn 会暂停，并在需要处理时调用 `turn/interrupt` 后等待 `turn/completed`；
    - 普通 turn 一律按 `codexAccounts.hotSwitchLongTurnPolicy` 选择延后、中断，或中断后自动续接；
    - 无法取得 `threadId`/`turnId` 的在途请求始终延后，绝不带着未知活动 turn 切认证。
-7. 仅当活动 turn 数为零时调用实验性 `account/login/start`，随后用 `account/read` 校验账号身份。这里比较的是实际 access token 中的 runtime email，而不是稳定账号记录中的 ID-token email；两者可能是同一 user ID 的不同邮箱别名。
+7. 仅当活动 turn 数为零时调用实验性 `account/login/start`，并等待 `account/login/completed(success=true)` 后再提交切换。若当前 Gateway provider 声明 `requiresOpenaiAuth=false`，`account/read` 返回 `account: null` 是协议语义，不再把它误判为账号不一致；在仍提供 ChatGPT 身份时才比较实际 access token 中的 runtime email，而不是稳定账号记录中的 ID-token email，两者可能是同一 user ID 的不同邮箱别名。
 8. 身份校验成功后由 manager 提交目标账号及 `auth.json`，再恢复 Goal 为 `active`。选择 `interruptAndContinue` 时，为由本次切换中断且最终状态确认为 `interrupted` 的非子代理普通 thread 启动一个带内部恢复上下文的新 `turn/start`；任何带近期额度恢复标记的切换也会续接尚未开始新工作的非子代理普通 thread。multi-agent 子代理由其父代理负责后续调度，shim 不会向它们直接发送 `Continue`。
 9. 登录、身份校验或本地账号提交失败时，尝试同时回滚 app-server 与 manager 当前账号并恢复 Goal；在旧 turn 仍活动时不会把失败降级成“先写认证再 reload”。如果旧身份不在 Manager 账号库中（例如曾删除全部账号），事务开始前会从有效 `auth.json` 读取仅驻留内存的回滚快照，并先用 live app-server 身份确认它确实对应当前账号；快照不会被自动导入或写入日志。
 
@@ -156,7 +164,7 @@ Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储
 
 - shim 与 manager 使用当前 extension-host PID 对应的本地 Unix socket；目录权限为 `0700`，socket 为 `0600`。
 - shim 在收到成功的 `initialize` 响应或客户端 `initialized` 通知后即可进入 ready；状态接口同时报告两个握手信号，便于区分官方扩展版本差异。热切换已启用但 bridge 未 ready 时，Manager 必须失败关闭，不能回退为磁盘切号。
-- runtime protocol v10 的状态接口必须同时报告 `httpTransportForced=true`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。`operationId` 仅是短期不透明标识，shim 最多保留 64 条、十分钟内的无凭据终态；诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
+- runtime protocol v11 的状态接口必须同时报告 `httpTransportForced=true`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。`operationId` 仅是短期不透明标识，shim 最多保留 64 条、十分钟内的无凭据终态；诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
 - access token 只通过进程内存和本地 IPC 传递，不写入 shim 配置，也不输出到日志。runtime 配置文件只保存官方 Codex CLI 的绝对路径及受保护的归因 journal 目录；两者均不含账号身份或凭据。
 - token 临近过期时由 manager 使用原有 OAuth 刷新逻辑更新；app-server 的 refresh 回调必须匹配原 ChatGPT account ID，否则拒绝返回凭据。
 - 同一 workspace ID 可能对应多个已导入用户。manager 在切换前校验 access token 的 user ID 与本地账号记录一致，再把 access token 的 runtime email 交给 app-server 身份校验；稳定账号记录邮箱与 runtime email 允许是同一 user ID 的不同别名。refresh 与失败回滚以 manager 本地账号 ID 和 workspace ID 为主；缺少本地身份且 workspace ID 不唯一时安全失败，不按数组顺序猜测账号。
@@ -183,6 +191,6 @@ npm run verify
 npm run package
 ```
 
-`test/hotSwitchBridge.test.ts` 使用假的 app-server 验证跨 provider 历史合并且不覆盖显式 provider 过滤、多个并发 turn、切换屏障、排队 turn、token refresh 回调、60 秒策略的缩短测试版本、普通 turn 延后/中断/同 thread 续接、当前协议终态 `error` 通知及兼容失败 turn 的额度耗尽恢复与防重复，以及持久 Goal 的暂停、interrupt、断连恢复、切号后自动续跑和 thread-sticky workspace 权限；测试 fixture 不包含真实账号数据。
+`test/hotSwitchBridge.test.ts` 使用假的 app-server 验证跨 provider 历史合并且不覆盖显式 provider 过滤、多个并发 turn、切换屏障、排队 turn、token refresh 回调、60 秒策略的缩短测试版本、普通 turn 延后/中断/同 thread 续接、当前协议终态 `error` 通知及兼容失败 turn 的额度耗尽恢复与防重复、模型容量错误的独立延迟恢复/重复失败重排队/切号抢占，以及持久 Goal 的暂停、interrupt、断连恢复、切号后自动续跑和 thread-sticky workspace 权限；测试 fixture 不包含真实账号数据。
 
 `verify:seamless-auth` 使用两个合成的未签名 JWT 和仅监听 `127.0.0.1` 的临时 HTTP server，不读取任何已导入账号。它以与 runtime 相同的参数布局启动指定 Codex，先确认每次 `account/read` 都报告当前 access token 的 runtime email，再验证同一 thread 在 A→B 登录切换后的两个 Responses 请求分别携带对应的合成认证；验证结束会删除临时 `CODEX_HOME`。升级官方 Codex 后应重新运行此检查。

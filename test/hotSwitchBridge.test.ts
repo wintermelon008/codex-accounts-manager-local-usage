@@ -78,7 +78,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 10,
+      runtimeProtocolVersion: 11,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -112,6 +112,112 @@ describe("CodexHotSwitchBridge", () => {
       })
     ).resolves.toEqual({ active: true, localAccountId: "local-a" });
   });
+
+  it("waits for the app-server identity to settle after login before committing a switch", async () => {
+    const root = path.resolve(__dirname, "..");
+    const shimPath = path.join(root, "runtime", "codex-app-server-shim.cjs");
+    const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
+    shim = childProcess.spawn(shimPath, ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: fakeCliPath,
+        FAKE_CODEX_LOGIN_SETTLE_MS: "180"
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "settle-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "settle-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 25,
+        longTurnPolicy: "defer"
+      })
+    ).resolves.toMatchObject({
+      status: "switched",
+      accountId: "account-b",
+      email: "b@example.invalid"
+    });
+
+    expect(
+      messages.all.filter(
+        (message) => message.method === "test/received" && message.params?.method === "account/read"
+      ).length
+    ).toBeGreaterThanOrEqual(1);
+    await expect(bridge.getIdentity()).resolves.toMatchObject({
+      accountType: "chatgpt",
+      email: "b@example.invalid",
+      externalAuthActive: true,
+      managedAccountId: "account-b",
+      managedLocalAccountId: "local-b"
+    });
+  }, 15_000);
+
+  it("accepts the login completion event when Gateway mode hides account/read identity", async () => {
+    const root = path.resolve(__dirname, "..");
+    const shimPath = path.join(root, "runtime", "codex-app-server-shim.cjs");
+    const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
+    shim = childProcess.spawn(shimPath, ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: fakeCliPath,
+        FAKE_CODEX_ACCOUNT_READ_REQUIRES_OPENAI_AUTH: "false"
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "hidden-account-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "hidden-account-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 25,
+        longTurnPolicy: "defer"
+      })
+    ).resolves.toMatchObject({
+      status: "switched",
+      accountId: "account-b",
+      email: "b@example.invalid"
+    });
+    expect(
+      messages.all.filter(
+        (message) => message.method === "test/received" && message.params?.method === "account/login/start"
+      )
+    ).toHaveLength(1);
+  }, 15_000);
 
   it("clears and disables low-quota observation without affecting later fresh observations", async () => {
     const root = path.resolve(__dirname, "..");
@@ -385,6 +491,85 @@ describe("CodexHotSwitchBridge", () => {
       if (!upstreamClosed) {
         await new Promise<void>((resolve) => upstream.close(() => resolve()));
       }
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("switches a non-fallback Gateway route in place through the turn barrier", async () => {
+    const root = path.resolve(__dirname, "..");
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-gateway-route-"));
+    const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
+    try {
+      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await writeFile(
+        path.join(runtimeDirectory, "codex-app-server-shim.json"),
+        JSON.stringify({
+          realCliPath: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+          forceHttpTransport: true,
+          gateway: {
+            displayName: "Gateway",
+            baseUrl: "http://127.0.0.1:1/v1",
+            model: "gateway-test-model",
+            autoFallbackToChatGpt: false
+          }
+        }),
+        "utf8"
+      );
+      shim = childProcess.spawn(shimPath, ["app-server"], {
+        cwd: root,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const messages = createMessageCollector(shim.stdout);
+      shim.stdin.write(`${JSON.stringify({ id: "route-initialize", method: "initialize", params: {} })}\n`);
+      await messages.next((message) => message.id === "route-initialize");
+      bridge = new CodexHotSwitchBridge(async () => ({
+        accessToken: "oauth-token",
+        chatgptAccountId: "oauth-account",
+        chatgptPlanType: "plus"
+      }));
+      await waitForSocket(getHotSwitchSocketPath(process.pid));
+      await bridge.configureGatewayCredential("gateway-key");
+
+      shim.stdin.write(
+        `${JSON.stringify({ id: "route-active-turn", method: "turn/start", params: { threadId: "route-thread", input: [] } })}\n`
+      );
+      await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "route-thread");
+      await expect(
+        bridge.switchGatewayRoute({ route: "chatgpt", gracePeriodMs: 0, longTurnPolicy: "defer" })
+      ).resolves.toMatchObject({ status: "deferred", reason: "activeOrdinaryTurns" });
+      await expect(bridge.getGatewayStatus()).resolves.toMatchObject({ active: true, route: "gateway" });
+      shim.stdin.write(`${JSON.stringify({ id: "route-complete-turn", method: "test/complete", params: {} })}\n`);
+      await messages.next((message) => message.id === "route-complete-turn");
+
+      await expect(
+        bridge.switchGatewayRoute({
+          route: "chatgpt",
+          chatgptAccessToken: "oauth-token",
+          gracePeriodMs: 0,
+          longTurnPolicy: "defer"
+        })
+      ).resolves.toMatchObject({ status: "switched", email: null });
+      await expect(bridge.getGatewayStatus()).resolves.toMatchObject({
+        active: false,
+        route: "chatgpt",
+        autoFallbackToChatGpt: false
+      });
+
+      await expect(
+        bridge.switchGatewayRoute({
+          route: "gateway",
+          accountId: "virtual:sub2api-gateway",
+          gracePeriodMs: 0,
+          longTurnPolicy: "defer"
+        })
+      ).resolves.toMatchObject({ status: "switched", accountId: "virtual:sub2api-gateway" });
+      await expect(bridge.getGatewayStatus()).resolves.toMatchObject({ active: true, route: "gateway" });
+    } finally {
+      bridge?.dispose();
+      bridge = undefined;
+      shim?.kill("SIGTERM");
+      shim = undefined;
       await rm(runtimeDirectory, { recursive: true, force: true });
     }
   }, 15_000);
@@ -1863,6 +2048,357 @@ describe("CodexHotSwitchBridge", () => {
     await messages.next((message) => message.id === "quota-response-complete");
   }, 15_000);
 
+  it("waits before retrying a model-capacity RPC rejection", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+        CODEX_ACCOUNTS_CAPACITY_RECOVERY_DELAY_MS: "120"
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-rpc-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-rpc-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-rpc-prepare", method: "test/failNextTurnStartWithCapacity", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-rpc-prepare");
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "capacity-rpc-turn",
+        method: "turn/start",
+        params: { threadId: "capacity-rpc-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) =>
+        message.id === "capacity-rpc-turn" &&
+        message.params?.method === undefined &&
+        message.params?.threadId === undefined &&
+        message.params?.runtimeAccountId === undefined
+    );
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      capacityRecoveryThreads: 1,
+      capacityRecoveryWaitingThreads: 1
+    });
+    await sleep(40);
+    expect(
+      messages.all.some(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "capacity-rpc-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).toBe(false);
+
+    await expect(
+      messages.next(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "capacity-rpc-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).resolves.toMatchObject({ params: { inputText: "Continue." } });
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      capacityRecoveryThreads: 0,
+      capacityRecoveryWaitingThreads: 0,
+      activeTurns: 1
+    });
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-rpc-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-rpc-complete");
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "capacity-notification-start",
+        method: "turn/start",
+        params: { threadId: "capacity-notification-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "capacity-notification-thread"
+    );
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "capacity-notification-fail",
+        method: "test/failCapacityNotification",
+        params: { errorField: "camel" }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "capacity-notification-fail");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      capacityRecoveryThreads: 1,
+      capacityRecoveryWaitingThreads: 1
+    });
+    await expect(
+      messages.next(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "capacity-notification-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).resolves.toMatchObject({ params: { inputText: "Continue." } });
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-notification-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-notification-complete");
+
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-clear-prepare", method: "test/failNextTurnStartWithCapacity", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-clear-prepare");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "capacity-clear-failed", method: "turn/start", params: { threadId: "capacity-clear-thread", input: [] } })}\n`
+    );
+    await messages.next((message) => message.id === "capacity-clear-failed" && message.params === undefined);
+    shim.stdin.write(
+      `${JSON.stringify({ id: "capacity-clear-new", method: "turn/start", params: { threadId: "capacity-clear-thread", input: [] } })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "capacity-clear-thread"
+    );
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      capacityRecoveryThreads: 0,
+      capacityRecoveryWaitingThreads: 0
+    });
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-clear-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-clear-complete");
+    await sleep(160);
+    expect(
+      messages.all.some(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "capacity-clear-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).toBe(false);
+  }, 15_000);
+
+  it("keeps capacity retries independent and restarts the timer after a retry is rejected", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+        CODEX_ACCOUNTS_CAPACITY_RECOVERY_DELAY_MS: "100"
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-independent-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-independent-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    for (const [id, threadId] of [
+      ["capacity-independent-start-a", "capacity-thread-a"],
+      ["capacity-independent-start-b", "capacity-thread-b"]
+    ] as const) {
+      shim.stdin.write(`${JSON.stringify({ id, method: "turn/start", params: { threadId, input: [] } })}\n`);
+      await messages.next((message) => message.method === "turn/started" && message.params?.threadId === threadId);
+    }
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-independent-fail-a", method: "test/failCapacity", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-independent-fail-a");
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-independent-fail-b", method: "test/failCapacity", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-independent-fail-b");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      capacityRecoveryThreads: 2,
+      capacityRecoveryWaitingThreads: 2
+    });
+    const firstRecoveryThreads = new Set<string>();
+    while (firstRecoveryThreads.size < 2) {
+      const message = await messages.next(
+        (candidate) =>
+          candidate.method === "test/received" &&
+          candidate.params?.method === "turn/start" &&
+          candidate.params?.recoveryMetadata === "true" &&
+          !firstRecoveryThreads.has(candidate.params?.threadId ?? "")
+      );
+      firstRecoveryThreads.add(message.params?.threadId ?? "");
+    }
+    expect(firstRecoveryThreads).toEqual(new Set(["capacity-thread-a", "capacity-thread-b"]));
+    const firstThreadARecoveryCount = messages.all.filter(
+      (message) =>
+        message.method === "test/received" &&
+        message.params?.method === "turn/start" &&
+        message.params?.threadId === "capacity-thread-a" &&
+        message.params?.recoveryMetadata === "true"
+    ).length;
+
+    // The next timer retry is rejected; it must create a fresh waiting entry
+    // instead of disappearing with the failed internal turn/start.
+    shim.stdin.write(
+      `${JSON.stringify({ id: "capacity-repeat-prepare", method: "test/failNextTurnStartWithCapacity", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "capacity-repeat-prepare");
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-repeat-fail-a", method: "test/failCapacity", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-repeat-fail-a");
+    await waitFor(
+      () =>
+        messages.all.filter(
+          (message) =>
+            message.method === "test/received" &&
+            message.params?.method === "turn/start" &&
+            message.params?.threadId === "capacity-thread-a" &&
+            message.params?.recoveryMetadata === "true"
+        ).length >= firstThreadARecoveryCount + 1
+    );
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      capacityRecoveryThreads: 1,
+      capacityRecoveryWaitingThreads: 1
+    });
+    await waitFor(
+      () =>
+        messages.all.filter(
+          (message) =>
+            message.method === "test/received" &&
+            message.params?.method === "turn/start" &&
+            message.params?.threadId === "capacity-thread-a" &&
+            message.params?.recoveryMetadata === "true"
+        ).length >= firstThreadARecoveryCount + 2
+    );
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-repeat-complete-a", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-repeat-complete-a");
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-repeat-complete-b", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-repeat-complete-b");
+  }, 15_000);
+
+  it("lets an in-flight seamless switch claim a waiting capacity recovery", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+        CODEX_ACCOUNTS_CAPACITY_RECOVERY_DELAY_MS: "140"
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-switch-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-switch-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-switch-start", method: "turn/start", params: { threadId: "capacity-switch-thread", input: [] } })}\n`);
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "capacity-switch-thread");
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-switch-fail", method: "test/failCapacity", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-switch-fail");
+
+    const switchResult = bridge.switchAccount({
+      accessToken: "access-token-b",
+      accountId: "account-b",
+      localAccountId: "local-b",
+      previousAccountId: "account-a",
+      previousLocalAccountId: "local-a",
+      previousExpectedEmail: "a@example.invalid",
+      expectedEmail: "b@example.invalid",
+      planType: "plus",
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue"
+    });
+    await expect(
+      messages.next(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "capacity-switch-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).resolves.toMatchObject({ params: { runtimeAccountId: "account-b", inputText: "Continue." } });
+    await expect(switchResult).resolves.toMatchObject({
+      status: "switched",
+      continuedThreads: 1,
+      activeTurns: 1
+    });
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      capacityRecoveryThreads: 0,
+      capacityRecoveryWaitingThreads: 0
+    });
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-switch-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-switch-complete");
+  }, 15_000);
+
+  it("starts a new capacity timer when the switch continuation is rejected", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+        CODEX_ACCOUNTS_CAPACITY_RECOVERY_DELAY_MS: "100"
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-switch-retry-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-switch-retry-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "capacity-switch-retry-start", method: "turn/start", params: { threadId: "capacity-switch-retry-thread", input: [] } })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "capacity-switch-retry-thread"
+    );
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-switch-retry-fail", method: "test/failCapacity", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-switch-retry-fail");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "capacity-switch-retry-prepare", method: "test/failNextTurnStartWithCapacity", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "capacity-switch-retry-prepare");
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue"
+      })
+    ).resolves.toMatchObject({ status: "switched", continuedThreads: 0, activeTurns: 0 });
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      capacityRecoveryThreads: 1,
+      capacityRecoveryWaitingThreads: 1
+    });
+
+    await expect(
+      messages.next(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "capacity-switch-retry-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).resolves.toMatchObject({ params: { inputText: "Continue." } });
+  }, 15_000);
+
   it("does not continue a stale quota failure after newer work starts on the same thread", async () => {
     const root = path.resolve(__dirname, "..");
     shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
@@ -2286,4 +2822,8 @@ async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error("Timed out waiting for test condition");
+}
+
+async function sleep(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

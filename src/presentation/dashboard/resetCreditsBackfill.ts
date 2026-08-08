@@ -1,4 +1,5 @@
 import type { DashboardAccountViewModel } from "../../domain/dashboard/types";
+import { isSub2ApiAccount } from "../../core/types";
 import { AccountsRepository } from "../../storage";
 import { fetchResetCredits } from "../../services/quota";
 import { logNetworkEvent } from "../../utils/debug";
@@ -12,6 +13,9 @@ export function pickResetCreditsBackfillTargets(
   now = Date.now()
 ): DashboardAccountViewModel[] {
   return accounts.filter((account) => {
+    if (isSub2ApiAccount(account)) {
+      return false;
+    }
     if ((account.resetCreditsAvailable ?? 0) <= 0) {
       return false;
     }
