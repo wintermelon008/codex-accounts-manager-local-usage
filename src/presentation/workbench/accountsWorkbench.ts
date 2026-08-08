@@ -11,6 +11,7 @@ import { AccountsRepository } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
 import { registerDebugOutput, t } from "../../utils";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
+import { isSub2ApiAccount } from "../../core/types";
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
 import { LocalImportInbox } from "./localImportInbox";
@@ -51,11 +52,21 @@ export class AccountsWorkbench {
     this.integrationHost = new ManagerIntegrationHost({
       isActive: () => this.hotSwitchRuntime.isGatewayActive(),
       isConfigured: () => this.hotSwitchRuntime.isGatewayConfigured(),
-      activate: (config, credential) => this.hotSwitchRuntime.activateGateway(config, credential),
-      deactivate: () => this.hotSwitchRuntime.deactivateGateway(),
+      activate: (config, credential, options) => this.hotSwitchRuntime.activateGateway(config, credential, options),
+      deactivate: (options) => this.hotSwitchRuntime.deactivateGateway(options),
       configureCredential: (credential) => this.hotSwitchRuntime.configureGatewayCredential(credential),
       getStatus: () => this.hotSwitchRuntime.getGatewayStatus(),
       fallbackToChatGpt: () => this.fallbackGatewayToChatGpt()
+    }, {
+      upsert: async (descriptor, displayName) => {
+        await this.repo.upsertVirtualAccount(descriptor, displayName);
+      },
+      activate: async (accountId) => {
+        await this.repo.switchProviderRoute(accountId);
+      },
+      deactivate: async () => {
+        await this.repo.switchProviderRoute();
+      }
     });
     this.localImportInbox = isLocalImportInboxEnabled()
       ? new LocalImportInbox(this.repo, () => {
@@ -109,7 +120,7 @@ export class AccountsWorkbench {
         accountId: string,
         options?: RuntimeAccountSwitchOptions,
         source: RuntimeSwitchSource = "automatic"
-      ): Promise<RuntimeAccountSwitchOutcome> => this.runtimeSwitchCoordinator.switchAccount(accountId, options, source)
+      ): Promise<RuntimeAccountSwitchOutcome> => this.switchRuntimeAccount(accountId, options, source)
     };
     await measureStep("registerCommands", () => {
       registerCommands(this.context, this.repo, refreshers, this.hotSwitchRuntime);
@@ -245,6 +256,23 @@ export class AccountsWorkbench {
           ? "No eligible ChatGPT Auth account completed the mandatory quota refresh for Gateway fallback"
           : `No eligible ChatGPT Auth fallback completed safely: ${lastCandidateFailure}`
     };
+  }
+
+  private async switchRuntimeAccount(
+    accountId: string,
+    options: RuntimeAccountSwitchOptions | undefined,
+    source: RuntimeSwitchSource
+  ): Promise<RuntimeAccountSwitchOutcome> {
+    const account = await this.repo.getAccount(accountId);
+    if (account && isSub2ApiAccount(account)) {
+      if (source !== "manual") {
+        return { status: "suppressed", reason: "gatewayActive" };
+      }
+      return this.runtimeSwitchCoordinator.runProviderSwitch(options, (transactionOptions) =>
+        this.integrationHost.switchVirtualAccount(accountId, transactionOptions)
+      );
+    }
+    return this.runtimeSwitchCoordinator.switchAccount(accountId, options, source);
   }
 
   private async notifyIndexHealth(): Promise<void> {

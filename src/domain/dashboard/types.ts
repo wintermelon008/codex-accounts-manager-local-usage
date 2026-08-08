@@ -378,6 +378,9 @@ export interface DashboardMetricViewModel {
 
 export interface DashboardAccountViewModel {
   id: string;
+  accountKind?: "chatgpt" | "sub2api";
+  manualOnly?: boolean;
+  providerActive?: boolean;
   displayName: string;
   email: string;
   authMode?: "chatgpt" | "oauth";
@@ -423,7 +426,28 @@ export interface DashboardAccountViewModel {
   quotaCountdownStartAvailable: boolean;
   tokenUsage?: DashboardAccountTokenUsageViewModel;
   autoSwitchLockedUntil?: number;
+  /** Optional provider-owned presentation data for virtual accounts. */
+  providerCard?: DashboardProviderAccountCardViewModel;
   metrics: DashboardMetricViewModel[];
+}
+
+/**
+ * Sanitized presentation data supplied by an optional provider integration.
+ * It contains no credentials or upstream account inventory.
+ */
+export interface DashboardProviderAccountCardViewModel {
+  integrationId: string;
+  details?: DashboardIntegrationDetail[];
+  metrics?: DashboardIntegrationMetric[];
+  actions?: DashboardIntegrationAction[];
+  usage?: DashboardProviderUsageViewModel;
+}
+
+export interface DashboardProviderUsageViewModel extends DashboardLocalUsageTokenTotals {
+  range: "today" | "5h" | "7d";
+  status: "tracking" | "waiting";
+  observedSince?: number;
+  byModel: DashboardLocalUsageModelViewModel[];
 }
 
 /**
@@ -557,6 +581,14 @@ export interface DashboardState {
   accounts: DashboardAccountViewModel[];
   localUsage?: DashboardLocalUsageViewModel;
   integrations?: DashboardIntegrationViewModel[];
+  integrationSettings?: DashboardIntegrationSettingViewModel[];
+}
+
+export interface DashboardIntegrationSettingViewModel {
+  id: string;
+  title: string;
+  description?: string;
+  enabled: boolean;
 }
 
 export type DashboardActionName =
@@ -592,6 +624,7 @@ export type DashboardActionName =
   | "refreshView"
   | "refreshLocalUsage"
   | "integrationAction"
+  | "integrationSetting"
   | "reloadPrompt"
   | "reauthorize"
   | "resyncProfile"
@@ -630,6 +663,8 @@ export interface DashboardActionPayload {
   privacyMode?: boolean;
   integrationId?: string;
   integrationActionId?: string;
+  integrationSettingId?: string;
+  enabled?: boolean;
 }
 
 export interface DashboardActionResultPayload {

@@ -517,6 +517,93 @@ describe("Codex hot-switch runtime setup", () => {
     expect(runtime.isEnabled()).toBe(true);
     await expect(runtime.switchAccount("local-b")).rejects.toThrow("runtime is not ready");
   });
+
+  it("requires one reload for first Gateway runtime installation, then switches both routes without reload", async () => {
+    const enabledConfiguration = {
+      get: (key: string, defaultValue?: unknown) => (key === "hotSwitchEnabled" ? true : defaultValue),
+      update: vi.fn(),
+      inspect: vi.fn()
+    } as unknown as vscode.WorkspaceConfiguration;
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(enabledConfiguration);
+    const config = {
+      displayName: "Gateway",
+      baseUrl: "https://gateway.example.invalid/v1",
+      model: "gpt-5",
+      autoFallbackToChatGpt: false
+    };
+    const firstRuntime = new CodexHotSwitchRuntime(
+      { globalState: { get: vi.fn(), update: vi.fn() } } as unknown as vscode.ExtensionContext,
+      {} as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+    vi.spyOn(firstRuntime as never, "configureRuntime" as never).mockResolvedValue({
+      enabled: true,
+      configured: false,
+      requiresReload: true
+    } as never);
+    await expect(firstRuntime.activateGateway(config)).resolves.toMatchObject({ requiresReload: true });
+
+    const globalState = new Map<string, unknown>([
+      [
+        "gateway.runtimeConfig",
+        {
+          config,
+          active: false
+        }
+      ]
+    ]);
+    const switchGatewayRoute = vi.fn(async ({ route }: { route: "gateway" | "chatgpt" }) => ({
+      status: "switched" as const,
+      accountId: route === "gateway" ? "virtual:sub2api-gateway" : "",
+      email: null,
+      activeTurns: 0,
+      interruptedTurns: 0,
+      continuedThreads: 0
+    }));
+    const runtime = new CodexHotSwitchRuntime(
+      {
+        globalState: {
+          get: (key: string) => globalState.get(key),
+          update: async (key: string, value: unknown) => globalState.set(key, value)
+        }
+      } as unknown as vscode.ExtensionContext,
+      {
+        listAccounts: vi.fn(async () => [
+          {
+            id: "oauth-account",
+            email: "oauth@example.invalid",
+            isActive: true,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]),
+        getTokens: vi.fn(async () => ({ idToken: "id", accessToken: "oauth-token" })),
+        switchProviderRoute: vi.fn()
+      } as never
+    );
+    (runtime as unknown as { bridge: unknown }).bridge = {
+      configureGatewayCredential: vi.fn(async () => undefined),
+      switchGatewayRoute
+    };
+
+    await expect(runtime.activateGateway(config, "gateway-key")).resolves.toEqual({
+      enabled: true,
+      configured: true,
+      requiresReload: false
+    });
+    await expect(runtime.deactivateGateway()).resolves.toEqual({
+      enabled: true,
+      configured: true,
+      requiresReload: false
+    });
+    expect(switchGatewayRoute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ route: "gateway", longTurnPolicy: expect.any(String) })
+    );
+    expect(switchGatewayRoute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ route: "chatgpt", longTurnPolicy: expect.any(String) })
+    );
+  });
 });
 
 function createUnsignedJwt(payload: Record<string, unknown>): string {

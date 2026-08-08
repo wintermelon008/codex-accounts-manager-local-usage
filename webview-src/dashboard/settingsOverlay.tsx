@@ -1,5 +1,6 @@
 import type {
   DashboardCopy,
+  DashboardIntegrationSettingViewModel,
   DashboardSettingKey,
   DashboardSettings,
   DashboardState
@@ -29,6 +30,7 @@ export function SettingsOverlay(props: {
   lang: DashboardState["lang"];
   settings: DashboardSettings;
   tokenAutomation: DashboardState["tokenAutomation"];
+  integrationSettings: readonly DashboardIntegrationSettingViewModel[];
   onClose: () => void;
   onPatchSettings: (patch: Partial<DashboardSettings>) => void;
   onSendSetting: (key: DashboardSettingKey, value: string | number | boolean) => void;
@@ -38,6 +40,7 @@ export function SettingsOverlay(props: {
   onThresholdCommit: (key: "yellow" | "green", value: number) => void;
   onPickCodexAppPath: () => void;
   onClearCodexAppPath: () => void;
+  onIntegrationSettingToggle: (settingId: string, enabled: boolean) => void;
 }) {
   const patchAndSend = (key: DashboardSettingKey, value: string | number | boolean) => {
     props.onPatchSettings({ [key]: value } as Partial<DashboardSettings>);
@@ -70,6 +73,15 @@ export function SettingsOverlay(props: {
               props.onSendSetting("displayLanguage", value);
             }}
           />
+          {props.integrationSettings.map((setting) => (
+            <SettingsToggleBlock
+              key={setting.id}
+              title={setting.title}
+              sub={setting.description ?? ""}
+              enabled={setting.enabled}
+              onToggle={(enabled) => props.onIntegrationSettingToggle(setting.id, enabled)}
+            />
+          ))}
           <SettingsSegmentBlock
             title={props.copy.localUsageSettingsTitle}
             sub={props.copy.localUsageSettingsSub}

@@ -321,6 +321,18 @@ export function mergeAccountsIndexChanges(
     latest.currentAccountId,
     true
   );
+  const currentProviderRoute = mergeScalarChange(
+    base.currentProviderRoute,
+    local.currentProviderRoute,
+    latest.currentProviderRoute,
+    true
+  );
+  const currentProviderAccountId = mergeScalarChange(
+    base.currentProviderAccountId,
+    local.currentProviderAccountId,
+    latest.currentProviderAccountId,
+    true
+  );
   const accounts = latest.accounts
     .map((account) => latestById.get(account.id))
     .filter((account): account is CodexAccountRecord => Boolean(account));
@@ -335,8 +347,20 @@ export function mergeAccountsIndexChanges(
     : undefined;
   for (const account of accounts) {
     account.isActive = account.id === effectiveCurrentAccountId;
+    account.providerActive =
+      currentProviderRoute === "sub2api"
+        ? account.id === currentProviderAccountId
+        : account.id === effectiveCurrentAccountId;
   }
-  return cloneIndex({ currentAccountId: effectiveCurrentAccountId, accounts });
+  return cloneIndex({
+    currentAccountId: effectiveCurrentAccountId,
+    currentProviderRoute: currentProviderRoute === "sub2api" ? "sub2api" : "chatgpt",
+    currentProviderAccountId:
+      currentProviderRoute === "sub2api" && accounts.some((account) => account.id === currentProviderAccountId)
+        ? currentProviderAccountId
+        : effectiveCurrentAccountId,
+    accounts
+  });
 }
 
 export async function tryAcquireSharedFileLease(

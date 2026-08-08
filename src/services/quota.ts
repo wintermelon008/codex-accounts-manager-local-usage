@@ -20,7 +20,8 @@ import {
   CodexUsageResponse,
   UsageCreditsInfo,
   UsageRateLimitInfo,
-  UsageWindowInfo
+  UsageWindowInfo,
+  isSub2ApiAccount
 } from "../core/types";
 import { APIError } from "../core/errors";
 import { needsRefresh, refreshTokens } from "../auth/oauth";
@@ -71,6 +72,9 @@ export async function refreshQuota(
   tokens: CodexTokens,
   forceRefresh = false
 ): Promise<QuotaRefreshResult> {
+  if (isSub2ApiAccount(account) || account.quotaMode === "none") {
+    return {};
+  }
   pruneQuotaCache();
   const generation = getQuotaCacheGeneration(account.id);
   if (!forceRefresh) {

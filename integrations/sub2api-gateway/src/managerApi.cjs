@@ -12,7 +12,10 @@ async function resolveManagerIntegrationApi(vscode) {
   if (!api || api.apiVersion !== MANAGER_INTEGRATION_API_VERSION) {
     throw new Error("Codex Accounts Manager does not expose a compatible integration API.");
   }
-  if (typeof api.registerGateway !== "function" || typeof api.registerDashboardIntegration !== "function") {
+  if (
+    typeof api.registerGateway !== "function" ||
+    typeof api.registerVirtualAccount !== "function"
+  ) {
     throw new Error("Codex Accounts Manager returned an incomplete integration API.");
   }
   return api;

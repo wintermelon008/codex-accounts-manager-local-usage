@@ -5,6 +5,9 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     .map((account) =>
       [
         account.id,
+        account.accountKind ?? "chatgpt",
+        account.manualOnly ? "1" : "0",
+        account.providerActive ? "1" : "0",
         account.email,
         account.displayName,
         account.accountName ?? "",
@@ -44,6 +47,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
         account.lastTokenRefreshAt ?? "",
         account.lastTokenRefreshError ?? "",
         account.autoSwitchLockedUntil ?? "",
+        account.providerCard ? JSON.stringify(account.providerCard) : "",
         account.metrics
           .filter((metric) => metric.visible)
           .map(
@@ -124,6 +128,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     announcementSignature,
     accountSignature,
     localUsageSignature,
-    integrationsSignature
+    integrationsSignature,
+    JSON.stringify(state.integrationSettings ?? [])
   ].join("||");
 }

@@ -17,7 +17,7 @@ test("consumes a valid private S+ queue job and leaves only a redacted result", 
   await fs.writeFile(path.join(outbox, `${jobId}.json`), JSON.stringify(job()), { mode: 0o600 });
   let submitted;
   const summary = await processOutbox(
-    { queueDirectory: outbox, adminBaseUrl: "https://gateway.example.invalid", adminToken: "private-token" },
+    { queueDirectory: outbox, adminBaseUrl: "https://gateway.example.invalid", adminApiKey: "private-admin-api-key" },
     {
       submit: async (_configuration, payload) => {
         submitted = payload;

@@ -1,4 +1,4 @@
-import type { CodexAccountRecord, SeamlessQuotaBandSize, SeamlessSwitchThreshold } from "../../core/types";
+import { isAutomaticAccount, type CodexAccountRecord, type SeamlessQuotaBandSize, type SeamlessSwitchThreshold } from "../../core/types";
 
 export const QUOTA_BAND_SIZE = 20;
 export const BALANCE_QUOTA_MAX_AGE_MS = 15 * 60 * 1000;
@@ -44,7 +44,7 @@ export function selectBalanceCandidate(params: {
 }): CodexAccountRecord | undefined {
   const now = params.now ?? Date.now();
   const active = params.accounts.find((account) => account.id === params.activeAccountId);
-  if (!active || active.isHidden) {
+  if (!active || active.isHidden || !isAutomaticAccount(active) || active.quotaMode === "none") {
     return undefined;
   }
 
@@ -58,6 +58,8 @@ export function selectBalanceCandidate(params: {
     (account) =>
       account.id !== params.activeAccountId &&
       !account.isHidden &&
+      isAutomaticAccount(account) &&
+      account.quotaMode !== "none" &&
       account.balancePoolEnabled === true &&
       getBalanceQuotaCapability(account, now) !== "unknown" &&
       (!params.requireFreshFreeCandidates ||

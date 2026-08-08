@@ -32,7 +32,8 @@ test("inventory observer aggregates read-only windows without returning account 
   assert.equal(result.weekly.remainingPercent, 50);
   assert.equal(result.eligibleAccountCount, 1);
   assert.equal(result.observedAccountCount, 1);
-  assert.equal(JSON.stringify(result).includes("11"), false);
+  assert.equal(Object.hasOwn(result, "accounts"), false);
+  assert.equal(Object.hasOwn(result, "accountIds"), false);
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/v1/admin/groups/all?platform=openai",
     "/api/v1/admin/accounts?platform=openai&group=7&page=1&page_size=200",

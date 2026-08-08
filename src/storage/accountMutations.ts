@@ -1,5 +1,6 @@
 import { AccountError, ErrorCode } from "../core/errors";
 import type { CodexAccountRecord, CodexAccountsIndex } from "../core/types";
+import { isSub2ApiAccount } from "../core/types";
 import { markActive } from "./accountsIndex";
 import { reconcileStatusBarSelections } from "./accountMetadata";
 import { normalizeAccountTags } from "./sharedAccounts";
@@ -12,6 +13,9 @@ export function dismissAccountHealthIssue(
 ): CodexAccountRecord | undefined {
   const account = index.accounts.find((item) => item.id === accountId);
   if (!account) {
+    return undefined;
+  }
+  if (isSub2ApiAccount(account)) {
     return undefined;
   }
 
@@ -97,6 +101,9 @@ export function switchActiveAccount(index: CodexAccountsIndex, accountId: string
   if (!account) {
     return undefined;
   }
+  if (isSub2ApiAccount(account)) {
+    return undefined;
+  }
 
   const previousActiveId = index.currentAccountId;
   markActive(index, accountId);
@@ -110,6 +117,13 @@ export function removeAccountFromIndex(index: CodexAccountsIndex, accountId: str
 
   if (index.currentAccountId === accountId) {
     index.currentAccountId = undefined;
+  }
+  if (index.currentProviderAccountId === accountId) {
+    index.currentProviderRoute = "chatgpt";
+    index.currentProviderAccountId = index.currentAccountId;
+    for (const account of index.accounts) {
+      account.providerActive = account.id === index.currentProviderAccountId;
+    }
   }
 
   return index.accounts.length !== before;

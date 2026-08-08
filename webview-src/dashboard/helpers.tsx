@@ -83,6 +83,9 @@ function isAccountInSelectedPlan(
   account: DashboardAccountViewModel,
   selectedPlans: ReadonlySet<DashboardAccountPlanFilter>
 ): boolean {
+  if (account.accountKind === "sub2api" || account.manualOnly === true) {
+    return true;
+  }
   if (selectedPlans.size === 0) {
     return true;
   }

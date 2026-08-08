@@ -17,8 +17,7 @@ test("migrates only the required legacy Sub2API values into a new private import
     [
       "FEISHU_APP_SECRET=must-not-copy",
       "SUB2API_BASE_URL=https://gateway.example.invalid/",
-      "SUB2API_ADMIN_TOKEN=private-admin-token",
-      "SUB2API_ADMIN_REFRESH_TOKEN=private-refresh-token",
+      "SUB2API_ADMIN_API_KEY=private-admin-api-key",
       "SUB2API_IMPORT_GROUP_NAME=test",
       "SUB2API_IMPORT_CONCURRENCY=2",
       "SHOP_TOKEN=must-not-copy"
@@ -30,8 +29,7 @@ test("migrates only the required legacy Sub2API values into a new private import
   const created = await fs.readFile(destinationPath, "utf8");
   assert.deepEqual(result, { destinationPath, pollSeconds: 9 });
   assert.match(created, /^SUB2API_ADMIN_BASE_URL=https:\/\/gateway\.example\.invalid$/mu);
-  assert.match(created, /^SUB2API_ADMIN_TOKEN=private-admin-token$/mu);
-  assert.match(created, /^SUB2API_ADMIN_REFRESH_TOKEN=private-refresh-token$/mu);
+  assert.match(created, /^SUB2API_ADMIN_API_KEY=private-admin-api-key$/mu);
   assert.match(created, /^SUB2API_IMPORT_PROXY_NAME=default$/mu);
   assert.match(created, /^SUB2API_IMPORT_GROUP_NAME=test$/mu);
   assert.match(created, /^SUB2API_IMPORT_CONCURRENCY=2$/mu);
@@ -45,7 +43,7 @@ test("refuses to overwrite a private destination environment", async (t) => {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const sourcePath = path.join(root, "legacy.env");
   const destinationPath = path.join(root, "importer.env");
-  await fs.writeFile(sourcePath, "SUB2API_BASE_URL=https://gateway.example.invalid\nSUB2API_ADMIN_TOKEN=private-admin-token\n", { mode: 0o600 });
+  await fs.writeFile(sourcePath, "SUB2API_BASE_URL=https://gateway.example.invalid\nSUB2API_ADMIN_API_KEY=private-admin-api-key\n", { mode: 0o600 });
   await fs.writeFile(destinationPath, "keep-existing\n", { mode: 0o600 });
   await assert.rejects(
     () => migrateLegacyEnvironment({ sourcePath, destinationPath }),

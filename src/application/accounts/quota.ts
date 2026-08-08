@@ -2,7 +2,12 @@ import * as vscode from "vscode";
 import type { RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import type { RuntimeSwitchSource } from "./runtimeSwitchCoordinator";
 import { createError } from "../../core";
-import { CodexAccountRecord } from "../../core/types";
+import {
+  CodexAccountRecord,
+  isAutomaticAccount,
+  isCurrentProviderAccount,
+  isSub2ApiAccount
+} from "../../core/types";
 import {
   getCodexAccountsConfiguration,
   getSeamlessSwitchThreshold,
@@ -96,6 +101,9 @@ export async function refreshSingleQuota(
   if (!account) {
     return;
   }
+  if (isSub2ApiAccount(account) || account.quotaMode === "none") {
+    return;
+  }
 
   const tokens = await repo.getTokens(accountId);
   if (!tokens) {
@@ -157,6 +165,9 @@ export async function refreshImportedAccountQuota(
   const account = await repo.getAccount(accountId);
   if (!account) {
     throw createError.accountNotFound(accountId);
+  }
+  if (isSub2ApiAccount(account) || account.quotaMode === "none") {
+    return {};
   }
 
   const tokens = await repo.getTokens(accountId);
@@ -232,8 +243,8 @@ export async function refreshSingleQuotaSafely(
 
 export async function maybeWarnForActiveQuota(repo: AccountsRepository): Promise<void> {
   const accounts = await repo.listAccounts();
-  const active = accounts.find((account) => account.isActive);
-  if (!active) {
+  const active = accounts.find((account) => isCurrentProviderAccount(account));
+  if (!active || !isAutomaticAccount(active) || active.quotaMode === "none") {
     return;
   }
   await maybeWarnForAccount(repo, active.id);
@@ -296,10 +307,13 @@ async function runSeamlessBalanceSwitchForActiveQuota(
   }
 
   const accounts = await repo.listAccounts();
-  const globallyActive = accounts.find((account) => account.isActive);
+  const globallyActive = accounts.find((account) => isCurrentProviderAccount(account));
   const active = options.activeAccountId
     ? accounts.find((account) => account.id === options.activeAccountId)
     : globallyActive;
+  if ((active && !isAutomaticAccount(active)) || (globallyActive && !isAutomaticAccount(globallyActive))) {
+    return false;
+  }
   if (options.trigger && options.activeAccountId && globallyActive && globallyActive.id !== options.activeAccountId) {
     return convergeUsageLimitedRuntimeToGlobalAccount(view, globallyActive);
   }
@@ -345,7 +359,7 @@ async function runSeamlessBalanceSwitchForActiveQuota(
 }
 
 function isAccountVisibleToSeamlessSwitch(account: CodexAccountRecord, config: vscode.WorkspaceConfiguration): boolean {
-  if (account.isHidden) {
+  if (account.isHidden || !isAutomaticAccount(account) || account.quotaMode === "none") {
     return false;
   }
 
@@ -520,8 +534,15 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
   const weeklyThreshold = normalizeAutoSwitchThreshold(config.get<number>(AUTO_SWITCH_WEEKLY_THRESHOLD, 20));
   const hourlyQuotaControlEnabled = config.get<boolean>(HOURLY_QUOTA_CONTROL_ENABLED, false);
   const accounts = await repo.listAccounts();
-  const active = accounts.find((account) => account.isActive);
-  if (!active?.quotaSummary || active.quotaError || active.isHidden) {
+  const active = accounts.find((account) => isCurrentProviderAccount(account));
+  if (
+    !active ||
+    !isAutomaticAccount(active) ||
+    active.quotaMode === "none" ||
+    !active.quotaSummary ||
+    active.quotaError ||
+    active.isHidden
+  ) {
     return false;
   }
   if (isAutoSwitchLocked(active.id)) {
@@ -542,7 +563,9 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
   const candidates = accounts
     .filter(
       (account) =>
-        !account.isActive &&
+        !isCurrentProviderAccount(account) &&
+        isAutomaticAccount(account) &&
+        account.quotaMode !== "none" &&
         !account.isHidden &&
         !!account.quotaSummary &&
         !account.quotaError &&
@@ -616,7 +639,13 @@ export async function maybeWarnForAccount(repo: AccountsRepository, accountId: s
   const threshold = normalizeQuotaWarningThreshold(config.get<number>(QUOTA_WARNING_THRESHOLD, 20));
   const hourlyQuotaControlEnabled = config.get<boolean>(HOURLY_QUOTA_CONTROL_ENABLED, false);
   const account = await repo.getAccount(accountId);
-  if (!account?.isActive || !account.quotaSummary) {
+  if (
+    !account ||
+    !isAutomaticAccount(account) ||
+    account.quotaMode === "none" ||
+    !isCurrentProviderAccount(account) ||
+    !account.quotaSummary
+  ) {
     return;
   }
 
@@ -682,6 +711,9 @@ function clearQuotaWarningCount(accountId: string, dimension: "hourly" | "weekly
 }
 
 export function formatAccountToastLabel(account: CodexAccountRecord): string {
+  if (isSub2ApiAccount(account)) {
+    return "Sub2API Gateway";
+  }
   const team = account.accountName?.trim();
   if (team) {
     return `${team} · ${account.email}`;

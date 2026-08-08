@@ -25,6 +25,19 @@ export interface CodexTokens {
 
 export type CodexAuthMode = "chatgpt" | "oauth";
 
+/** The persisted account kind. Sub2API records never contain OAuth tokens. */
+export type CodexAccountKind = "chatgpt" | "sub2api";
+export type CodexQuotaMode = "chatgpt" | "none";
+export type CodexProviderRoute = "chatgpt" | "sub2api";
+
+/** Non-secret downstream route metadata supplied by an optional integration. */
+export interface CodexVirtualRouteDescriptor {
+  integrationId: string;
+  baseUrl: string;
+  model: string;
+  credentialRef: string;
+}
+
 export type SeamlessQuotaBandSize = 20 | 25 | 33 | 50;
 export type SeamlessSwitchThreshold = 0 | 1 | 3 | 5;
 /** 账号面板与无感切号使用的可见分组。 */
@@ -150,6 +163,16 @@ export interface CodexAccountRecord {
   email: string;
   /** 认证模式 */
   authMode?: CodexAuthMode;
+  /** 持久化账号类型；旧记录缺省时按 ChatGPT Auth 兼容处理。 */
+  accountKind?: CodexAccountKind;
+  /** 仅允许用户明确选择，不进入任何自动调度或恢复路径。 */
+  manualOnly?: boolean;
+  /** 该记录是否有 Manager 可读取的额度能力。 */
+  quotaMode?: CodexQuotaMode;
+  /** 当前 provider 路由是否展示为该记录；不改变 OAuth 当前账号。 */
+  providerActive?: boolean;
+  /** Sub2API 下游入口元数据；不包含 API key。 */
+  virtualRoute?: CodexVirtualRouteDescriptor;
   /** 用户 ID */
   userId?: string;
   /** 认证提供者 (如 google, microsoft 等) */
@@ -206,8 +229,29 @@ export interface CodexAccountRecord {
 export interface CodexAccountsIndex {
   /** 当前激活账号 ID */
   currentAccountId?: string;
+  /** 当前 app-server provider 路由，独立于 OAuth currentAccountId。 */
+  currentProviderRoute?: CodexProviderRoute;
+  /** 当前 provider 对应的本地账号记录；Gateway 时指向虚拟账号。 */
+  currentProviderAccountId?: string;
   /** 账号列表 */
   accounts: CodexAccountRecord[];
+}
+
+export function isSub2ApiAccount(account: Pick<CodexAccountRecord, "accountKind" | "manualOnly">): boolean {
+  return account.accountKind === "sub2api" || account.manualOnly === true;
+}
+
+export function isAutomaticAccount(
+  account: Pick<CodexAccountRecord, "accountKind" | "manualOnly" | "quotaMode">
+): boolean {
+  return !isSub2ApiAccount(account) && account.quotaMode !== "none";
+}
+
+/** Provider route activity is distinct from the preserved OAuth active record. */
+export function isCurrentProviderAccount(
+  account: Pick<CodexAccountRecord, "providerActive" | "isActive">
+): boolean {
+  return account.providerActive ?? account.isActive === true;
 }
 
 export type CodexIndexHealthStatus = "healthy" | "restored_from_backup" | "corrupted_unrecoverable";

@@ -25,7 +25,7 @@ This table applies only to local builds from this repository.
 | Opt-in settings        | Upstream Auto Switch, quota warnings, timed quota refresh, and Codex App restart                                      | Enable the relevant Dashboard setting. No automatic switch is enabled by default.                                                                                                                                           |
 | One-time bundled setup | Experimental seamless switching and quota bands                                                                       | On Linux/macOS, run the install command, reload once, then prepare at least two fresh accounts and configure their pool. Windows is not supported yet.                                                                      |
 | Optional package       | Feishu private-chat M+/S+ import                                                                                      | Install the restricted private-chat bot separately. M+ still requires the explicit Manager inbox setting; S+ is consumed only by a separately started importer.                                                               |
-| Optional package       | Sub2API Gateway                                                                                                       | Install the standalone Gateway VSIX, then configure it and save its key from its Dashboard card. Core Manager has no vendor-specific setting, configuration, or SecretStorage access.                                           |
+| Optional package       | Sub2API Gateway                                                                                                       | Install the standalone Gateway VSIX; it registers the downstream as a saved manual-only virtual account whose card owns configuration, key storage, refresh, usage, and estimated price. Core Manager never imports provider-side accounts or keys. |
 
 ## Experimental seamless switching
 
@@ -37,12 +37,12 @@ This is separate from upstream Auto Switch. It updates authentication at a safe 
 4. Enable **Seamless account switching (experimental)**, then independently enable **Quota-band switching** and/or **Low-quota switching**. A one-minute quota refresh is recommended.
 5. Choose a band size and wait time under **Quota-band switching**; choose **After exhaustion**, `1%`, `3%` (default), or `5%` under **Low-quota switching**; then choose the shared **Switch policy**.
 
-When **Low-quota switching** is off, low quota, structured `usageLimitExceeded`, and exhaustion batches cannot start a new automatic switch; quota-band switching remains independent. **After exhaustion** waits within one band until every conversation in the active batch actually stops for quota exhaustion, for up to 6 hours. Auto-continuation can still repeat non-idempotent external effects. See [the seamless-switch guide](docs/HOT_SWITCH.md) for full rules.
+When **Low-quota switching** is off, low quota, structured `usageLimitExceeded`, and exhaustion batches cannot start a new automatic switch; quota-band switching remains independent. **After exhaustion** waits within one band until every conversation in the active batch actually stops for quota exhaustion, for up to 6 hours. For `Selected model is at capacity. Please try a different model.`, the runtime waits one minute per thread and sends `Continue.`; a seamless account switch claims any still-waiting capacity recovery first. Auto-continuation can still repeat non-idempotent external effects. See [the seamless-switch guide](docs/HOT_SWITCH.md) for full rules.
 
 ## Optional local integrations
 
 - [Feishu private-chat M+/S+ import package](docs/integrations/feishu-private-import.md): accepts only administrator one-to-one text messages. M+ writes to Manager's explicit local inbox; S+ writes only to a separate private queue.
-- [Standalone Sub2API Gateway and S+ importer](docs/integrations/sub2api-gateway.md): the Gateway VSIX, administrative importer, and core Manager install and stop independently; the Gateway never becomes an OAuth account or normal pool member.
+- [Standalone Sub2API Gateway and S+ importer](docs/integrations/sub2api-gateway.md): the Gateway VSIX, administrative importer, and core Manager install and stop independently; the Gateway appears as a manual-only saved virtual account with card-local actions and tracker usage, but never becomes an OAuth account or normal pool member.
 
 ## Install and update
 

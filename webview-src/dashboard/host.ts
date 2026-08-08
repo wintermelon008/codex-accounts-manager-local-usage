@@ -29,7 +29,8 @@ export const BLOCKING_GLOBAL_ACTIONS = new Set<DashboardActionName>([
   "restoreFromAuthJson",
   "importSharedJson",
   "downloadJsonFile",
-  "integrationAction"
+  "integrationAction",
+  "integrationSetting"
 ]);
 
 let actionRequestSequence = 0;
@@ -57,6 +58,8 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
     case "hideAccounts":
     case "unhideAccounts":
     case "setAccountGroup":
+    case "integrationAction":
+    case "integrationSetting":
       return 30_000;
     case "refreshAnnouncements":
     case "markAnnouncementRead":

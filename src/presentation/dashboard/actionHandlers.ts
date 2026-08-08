@@ -10,7 +10,7 @@ import type {
   DashboardHostMessage,
   DashboardActionResultPayload
 } from "../../domain/dashboard/types";
-import type { CodexAccountGroup, CodexAccountRecord } from "../../core/types";
+import { isSub2ApiAccount, type CodexAccountGroup, type CodexAccountRecord } from "../../core/types";
 import type { DashboardLanguage } from "../../localization/languages";
 import { AccountsRepository } from "../../storage";
 import { AnnouncementService, type AnnouncementOptions } from "../../services/announcements";
@@ -133,9 +133,22 @@ async function runDashboardAction(
       await ctx.refreshLocalUsage?.();
       return undefined;
     case "integrationAction":
-      await requireManagerIntegrationHost().runDashboardAction(
-        requireDashboardIntegrationPayload(payload, "integrationId"),
-        requireDashboardIntegrationPayload(payload, "integrationActionId")
+      {
+        const host = requireManagerIntegrationHost();
+        const integrationId = requireDashboardIntegrationPayload(payload, "integrationId");
+        const integrationActionId = requireDashboardIntegrationPayload(payload, "integrationActionId");
+        if (account && isSub2ApiAccount(account)) {
+          await host.runVirtualAccountAction(account.id, integrationActionId);
+        } else {
+          await host.runDashboardAction(integrationId, integrationActionId);
+        }
+      }
+      ctx.schedulePublishState();
+      return undefined;
+    case "integrationSetting":
+      await requireManagerIntegrationHost().updateIntegrationSetting(
+        requireDashboardIntegrationPayload(payload, "integrationSettingId"),
+        payload?.enabled === true
       );
       ctx.schedulePublishState();
       return undefined;
@@ -264,7 +277,7 @@ function requireManagerIntegrationHost() {
 
 function requireDashboardIntegrationPayload(
   payload: DashboardActionPayload | undefined,
-  key: "integrationId" | "integrationActionId"
+  key: "integrationId" | "integrationActionId" | "integrationSettingId"
 ): string {
   const value = payload?.[key];
   if (!value?.trim()) {
@@ -581,6 +594,9 @@ async function handleToggleBalancePool(
   if (!account || account.isHidden) {
     return undefined;
   }
+  if (isSub2ApiAccount(account)) {
+    return undefined;
+  }
   await repo.setBalancePoolMembership(account.id, account.balancePoolEnabled !== true);
   resetSeamlessSwitchRuntimeState();
   schedulePublishState();
@@ -687,6 +703,9 @@ async function handleBatchRefresh(
     CODEX_BATCH_REFRESH_CONCURRENCY,
     async (id) => {
       try {
+        if (accountsById.get(id) && isSub2ApiAccount(accountsById.get(id)!)) {
+          return;
+        }
         await refreshSingleQuota(repo, { refresh() {} }, id, {
           announce: false,
           forceRefresh: true,
@@ -744,6 +763,9 @@ async function handleBatchResync(
     4,
     async (id) => {
       try {
+        if (accountsById.get(id) && isSub2ApiAccount(accountsById.get(id)!)) {
+          return;
+        }
         await resyncAccountInfo(repo, id);
         success += 1;
       } catch (error) {
@@ -779,6 +801,10 @@ async function handleBatchResync(
 }
 
 async function resyncAccountInfo(repo: AccountsRepository, accountId: string): Promise<void> {
+  const account = await repo.getAccount(accountId);
+  if (account && isSub2ApiAccount(account)) {
+    throw new Error("Gateway accounts do not expose OAuth profile or quota details");
+  }
   await repo.refreshAccountProfileMetadata(accountId);
   await refreshSingleQuota(repo, { refresh() {} }, accountId, {
     announce: false,
@@ -869,6 +895,9 @@ async function handleGetResetCredits(
   if (!account) {
     throw new Error("Account not found");
   }
+  if (isSub2ApiAccount(account)) {
+    throw new Error("Gateway accounts do not expose reset credits");
+  }
 
   const tokens = await repo.getTokens(account.id);
   if (!tokens?.accessToken) {
@@ -888,6 +917,9 @@ async function handleConsumeResetCredit(
 ) {
   if (!account) {
     throw new Error("Account not found");
+  }
+  if (isSub2ApiAccount(account)) {
+    throw new Error("Gateway accounts do not expose reset credits");
   }
 
   const available = account.quotaSummary?.resetCreditsAvailable;

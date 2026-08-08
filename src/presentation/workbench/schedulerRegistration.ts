@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { needsRefresh, refreshTokens } from "../../auth/oauth";
 import type { CodexHotSwitchRuntime, HotSwitchIdentity, HotSwitchStatus } from "../../codex";
-import type { CodexAccountRecord } from "../../core/types";
+import { isAutomaticAccount, type CodexAccountRecord } from "../../core/types";
 import { DASHBOARD_ACCOUNTS_PAGE_SIZE } from "../../domain/dashboard/types";
 import {
   getAutoRefreshMinutes,
@@ -335,7 +335,7 @@ export function getAutomaticQuotaRefreshAccountIds(
 }
 
 function isAutomaticallyRefreshable(account: CodexAccountRecord, config: vscode.WorkspaceConfiguration): boolean {
-  if (account.isHidden) {
+  if (!isAutomaticAccount(account) || account.quotaMode === "none" || account.isHidden) {
     return false;
   }
 
@@ -394,6 +394,9 @@ export function registerTokenRefreshScheduler(params: {
       sweepStarted = true;
 
       for (const account of accounts) {
+        if (!isAutomaticAccount(account) || account.quotaMode === "none") {
+          continue;
+        }
         try {
           const tokens = await params.repo.getTokens(account.id);
           markTokenAutomationCheck(account.id);

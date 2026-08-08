@@ -15,6 +15,8 @@ let turnSequence = 0;
 let goalSequence = 0;
 let reorderNextTurnStartResponse = false;
 let failNextTurnStartWithUsageLimit = false;
+let failNextTurnStartWithCapacity = false;
+let loginSettleTimer;
 
 emit({
   method: "test/runtimeArgs",
@@ -95,6 +97,14 @@ function handleLine(line) {
             message: "Usage limit exceeded",
             data: { codexErrorInfo: "usageLimitExceeded" }
           }
+        });
+        break;
+      }
+      if (failNextTurnStartWithCapacity) {
+        failNextTurnStartWithCapacity = false;
+        emit({
+          id: message.id,
+          error: createCapacityError(message.params && message.params.capacityErrorField)
         });
         break;
       }
@@ -228,6 +238,39 @@ function handleLine(line) {
       respond(message.id, {});
       break;
     }
+    case "test/failCapacity": {
+      const activeTurn = activeTurns.shift();
+      if (activeTurn) {
+        const turn = {
+          id: activeTurn.id,
+          items: [],
+          itemsView: { type: "all" },
+          status: "errored",
+          error: createCapacityError(message.params && message.params.errorField)
+        };
+        emit({ method: "turn/completed", params: { threadId: activeTurn.threadId, turn } });
+      }
+      respond(message.id, {});
+      break;
+    }
+    case "test/failCapacityNotification": {
+      const activeTurn = activeTurns.shift();
+      if (activeTurn) {
+        emit({
+          method: "error",
+          params: {
+            threadId: activeTurn.threadId,
+            turnId: activeTurn.id,
+            willRetry: false,
+            error: createCapacityError(message.params && message.params.errorField)
+          }
+        });
+        const turn = { id: activeTurn.id, items: [], itemsView: { type: "all" }, status: "failed" };
+        emit({ method: "turn/completed", params: { threadId: activeTurn.threadId, turn } });
+      }
+      respond(message.id, {});
+      break;
+    }
     case "test/notifyUsageLimit": {
       const requestedThreadId = message.params && message.params.threadId;
       const activeTurn =
@@ -278,6 +321,10 @@ function handleLine(line) {
       failNextTurnStartWithUsageLimit = true;
       respond(message.id, {});
       break;
+    case "test/failNextTurnStartWithCapacity":
+      failNextTurnStartWithCapacity = true;
+      respond(message.id, {});
+      break;
     case "test/probeGateway":
       void probeGateway(message);
       break;
@@ -323,28 +370,56 @@ function handleLine(line) {
       respond(message.id, {});
       break;
     case "account/login/start":
-      currentAccountId = message.params.chatgptAccountId;
-      currentEmail = currentAccountId === "account-b" ? "b@example.invalid" : "a@example.invalid";
+      {
+        const nextAccountId = message.params.chatgptAccountId;
+        const nextEmail = nextAccountId === "account-b" ? "b@example.invalid" : "a@example.invalid";
+        const settleMs = Number(process.env.FAKE_CODEX_LOGIN_SETTLE_MS ?? 0);
+        if (loginSettleTimer) {
+          clearTimeout(loginSettleTimer);
+          loginSettleTimer = undefined;
+        }
+        const applyLogin = () => {
+          currentAccountId = nextAccountId;
+          currentEmail = nextEmail;
+          emit({
+            method: "account/login/completed",
+            params: { loginId: null, success: true, error: null }
+          });
+          emit({
+            method: "account/updated",
+            params: { authMode: "chatgpt", planType: "plus" }
+          });
+        };
+        if (Number.isFinite(settleMs) && settleMs > 0) {
+          loginSettleTimer = setTimeout(applyLogin, settleMs);
+        } else {
+          applyLogin();
+        }
+      }
       respond(message.id, { type: "chatgptAuthTokens" });
-      emit({
-        method: "account/login/completed",
-        params: { loginId: null, success: true, error: null }
-      });
-      emit({
-        method: "account/updated",
-        params: { authMode: "chatgpt", planType: "plus" }
-      });
       break;
     case "account/read":
-      respond(message.id, {
-        account: { type: "chatgpt", email: currentEmail, planType: "plus" },
-        requiresOpenaiAuth: true
-      });
+      if (process.env.FAKE_CODEX_ACCOUNT_READ_REQUIRES_OPENAI_AUTH === "false") {
+        respond(message.id, { account: null, requiresOpenaiAuth: false });
+      } else {
+        respond(message.id, {
+          account: { type: "chatgpt", email: currentEmail, planType: "plus" },
+          requiresOpenaiAuth: true
+        });
+      }
       break;
     default:
       respond(message.id, {});
       break;
   }
+}
+
+function createCapacityError(errorField) {
+  const info = errorField === "camel" ? { codexErrorInfo: "server_overloaded" } : { codex_error_info: "server_overloaded" };
+  return {
+    message: "Selected model is at capacity. Please try a different model.",
+    ...info
+  };
 }
 
 function hasLoopbackNoProxyBypass() {

@@ -28,16 +28,29 @@ test("an invalid optional observer keeps the downstream Gateway configurable", a
     { mode: 0o600 }
   );
 
-  const integration = new Sub2ApiGatewayIntegration(createVscode(), createContext(storage), createApi());
+  const api = createApi();
+  const integration = new Sub2ApiGatewayIntegration(createVscode(), createContext(storage), api);
   await integration.initialize();
-  const view = integration.getViewModel();
+  const card = integration.getCardViewModel();
 
-  assert.equal(detail(view, "下游").value, "https://gateway.example.invalid/v1");
-  assert.equal(detail(view, "模型").value, "gpt-5");
-  assert.match(detail(view, "只读库存观察").value, /^配置有误：Observer admin base URL must not include a path\./u);
-  assert.equal(action(view, "configureCredential").enabled, true);
-  assert.equal(action(view, "configureObserverCredential"), undefined);
-  assert.equal(action(view, "refresh").enabled, true);
+  assert.equal(detail(card, "下游").value, "https://gateway.example.invalid/v1");
+  assert.equal(detail(card, "模型").value, "gpt-5");
+  assert.equal(action(card, "configureCredential").enabled, true);
+  assert.equal(action(card, "refresh").enabled, true);
+  assert.equal(api.dashboardRegistrations, 0);
+  assert.deepEqual(card.details.map((entry) => entry.label), ["下游", "模型", "下游密钥"]);
+  assert.deepEqual(card.actions.map((entry) => entry.id), ["configureCredential", "refresh", "openConfig"]);
+  assert.equal(card.usage.range, "5h");
+  assert.equal(card.usage.status, "waiting");
+  assert.equal(card.usage.byModel[0].model, "gpt-5");
+  assert.equal(card.details.some((entry) => entry.label.includes("上游") || entry.label.includes("库存")), false);
+  assert.deepEqual(api.virtualRegistrations[0].descriptor, {
+    integrationId: "sub2api-gateway",
+    baseUrl: "https://gateway.example.invalid/v1",
+    model: "gpt-5",
+    credentialRef: "primary"
+  });
+  assert.equal(Object.hasOwn(api.virtualRegistrations[0].descriptor, "apiKey"), false);
 
   integration.dispose();
 });
@@ -60,6 +73,26 @@ test("normalizes a pasted Bearer prefix and sends a single downstream authorizat
   assert.deepEqual(health, { kind: "healthy", message: "下游健康检查成功。" });
 });
 
+test("the Manager setting only persists card visibility and never changes the Gateway route", async (t) => {
+  const storage = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-integration-"));
+  t.after(() => fs.rm(storage, { recursive: true, force: true }));
+  const api = createApi();
+  const context = createContext(storage);
+  const integration = new Sub2ApiGatewayIntegration(createVscode(), context, api);
+  await integration.initialize();
+
+  const setting = api.virtualRegistrations[0].setting;
+  assert.equal(setting.id, "sub2api-gateway-card-visible");
+  assert.equal(setting.getEnabled(), true);
+  await setting.setEnabled(false);
+
+  assert.equal(setting.getEnabled(), false);
+  assert.equal(context.globalState.get("sub2apiGateway.cardVisibility.v1"), false);
+  assert.equal(api.gatewayActivateCalls, 0);
+  assert.equal(api.gatewayDeactivateCalls, 0);
+  integration.dispose();
+});
+
 test("explains that an administrator login token cannot satisfy a downstream 401", async () => {
   const health = await checkGatewayHealth(
     { sub2api: { baseUrl: "https://gateway.example.invalid/v1" } },
@@ -80,11 +113,12 @@ function action(view, id) {
 }
 
 function createContext(storage) {
+  const values = new Map();
   return {
     globalStorageUri: { fsPath: storage },
     globalState: {
-      get: () => undefined,
-      update: async () => undefined
+      get: (key) => values.get(key),
+      update: async (key, value) => values.set(key, value)
     },
     secrets: {
       get: async () => undefined,
@@ -94,19 +128,38 @@ function createContext(storage) {
 }
 
 function createApi() {
-  return {
+  const virtualRegistrations = [];
+  const api = {
+    virtualRegistrations,
+    dashboardRegistrations: 0,
+    gatewayActivateCalls: 0,
+    gatewayDeactivateCalls: 0,
+    registerVirtualAccount: async (registration) => {
+      virtualRegistrations.push(registration);
+      return { dispose() {} };
+    },
     registerGateway: () => ({
       dispose() {},
       isActive: () => false,
       isConfigured: () => false,
-      activate: async () => ({ enabled: true, configured: true, requiresReload: false }),
-      deactivate: async () => ({ enabled: false, configured: false, requiresReload: false }),
+      activate: async () => {
+        api.gatewayActivateCalls += 1;
+        return { enabled: true, configured: true, requiresReload: false };
+      },
+      deactivate: async () => {
+        api.gatewayDeactivateCalls += 1;
+        return { enabled: false, configured: false, requiresReload: false };
+      },
       configureCredential: async () => ({ active: false, ready: false }),
       getStatus: async () => ({ active: false, ready: false }),
       fallbackToChatGpt: async () => ({ status: "unavailable" })
     }),
-    registerDashboardIntegration: () => ({ dispose() {} })
+    registerDashboardIntegration: () => {
+      api.dashboardRegistrations += 1;
+      return { dispose() {} };
+    }
   };
+  return api;
 }
 
 function createVscode() {

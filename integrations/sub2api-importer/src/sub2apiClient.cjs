@@ -1,9 +1,6 @@
 "use strict";
 
-const { readRefreshToken, writeRefreshToken } = require("./adminSession.cjs");
-
 const IMPORT_PATH = "/api/v1/admin/accounts/data";
-const REFRESH_PATH = "/api/v1/auth/refresh";
 const REQUEST_TIMEOUT_MS = 30_000;
 
 async function submitSub2ApiImport(configuration, payload, options = {}) {
@@ -13,24 +10,9 @@ async function submitSub2ApiImport(configuration, payload, options = {}) {
 
 async function createSub2ApiAdminClient(configuration, options = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const loadRefreshToken = options.loadRefreshToken ?? readRefreshToken;
-  const saveRefreshToken = options.saveRefreshToken ?? writeRefreshToken;
-  let accessToken = configuration.adminToken;
-  let refreshToken = configuration.adminRefreshToken;
-  try {
-    const saved = await loadRefreshToken(configuration.adminSessionStateFile);
-    if (saved) refreshToken = saved;
-  } catch {
-    throw new Sub2ApiImportError("sessionStateFailure");
-  }
 
   async function requestJson(path, request = {}) {
-    let result = await sendRequest(path, request, accessToken);
-    if (isExpiredTokenResponse(result.response, result.body) && refreshToken) {
-      const refreshed = await refreshAccessToken();
-      accessToken = refreshed.accessToken;
-      result = await sendRequest(path, request, accessToken);
-    }
+    const result = await sendRequest(path, request);
     if (!result.response.ok) {
       throw new Sub2ApiImportError("remoteRejected", result.response.status);
     }
@@ -40,11 +22,10 @@ async function createSub2ApiAdminClient(configuration, options = {}) {
     return unwrapEnvelope(result.body, result.response.status);
   }
 
-  async function sendRequest(path, request, token) {
+  async function sendRequest(path, request) {
     const headers = {
       accept: "application/json",
-      authorization: `Bearer ${token}`,
-      "x-admin-ui-request": "1",
+      "x-api-key": configuration.adminApiKey,
       ...(request.body === undefined ? {} : { "content-type": "application/json" }),
       ...(request.headers ?? {})
     };
@@ -54,32 +35,6 @@ async function createSub2ApiAdminClient(configuration, options = {}) {
       ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) })
     });
     return { response, body: await readJson(response) };
-  }
-
-  async function refreshAccessToken() {
-    const response = await requestWithTimeout(fetchImpl, `${configuration.adminBaseUrl}${REFRESH_PATH}`, {
-      method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken })
-    });
-    const body = await readJson(response);
-    if (!response.ok || !body || typeof body !== "object" || Array.isArray(body) || body.code !== 0 || !body.data || typeof body.data !== "object") {
-      throw new Sub2ApiImportError("tokenRefreshFailed", response.status);
-    }
-    const nextAccessToken = nonemptyString(body.data.access_token);
-    const nextRefreshToken = nonemptyString(body.data.refresh_token);
-    if (!nextAccessToken) {
-      throw new Sub2ApiImportError("tokenRefreshFailed", response.status);
-    }
-    if (nextRefreshToken && nextRefreshToken !== refreshToken) {
-      try {
-        await saveRefreshToken(configuration.adminSessionStateFile, nextRefreshToken);
-      } catch {
-        throw new Sub2ApiImportError("sessionStateFailure");
-      }
-      refreshToken = nextRefreshToken;
-    }
-    return { accessToken: nextAccessToken };
   }
 
   return {
@@ -98,7 +53,7 @@ async function createSub2ApiAdminClient(configuration, options = {}) {
 
 class Sub2ApiImportError extends Error {
   constructor(kind, statusCode) {
-    super("The Sub2API import request did not complete safely.");
+    super(Number.isInteger(statusCode) ? `Sub2API request failed with HTTP ${statusCode}.` : "Sub2API request failed.");
     this.name = "Sub2ApiImportError";
     this.kind = kind;
     this.statusCode = Number.isInteger(statusCode) ? statusCode : undefined;
@@ -123,10 +78,6 @@ async function readJson(response) {
   } catch {
     return undefined;
   }
-}
-
-function isExpiredTokenResponse(response, body) {
-  return response.status === 401 && body && typeof body === "object" && !Array.isArray(body) && body.code === "TOKEN_EXPIRED";
 }
 
 function unwrapEnvelope(value, statusCode) {
@@ -167,13 +118,8 @@ function nonNegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-function nonemptyString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 module.exports = {
   IMPORT_PATH,
-  REFRESH_PATH,
   Sub2ApiImportError,
   createSub2ApiAdminClient,
   submitSub2ApiImport,

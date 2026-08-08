@@ -3,6 +3,7 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import type { CodexAccountRecord, CodexQuotaSummary, CodexTokens, SharedCodexAccountJson } from "../core/types";
+import { isSub2ApiAccount } from "../core/types";
 import { extractClaims } from "../utils/jwt";
 import { tryAcquireSharedFileLease } from "./accountsWriteCoordinator";
 
@@ -95,7 +96,7 @@ export async function listAideckCodexSharedAccounts(): Promise<SharedCodexAccoun
 }
 
 export async function mirrorAideckCodexAccount(account: CodexAccountRecord, tokens?: CodexTokens): Promise<void> {
-  if (!account.id || !account.email) {
+  if (!account.id || !account.email || isSub2ApiAccount(account)) {
     return;
   }
 

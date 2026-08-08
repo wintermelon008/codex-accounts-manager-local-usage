@@ -106,6 +106,113 @@ describe("ManagerIntegrationHost", () => {
     second.dispose();
     host.dispose();
   });
+
+  it("registers and manually switches an opaque virtual provider account", async () => {
+    const gateway = createGateway();
+    const virtual = {
+      upsert: vi.fn(async () => undefined),
+      activate: vi.fn(async () => undefined),
+      deactivate: vi.fn(async () => undefined)
+    };
+    const host = new ManagerIntegrationHost(gateway.operations, virtual);
+    const activate = vi.fn(async () => ({ enabled: true, configured: true, requiresReload: false }));
+    const runCardAction = vi.fn(async () => undefined);
+    const setEnabled = vi.fn(async () => undefined);
+    let visible = true;
+    await host.api.registerVirtualAccount({
+      id: "sub2api-gateway",
+      displayName: "Sub2API Gateway",
+      descriptor: {
+        integrationId: "sub2api-gateway",
+        baseUrl: "https://gateway.invalid/v1",
+        model: "gpt-5",
+        credentialRef: "primary"
+      },
+      activate,
+      getCardView: () => ({
+        integrationId: "sub2api-gateway",
+        details: [{ label: "下游", value: "https://gateway.invalid/v1" }],
+        actions: [{ id: "refresh", label: "刷新" }]
+      }),
+      runCardAction,
+      setting: {
+        id: "sub2api-gateway-card-visible",
+        title: "显示 Sub2API 账号卡片",
+        getEnabled: () => visible,
+        setEnabled: vi.fn(async (enabled: boolean) => {
+          visible = enabled;
+          await setEnabled(enabled);
+        })
+      }
+    });
+
+    expect(host.getVirtualAccountCards()).toEqual([
+      expect.objectContaining({
+        accountId: "virtual:sub2api-gateway",
+        card: expect.objectContaining({ integrationId: "sub2api-gateway" })
+      })
+    ]);
+    expect(host.getIntegrationSettings()).toEqual([
+      expect.objectContaining({ id: "sub2api-gateway-card-visible", enabled: true })
+    ]);
+    await host.runVirtualAccountAction("virtual:sub2api-gateway", "refresh");
+    await host.updateIntegrationSetting("sub2api-gateway-card-visible", false);
+    expect(runCardAction).toHaveBeenCalledWith("refresh");
+    expect(setEnabled).toHaveBeenCalledWith(false);
+    expect(host.getVirtualAccountCards()).toEqual([]);
+    expect(host.getVisibleVirtualAccountIds()).not.toContain("virtual:sub2api-gateway");
+
+    await expect(host.switchVirtualAccount("virtual:sub2api-gateway")).resolves.toMatchObject({
+      status: "switched",
+      accountId: "virtual:sub2api-gateway"
+    });
+    expect(virtual.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ integrationId: "sub2api-gateway", credentialRef: "primary" }),
+      "Sub2API Gateway"
+    );
+    expect(virtual.activate).toHaveBeenCalledWith("virtual:sub2api-gateway");
+    expect(activate).toHaveBeenCalledOnce();
+    host.dispose();
+  });
+
+  it("updates provider card visibility without changing the provider route", async () => {
+    const gateway = createGateway();
+    const virtual = {
+      upsert: vi.fn(async () => undefined),
+      activate: vi.fn(async () => undefined),
+      deactivate: vi.fn(async () => undefined)
+    };
+    const host = new ManagerIntegrationHost(gateway.operations, virtual);
+    const setEnabled = vi.fn(async () => undefined);
+    let visible = false;
+    await host.api.registerVirtualAccount({
+      id: "sub2api-gateway",
+      displayName: "Sub2API Gateway",
+      descriptor: {
+        integrationId: "sub2api-gateway",
+        baseUrl: "https://gateway.invalid/v1",
+        model: "gpt-5",
+        credentialRef: "primary"
+      },
+      activate: vi.fn(async () => ({ enabled: true, configured: true, requiresReload: false })),
+      setting: {
+        id: "sub2api-gateway-card-visible",
+        title: "显示 Sub2API 账号卡片",
+        getEnabled: () => visible,
+        setEnabled: vi.fn(async (enabled: boolean) => {
+          visible = enabled;
+          await setEnabled(enabled);
+        })
+      }
+    });
+
+    await host.updateIntegrationSetting("sub2api-gateway-card-visible", true);
+    expect(setEnabled).toHaveBeenCalledWith(true);
+    expect(gateway.operations.activate).not.toHaveBeenCalled();
+    expect(virtual.activate).not.toHaveBeenCalled();
+    expect(host.getVisibleVirtualAccountIds()).toContain("virtual:sub2api-gateway");
+    host.dispose();
+  });
 });
 
 function createGateway() {

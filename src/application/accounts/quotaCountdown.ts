@@ -1,4 +1,4 @@
-import type { CodexAccountRecord } from "../../core/types";
+import { isSub2ApiAccount, type CodexAccountRecord } from "../../core/types";
 import { isQuotaCountdownStartEligible } from "../../domain/dashboard/quotaCountdown";
 import { sendQuotaCountdownStartMessage } from "../../services/quotaCountdown";
 import type { AccountsRepository } from "../../storage";
@@ -11,6 +11,9 @@ const inflightStarts = new Map<string, Promise<QuotaCountdownStartResult>>();
 export type QuotaCountdownStartResult = "started" | "already-started";
 
 export function isQuotaCountdownStartAvailable(account: CodexAccountRecord, nowMs: number = Date.now()): boolean {
+  if (isSub2ApiAccount(account) || account.quotaMode === "none") {
+    return false;
+  }
   pruneRecentStarts(nowMs);
   return !recentStarts.has(account.id) && isQuotaCountdownStartEligible(account.quotaSummary, nowMs);
 }
@@ -40,6 +43,11 @@ async function runQuotaCountdownStart(repo: AccountsRepository, accountId: strin
   pruneRecentStarts(now);
   if (recentStarts.has(accountId)) {
     return "already-started";
+  }
+
+  const selected = await repo.getAccount(accountId);
+  if (selected && isSub2ApiAccount(selected)) {
+    throw new Error("Gateway accounts do not expose quota countdowns");
   }
 
   await refreshSingleQuota(repo, { refresh: () => undefined }, accountId, {

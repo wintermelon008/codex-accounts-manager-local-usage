@@ -8,7 +8,13 @@ import { findAccountTokenUsageWindow, type AccountTokenUsageSnapshot } from "../
 import { AccountsRepository } from "../../storage";
 import { ExtensionSettingsStore } from "../../infrastructure/config/extensionSettings";
 import { formatAccountStructure, formatAuthProvider, formatPlanType, getDashboardCopy } from "./copy";
-import { CodexAccountRecord, CodexCreditsSummary, CodexTokens, type CodexAnnouncementState } from "../../core/types";
+import {
+  CodexAccountRecord,
+  CodexCreditsSummary,
+  CodexTokens,
+  isSub2ApiAccount,
+  type CodexAnnouncementState
+} from "../../core/types";
 import { resolveCodexAppLaunchPath } from "../../utils/codexApp";
 import { getCurrentWindowRuntimeAccountId } from "../../presentation/workbench/windowRuntimeAccount";
 import { getQuotaIssueKind } from "../../utils/quotaIssue";
@@ -36,17 +42,32 @@ export async function buildDashboardState(
   const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
   const tokenAutomation = getTokenAutomationSnapshot();
   const autoSwitchRuntime = getAutoSwitchRuntimeSnapshot();
-  const integrations = getActiveManagerIntegrationHost()?.getDashboardIntegrations();
+  const integrationHost = getActiveManagerIntegrationHost();
+  const integrations = integrationHost?.getDashboardIntegrations();
+  const integrationSettings = integrationHost?.getIntegrationSettings();
+  const providerCards = new Map(
+    integrationHost?.getVirtualAccountCards().map(({ accountId, card }) => [accountId, card] as const) ?? []
+  );
+  const visibleVirtualAccountIds = integrationHost?.getVisibleVirtualAccountIds();
   const indexHealth = await repo.getIndexHealthSummary();
-  const accounts = await repo.listAccounts();
+  const accounts = (await repo.listAccounts()).filter(
+    (account) =>
+      !isSub2ApiAccount(account) ||
+      visibleVirtualAccountIds === undefined ||
+      visibleVirtualAccountIds.has(account.id)
+  );
   const tokenEntries = await Promise.all(
-    accounts.map(async (account) => [account.id, await repo.getTokens(account.id, { syncExternal: false })] as const)
+    accounts.map(async (account) =>
+      [account.id, isSub2ApiAccount(account) ? undefined : await repo.getTokens(account.id, { syncExternal: false })] as const
+    )
   );
   const tokensByAccountId = new Map(tokenEntries);
   const accountViewStateById = new Map(
     accounts.map((account) => {
       const tokens = tokensByAccountId.get(account.id);
-      const health = resolveAccountHealth(account, tokens, tokenAutomation);
+      const health: ReturnType<typeof resolveAccountHealth> = isSub2ApiAccount(account)
+        ? { kind: "healthy", issueKey: "virtual" }
+        : resolveAccountHealth(account, tokens, tokenAutomation);
       return [
         account.id,
         {
@@ -80,6 +101,7 @@ export async function buildDashboardState(
     indexHealth,
     localUsage,
     integrations,
+    integrationSettings,
     accounts: sortedAccounts.map((account) =>
       mapAccount(
         account,
@@ -89,13 +111,17 @@ export async function buildDashboardState(
         copy,
         currentWindowAccountId,
         autoSwitchRuntime,
-        accountTokenUsage
+        accountTokenUsage,
+        providerCards.get(account.id)
       )
     )
   };
 }
 
-export function sortDashboardAccounts<T extends Pick<CodexAccountRecord, "id" | "isActive" | "createdAt" | "email">>(
+export function sortDashboardAccounts<
+  T extends Pick<CodexAccountRecord, "id" | "isActive" | "createdAt" | "email"> &
+    Partial<Pick<CodexAccountRecord, "providerActive">>
+>(
   accounts: readonly T[],
   currentWindowAccountId?: string,
   accountViewStateById?: Map<string, { healthPriority: number }>
@@ -103,7 +129,7 @@ export function sortDashboardAccounts<T extends Pick<CodexAccountRecord, "id" | 
   return [...accounts].sort(
     (a, b) =>
       Number(b.id === currentWindowAccountId) - Number(a.id === currentWindowAccountId) ||
-      Number(b.isActive) - Number(a.isActive) ||
+      Number(b.isActive || b.providerActive) - Number(a.isActive || a.providerActive) ||
       (accountViewStateById?.get(b.id)?.healthPriority ?? 0) - (accountViewStateById?.get(a.id)?.healthPriority ?? 0) ||
       b.createdAt - a.createdAt ||
       a.email.localeCompare(b.email)
@@ -125,15 +151,23 @@ function mapAccount(
   copy: DashboardState["copy"],
   currentWindowAccountId?: string,
   autoSwitchRuntime?: ReturnType<typeof getAutoSwitchRuntimeSnapshot>,
-  accountTokenUsage?: AccountTokenUsageSnapshot
+  accountTokenUsage?: AccountTokenUsageSnapshot,
+  providerCard?: DashboardAccountViewModel["providerCard"]
 ): DashboardAccountViewModel {
-  const canToggleStatusBar = account.isActive ? false : Boolean(account.showInStatusBar) || extraSelectedCount < 2;
-  const health = viewState?.health ?? resolveAccountHealth(account, viewState?.tokens, getTokenAutomationSnapshot());
+  const virtual = isSub2ApiAccount(account);
+  const canToggleStatusBar = account.isActive || account.providerActive
+    ? false
+    : Boolean(account.showInStatusBar) || extraSelectedCount < 2;
+  const health: ReturnType<typeof resolveAccountHealth> = virtual
+    ? { kind: "healthy", issueKey: "virtual" }
+    : viewState?.health ?? resolveAccountHealth(account, viewState?.tokens, getTokenAutomationSnapshot());
   const dismissedHealth = viewState?.dismissedHealth ?? isHealthDismissed(account, health);
   const automationState = viewState?.automationState;
-  const subscription = resolveSubscriptionDisplay(account, viewState?.tokens, copy, lang);
-  const resetCreditsAvailable = account.quotaSummary?.resetCreditsAvailable;
-  const resetCreditsNextExpiresAt = account.quotaSummary?.resetCreditsNextExpiresAt;
+  const subscription = virtual
+    ? { text: "", title: "" }
+    : resolveSubscriptionDisplay(account, viewState?.tokens, copy, lang);
+  const resetCreditsAvailable = virtual ? undefined : account.quotaSummary?.resetCreditsAvailable;
+  const resetCreditsNextExpiresAt = virtual ? undefined : account.quotaSummary?.resetCreditsNextExpiresAt;
   if ((resetCreditsAvailable ?? 0) > 0 && resetCreditsNextExpiresAt == null) {
     console.info("[codexAccounts] dashboard state missing reset credits expiry", {
       accountId: account.id,
@@ -145,34 +179,37 @@ function mapAccount(
   }
 
   return {
-    quotaIssueKind: getQuotaIssueKind(account.quotaError),
+    quotaIssueKind: virtual ? undefined : getQuotaIssueKind(account.quotaError),
     id: account.id,
-    displayName: account.accountName?.trim() ?? account.email,
+    accountKind: account.accountKind,
+    manualOnly: virtual || account.manualOnly,
+    providerActive: account.providerActive,
+    displayName: virtual ? "Sub2API Gateway" : account.accountName?.trim() ?? account.email,
     email: account.email,
-    authMode: account.authMode ?? "chatgpt",
+    authMode: virtual ? undefined : account.authMode ?? "chatgpt",
     accountName: account.accountName,
     tags: [...(account.tags ?? [])],
-    authProviderLabel: formatAuthProvider(account.authProvider, lang),
-    accountStructureLabel: formatAccountStructure(account.accountStructure, lang),
-    workspaceLabel: resolveWorkspaceDisplay(account),
-    isTeamWorkspace: isTeamWorkspace(account),
+    authProviderLabel: virtual ? "Gateway" : formatAuthProvider(account.authProvider, lang),
+    accountStructureLabel: virtual ? "" : formatAccountStructure(account.accountStructure, lang),
+    workspaceLabel: virtual ? "Sub2API Gateway" : resolveWorkspaceDisplay(account),
+    isTeamWorkspace: virtual ? false : isTeamWorkspace(account),
     subscriptionText: subscription.text,
     subscriptionTitle: subscription.title,
     subscriptionColor: subscription.color,
-    addMethodLabel: `${formatAddMethod(account.addedVia, lang)} | ${formatAuthProvider(account.authProvider, lang)}`,
+    addMethodLabel: virtual ? "Gateway | 手动" : `${formatAddMethod(account.addedVia, lang)} | ${formatAuthProvider(account.authProvider, lang)}`,
     addedAtLabel: formatAddedAt(account.createdAt, copy.never),
-    statusColor: account.isActive ? "var(--accent-green)" : health.kind === "healthy" ? undefined : "#ef4444",
-    planTypeLabel: formatPlanTypeWithQuota(account, lang),
-    planType: account.planType,
-    creditsText: formatCreditsText(account.quotaSummary?.credits, lang),
-    userId: account.userId,
-    accountId: account.accountId,
-    organizationId: account.organizationId,
+    statusColor: virtual ? "var(--accent-blue)" : account.isActive ? "var(--accent-green)" : health.kind === "healthy" ? undefined : "#ef4444",
+    planTypeLabel: virtual ? "Sub2API Gateway" : formatPlanTypeWithQuota(account, lang),
+    planType: virtual ? undefined : account.planType,
+    creditsText: virtual ? undefined : formatCreditsText(account.quotaSummary?.credits, lang),
+    userId: virtual ? undefined : account.userId,
+    accountId: virtual ? undefined : account.accountId,
+    organizationId: virtual ? undefined : account.organizationId,
     isActive: account.isActive,
     isHidden: Boolean(account.isHidden),
     accountGroup: account.accountGroup,
-    isCurrentWindowAccount: account.id === currentWindowAccountId,
-    balancePoolEnabled: Boolean(account.balancePoolEnabled),
+    isCurrentWindowAccount: virtual ? Boolean(account.providerActive) : account.id === currentWindowAccountId,
+    balancePoolEnabled: virtual ? false : Boolean(account.balancePoolEnabled),
     showInStatusBar: Boolean(account.showInStatusBar),
     canToggleStatusBar,
     statusToggleTitle: canToggleStatusBar
@@ -180,23 +217,24 @@ function mapAccount(
         ? copy.statusToggleTipChecked
         : copy.statusToggleTip
       : copy.statusLimitTip,
-    hasQuota402: hasQuota402(account),
+    hasQuota402: virtual ? false : hasQuota402(account),
     healthKind: health.kind,
     healthLabel: formatHealthLabel(health.kind, copy),
     healthMessage: health.message,
     healthIssueKey: health.issueKey,
     dismissedHealth,
-    lastTokenCheckAt: automationState?.lastCheckAt,
-    lastTokenRefreshAt: automationState?.lastRefreshAt,
-    lastTokenRefreshError: automationState?.lastError,
-    lastQuotaAt: account.lastQuotaAt,
+    lastTokenCheckAt: virtual ? undefined : automationState?.lastCheckAt,
+    lastTokenRefreshAt: virtual ? undefined : automationState?.lastRefreshAt,
+    lastTokenRefreshError: virtual ? undefined : automationState?.lastError,
+    lastQuotaAt: virtual ? undefined : account.lastQuotaAt,
     resetCreditsAvailable,
     resetCreditsNextExpiresAt,
-    quotaCountdownStartAvailable: isQuotaCountdownStartAvailable(account),
-    tokenUsage: resolveAccountTokenUsage(account, accountTokenUsage),
+    quotaCountdownStartAvailable: virtual ? false : isQuotaCountdownStartAvailable(account),
+    tokenUsage: virtual ? undefined : resolveAccountTokenUsage(account, accountTokenUsage),
     autoSwitchLockedUntil:
       autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
-    metrics: buildMetrics(account, copy)
+    providerCard: virtual ? providerCard : undefined,
+    metrics: virtual ? [] : buildMetrics(account, copy)
   };
 }
 

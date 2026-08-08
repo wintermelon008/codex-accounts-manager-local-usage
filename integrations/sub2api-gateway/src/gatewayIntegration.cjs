@@ -11,6 +11,7 @@ const { GatewayUsageTracker } = require("./usageTracker.cjs");
 
 const INTEGRATION_ID = "sub2api-gateway";
 const SELECTION_STATE_KEY = "sub2apiGateway.selection.v1";
+const CARD_VISIBILITY_STATE_KEY = "sub2apiGateway.cardVisibility.v1";
 const RUNTIME_POLL_MS = 15_000;
 const FALLBACK_POLL_MS = 2_000;
 const INITIAL_RETRY_MS = 5_000;
@@ -25,7 +26,8 @@ class Sub2ApiGatewayIntegration {
     this.usageTracker = new GatewayUsageTracker(context.globalState);
     this.events = new vscode.EventEmitter();
     this.gateway = undefined;
-    this.dashboardRegistration = undefined;
+    this.virtualRegistration = undefined;
+    this.virtualDescriptorKey = undefined;
     this.config = undefined;
     this.configError = undefined;
     this.inventoryObserverError = undefined;
@@ -36,6 +38,7 @@ class Sub2ApiGatewayIntegration {
     this.credentialPresent = false;
     this.observerCredentialPresent = false;
     this.selection = "inactive";
+    this.cardVisible = true;
     this.runtimeTimer = undefined;
     this.inventoryTimer = undefined;
     this.refreshingInventory = undefined;
@@ -47,17 +50,19 @@ class Sub2ApiGatewayIntegration {
 
   async initialize() {
     this.gateway = this.api.registerGateway(INTEGRATION_ID);
-    this.dashboardRegistration = this.api.registerDashboardIntegration({
-      id: INTEGRATION_ID,
-      getViewModel: () => this.getViewModel(),
-      runAction: (actionId) => this.runAction(actionId),
-      onDidChange: this.events.event
-    });
     this.usageTracker.load();
     this.selection = readSelection(this.context.globalState.get(SELECTION_STATE_KEY));
+    this.cardVisible = readBoolean(this.context.globalState.get(CARD_VISIBILITY_STATE_KEY), true);
     await this.reloadConfiguration(true);
+    await this.syncVirtualAccountRegistration();
     if (this.selection === "active" && this.config) {
-      await this.resumeSelectedGateway();
+      const runtimeStatus = await this.gateway.getStatus().catch(() => undefined);
+      if (runtimeStatus && runtimeStatus.active === false && runtimeStatus.route !== "gateway") {
+        this.selection = "inactive";
+        await this.context.globalState.update(SELECTION_STATE_KEY, this.selection);
+      } else {
+        await this.resumeSelectedGateway();
+      }
     } else if (this.selection === "fallback") {
       await this.refreshRuntimeStatus();
     }
@@ -68,44 +73,31 @@ class Sub2ApiGatewayIntegration {
     this.publish();
   }
 
-  getViewModel() {
+  getCardViewModel() {
     const config = this.config;
-    const status = this.resolveStatus();
     const usage = this.usageTracker.snapshot();
-    const details = [
-      { label: "下游", value: config?.sub2api.baseUrl ?? "未配置", emphasis: config ? "normal" : "warning" },
-      { label: "模型", value: config?.sub2api.model ?? "未配置" },
-      { label: "下游密钥", value: this.credentialPresent ? "已存入本扩展 SecretStorage" : "需要保存", emphasis: this.credentialPresent ? "positive" : "warning" },
-      {
-        label: "只读库存观察",
-        value: this.inventoryObserverError
-          ? `配置有误：${this.inventoryObserverError}`
-          : observerSummary(this.inventory, config?.inventoryObserver, this.observerCredentialPresent),
-        emphasis: this.inventoryObserverError || this.inventory.status === "error" ? "warning" : "normal"
-      }
-    ];
-    const metrics = [
-      metricForWindow("5 小时", this.inventory.fiveHour, usage.fiveHour),
-      metricForWindow("7 天", this.inventory.weekly, usage.sevenDay),
-      { label: "今日 Gateway Token", value: formatTokens(usage.today.totalTokens), description: usage.today.observedSince ? "仅统计本扩展观察到的完成 token。" : "尚未观察到完成 token。" }
-    ];
     return {
-      id: INTEGRATION_ID,
-      title: config?.displayName ?? "Sub2API Gateway",
-      status: status.kind,
-      statusMessage: status.message,
-      description: "可选本地回环 Gateway；下游密钥仅保存在此扩展的 SecretStorage。",
-      details,
-      metrics,
+      integrationId: INTEGRATION_ID,
+      details: [
+        { label: "下游", value: config?.sub2api.baseUrl ?? "未配置", emphasis: config ? "normal" : "warning" },
+        { label: "模型", value: config?.sub2api.model ?? "未配置" },
+        {
+          label: "下游密钥",
+          value: this.credentialPresent ? "已保存（扩展 SecretStorage）" : "需要保存",
+          emphasis: this.credentialPresent ? "positive" : "warning"
+        }
+      ],
+      metrics: [
+        { label: "5 小时 Token", value: formatTokens(usage.fiveHour.totalTokens), description: usage.fiveHour.observedSince ? "仅统计本扩展观察到的完成 token。" : "尚未观察到完成 token。" },
+        { label: "7 天 Token", value: formatTokens(usage.sevenDay.totalTokens), description: usage.sevenDay.observedSince ? "仅统计本扩展观察到的完成 token。" : "尚未观察到完成 token。" },
+        { label: "今日 Token", value: formatTokens(usage.today.totalTokens), description: usage.today.observedSince ? "仅统计本扩展观察到的完成 token。" : "尚未观察到完成 token。" }
+      ],
+      usage: config
+        ? providerUsage(config.sub2api.model, usage.fiveHour, "5h")
+        : undefined,
       actions: [
         { id: "configureCredential", label: "保存下游密钥", enabled: Boolean(config), tooltip: "只存入本扩展的 VS Code SecretStorage" },
-        ...(config?.inventoryObserver
-          ? [{ id: "configureObserverCredential", label: "保存只读观察密钥", enabled: true, tooltip: "仅用于 GET 库存和额度请求" }]
-          : []),
         { id: "refresh", label: "刷新", enabled: true },
-        this.selection === "active"
-          ? { id: "deactivate", label: "使用 ChatGPT Auth", tone: "default" }
-          : { id: "activate", label: "使用 Sub2API", enabled: Boolean(config && this.credentialPresent), tone: "primary" },
         { id: "openConfig", label: "打开配置", enabled: true }
       ]
     };
@@ -138,6 +130,7 @@ class Sub2ApiGatewayIntegration {
 
   async activate() {
     await this.reloadConfiguration(true);
+    await this.syncVirtualAccountRegistration();
     const config = this.requireConfig();
     const credential = await this.requireCredential(config);
     const result = await this.gateway.activate(toRuntimeConfig(config), credential);
@@ -153,10 +146,13 @@ class Sub2ApiGatewayIntegration {
     this.resetTimers();
     this.publish();
     await promptReloadIfNeeded(this.vscode, result, "Sub2API Gateway 已选择。请重新加载窗口一次以启动本地回环适配器。");
+    if (!result.requiresReload) {
+      void this.vscode.window.showInformationMessage("Sub2API Gateway 已选择，无需重新加载窗口。");
+    }
   }
 
-  async deactivate() {
-    const result = await this.gateway.deactivate();
+  async deactivate(options) {
+    const result = await this.gateway.deactivate(options);
     if (result.error) {
       this.runtimeError = result.error;
       this.publish();
@@ -169,10 +165,14 @@ class Sub2ApiGatewayIntegration {
     this.resetTimers();
     this.publish();
     await promptReloadIfNeeded(this.vscode, result, "已切换回 ChatGPT Auth。请重新加载窗口一次以应用新的传输。");
+    if (!result.requiresReload) {
+      void this.vscode.window.showInformationMessage("已切换回 ChatGPT Auth，无需重新加载窗口。");
+    }
   }
 
   async refresh() {
     await this.reloadConfiguration(true);
+    await this.syncVirtualAccountRegistration();
     const config = this.config;
     if (!config) {
       this.publish();
@@ -263,6 +263,63 @@ class Sub2ApiGatewayIntegration {
       this.observerCredentialPresent = false;
       this.inventory = emptyInventory();
     }
+  }
+
+  async syncVirtualAccountRegistration() {
+    if (typeof this.api.registerVirtualAccount !== "function" || !this.config) {
+      return;
+    }
+    const descriptor = {
+      integrationId: INTEGRATION_ID,
+      baseUrl: this.config.sub2api.baseUrl,
+      model: this.config.sub2api.model,
+      credentialRef: this.config.sub2api.credentialRef
+    };
+    const key = JSON.stringify(descriptor);
+    if (key === this.virtualDescriptorKey && this.virtualRegistration) {
+      return;
+    }
+    this.virtualRegistration?.dispose();
+    this.virtualRegistration = await this.api.registerVirtualAccount({
+      id: INTEGRATION_ID,
+      displayName: this.config.displayName || "Sub2API Gateway",
+      descriptor,
+      getCardView: () => this.getCardViewModel(),
+      runCardAction: (actionId) => this.runAction(actionId),
+      onDidChange: this.events.event,
+      deactivate: (options) => this.deactivate(options),
+      setting: {
+        id: "sub2api-gateway-card-visible",
+        title: "显示 Sub2API 账号卡片",
+        description: "仅控制已保存账号列表中的虚拟账号卡片是否显示，不会切换当前路由。",
+        getEnabled: () => this.cardVisible,
+        setEnabled: async (enabled) => {
+          if (this.cardVisible === enabled) {
+            return;
+          }
+          this.cardVisible = enabled;
+          await this.context.globalState.update(CARD_VISIBILITY_STATE_KEY, enabled);
+          this.publish();
+        }
+      },
+      activate: async (options) => {
+        await this.reloadConfiguration(true);
+        const config = this.requireConfig();
+        const credential = await this.requireCredential(config);
+        const result = await this.gateway.activate(toRuntimeConfig(config), credential, options);
+        if (!result.error) {
+          this.selection = "active";
+          await this.context.globalState.update(SELECTION_STATE_KEY, this.selection);
+          this.runtimeError = undefined;
+          await this.refreshRuntimeStatus();
+          this.resetTimers();
+          this.publish();
+        }
+        return result;
+      }
+    });
+    this.virtualDescriptorKey = key;
+    this.publish();
   }
 
   async resumeSelectedGateway() {
@@ -417,7 +474,7 @@ class Sub2ApiGatewayIntegration {
     if (this.runtimeError) {
       return { kind: "warning", message: this.runtimeError };
     }
-    if (this.selection === "active" && this.runtimeStatus?.active) {
+    if (this.gateway?.isActive?.() === true) {
       if (this.inventoryObserverError) {
         return { kind: "warning", message: `本地回环 Gateway 已激活；只读库存观察配置有误：${this.inventoryObserverError}` };
       }
@@ -445,7 +502,7 @@ class Sub2ApiGatewayIntegration {
     this.disposed = true;
     clearInterval(this.runtimeTimer);
     clearInterval(this.inventoryTimer);
-    this.dashboardRegistration?.dispose();
+    this.virtualRegistration?.dispose();
     this.gateway?.dispose();
     this.events.dispose();
   }
@@ -511,6 +568,10 @@ function readSelection(value) {
   return value === "active" || value === "fallback" ? value : "inactive";
 }
 
+function readBoolean(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function emptyInventory(observer, credentialPresent = false) {
   return {
     status: observer ? (credentialPresent ? "pending" : "credential_required") : "not_configured",
@@ -533,39 +594,25 @@ function normalizeInventory(inventory, observer, credentialPresent) {
   return inventory?.group === observer.group ? inventory : emptyInventory(observer, true);
 }
 
-function observerSummary(inventory, observer, credentialPresent) {
-  if (!observer) return "未配置";
-  if (!credentialPresent) return "需要单独的只读观察密钥";
-  if (inventory.status === "error") return "读取失败；不会伪造额度";
-  if (inventory.status !== "available") return "等待首次读取";
-  return `已观察 ${inventory.observedAccountCount} / ${inventory.eligibleAccountCount} 个可调度账号`;
-}
-
-function metricForWindow(label, pool, usage) {
-  if (pool?.capacityUnits > 0) {
-    return {
-      label: `${label} 上游池`,
-      value: `${formatPercent(pool.remainingPercent)} · ${formatUnits(pool.remainingUnits)} / ${formatUnits(pool.capacityUnits)}`,
-      description: pool.earliestResetAt ? `最早重置：${new Date(pool.earliestResetAt).toLocaleString()}` : "仅聚合可读的上游窗口。"
-    };
-  }
+function providerUsage(model, usage, range) {
+  const totals = {
+    inputTokens: usage.inputTokens,
+    cachedInputTokens: usage.cachedInputTokens,
+    outputTokens: usage.outputTokens,
+    reasoningOutputTokens: usage.reasoningTokens,
+    totalTokens: usage.totalTokens
+  };
   return {
-    label: `${label} Gateway Token`,
-    value: formatTokens(usage.totalTokens),
-    description: usage.observedSince ? "仅统计本扩展观察到的完成 token，不代表上游百分比。" : "尚未观察到完成 token。"
+    ...totals,
+    range,
+    status: usage.totalTokens > 0 ? "tracking" : "waiting",
+    observedSince: usage.observedSince,
+    byModel: [{ model, ...totals }]
   };
 }
 
 function formatTokens(value) {
   return new Intl.NumberFormat().format(Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0);
-}
-
-function formatUnits(value) {
-  return Number.isFinite(value) ? value.toFixed(value % 1 === 0 ? 0 : 2) : "0";
-}
-
-function formatPercent(value) {
-  return Number.isFinite(value) ? `${Math.round(value)}%` : "未知";
 }
 
 function safeError(error, fallback) {
@@ -575,4 +622,4 @@ function safeError(error, fallback) {
   return fallback;
 }
 
-module.exports = { INTEGRATION_ID, Sub2ApiGatewayIntegration, checkGatewayHealth, emptyInventory, metricForWindow, normalizeDownstreamCredential };
+module.exports = { INTEGRATION_ID, Sub2ApiGatewayIntegration, checkGatewayHealth, emptyInventory, normalizeDownstreamCredential };

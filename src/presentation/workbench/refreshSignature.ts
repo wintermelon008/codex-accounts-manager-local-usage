@@ -11,6 +11,12 @@ export function buildWorkbenchRefreshSignature(params: {
     .map((account) =>
       [
         account.id,
+        account.accountKind ?? "chatgpt",
+        account.manualOnly ? "1" : "0",
+        account.providerActive ? "1" : "0",
+        account.virtualRoute?.baseUrl ?? "",
+        account.virtualRoute?.model ?? "",
+        account.virtualRoute?.credentialRef ?? "",
         account.email,
         account.accountName ?? "",
         account.planType ?? "",

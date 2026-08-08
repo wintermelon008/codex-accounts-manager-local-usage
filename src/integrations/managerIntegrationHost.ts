@@ -1,7 +1,12 @@
 import type * as vscode from "vscode";
-import type { GatewayRuntimeStatus, RuntimeAccountSwitchOutcome } from "../codex/hotSwitchBridge";
-import type { GatewayRuntimeConfig, HotSwitchSetupResult } from "../codex/hotSwitchRuntime";
-import type { DashboardIntegrationViewModel } from "../domain/dashboard/types";
+import type { GatewayRuntimeStatus, HotSwitchAccountResult, RuntimeAccountSwitchOutcome } from "../codex/hotSwitchBridge";
+import type { GatewayRuntimeConfig, HotSwitchSetupResult, RuntimeAccountSwitchOptions } from "../codex/hotSwitchRuntime";
+import type {
+  DashboardIntegrationSettingViewModel,
+  DashboardIntegrationViewModel,
+  DashboardProviderAccountCardViewModel
+} from "../domain/dashboard/types";
+import type { CodexVirtualRouteDescriptor } from "../core/types";
 
 const INTEGRATION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 export const MANAGER_INTEGRATION_API_VERSION = 1 as const;
@@ -19,30 +24,79 @@ export type GatewayRuntimeLease = vscode.Disposable & {
   readonly integrationId: string;
   isActive: () => boolean;
   isConfigured: () => boolean;
-  activate: (config: GatewayRuntimeConfig, credential?: string) => Promise<HotSwitchSetupResult>;
-  deactivate: () => Promise<HotSwitchSetupResult>;
+  activate: (
+    config: GatewayRuntimeConfig,
+    credential?: string,
+    options?: RuntimeAccountSwitchOptions
+  ) => Promise<HotSwitchSetupResult>;
+  deactivate: (options?: RuntimeAccountSwitchOptions) => Promise<HotSwitchSetupResult>;
   configureCredential: (credential: string) => Promise<GatewayRuntimeStatus>;
   getStatus: () => Promise<GatewayRuntimeStatus>;
   fallbackToChatGpt: () => Promise<RuntimeAccountSwitchOutcome>;
+};
+
+/**
+ * A provider-owned route handle. The callback is deliberately opaque to the
+ * Manager: it may load a credential from the integration's SecretStorage and
+ * must complete the runtime's safe route transaction.
+ */
+export type VirtualAccountRegistration = {
+  id: string;
+  displayName: string;
+  descriptor: CodexVirtualRouteDescriptor;
+  activate: (options?: RuntimeAccountSwitchOptions) => Promise<HotSwitchSetupResult>;
+  /** Provider-owned, sanitized card data rendered inside the saved account card. */
+  getCardView?: () => DashboardProviderAccountCardViewModel;
+  /** Executes a declared provider-owned card action without exposing secrets to Manager. */
+  runCardAction?: (actionId: string) => void | Promise<void>;
+  /** Provider-owned safe return route used by the dynamic setting toggle. */
+  deactivate?: (options?: RuntimeAccountSwitchOptions) => Promise<HotSwitchSetupResult>;
+  onDidChange?: IntegrationChangeEvent;
+  /** A provider-owned card-visibility setting shown only while this virtual account is registered. */
+  setting?: VirtualAccountSettingRegistration;
+};
+
+export type VirtualAccountSettingRegistration = {
+  id: string;
+  title: string;
+  description?: string;
+  /** Whether the virtual account card is shown; this must not select a provider route. */
+  getEnabled: () => boolean;
+  setEnabled: (enabled: boolean) => void | Promise<void>;
+};
+
+export type VirtualAccountOperations = {
+  upsert: (descriptor: CodexVirtualRouteDescriptor, displayName: string) => Promise<void>;
+  activate: (accountId: string) => Promise<void>;
+  deactivate: () => Promise<void>;
 };
 
 export type CodexAccountsIntegrationApi = {
   readonly apiVersion: typeof MANAGER_INTEGRATION_API_VERSION;
   registerDashboardIntegration: (registration: DashboardIntegrationRegistration) => vscode.Disposable;
   registerGateway: (integrationId: string) => GatewayRuntimeLease;
+  registerVirtualAccount: (registration: VirtualAccountRegistration) => Promise<vscode.Disposable>;
 };
 
 type GatewayRuntimeOperations = {
   isActive: () => boolean;
   isConfigured: () => boolean;
-  activate: (config: GatewayRuntimeConfig, credential?: string) => Promise<HotSwitchSetupResult>;
-  deactivate: () => Promise<HotSwitchSetupResult>;
+  activate: (
+    config: GatewayRuntimeConfig,
+    credential?: string,
+    options?: RuntimeAccountSwitchOptions
+  ) => Promise<HotSwitchSetupResult>;
+  deactivate: (options?: RuntimeAccountSwitchOptions) => Promise<HotSwitchSetupResult>;
   configureCredential: (credential: string) => Promise<GatewayRuntimeStatus>;
   getStatus: () => Promise<GatewayRuntimeStatus>;
   fallbackToChatGpt: () => Promise<RuntimeAccountSwitchOutcome>;
 };
 
 type RegisteredDashboardIntegration = DashboardIntegrationRegistration & {
+  changeSubscription?: vscode.Disposable;
+};
+
+type RegisteredVirtualAccount = VirtualAccountRegistration & {
   changeSubscription?: vscode.Disposable;
 };
 
@@ -60,17 +114,23 @@ export class ManagerIntegrationHost implements vscode.Disposable {
 
   private readonly dashboardIntegrations = new Map<string, RegisteredDashboardIntegration>();
   private readonly gatewayLeases = new Map<string, GatewayRuntimeLeaseState>();
+  private readonly virtualAccounts = new Map<string, RegisteredVirtualAccount>();
   private readonly changeListeners = new Set<() => void>();
+  private virtualSwitchInFlight: Promise<RuntimeAccountSwitchOutcome> | undefined;
   private configuredGatewayOwner: string | undefined;
   private activeGatewayOwner: string | undefined;
   private gatewayTransitionOwner: string | undefined;
   private disposed = false;
 
-  constructor(private readonly gateway: GatewayRuntimeOperations) {
+  constructor(
+    private readonly gateway: GatewayRuntimeOperations,
+    private readonly virtualAccountOperations?: VirtualAccountOperations
+  ) {
     this.api = {
       apiVersion: MANAGER_INTEGRATION_API_VERSION,
       registerDashboardIntegration: (registration) => this.registerDashboardIntegration(registration),
-      registerGateway: (integrationId) => this.registerGateway(integrationId)
+      registerGateway: (integrationId) => this.registerGateway(integrationId),
+      registerVirtualAccount: (registration) => this.registerVirtualAccount(registration)
     };
   }
 
@@ -93,6 +153,68 @@ export class ManagerIntegrationHost implements vscode.Disposable {
       .map((registration) => this.readDashboardViewModel(registration));
   }
 
+  getVirtualAccountCards(): Array<{ accountId: string; card: DashboardProviderAccountCardViewModel }> {
+    if (this.disposed) {
+      return [];
+    }
+    const cards: Array<{ accountId: string; card: DashboardProviderAccountCardViewModel }> = [];
+    for (const [accountId, registration] of this.virtualAccounts) {
+      if (!this.isVirtualAccountVisible(registration)) {
+        continue;
+      }
+      if (!registration.getCardView) {
+        continue;
+      }
+      try {
+        const card = registration.getCardView();
+        if (card.integrationId !== registration.id) {
+          continue;
+        }
+        cards.push({ accountId, card });
+      } catch {
+        // Provider card data is optional; a broken card must not break the Dashboard.
+      }
+    }
+    return cards;
+  }
+
+  getVisibleVirtualAccountIds(): ReadonlySet<string> {
+    if (this.disposed) {
+      return new Set<string>();
+    }
+    const accountIds = new Set<string>();
+    for (const [accountId, registration] of this.virtualAccounts) {
+      if (this.isVirtualAccountVisible(registration)) {
+        accountIds.add(accountId);
+      }
+    }
+    return accountIds;
+  }
+
+  getIntegrationSettings(): DashboardIntegrationSettingViewModel[] {
+    if (this.disposed) {
+      return [];
+    }
+    const settings: DashboardIntegrationSettingViewModel[] = [];
+    for (const registration of this.virtualAccounts.values()) {
+      const setting = registration.setting;
+      if (!setting) {
+        continue;
+      }
+      try {
+        settings.push({
+          id: setting.id,
+          title: setting.title,
+          description: setting.description,
+          enabled: setting.getEnabled()
+        });
+      } catch {
+        // An unavailable optional setting is omitted from the core UI.
+      }
+    }
+    return settings;
+  }
+
   async runDashboardAction(integrationId: string, actionId: string): Promise<void> {
     this.throwIfDisposed();
     const registration = this.dashboardIntegrations.get(normalizeIntegrationId(integrationId));
@@ -107,6 +229,69 @@ export class ManagerIntegrationHost implements vscode.Disposable {
     this.fireDidChange();
   }
 
+  async runVirtualAccountAction(accountId: string, actionId: string): Promise<void> {
+    this.throwIfDisposed();
+    const registration = this.virtualAccounts.get(accountId);
+    if (!registration?.runCardAction || !registration.getCardView) {
+      throw new Error("The requested virtual account action is unavailable");
+    }
+    const card = registration.getCardView();
+    if (!card.actions?.some((action) => action.id === actionId && action.enabled !== false)) {
+      throw new Error("The requested virtual account action is unavailable");
+    }
+    await registration.runCardAction(actionId);
+    this.fireDidChange();
+  }
+
+  async updateIntegrationSetting(settingId: string, enabled: boolean): Promise<void> {
+    this.throwIfDisposed();
+    const entry = [...this.virtualAccounts.entries()].find(([, item]) => item.setting?.id === settingId);
+    const registration = entry?.[1];
+    if (!registration?.setting) {
+      throw new Error("The requested Manager integration setting is unavailable");
+    }
+    await registration.setting.setEnabled(enabled);
+    this.fireDidChange();
+  }
+
+  async deactivateVirtualAccount(
+    accountId: string,
+    options?: RuntimeAccountSwitchOptions
+  ): Promise<RuntimeAccountSwitchOutcome> {
+    this.throwIfDisposed();
+    const registration = this.virtualAccounts.get(accountId);
+    if (!registration) {
+      return { status: "failed", message: "The virtual provider integration is unavailable" };
+    }
+    try {
+      const result = registration.deactivate
+        ? await registration.deactivate(options)
+        : await this.gateway.deactivate(options);
+      if (result.error) {
+        return { status: "failed", message: result.error };
+      }
+      if (result.requiresReload) {
+        return {
+          status: "failed",
+          message: "The seamless runtime was installed or changed; reload once before returning to ChatGPT Auth"
+        };
+      }
+      this.activeGatewayOwner = undefined;
+      await this.virtualAccountOperations?.deactivate();
+      this.fireDidChange();
+      return {
+        status: "switched",
+        accountId: accountId,
+        email: null,
+        activeTurns: 0,
+        interruptedTurns: 0,
+        continuedThreads: 0
+      } satisfies HotSwitchAccountResult;
+    } catch (error) {
+      return { status: "failed", message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   dispose(): void {
     if (this.disposed) {
       return;
@@ -115,7 +300,11 @@ export class ManagerIntegrationHost implements vscode.Disposable {
     for (const registration of this.dashboardIntegrations.values()) {
       registration.changeSubscription?.dispose();
     }
+    for (const registration of this.virtualAccounts.values()) {
+      registration.changeSubscription?.dispose();
+    }
     this.dashboardIntegrations.clear();
+    this.virtualAccounts.clear();
     this.gatewayLeases.clear();
     this.changeListeners.clear();
     if (this.configuredGatewayOwner || this.gatewayTransitionOwner) {
@@ -124,6 +313,106 @@ export class ManagerIntegrationHost implements vscode.Disposable {
     this.configuredGatewayOwner = undefined;
     this.activeGatewayOwner = undefined;
     this.gatewayTransitionOwner = undefined;
+  }
+
+  async switchVirtualAccount(
+    accountId: string,
+    options?: RuntimeAccountSwitchOptions
+  ): Promise<RuntimeAccountSwitchOutcome> {
+    this.throwIfDisposed();
+    const registration = this.virtualAccounts.get(accountId);
+    if (!registration) {
+      return { status: "failed", message: "The virtual provider integration is unavailable" };
+    }
+    if (this.virtualSwitchInFlight) {
+      return { status: "suppressed", reason: "operationInProgress" };
+    }
+    const attempt = (async (): Promise<RuntimeAccountSwitchOutcome> => {
+      const result = await registration.activate(options);
+      if (result.error) {
+        return { status: "failed", message: result.error };
+      }
+      if (result.requiresReload) {
+        return {
+          status: "failed",
+          message: "The seamless runtime was installed or changed; reload once before selecting the Gateway"
+        };
+      }
+      await this.virtualAccountOperations?.activate(accountId);
+      this.activeGatewayOwner = registration.descriptor.integrationId;
+      this.fireDidChange();
+      return {
+        status: "switched",
+        accountId,
+        email: null,
+        activeTurns: 0,
+        interruptedTurns: 0,
+        continuedThreads: 0
+      } satisfies HotSwitchAccountResult;
+    })();
+    this.virtualSwitchInFlight = attempt;
+    try {
+      return await attempt;
+    } catch (error) {
+      // Persisting the provider marker is part of the same user-visible
+      // switch. If that commit fails after the runtime route changed, restore
+      // ChatGPT before reporting failure.
+      await this.gateway.deactivate().catch(() => undefined);
+      await this.virtualAccountOperations?.deactivate().catch(() => undefined);
+      return { status: "failed", message: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (this.virtualSwitchInFlight === attempt) {
+        this.virtualSwitchInFlight = undefined;
+      }
+    }
+  }
+
+  private async registerVirtualAccount(registration: VirtualAccountRegistration): Promise<vscode.Disposable> {
+    this.throwIfDisposed();
+    const id = registration.id.trim();
+    if (!id || !INTEGRATION_ID_PATTERN.test(id)) {
+      throw new Error("Virtual account IDs must use lowercase letters, digits, dots, underscores, or hyphens");
+    }
+    if (
+      !registration.descriptor ||
+      typeof registration.descriptor.integrationId !== "string" ||
+      typeof registration.descriptor.baseUrl !== "string" ||
+      typeof registration.descriptor.model !== "string" ||
+      typeof registration.descriptor.credentialRef !== "string" ||
+      registration.descriptor.integrationId.trim() !== id
+    ) {
+      throw new Error("The virtual account descriptor is invalid");
+    }
+    if (!this.virtualAccountOperations) {
+      throw new Error("Virtual account registration is unavailable in this Manager build");
+    }
+    await this.virtualAccountOperations.upsert(registration.descriptor, registration.displayName);
+    const accountId = `virtual:${id}`;
+    const normalized: RegisteredVirtualAccount = { ...registration, id };
+    normalized.changeSubscription = registration.onDidChange?.(() => this.fireDidChange());
+    this.virtualAccounts.set(accountId, normalized);
+    this.fireDidChange();
+    return {
+      dispose: () => {
+        const current = this.virtualAccounts.get(accountId);
+        if (current?.activate === registration.activate) {
+          current.changeSubscription?.dispose();
+          this.virtualAccounts.delete(accountId);
+          this.fireDidChange();
+        }
+      }
+    };
+  }
+
+  private isVirtualAccountVisible(registration: RegisteredVirtualAccount): boolean {
+    if (!registration.setting) {
+      return true;
+    }
+    try {
+      return registration.setting.getEnabled();
+    } catch {
+      return false;
+    }
   }
 
   private registerDashboardIntegration(registration: DashboardIntegrationRegistration): vscode.Disposable {
@@ -167,7 +456,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
       integrationId: id,
       isActive: () => !state.disposed && this.activeGatewayOwner === id && this.gateway.isActive(),
       isConfigured: () => !state.disposed && this.configuredGatewayOwner === id && this.gateway.isConfigured(),
-      activate: async (config, credential) => {
+      activate: async (config, credential, options) => {
         assertLease();
         if (this.configuredGatewayOwner && this.configuredGatewayOwner !== id) {
           throw new Error("Another Manager Gateway integration already owns the local runtime");
@@ -178,7 +467,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
         this.gatewayTransitionOwner = id;
         let shouldDeactivateOnFailure = false;
         try {
-          const result = await this.gateway.activate(config, credential);
+          const result = await this.gateway.activate(config, credential, options);
           if (result.error) {
             throw new Error(result.error);
           }
@@ -186,12 +475,16 @@ export class ManagerIntegrationHost implements vscode.Disposable {
           assertLease();
           this.configuredGatewayOwner = id;
           this.activeGatewayOwner = this.gateway.isActive() ? id : undefined;
+          if (this.activeGatewayOwner && this.virtualAccounts.has(`virtual:${id}`)) {
+            await this.virtualAccountOperations?.activate(`virtual:${id}`);
+          }
           shouldDeactivateOnFailure = false;
           this.fireDidChange();
           return result;
         } catch (error) {
           if (shouldDeactivateOnFailure) {
             void this.gateway.deactivate().catch(() => undefined);
+            void this.virtualAccountOperations?.deactivate().catch(() => undefined);
           }
           throw error;
         } finally {
@@ -218,6 +511,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
         }
         this.configuredGatewayOwner = undefined;
         this.activeGatewayOwner = undefined;
+        await this.virtualAccountOperations?.deactivate();
         this.fireDidChange();
         return result;
       },
@@ -243,6 +537,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
         const result = await this.gateway.fallbackToChatGpt();
         if (result.status === "switched") {
           this.activeGatewayOwner = undefined;
+          await this.virtualAccountOperations?.deactivate();
           this.fireDidChange();
         }
         return result;

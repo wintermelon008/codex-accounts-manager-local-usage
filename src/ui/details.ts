@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { needsRefresh, refreshTokens } from "../auth/oauth";
-import { CodexAccountRecord, CodexDailyUsageBreakdown, CodexDailyUsagePoint } from "../core/types";
+import { CodexAccountRecord, CodexDailyUsageBreakdown, CodexDailyUsagePoint, isSub2ApiAccount } from "../core/types";
 import { resolveAccountHealth, isHealthDismissed } from "../application/accounts/health";
 import { resolveSubscriptionDisplay } from "../application/dashboard/buildDashboardState";
 import { formatAccountStructure } from "../application/dashboard/copy";
@@ -142,6 +142,10 @@ export function openDetailsPanel(
 }
 
 async function hydrateUsage(repo: AccountsRepository, accountId: string, requestId: number): Promise<void> {
+  const account = await repo.getAccount(accountId);
+  if (!account || isSub2ApiAccount(account)) {
+    return;
+  }
   try {
     const tokens = await getFreshUsageTokens(repo, accountId);
     if (!tokens || !detailsPanel || requestId !== detailsPanelRequestId || detailsPanelState.accountId !== accountId) {
@@ -254,6 +258,9 @@ function renderHtml(
     usage?: CodexDailyUsageBreakdown;
   }
 ): string {
+  if (isSub2ApiAccount(account)) {
+    return renderVirtualDetails(account, copy, styles, scripts, options);
+  }
   const quota = account.quotaSummary;
   const accountStatus = account.isActive ? copy.currentlyActive : copy.savedAccount;
   const provider = prettyAuthProvider(account.authProvider);
@@ -411,6 +418,17 @@ function renderHtml(
   <script src="${scripts.page}"></script>
 </body>
 </html>`;
+}
+
+function renderVirtualDetails(
+  account: CodexAccountRecord,
+  copy: DetailCopy,
+  styles: WebviewStyles,
+  scripts: WebviewScripts,
+  options: { theme: DashboardThemeOption; privacyMode: boolean }
+): string {
+  const route = account.virtualRoute;
+  return `<!DOCTYPE html><html lang="${copy.lang}" ${renderDetailsThemeAttributes(options.theme)}><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><link rel="stylesheet" href="${styles.shared}" /><link rel="stylesheet" href="${styles.page}" /></head><body ${renderDetailsBodyAttributes(options.privacyMode)}><div class="shell"><section class="panel"><div class="panel-inner hero"><div class="hero-top"><div class="hero-title"><h1>Sub2API Gateway</h1><div class="meta">Gateway · 仅手动切换</div></div><div class="badges"><span class="pill active">Gateway</span><span class="pill">手动</span></div></div><div class="summary"><div class="meta"><strong>Base URL:</strong> ${escapeHtml(route?.baseUrl ?? "-")}</div><div class="meta"><strong>Model:</strong> ${escapeHtml(route?.model ?? "-")}</div><div class="meta"><strong>Credential:</strong> ${escapeHtml(route?.credentialRef ?? "-")}</div><div class="meta"><strong>Status:</strong> ${escapeHtml(account.providerActive ? "当前 Gateway 路由" : "可手动切换")}</div></div></div></section></div><script src="${scripts.page}"></script></body></html>`;
 }
 
 export function getDetailsThemePreference(): DashboardThemeOption {

@@ -64,6 +64,34 @@ describe("accountsIndex helpers", () => {
     expect(parsed.currentAccountId).toBe("a");
     expect(parsed.accounts).toHaveLength(1);
   });
+
+  it("keeps the OAuth current account while a virtual provider owns the route", () => {
+    const index = cloneIndex({
+      currentAccountId: "oauth",
+      currentProviderRoute: "sub2api",
+      currentProviderAccountId: "virtual:sub2api-gateway",
+      accounts: [
+        { id: "oauth", email: "oauth@example.com", isActive: true, providerActive: false, createdAt: 1, updatedAt: 1 },
+        {
+          id: "virtual:sub2api-gateway",
+          email: "Sub2API Gateway",
+          accountKind: "sub2api",
+          manualOnly: true,
+          quotaMode: "none",
+          providerActive: true,
+          createdAt: 1,
+          updatedAt: 1
+        }
+      ]
+    });
+
+    expect(syncActiveAccountState(index, "different-oauth")).toBe(false);
+    expect(index.currentAccountId).toBe("oauth");
+    expect(index.currentProviderRoute).toBe("sub2api");
+    expect(index.currentProviderAccountId).toBe("virtual:sub2api-gateway");
+    expect(index.accounts.find((account) => account.id === "oauth")?.isActive).toBe(true);
+    expect(index.accounts.find((account) => account.id === "virtual:sub2api-gateway")?.providerActive).toBe(true);
+  });
 });
 
 describe("sharedAccounts helpers", () => {

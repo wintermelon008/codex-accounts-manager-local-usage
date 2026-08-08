@@ -593,6 +593,9 @@ function App() {
                   poolTogglePending={isActionPending("toggleBalancePool", account.id)}
                   updateTagsPending={isActionPending("updateTags", account.id)}
                   consumeResetCreditPending={isActionPending("consumeResetCredit", account.id)}
+                  providerActionPending={state.pendingActions.some(
+                    (request) => request.action === "integrationAction" && request.accountId === account.id
+                  )}
                   selected={selectedAccountIds.has(account.id)}
                   onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
                   onEditTags={() => handleEditAccountTags(account)}
@@ -663,6 +666,7 @@ function App() {
         lang={snapshot.lang}
         settings={snapshot.settings}
         tokenAutomation={snapshot.tokenAutomation}
+        integrationSettings={snapshot.integrationSettings ?? []}
         onClose={() => dispatch({ type: "close-settings" })}
         onPatchSettings={patchSettings}
         onSendSetting={sendSetting}
@@ -672,6 +676,9 @@ function App() {
         onThresholdCommit={handleThresholdCommit}
         onPickCodexAppPath={() => postMessageToHost({ type: "dashboard:pickCodexAppPath" })}
         onClearCodexAppPath={() => postMessageToHost({ type: "dashboard:clearCodexAppPath" })}
+        onIntegrationSettingToggle={(settingId, enabled) =>
+          sendAction("integrationSetting", undefined, { integrationSettingId: settingId, enabled })
+        }
       />
 
       <AnnouncementCenter

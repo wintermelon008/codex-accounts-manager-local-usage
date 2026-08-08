@@ -1,5 +1,5 @@
 import { isTokenExpired } from "../../utils/jwt";
-import { CodexAccountRecord, CodexTokens } from "../../core/types";
+import { CodexAccountRecord, CodexTokens, isSub2ApiAccount } from "../../core/types";
 import { getQuotaIssueKind } from "../../utils/quotaIssue";
 import type { AccountAutomationState, TokenAutomationSnapshot } from "../../presentation/workbench/tokenAutomationState";
 
@@ -16,6 +16,9 @@ export function resolveAccountHealth(
   tokens: CodexTokens | undefined,
   automation: TokenAutomationSnapshot
 ): AccountHealthInfo {
+  if (isSub2ApiAccount(account)) {
+    return { kind: "healthy", issueKey: "virtual" };
+  }
   const automationState = automation.accounts[account.id];
   const quotaIssueKind = getQuotaIssueKind(account.quotaError);
   if (quotaIssueKind === "disabled") {

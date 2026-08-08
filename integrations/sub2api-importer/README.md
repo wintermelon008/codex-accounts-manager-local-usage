@@ -10,12 +10,7 @@
 
 ```dotenv
 SUB2API_ADMIN_BASE_URL=https://gateway.example.invalid
-SUB2API_ADMIN_TOKEN=<private-admin-token>
-
-# 可选但建议配置：当 access token 过期时自动刷新。轮换后的 refresh token
-# 仅写入本包的 owner-only 私有状态文件，不会写回仓库或队列。
-SUB2API_ADMIN_REFRESH_TOKEN=<private-admin-refresh-token>
-SUB2API_ADMIN_SESSION_STATE_FILE=<absolute-private-session-state-file>
+SUB2API_ADMIN_API_KEY=<sub2api-admin-api-key>
 
 # S+ 新建账号的显式默认策略；以下正是默认值，可按目标 Sub2API 调整。
 SUB2API_IMPORT_PROXY_NAME=default
@@ -28,9 +23,9 @@ SESSION_INGRESS_STATE_DIR=<absolute-private-state-directory>
 SUB2API_IMPORT_POLL_SECONDS=5
 ```
 
-`SUB2API_ADMIN_TOKEN` 与可选的 `SUB2API_ADMIN_REFRESH_TOKEN` 只存在于此进程的私有环境；不会写入 Manager、Gateway VSIX、任务结果、日志或仓库文件。若 access token 因 `TOKEN_EXPIRED` 被拒绝，导入器只会用 refresh token 刷新一次并重试原请求；若服务器轮换 refresh token，新值会写入 owner-only 私有状态文件，以便服务重启后继续使用。未配置 refresh token 时保持原有的失败关闭行为。若未指定 `SUB2API_IMPORT_QUEUE_DIR`，本包会使用与飞书机器人相同的可移植标准状态目录发现规则。
+`SUB2API_ADMIN_API_KEY` 是 Sub2API 设置页生成的全局管理员 API Key。导入器通过 `x-api-key` 使用它，不再依赖浏览器的 `auth_token`、`refresh_token` 或会话状态文件。若未指定 `SUB2API_IMPORT_QUEUE_DIR`，本包会使用与飞书机器人相同的可移植标准状态目录发现规则。
 
-从旧的 M+/S+ 工作器迁移时，可用本包的迁移脚本从**旧账户导入工作器自己的私有环境文件**提取仅需的 Sub2API 管理端地址、令牌，以及已有的 S+ 默认策略；若旧环境已有 refresh token 也会一并迁移。脚本不会复制飞书、店铺、Manager 或其他无关变量，并写入一个全新的、权限为 `0600` 的导入器环境文件：
+从旧的 M+/S+ 工作器迁移时，可用本包的迁移脚本从**旧账户导入工作器自己的私有环境文件**提取 Sub2API 管理端地址、Admin API Key 和已有的 S+ 默认策略：
 
 ```bash
 node scripts/migrate-legacy-env.cjs \
@@ -58,4 +53,12 @@ node integrations/sub2api-importer/src/cli.cjs --once
 node integrations/sub2api-importer/src/cli.cjs
 ```
 
-`package` 会在本包自己的 `dist/` 中生成可安装 tarball；它不包含私有环境文件、管理令牌、账号或队列内容。使用 `--once` 可安全执行一次扫描，适合作为手动验证或受调度器管理的任务。常驻模式按 `SUB2API_IMPORT_POLL_SECONDS` 轮询。无论哪种模式，都不会自动迁移旧机器人、旧服务或历史账号数据。
+`package` 会在本包自己的 `dist/` 中生成可安装 tarball；它不包含私有环境文件、Admin API Key、账号或队列内容。使用 `--once` 可执行一次扫描，常驻模式按 `SUB2API_IMPORT_POLL_SECONDS` 轮询。
+
+本机 systemd 部署失效时，运行一次：
+
+```bash
+sub2api-repair
+```
+
+该命令启用并重启 `sub2api.service`，确认 Admin API Key 可用，然后重启 `codex-accounts-sub2api-importer.service`。系统服务操作会请求当前用户的 sudo 密码。
