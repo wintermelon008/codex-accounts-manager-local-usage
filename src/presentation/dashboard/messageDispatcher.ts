@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
-import type { DashboardClientMessage, DashboardSettingKey } from "../../domain/dashboard/types";
+import type { DashboardClientMessage, DashboardSettingKey, DashboardSettingValue } from "../../domain/dashboard/types";
 
 export type DashboardMessageHandlers = {
   onReady: () => void | Promise<void>;
   onAction: (message: Extract<DashboardClientMessage, { type: "dashboard:action" }>) => Promise<void>;
-  onSetting: (key: DashboardSettingKey, value: string | number | boolean) => Promise<void>;
+  onSetting: (key: DashboardSettingKey, value: DashboardSettingValue) => Promise<void>;
   onPickCodexAppPath: () => Promise<void>;
   onClearCodexAppPath: () => Promise<void>;
 };

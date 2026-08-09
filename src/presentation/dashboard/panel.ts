@@ -5,7 +5,8 @@ import type {
   DashboardActionName,
   DashboardClientMessage,
   DashboardHostMessage,
-  DashboardSettingKey
+  DashboardSettingKey,
+  DashboardSettingValue
 } from "../../domain/dashboard/types";
 import { ExtensionSettingsStore } from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
@@ -273,7 +274,7 @@ class DashboardPanelController {
     } satisfies DashboardHostMessage);
   }
 
-  private async handleSettingUpdate(key: DashboardSettingKey, value: string | number | boolean): Promise<void> {
+  private async handleSettingUpdate(key: DashboardSettingKey, value: DashboardSettingValue): Promise<void> {
     const updated = await handleDashboardSettingUpdate(key, value);
     if (updated) {
       this.schedulePublishState();
@@ -314,6 +315,7 @@ class DashboardPanelController {
       // cover hundreds of megabytes and is intentionally user-triggered.
       backgroundRefreshEnabled: false
     });
+    this.usageAnalytics.setEnabledRanges(this.settingsStore.getDashboardSettings().localUsageEnabledRanges);
     return this.usageAnalytics;
   }
 }

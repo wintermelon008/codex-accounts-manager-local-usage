@@ -20,6 +20,7 @@ function createState(overrides?: {
     settings: {
       dashboardTheme: "dark",
       localUsageDefaultRange: "7d",
+      localUsageEnabledRanges: ["7d"],
       localUsageShowEquivalentPrice: true,
       displayLanguage: "zh",
       autoRefreshMinutes: 0,
@@ -163,7 +164,7 @@ describe("buildDashboardStateSignature", () => {
       ...base,
       settings: {
         ...base.settings,
-        localUsageDefaultRange: "14d"
+        localUsageEnabledRanges: ["14d"]
       }
     };
     const usageChanged: DashboardState = {
@@ -172,6 +173,7 @@ describe("buildDashboardStateSignature", () => {
         status: "ready",
         isRefreshing: false,
         periodDays: 14,
+        timeZone: "Asia/Shanghai",
         calculatedAt: 100,
         nextRefreshAt: 200,
         sourceFileCount: 1,
@@ -183,6 +185,8 @@ describe("buildDashboardStateSignature", () => {
           reasoningOutputTokens: 1,
           totalTokens: 13
         },
+        by3Hour: [],
+        by3HourAndModel: [],
         byDay: [
           {
             date: "2026-07-14",

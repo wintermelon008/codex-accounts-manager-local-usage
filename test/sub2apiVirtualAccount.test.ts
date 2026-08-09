@@ -4,6 +4,11 @@ import { selectBalanceCandidate } from "../src/application/accounts/balanceSched
 import { selectGatewayFallbackCandidates } from "../src/application/accounts/gatewayFallbackSelection";
 import { refreshSingleQuota } from "../src/application/accounts/quota";
 import { buildDashboardState } from "../src/application/dashboard/buildDashboardState";
+import {
+  getActiveManagerIntegrationHost,
+  ManagerIntegrationHost,
+  setActiveManagerIntegrationHost
+} from "../src/integrations";
 import type { CodexAccountRecord, CodexQuotaSummary } from "../src/core/types";
 
 const quota: CodexQuotaSummary = {
@@ -113,6 +118,34 @@ describe("Sub2API virtual account boundaries", () => {
     expect(rendered.quotaIssueKind).toBeUndefined();
     expect(rendered.lastTokenRefreshAt).toBeUndefined();
     expect(rendered.statusColor).toBe("var(--accent-blue)");
+  });
+
+  it("hides saved virtual accounts when no provider integration is registered", async () => {
+    const previousHost = getActiveManagerIntegrationHost();
+    const host = new ManagerIntegrationHost({} as never);
+    setActiveManagerIntegrationHost(host);
+    try {
+      const state = await buildDashboardState(
+        {
+          listAccounts: vi.fn(async () => [virtual(), chatgpt("saved")]),
+          getTokens: vi.fn(async () => undefined),
+          getIndexHealthSummary: vi.fn(async () => ({ status: "healthy", availableBackups: 0 }))
+        } as never,
+        {
+          resolveLanguage: () => "zh",
+          getDashboardSettings: () => ({ codexAppPath: "" })
+        } as never,
+        "",
+        { announcements: [], unreadIds: [] }
+      );
+
+      expect(state.accounts.map((account) => account.id)).toEqual(["saved"]);
+      expect(state.integrations).toEqual([]);
+      expect(state.integrationSettings).toEqual([]);
+    } finally {
+      host.dispose();
+      setActiveManagerIntegrationHost(previousHost);
+    }
   });
 
   it("carries provider-owned usage and card actions without OAuth fields", async () => {

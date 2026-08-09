@@ -52,8 +52,31 @@ describe("handleDashboardSettingUpdate", () => {
     await expect(handleDashboardSettingUpdate("localUsageDefaultRange", "24h")).resolves.toBe(true);
     await expect(handleDashboardSettingUpdate("localUsageDefaultRange", "unsupported")).resolves.toBe(true);
 
-    expect(update).toHaveBeenNthCalledWith(1, "localUsageDefaultRange", "7d", vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(1, "localUsageDefaultRange", "24h", vscode.ConfigurationTarget.Global);
     expect(update).toHaveBeenNthCalledWith(2, "localUsageDefaultRange", "7d", vscode.ConfigurationTarget.Global);
+  });
+
+  it("normalizes multi-select local usage ranges and falls back to 24h", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(),
+      update,
+      inspect: vi.fn(() => ({
+        key: "codexAccounts.localUsageEnabledRanges",
+        defaultValue: ["24h"]
+      }))
+    } as never);
+
+    await expect(handleDashboardSettingUpdate("localUsageEnabledRanges", ["7m", "24h", "7m"])).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("localUsageEnabledRanges", [])).resolves.toBe(true);
+
+    expect(update).toHaveBeenNthCalledWith(
+      1,
+      "localUsageEnabledRanges",
+      ["24h", "7m"],
+      vscode.ConfigurationTarget.Global
+    );
+    expect(update).toHaveBeenNthCalledWith(2, "localUsageEnabledRanges", ["24h"], vscode.ConfigurationTarget.Global);
   });
 
   it("migrates a legacy numeric range when the new range has not been explicitly configured", () => {

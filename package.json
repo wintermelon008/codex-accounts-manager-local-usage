@@ -79,7 +79,25 @@
             "14d"
           ],
           "default": "7d",
-          "markdownDescription": "Default range for the local Codex usage dashboard. Usage is aggregated by local calendar day. Changing the range only filters the cached local aggregate and does not trigger an additional scan."
+          "markdownDescription": "Deprecated compatibility setting. Use localUsageEnabledRanges to choose the local Codex usage dashboard time categories."
+        },
+        "codexAccounts.localUsageEnabledRanges": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "24h",
+              "3d",
+              "7d",
+              "14d",
+              "7w",
+              "7m"
+            ]
+          },
+          "default": [
+            "24h"
+          ],
+          "markdownDescription": "Time categories enabled in the local Codex usage dashboard. Select none to use 24h automatically. Changing categories only reuses the cached aggregate and does not trigger a session scan."
         },
         "codexAccounts.localUsageShowEquivalentPrice": {
           "type": "boolean",

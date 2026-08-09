@@ -18,6 +18,7 @@ export const DASHBOARD_ACCOUNTS_PAGE_SIZE = 50;
 export type DashboardSettingKey =
   | "dashboardTheme"
   | "localUsageDefaultRange"
+  | "localUsageEnabledRanges"
   | "localUsageShowEquivalentPrice"
   | "codexAppRestartEnabled"
   | "codexAppRestartMode"
@@ -49,6 +50,7 @@ export type DashboardSettingKey =
 export interface DashboardSettings {
   dashboardTheme: DashboardThemeOption;
   localUsageDefaultRange: DashboardLocalUsageRange;
+  localUsageEnabledRanges: DashboardLocalUsageRange[];
   localUsageShowEquivalentPrice: boolean;
   codexAppRestartEnabled: boolean;
   codexAppRestartMode: "auto" | "manual";
@@ -83,7 +85,18 @@ export interface DashboardSettings {
 
 export type DashboardThemeOption = "auto" | "dark" | "light";
 
-export type DashboardLocalUsageRange = "7d" | "14d";
+export type DashboardLocalUsageRange = "24h" | "3d" | "7d" | "14d" | "7w" | "7m";
+
+export const DASHBOARD_LOCAL_USAGE_RANGE_OPTIONS: readonly DashboardLocalUsageRange[] = [
+  "24h",
+  "3d",
+  "7d",
+  "14d",
+  "7w",
+  "7m"
+];
+
+export type DashboardSettingValue = string | number | boolean | DashboardLocalUsageRange[];
 
 export interface DashboardCopy {
   panelTitle: string;
@@ -206,15 +219,23 @@ export interface DashboardCopy {
   localUsageModelUnknown: string;
   localUsageNote: string;
   localUsagePriceNote: string;
+  localUsageRange24Hours: string;
+  localUsageRange3Days: string;
   localUsageRange7Days: string;
   localUsageRange14Days: string;
+  localUsageRange7Weeks: string;
+  localUsageRange7Months: string;
   localUsageSameRange: string;
   localUsageSettingsTitle: string;
   localUsageSettingsSub: string;
-  localUsageDefaultRangeTitle: string;
-  localUsageDefaultRangeSub: string;
+  localUsageEnabledRangesTitle: string;
+  localUsageEnabledRangesSub: string;
+  localUsageRange24HoursDesc: string;
+  localUsageRange3DaysDesc: string;
   localUsageRange7DaysDesc: string;
   localUsageRange14DaysDesc: string;
+  localUsageRange7WeeksDesc: string;
+  localUsageRange7MonthsDesc: string;
   localUsagePriceSettingsTitle: string;
   localUsagePriceSettingsSub: string;
   localUsagePriceSettingsNote: string;
@@ -483,12 +504,23 @@ export interface DashboardLocalUsageDayViewModel extends DashboardLocalUsageToke
   eventCount: number;
 }
 
+export interface DashboardLocalUsageBucketViewModel extends DashboardLocalUsageTokenTotals {
+  startAt: number;
+  endAt: number;
+  eventCount: number;
+}
+
 export interface DashboardLocalUsageModelViewModel extends DashboardLocalUsageTokenTotals {
   model: string;
 }
 
 export interface DashboardLocalUsageDayModelViewModel extends DashboardLocalUsageTokenTotals {
   date: string;
+  model: string;
+}
+
+export interface DashboardLocalUsageBucketModelViewModel extends DashboardLocalUsageTokenTotals {
+  startAt: number;
   model: string;
 }
 
@@ -500,11 +532,14 @@ export interface DashboardLocalUsageViewModel {
   status: "loading" | "ready" | "unavailable";
   isRefreshing: boolean;
   periodDays: number;
+  timeZone: string;
   calculatedAt?: number;
   nextRefreshAt?: number;
   sourceFileCount: number;
   eventCount: number;
   total: DashboardLocalUsageTokenTotals;
+  by3Hour: DashboardLocalUsageBucketViewModel[];
+  by3HourAndModel: DashboardLocalUsageBucketModelViewModel[];
   byDay: DashboardLocalUsageDayViewModel[];
   byModel: DashboardLocalUsageModelViewModel[];
   byDayAndModel: DashboardLocalUsageDayModelViewModel[];
@@ -708,7 +743,7 @@ export type DashboardClientMessage =
   | {
       type: "dashboard:setting";
       key: DashboardSettingKey;
-      value: string | number | boolean;
+      value: DashboardSettingValue;
     }
   | { type: "dashboard:pickCodexAppPath" }
   | { type: "dashboard:clearCodexAppPath" };

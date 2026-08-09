@@ -2,9 +2,11 @@ import type {
   DashboardCopy,
   DashboardIntegrationSettingViewModel,
   DashboardSettingKey,
+  DashboardSettingValue,
   DashboardSettings,
   DashboardState
 } from "../../src/domain/dashboard/types";
+import { DASHBOARD_LOCAL_USAGE_RANGE_OPTIONS as LOCAL_USAGE_RANGE_OPTIONS } from "../../src/domain/dashboard/types";
 import {
   SettingsDiscreteSlider,
   SettingsLanguageBlock,
@@ -33,7 +35,7 @@ export function SettingsOverlay(props: {
   integrationSettings: readonly DashboardIntegrationSettingViewModel[];
   onClose: () => void;
   onPatchSettings: (patch: Partial<DashboardSettings>) => void;
-  onSendSetting: (key: DashboardSettingKey, value: string | number | boolean) => void;
+  onSendSetting: (key: DashboardSettingKey, value: DashboardSettingValue) => void;
   onAutoRefreshToggle: (enabled: boolean) => void;
   onAutoRefreshValue: (minutes: number) => void;
   onThresholdPreview: (key: "yellow" | "green", value: number) => void;
@@ -42,9 +44,20 @@ export function SettingsOverlay(props: {
   onClearCodexAppPath: () => void;
   onIntegrationSettingToggle: (settingId: string, enabled: boolean) => void;
 }) {
-  const patchAndSend = (key: DashboardSettingKey, value: string | number | boolean) => {
+  const patchAndSend = (key: DashboardSettingKey, value: DashboardSettingValue) => {
     props.onPatchSettings({ [key]: value } as Partial<DashboardSettings>);
     props.onSendSetting(key, value);
+  };
+
+  const toggleUsageRange = (range: (typeof LOCAL_USAGE_RANGE_OPTIONS)[number]): void => {
+    const enabled = new Set(props.settings.localUsageEnabledRanges);
+    if (enabled.has(range)) {
+      enabled.delete(range);
+    } else {
+      enabled.add(range);
+    }
+    const next = LOCAL_USAGE_RANGE_OPTIONS.filter((candidate) => enabled.has(candidate));
+    patchAndSend("localUsageEnabledRanges", next.length > 0 ? next : ["24h"]);
   };
 
   return (
@@ -87,20 +100,49 @@ export function SettingsOverlay(props: {
             sub={props.copy.localUsageSettingsSub}
             options={[
               {
+                key: "local-usage-24h",
+                title: props.copy.localUsageRange24Hours,
+                description: props.copy.localUsageRange24HoursDesc,
+                active: props.settings.localUsageEnabledRanges.includes("24h"),
+                onClick: () => toggleUsageRange("24h")
+              },
+              {
+                key: "local-usage-3d",
+                title: props.copy.localUsageRange3Days,
+                description: props.copy.localUsageRange3DaysDesc,
+                active: props.settings.localUsageEnabledRanges.includes("3d"),
+                onClick: () => toggleUsageRange("3d")
+              },
+              {
                 key: "local-usage-7d",
                 title: props.copy.localUsageRange7Days,
                 description: props.copy.localUsageRange7DaysDesc,
-                active: props.settings.localUsageDefaultRange === "7d",
-                onClick: () => patchAndSend("localUsageDefaultRange", "7d")
+                active: props.settings.localUsageEnabledRanges.includes("7d"),
+                onClick: () => toggleUsageRange("7d")
               },
               {
                 key: "local-usage-14d",
                 title: props.copy.localUsageRange14Days,
                 description: props.copy.localUsageRange14DaysDesc,
-                active: props.settings.localUsageDefaultRange === "14d",
-                onClick: () => patchAndSend("localUsageDefaultRange", "14d")
+                active: props.settings.localUsageEnabledRanges.includes("14d"),
+                onClick: () => toggleUsageRange("14d")
+              },
+              {
+                key: "local-usage-7w",
+                title: props.copy.localUsageRange7Weeks,
+                description: props.copy.localUsageRange7WeeksDesc,
+                active: props.settings.localUsageEnabledRanges.includes("7w"),
+                onClick: () => toggleUsageRange("7w")
+              },
+              {
+                key: "local-usage-7m",
+                title: props.copy.localUsageRange7Months,
+                description: props.copy.localUsageRange7MonthsDesc,
+                active: props.settings.localUsageEnabledRanges.includes("7m"),
+                onClick: () => toggleUsageRange("7m")
               }
             ]}
+            note={props.copy.localUsageEnabledRangesSub}
           />
           <SettingsToggleBlock
             title={props.copy.localUsagePriceSettingsTitle}

@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { getDashboardCopy } from "../../application/dashboard/copy";
-import type { DashboardSettingKey } from "../../domain/dashboard/types";
+import type { DashboardSettingKey, DashboardSettingValue } from "../../domain/dashboard/types";
 import {
   ExtensionSettingsStore,
   getCodexAccountsConfiguration,
@@ -9,6 +9,7 @@ import {
   normalizeHotSwitchGraceSeconds,
   normalizeHotSwitchLongTurnPolicy,
   normalizeLocalUsageRange,
+  normalizeLocalUsageRanges,
   normalizeSeamlessQuotaBandSize,
   normalizeSeamlessSwitchThreshold
 } from "../../infrastructure/config/extensionSettings";
@@ -19,7 +20,7 @@ type DashboardConfigurationKey = DashboardSettingKey | "codexAppPath";
 
 export async function handleDashboardSettingUpdate(
   key: DashboardSettingKey,
-  value: string | number | boolean
+  value: DashboardSettingValue
 ): Promise<boolean> {
   const config = getCodexAccountsConfiguration();
   let updated = false;
@@ -113,6 +114,12 @@ export async function handleDashboardSettingUpdate(
         updated = true;
       }
       break;
+    case "localUsageEnabledRanges":
+      if (Array.isArray(value)) {
+        await updateDashboardConfiguration(config, key, normalizeLocalUsageRanges(value));
+        updated = true;
+      }
+      break;
     case "displayLanguage":
       if (typeof value === "string" && isDashboardLanguageOption(value)) {
         await updateDashboardConfiguration(config, key, value);
@@ -129,7 +136,7 @@ export async function handleDashboardSettingUpdate(
 async function updateDashboardConfiguration(
   config: vscode.WorkspaceConfiguration,
   key: DashboardConfigurationKey,
-  value: string | number | boolean
+  value: DashboardSettingValue
 ): Promise<void> {
   await config.update(key, value, resolveConfigurationTarget(config, key));
 }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
+  DashboardLocalUsageBucketModelViewModel,
+  DashboardLocalUsageBucketViewModel,
   DashboardLocalUsageDayViewModel,
   DashboardLocalUsageModelViewModel,
   DashboardLocalUsageViewModel
@@ -20,6 +22,25 @@ describe("deriveLocalUsageRange", () => {
       expect.objectContaining({ model: "gpt-5.6-sol", totalTokens: 100 })
     ]);
     expect(range.byModel.some((row) => row.model === "gpt-5.5")).toBe(false);
+  });
+
+  it("projects 24h into eight three-hour bars and 3d into six half-day bars", () => {
+    const usage = shortUsageSnapshot();
+
+    expect(deriveLocalUsageRange(usage, "24h").bars).toHaveLength(8);
+    const threeDay = deriveLocalUsageRange(usage, "3d");
+    expect(threeDay.bars).toHaveLength(6);
+    expect(threeDay.bars.slice(0, 2).map((bar) => bar.total.totalTokens)).toEqual([10, 26]);
+    expect(threeDay.bars.slice(-2).map((bar) => bar.total.totalTokens)).toEqual([810, 826]);
+    expect(threeDay.total.totalTokens).toBe(2_508);
+  });
+
+  it("keeps every selectable range within the seven-row display limit", () => {
+    const usage = shortUsageSnapshot();
+    expect(deriveLocalUsageRange(usage, "7d").bars).toHaveLength(7);
+    expect(deriveLocalUsageRange(usage, "14d").bars).toHaveLength(7);
+    expect(deriveLocalUsageRange(usage, "7w").bars).toHaveLength(7);
+    expect(deriveLocalUsageRange(usage, "7m").bars).toHaveLength(7);
   });
 
 });
@@ -71,11 +92,14 @@ function usageSnapshot(): DashboardLocalUsageViewModel {
     status: "ready",
     isRefreshing: false,
     periodDays: 14,
+    timeZone: "Asia/Shanghai",
     calculatedAt: 1,
     nextRefreshAt: 2,
     sourceFileCount: 1,
     eventCount: 3,
     total: totals(1_299),
+    by3Hour: [],
+    by3HourAndModel: [],
     byDay,
     byModel: [],
     byDayAndModel: [
@@ -84,6 +108,55 @@ function usageSnapshot(): DashboardLocalUsageViewModel {
       { date: "2026-07-14", ...modelUsage("gpt-5.6-sol", { totalTokens: 100 }) }
     ]
   };
+}
+
+function shortUsageSnapshot(): DashboardLocalUsageViewModel {
+  const dates = ["2026-07-12", "2026-07-13", "2026-07-14"];
+  const by3Hour: DashboardLocalUsageBucketViewModel[] = [];
+  const by3HourAndModel: DashboardLocalUsageBucketModelViewModel[] = [];
+  const byDay: DashboardLocalUsageDayViewModel[] = [];
+  for (const [dayIndex, date] of dates.entries()) {
+    let dailyTotal = 0;
+    for (let bucketIndex = 0; bucketIndex < 8; bucketIndex += 1) {
+      const startAt = shanghaiTimestamp(date, bucketIndex * 3);
+      const endAt = shanghaiTimestamp(date, bucketIndex * 3 + 3);
+      const totalTokens = dayIndex * 100 + bucketIndex + 1;
+      dailyTotal += totalTokens;
+      by3Hour.push({
+        startAt,
+        endAt,
+        eventCount: 1,
+        ...totals(totalTokens)
+      });
+      by3HourAndModel.push({
+        startAt,
+        model: "gpt-5.6-sol",
+        ...totals(totalTokens)
+      });
+    }
+    byDay.push({ date, eventCount: 8, ...totals(dailyTotal) });
+  }
+  return {
+    status: "ready",
+    isRefreshing: false,
+    periodDays: 3,
+    timeZone: "Asia/Shanghai",
+    calculatedAt: Date.parse("2026-07-14T12:00:00.000Z"),
+    nextRefreshAt: Date.parse("2026-07-14T13:00:00.000Z"),
+    sourceFileCount: 1,
+    eventCount: 24,
+    total: totals(2_508),
+    by3Hour,
+    by3HourAndModel,
+    byDay,
+    byModel: [],
+    byDayAndModel: []
+  };
+}
+
+function shanghaiTimestamp(date: string, hour: number): number {
+  const [year, month, day] = date.split("-").map(Number);
+  return Date.UTC(year ?? 0, (month ?? 1) - 1, (day ?? 1), hour) - 8 * 60 * 60 * 1000;
 }
 
 function dayUsage(date: string, eventCount: number, totalTokens: number): DashboardLocalUsageDayViewModel {
