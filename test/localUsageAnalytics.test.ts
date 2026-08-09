@@ -98,6 +98,67 @@ describe("scanLocalUsageSessions", () => {
     ]);
   });
 
+  it("assigns recent usage to local three-hour boundaries and preserves model buckets", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    await writeSession(sessionsPath, "2026/07/14/three-hour.jsonl", [
+      { type: "turn_context", payload: { model: "gpt-5.6-sol" } },
+      tokenCountEvent("2026-07-14T09:59:00.000Z", 10),
+      { type: "turn_context", payload: { model: "gpt-5.6-luna" } },
+      tokenCountEvent("2026-07-14T10:00:00.000Z", 20),
+      tokenCountEvent("2026-07-14T12:00:00.000Z", 30)
+    ]);
+
+    const result = await scanLocalUsageSessions({
+      sessionsPath,
+      periodDays: 4,
+      shortPeriodDays: 4,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.by3Hour).toHaveLength(31);
+    expect(result.by3Hour.find((row) => row.startAt === Date.parse("2026-07-14T07:00:00.000Z"))).toMatchObject({
+      eventCount: 1,
+      totalTokens: 10
+    });
+    expect(result.by3Hour.find((row) => row.startAt === Date.parse("2026-07-14T10:00:00.000Z"))).toMatchObject({
+      eventCount: 2,
+      totalTokens: 50
+    });
+    expect(result.by3HourAndModel).toEqual([
+      expect.objectContaining({ startAt: Date.parse("2026-07-14T07:00:00.000Z"), model: "gpt-5.6-sol", totalTokens: 10 }),
+      expect.objectContaining({ startAt: Date.parse("2026-07-14T10:00:00.000Z"), model: "gpt-5.6-luna", totalTokens: 50 })
+    ]);
+  });
+
+  it("keeps the short-range start at local midnight across a DST transition", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const now = Date.parse("2026-03-09T16:00:00.000Z");
+    await writeSession(sessionsPath, "2026/03/09/dst.jsonl", [
+      { type: "turn_context", payload: { model: "gpt-5.6-sol" } },
+      tokenCountEvent("2026-03-06T04:30:00.000Z", 10),
+      tokenCountEvent("2026-03-06T05:00:00.000Z", 20),
+      tokenCountEvent("2026-03-09T15:00:00.000Z", 30)
+    ]);
+
+    const result = await scanLocalUsageSessions({
+      sessionsPath,
+      periodDays: 1,
+      shortPeriodDays: 4,
+      timeZone: "America/New_York",
+      now
+    });
+
+    expect(result.eventCount).toBe(1);
+    expect(result.total.totalTokens).toBe(30);
+    expect(result.by3Hour.find((row) => row.startAt === Date.parse("2026-03-06T05:00:00.000Z"))).toMatchObject({
+      eventCount: 1,
+      totalTokens: 20
+    });
+  });
+
   it("uses cumulative high-water deltas instead of repeated last-token reports", async () => {
     const root = await createTempDirectory();
     const sessionsPath = path.join(root, "sessions");
@@ -314,7 +375,7 @@ describe("scanLocalUsageSessions", () => {
       { type: "turn_context", payload: { model: "old-model" } },
       tokenCountEvent("2026-07-14T01:00:00.000Z", 900)
     ]);
-    await utimes(oldFile, new Date(NOW - 5 * 24 * 60 * 60 * 1000), new Date(NOW - 5 * 24 * 60 * 60 * 1000));
+    await utimes(oldFile, new Date(NOW - 6 * 24 * 60 * 60 * 1000), new Date(NOW - 6 * 24 * 60 * 60 * 1000));
     await writeSession(sessionsPath, "recent.jsonl", [
       { type: "turn_context", payload: { model: "recent-model" } },
       tokenCountEvent("2026-07-14T01:00:00.000Z", 100)
@@ -652,7 +713,7 @@ describe("LocalUsageAnalyticsService", () => {
     const firstCached = await service.getSnapshot();
     expect(firstCached.total.totalTokens).toBe(100);
     expect(scanner).toHaveBeenCalledTimes(1);
-    await expect(readFile(path.join(storagePath, "local-usage-analytics-v6.json"), "utf8")).resolves.toContain(
+    await expect(readFile(path.join(storagePath, "local-usage-analytics-v7.json"), "utf8")).resolves.toContain(
       '"totalTokens":100'
     );
 
@@ -706,6 +767,36 @@ describe("LocalUsageAnalyticsService", () => {
 
     expect(scanner).toHaveBeenCalledTimes(2);
     expect((await service.getSnapshot()).total.totalTokens).toBe(200);
+  });
+
+  it("backfills a long range once and reuses daily coverage on later refreshes", async () => {
+    const root = await createTempDirectory();
+    const storagePath = path.join(root, "storage");
+    let now = NOW;
+    const periods: number[] = [];
+    const scanner: LocalUsageScanner = vi.fn(async ({ periodDays, now: scannedAt }) => {
+      periods.push(periodDays);
+      return readySnapshotWithDailyCoverage(periodDays, scannedAt);
+    });
+    const service = new LocalUsageAnalyticsService({
+      globalStoragePath: storagePath,
+      sessionsPath: path.join(root, "sessions"),
+      timeZone: TIME_ZONE,
+      now: () => now,
+      scanner,
+      enabledRanges: ["7m"],
+      backgroundRefreshEnabled: false
+    });
+
+    await service.refresh();
+    await service.refresh();
+    now += 24 * 60 * 60 * 1000;
+    await service.refresh();
+
+    expect(periods[0]).toBeGreaterThan(180);
+    expect(periods[1]).toBe(4);
+    expect(periods[2]).toBe(4);
+    expect((await service.getSnapshot()).byDay.some((row) => row.date === "2026-01-01")).toBe(true);
   });
 
   it("keeps the Dashboard cache read-only until an explicit refresh", async () => {
@@ -902,7 +993,7 @@ describe("LocalUsageAnalyticsService", () => {
     await service.getSnapshot(refreshed.resolve);
     await refreshed.promise;
 
-    const persisted = await readFile(path.join(storagePath, "local-usage-analytics-v6.json"), "utf8");
+    const persisted = await readFile(path.join(storagePath, "local-usage-analytics-v7.json"), "utf8");
     expect(persisted).toContain('"totalTokens":13');
     expect(persisted).not.toContain(secretMessage);
     expect(persisted).not.toContain(secretAccountId);
@@ -927,6 +1018,7 @@ function readySnapshot(periodDays: number, calculatedAt: number, totalTokens: nu
     status: "ready",
     isRefreshing: false,
     periodDays,
+    timeZone: TIME_ZONE,
     calculatedAt,
     nextRefreshAt: calculatedAt + LOCAL_USAGE_CACHE_TTL_MS,
     sourceFileCount: 1,
@@ -938,9 +1030,55 @@ function readySnapshot(periodDays: number, calculatedAt: number, totalTokens: nu
       reasoningOutputTokens: 0,
       totalTokens
     },
+    by3Hour: [],
+    by3HourAndModel: [],
     byDay: [],
     byModel: [],
     byDayAndModel: []
+  };
+}
+
+function readySnapshotWithDailyCoverage(periodDays: number, calculatedAt: number): DashboardLocalUsageViewModel {
+  const today = new Date(calculatedAt + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const [year, month, day] = today.split("-").map(Number);
+  const dates = Array.from({ length: Math.max(1, Math.floor(periodDays)) }, (_, index) => {
+    const date = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, (day ?? 1) - (periodDays - index - 1)));
+    return date.toISOString().slice(0, 10);
+  });
+  const byDay = dates.map((date) => ({
+    date,
+    eventCount: date === today ? 1 : 0,
+    ...testTotals(date === today ? 1 : 0)
+  }));
+  const activeModel = {
+    model: "gpt-5.6-sol",
+    ...testTotals(1)
+  };
+  return {
+    status: "ready",
+    isRefreshing: false,
+    periodDays,
+    timeZone: TIME_ZONE,
+    calculatedAt,
+    nextRefreshAt: calculatedAt + LOCAL_USAGE_CACHE_TTL_MS,
+    sourceFileCount: 1,
+    eventCount: 1,
+    total: testTotals(1),
+    by3Hour: [],
+    by3HourAndModel: [],
+    byDay,
+    byModel: [activeModel],
+    byDayAndModel: [{ date: today, ...activeModel }]
+  };
+}
+
+function testTotals(totalTokens: number) {
+  return {
+    inputTokens: totalTokens,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens
   };
 }
 

@@ -9,7 +9,6 @@ import type {
 import {
   deriveLocalUsageRange,
   estimateStandardApiCost,
-  LOCAL_USAGE_RANGE_OPTIONS,
   type LocalUsagePriceEstimate
 } from "./localUsageInsights";
 import { ActionButton } from "./primitives";
@@ -20,14 +19,17 @@ export function LocalUsageSection(props: {
   settings: DashboardSettings;
   refreshPending: boolean;
   onRefresh: () => void;
-  onRangeChange: (range: DashboardLocalUsageRange) => void;
 }) {
   const { usage, copy, settings } = props;
-  const [selectedRange, setSelectedRange] = useState(settings.localUsageDefaultRange);
+  const enabledRanges: readonly DashboardLocalUsageRange[] =
+    settings.localUsageEnabledRanges.length > 0 ? settings.localUsageEnabledRanges : ["24h"];
+  const [selectedRange, setSelectedRange] = useState<DashboardLocalUsageRange>(enabledRanges[0] ?? "24h");
 
   useEffect(() => {
-    setSelectedRange(settings.localUsageDefaultRange);
-  }, [settings.localUsageDefaultRange]);
+    if (!enabledRanges.includes(selectedRange)) {
+      setSelectedRange(enabledRanges[0] ?? "24h");
+    }
+  }, [enabledRanges, selectedRange]);
 
   if (!usage) {
     return null;
@@ -93,21 +95,20 @@ export function LocalUsageSection(props: {
               title={copy.localUsageDaily}
               rows={range.bars.map((row) => ({
                 key: row.key,
-                label: row.date,
+                label: row.label,
                 value: row.total.totalTokens,
                 price: row.price
               }))}
               control={
                 <RangeSelector
                   copy={copy}
+                  ranges={enabledRanges}
                   selectedRange={selectedRange}
                   onChange={(nextRange) => {
                     setSelectedRange(nextRange);
-                    props.onRangeChange(nextRange);
                   }}
                 />
               }
-              scrollable={range.range === "14d"}
               showPrice={showPrice}
               animationKey={range.range}
             />
@@ -140,12 +141,13 @@ export function LocalUsageSection(props: {
 
 function RangeSelector(props: {
   copy: DashboardCopy;
+  ranges: readonly DashboardLocalUsageRange[];
   selectedRange: DashboardLocalUsageRange;
   onChange: (range: DashboardLocalUsageRange) => void;
 }) {
   return (
-    <div class="local-usage-range" aria-label={props.copy.localUsageDefaultRangeTitle}>
-      {LOCAL_USAGE_RANGE_OPTIONS.map((range) => (
+    <div class="local-usage-range" aria-label={props.copy.localUsageEnabledRangesTitle}>
+      {props.ranges.map((range) => (
         <button
           key={range}
           class={`local-usage-range-btn ${props.selectedRange === range ? "active" : ""}`}
@@ -229,9 +231,17 @@ function UsageBars(props: {
 
 function rangeLabel(copy: DashboardCopy, range: DashboardLocalUsageRange): string {
   switch (range) {
+    case "24h":
+      return copy.localUsageRange24Hours;
+    case "3d":
+      return copy.localUsageRange3Days;
+    case "7w":
+      return copy.localUsageRange7Weeks;
+    case "7m":
+      return copy.localUsageRange7Months;
     case "14d":
       return copy.localUsageRange14Days;
-    default:
+    case "7d":
       return copy.localUsageRange7Days;
   }
 }

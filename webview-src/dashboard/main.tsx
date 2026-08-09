@@ -654,9 +654,6 @@ function App() {
           settings={snapshot.settings}
           refreshPending={localUsageRefreshPending}
           onRefresh={() => sendAction("refreshLocalUsage")}
-          onRangeChange={(range) => {
-            sendSetting("localUsageDefaultRange", range);
-          }}
         />
       </div>
 

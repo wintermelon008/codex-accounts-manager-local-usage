@@ -1,5 +1,10 @@
 import { useEffect, useRef } from "preact/hooks";
-import type { DashboardActionName, DashboardSettingKey, DashboardSettings } from "../../src/domain/dashboard/types";
+import type {
+  DashboardActionName,
+  DashboardSettingKey,
+  DashboardSettingValue,
+  DashboardSettings
+} from "../../src/domain/dashboard/types";
 import { BLOCKING_GLOBAL_ACTIONS, createActionRequestId, getActionTimeoutMs, postMessageToHost } from "./host";
 import type { AppDispatch, SendAction } from "./hookTypes";
 import type { AppState } from "./state";
@@ -75,7 +80,7 @@ export function useDashboardActions(state: AppState, dispatch: AppDispatch) {
     });
   };
 
-  const sendSetting = (key: DashboardSettingKey, value: string | number | boolean): void => {
+  const sendSetting = (key: DashboardSettingKey, value: DashboardSettingValue): void => {
     postMessageToHost({
       type: "dashboard:setting",
       key,

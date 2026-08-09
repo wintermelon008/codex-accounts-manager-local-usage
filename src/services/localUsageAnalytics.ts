@@ -4,25 +4,31 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import type {
+  DashboardLocalUsageBucketModelViewModel,
+  DashboardLocalUsageBucketViewModel,
   DashboardLocalUsageDayModelViewModel,
   DashboardLocalUsageDayViewModel,
+  DashboardLocalUsageRange,
   DashboardLocalUsageModelViewModel,
   DashboardLocalUsageTokenTotals,
   DashboardLocalUsageViewModel
 } from "../domain/dashboard/types";
+import { DASHBOARD_LOCAL_USAGE_RANGE_OPTIONS as LOCAL_USAGE_RANGE_OPTIONS } from "../domain/dashboard/types";
 import { tryAcquireSharedFileLease } from "../storage/accountsWriteCoordinator";
 
 export const LOCAL_USAGE_CACHE_TTL_MS = 15 * 60 * 1000;
 export const LOCAL_USAGE_PERIOD_DAYS = 14;
+export const LOCAL_USAGE_SHORT_PERIOD_DAYS = 4;
+export const LOCAL_USAGE_DAILY_RETENTION_DAYS = 370;
 export const LOCAL_USAGE_SCAN_LEASE_MS = 60 * 1000;
 export const ACCOUNT_TOKEN_USAGE_RETENTION_DAYS = 31;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const CACHE_FILE_NAME = "local-usage-analytics-v6.json";
+const CACHE_FILE_NAME = "local-usage-analytics-v7.json";
 export const ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME = "account-token-usage-v2.json";
 export const ACCOUNT_USAGE_ATTRIBUTION_DIRECTORY_NAME = "account-usage-attribution";
 export const LOCAL_USAGE_SCAN_LEASE_FILE_NAME = `${CACHE_FILE_NAME}.scan-lease`;
-const CACHE_SCHEMA_VERSION = 6;
+const CACHE_SCHEMA_VERSION = 7;
 const ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION = 2;
 const UNKNOWN_MODEL = "unknown";
 const PEER_REFRESH_WAIT_MS = 2_000;
@@ -49,6 +55,7 @@ type ZonedDateTimeParts = {
 export type LocalUsageScanInput = {
   sessionsPath: string;
   periodDays: number;
+  shortPeriodDays?: number;
   timeZone: string;
   now: number;
 };
@@ -92,11 +99,18 @@ export type LocalUsageAnalyticsOptions = {
   combinedScanner?: LocalUsageCombinedScanner;
   usageAttributionDirectory?: string;
   backgroundRefreshEnabled?: boolean;
+  enabledRanges?: DashboardLocalUsageRange[];
+};
+
+type LocalUsageCacheCoverage = {
+  dailyStartDate: string;
+  dailyEndDate: string;
 };
 
 type LocalUsageCache = {
   schemaVersion: number;
   snapshot: DashboardLocalUsageViewModel;
+  coverage: LocalUsageCacheCoverage;
 };
 
 type AccountTokenUsageCache = {
@@ -148,20 +162,23 @@ export class LocalUsageAnalyticsService {
   private readonly refreshCallbacks = new Set<() => void>();
   private snapshot: DashboardLocalUsageViewModel | undefined;
   private accountTokenUsage: AccountTokenUsageSnapshot | undefined;
+  private cacheCoverage: LocalUsageCacheCoverage | undefined;
   private readonly sessionsPath: string;
-  private readonly periodDays: number;
+  private readonly defaultPeriodDays: number;
   private readonly timeZone: string;
   private readonly now: () => number;
   private readonly combinedScanner: LocalUsageCombinedScanner;
   private readonly usageAttributionDirectory: string;
   private readonly backgroundRefreshEnabled: boolean;
+  private enabledRanges: DashboardLocalUsageRange[];
 
   constructor(private readonly options: LocalUsageAnalyticsOptions) {
     this.sessionsPath = options.sessionsPath ?? defaultSessionsPath();
-    this.periodDays = options.periodDays ?? LOCAL_USAGE_PERIOD_DAYS;
+    this.defaultPeriodDays = options.periodDays ?? LOCAL_USAGE_SHORT_PERIOD_DAYS;
     this.timeZone = options.timeZone ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
     this.now = options.now ?? Date.now;
     this.backgroundRefreshEnabled = options.backgroundRefreshEnabled ?? true;
+    this.enabledRanges = normalizeEnabledRanges(options.enabledRanges);
     this.usageAttributionDirectory =
       options.usageAttributionDirectory ??
       path.join(options.globalStoragePath, "hot-switch-runtime", ACCOUNT_USAGE_ATTRIBUTION_DIRECTORY_NAME);
@@ -177,6 +194,10 @@ export class LocalUsageAnalyticsService {
 
   async getSnapshot(onRefreshed?: () => void): Promise<DashboardLocalUsageViewModel> {
     return (await this.getSnapshots(onRefreshed)).localUsage;
+  }
+
+  setEnabledRanges(ranges: readonly DashboardLocalUsageRange[]): void {
+    this.enabledRanges = normalizeEnabledRanges(ranges);
   }
 
   /**
@@ -197,7 +218,13 @@ export class LocalUsageAnalyticsService {
       }
       const now = this.now();
       return {
-        localUsage: createEmptySnapshot("loading", this.periodDays, this.timeZone, now),
+        localUsage: createEmptySnapshot(
+          "loading",
+          this.defaultPeriodDays,
+          this.timeZone,
+          now,
+          LOCAL_USAGE_SHORT_PERIOD_DAYS
+        ),
         accountTokenUsage: createEmptyAccountTokenUsageSnapshot("loading", now)
       };
     }
@@ -238,7 +265,7 @@ export class LocalUsageAnalyticsService {
     try {
       const raw = await fs.readFile(this.cachePath(), "utf8");
       const cache = parseCache(raw);
-      if (cache?.snapshot.periodDays !== this.periodDays) {
+      if (!cache) {
         return false;
       }
 
@@ -252,6 +279,7 @@ export class LocalUsageAnalyticsService {
         ...cache.snapshot,
         isRefreshing: false
       };
+      this.cacheCoverage = cache.coverage;
       return true;
     } catch (error) {
       if (!isErrorCode(error, "ENOENT")) {
@@ -331,17 +359,16 @@ export class LocalUsageAnalyticsService {
   }
 
   private async scanAndPersist(): Promise<void> {
+    const scanPeriodDays = this.resolveScanPeriodDays();
     const scanned = await this.combinedScanner({
       sessionsPath: this.sessionsPath,
-      periodDays: this.periodDays,
+      periodDays: scanPeriodDays,
+      shortPeriodDays: LOCAL_USAGE_SHORT_PERIOD_DAYS,
       timeZone: this.timeZone,
       now: this.now(),
       usageAttributionDirectory: this.usageAttributionDirectory
     });
-    const snapshot: DashboardLocalUsageViewModel = {
-      ...scanned.localUsage,
-      isRefreshing: false
-    };
+    const snapshot = mergeLocalUsageSnapshots(this.snapshot, scanned.localUsage, this.timeZone, this.now());
     const accountTokenUsage: AccountTokenUsageSnapshot = {
       ...scanned.accountTokenUsage,
       isRefreshing: false
@@ -355,8 +382,10 @@ export class LocalUsageAnalyticsService {
     }
 
     await this.writeAccountTokenUsageCache(accountTokenUsage);
-    await this.writeCache(snapshot);
+    const coverage = mergeUsageCoverage(this.cacheCoverage, scanned.localUsage, this.timeZone);
+    await this.writeCache(snapshot, coverage);
     this.snapshot = snapshot;
+    this.cacheCoverage = coverage;
     this.accountTokenUsage = accountTokenUsage;
   }
 
@@ -367,12 +396,19 @@ export class LocalUsageAnalyticsService {
 
     const calculatedAt = this.now();
     this.snapshot = {
-      ...createEmptySnapshot("unavailable", this.periodDays, this.timeZone, calculatedAt),
+      ...createEmptySnapshot(
+        "unavailable",
+        this.defaultPeriodDays,
+        this.timeZone,
+        calculatedAt,
+        LOCAL_USAGE_SHORT_PERIOD_DAYS
+      ),
       calculatedAt,
       nextRefreshAt: nextLocalUsageRefreshAt(calculatedAt, this.timeZone)
     };
+    this.cacheCoverage = createUsageCoverage(this.snapshot);
     this.accountTokenUsage = createEmptyAccountTokenUsageSnapshot("unavailable", calculatedAt);
-    await this.writeCache(this.snapshot).catch(() => undefined);
+    await this.writeCache(this.snapshot, this.cacheCoverage).catch(() => undefined);
     await this.writeAccountTokenUsageCache(this.accountTokenUsage).catch(() => undefined);
   }
 
@@ -390,12 +426,13 @@ export class LocalUsageAnalyticsService {
     } while (Date.now() < deadline);
   }
 
-  private async writeCache(snapshot: DashboardLocalUsageViewModel): Promise<void> {
+  private async writeCache(snapshot: DashboardLocalUsageViewModel, coverage: LocalUsageCacheCoverage): Promise<void> {
     const cachePath = this.cachePath();
     const tempPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
     const value: LocalUsageCache = {
       schemaVersion: CACHE_SCHEMA_VERSION,
-      snapshot
+      snapshot,
+      coverage
     };
 
     await fs.mkdir(this.options.globalStoragePath, { recursive: true });
@@ -438,6 +475,21 @@ export class LocalUsageAnalyticsService {
   private scanLeasePath(): string {
     return path.join(this.options.globalStoragePath, LOCAL_USAGE_SCAN_LEASE_FILE_NAME);
   }
+
+  private resolveScanPeriodDays(): number {
+    const now = this.now();
+    const today = dateKey(now, this.timeZone);
+    const requiredStart = earliestRequiredDailyDate(today, this.enabledRanges);
+    const coveredStart = this.cacheCoverage?.dailyStartDate;
+    const coveredEnd = this.cacheCoverage?.dailyEndDate;
+    if (requiredStart && (!coveredStart || coveredStart > requiredStart)) {
+      return Math.max(this.defaultPeriodDays, daysBetweenDateKeys(requiredStart, today) + 1);
+    }
+    if (requiredStart && (!coveredEnd || coveredEnd < today)) {
+      return Math.max(this.defaultPeriodDays, daysBetweenDateKeys(coveredEnd ?? today, today) + 1);
+    }
+    return Math.max(this.defaultPeriodDays, LOCAL_USAGE_SHORT_PERIOD_DAYS);
+  }
 }
 
 export async function scanLocalUsageSessions(input: LocalUsageScanInput): Promise<DashboardLocalUsageViewModel> {
@@ -455,7 +507,8 @@ async function scanLocalUsageSessionsInternal(
   input: LocalUsageScanInput,
   attribution: UsageAttributionIndex
 ): Promise<LocalUsageSnapshots> {
-  const empty = createEmptySnapshot("unavailable", input.periodDays, input.timeZone, input.now);
+  const shortPeriodDays = Math.max(1, Math.floor(input.shortPeriodDays ?? LOCAL_USAGE_SHORT_PERIOD_DAYS));
+  const empty = createEmptySnapshot("unavailable", input.periodDays, input.timeZone, input.now, shortPeriodDays);
   const accountUsageWindows = new Map<string, Map<string, AccountTokenUsageWindow>>();
   const tracksAccountUsage = attribution.recordCount > 0;
   if (!(await isDirectory(input.sessionsPath))) {
@@ -470,11 +523,21 @@ async function scanLocalUsageSessionsInternal(
   }
 
   const allowedDates = new Set(recentDateKeys(input.now, input.periodDays, input.timeZone));
+  const shortStartDate = shiftLocalDate(
+    zonedDateTimeParts(input.now, input.timeZone),
+    -(shortPeriodDays - 1)
+  );
+  const shortUsageStartAt = localDateTimeToTimestamp(
+    { ...shortStartDate, hour: 0 },
+    input.timeZone
+  );
   const oldestAccountUsageTimestamp = tracksAccountUsage
     ? input.now - ACCOUNT_TOKEN_USAGE_RETENTION_DAYS * DAY_MS
     : Number.POSITIVE_INFINITY;
   const byDate = new Map(empty.byDay.map((row) => [row.date, row]));
+  const by3Hour = new Map(empty.by3Hour.map((row) => [row.startAt, row]));
   const byModel = new Map<string, DashboardLocalUsageModelViewModel>();
+  const by3HourAndModel = new Map<string, DashboardLocalUsageBucketModelViewModel>();
   const byDayAndModel = new Map<string, DashboardLocalUsageDayModelViewModel>();
   const sourceFiles = new Set<string>();
   const total = empty.total;
@@ -486,7 +549,12 @@ async function scanLocalUsageSessionsInternal(
   // retain the known 30-day long-term window plus one day for boundaries.
   const oldestRelevantMtime =
     input.now -
-    (Math.max(1, Math.floor(input.periodDays), tracksAccountUsage ? ACCOUNT_TOKEN_USAGE_RETENTION_DAYS : 0) + 1) * DAY_MS;
+    (Math.max(
+      1,
+      Math.floor(input.periodDays),
+      shortPeriodDays,
+      tracksAccountUsage ? ACCOUNT_TOKEN_USAGE_RETENTION_DAYS : 0
+    ) + 1) * DAY_MS;
   const files = await findJsonlFiles(input.sessionsPath, oldestRelevantMtime);
   for (const file of files) {
     let currentModel = UNKNOWN_MODEL;
@@ -564,8 +632,9 @@ async function scanLocalUsageSessionsInternal(
         const localTimestamp = zonedDateTimeParts(timestamp, input.timeZone);
         const date = localTimestamp.date;
         const includesLocalUsage = allowedDates.has(date);
+        const includesShortUsage = timestamp >= shortUsageStartAt;
         const includesAccountUsage = tracksAccountUsage && timestamp >= oldestAccountUsageTimestamp;
-        if (!includesLocalUsage && !includesAccountUsage) {
+        if (!includesLocalUsage && !includesShortUsage && !includesAccountUsage) {
           continue;
         }
 
@@ -578,6 +647,17 @@ async function scanLocalUsageSessionsInternal(
             addAccountTokenUsage(accountUsageWindows, attributionRecord.a, quotaWindows, model, usage, timestamp);
             attributedEventCount += 1;
           }
+        }
+
+        if (includesShortUsage) {
+          const bucketStartAt = localUsageBucketStartAt(timestamp, input.timeZone);
+          const bucket = by3Hour.get(bucketStartAt);
+          if (bucket) {
+            addTotals(bucket, usage);
+            bucket.eventCount += 1;
+          }
+          const bucketModel = getOrCreateBucketModelBucket(by3HourAndModel, bucketStartAt, model);
+          addTotals(bucketModel, usage);
         }
 
         if (!includesLocalUsage) {
@@ -618,10 +698,15 @@ async function scanLocalUsageSessionsInternal(
       status,
       isRefreshing: false,
       periodDays: input.periodDays,
+      timeZone: input.timeZone,
       calculatedAt: input.now,
       sourceFileCount: sourceFiles.size,
       eventCount,
       total,
+      by3Hour: [...by3Hour.values()].sort((a, b) => a.startAt - b.startAt),
+      by3HourAndModel: [...by3HourAndModel.values()].sort(
+        (a, b) => a.startAt - b.startAt || b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)
+      ),
       byDay: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
       byModel: [...byModel.values()].sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)),
       byDayAndModel: [...byDayAndModel.values()].sort(
@@ -697,15 +782,19 @@ function createEmptySnapshot(
   status: DashboardLocalUsageViewModel["status"],
   periodDays: number,
   timeZone: string,
-  now: number
+  now: number,
+  shortPeriodDays = LOCAL_USAGE_SHORT_PERIOD_DAYS
 ): DashboardLocalUsageViewModel {
   return {
     status,
     isRefreshing: false,
     periodDays,
+    timeZone,
     sourceFileCount: 0,
     eventCount: 0,
     total: emptyTotals(),
+    by3Hour: recent3HourBuckets(now, shortPeriodDays, timeZone),
+    by3HourAndModel: [],
     byDay: recentDateKeys(now, periodDays, timeZone).map((date) => ({
       date,
       eventCount: 0,
@@ -714,6 +803,164 @@ function createEmptySnapshot(
     byModel: [],
     byDayAndModel: []
   };
+}
+
+function mergeLocalUsageSnapshots(
+  previous: DashboardLocalUsageViewModel | undefined,
+  scanned: DashboardLocalUsageViewModel,
+  timeZone: string,
+  calculatedAt: number
+): DashboardLocalUsageViewModel {
+  const scannedByDay = scanned.byDay ?? [];
+  const scannedByDayAndModel = scanned.byDayAndModel ?? [];
+  const scannedBy3Hour = scanned.by3Hour ?? [];
+  const scannedBy3HourAndModel = scanned.by3HourAndModel ?? [];
+  if (
+    scannedByDay.length === 0 &&
+    scannedByDayAndModel.length === 0 &&
+    scannedBy3Hour.length === 0 &&
+    scannedBy3HourAndModel.length === 0
+  ) {
+    return {
+      ...scanned,
+      timeZone,
+      by3Hour: scannedBy3Hour,
+      by3HourAndModel: scannedBy3HourAndModel,
+      byDay: scannedByDay,
+      byDayAndModel: scannedByDayAndModel,
+      isRefreshing: false
+    };
+  }
+
+  const dailyRows = new Map(previous?.byDay.map((row) => [row.date, row]) ?? []);
+  const scannedDates = new Set(scannedByDay.map((row) => row.date));
+  for (const date of scannedDates) {
+    dailyRows.delete(date);
+  }
+  for (const row of scannedByDay) {
+    dailyRows.set(row.date, row);
+  }
+
+  const dailyModelRows = new Map(
+    previous?.byDayAndModel.map((row) => [`${row.date}\u0000${row.model}`, row]) ?? []
+  );
+  for (const key of [...dailyModelRows.keys()]) {
+    if (scannedDates.has(key.split("\u0000", 1)[0] ?? "")) {
+      dailyModelRows.delete(key);
+    }
+  }
+  for (const row of scanned.byDayAndModel) {
+    dailyModelRows.set(`${row.date}\u0000${row.model}`, row);
+  }
+
+  const shortBucketStarts = new Set(scannedBy3Hour.map((row) => row.startAt));
+  const shortRows = new Map(previous?.by3Hour.map((row) => [row.startAt, row]) ?? []);
+  for (const startAt of shortBucketStarts) {
+    shortRows.delete(startAt);
+  }
+  for (const row of scannedBy3Hour) {
+    shortRows.set(row.startAt, row);
+  }
+  const retainedShortStarts = new Set(recent3HourBuckets(calculatedAt, LOCAL_USAGE_SHORT_PERIOD_DAYS, timeZone).map((row) => row.startAt));
+  for (const startAt of shortRows.keys()) {
+    if (!retainedShortStarts.has(startAt)) {
+      shortRows.delete(startAt);
+    }
+  }
+
+  const shortModelRows = new Map(
+    previous?.by3HourAndModel.map((row) => [`${row.startAt}\u0000${row.model}`, row]) ?? []
+  );
+  for (const key of [...shortModelRows.keys()]) {
+    const startAt = Number(key.split("\u0000", 1)[0]);
+    if (shortBucketStarts.has(startAt) || !retainedShortStarts.has(startAt)) {
+      shortModelRows.delete(key);
+    }
+  }
+  for (const row of scannedBy3HourAndModel) {
+    shortModelRows.set(`${row.startAt}\u0000${row.model}`, row);
+  }
+
+  const sortedDays = [...dailyRows.values()]
+    .filter((row) => isWithinDailyRetention(row.date, calculatedAt, timeZone))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const sortedDayModels = [...dailyModelRows.values()]
+    .filter((row) => isWithinDailyRetention(row.date, calculatedAt, timeZone))
+    .sort((a, b) => a.date.localeCompare(b.date) || b.totalTokens - a.totalTokens || a.model.localeCompare(b.model));
+  const total = sumUsageTotals(sortedDays);
+  const byModel = aggregateUsageModels(sortedDayModels);
+  const eventCount = sortedDays.reduce((count, row) => count + row.eventCount, 0);
+
+  return withRefreshWindow(
+    {
+      status: eventCount > 0 ? "ready" : "unavailable",
+      isRefreshing: false,
+      periodDays: sortedDays.length,
+      timeZone,
+      sourceFileCount: scanned.sourceFileCount,
+      eventCount,
+      total,
+      by3Hour: [...shortRows.values()].sort((a, b) => a.startAt - b.startAt),
+      by3HourAndModel: [...shortModelRows.values()].sort(
+        (a, b) => a.startAt - b.startAt || b.totalTokens - a.totalTokens || a.model.localeCompare(b.model)
+      ),
+      byDay: sortedDays,
+      byModel,
+      byDayAndModel: sortedDayModels
+    },
+    calculatedAt,
+    timeZone
+  );
+}
+
+function mergeUsageCoverage(
+  previous: LocalUsageCacheCoverage | undefined,
+  scanned: DashboardLocalUsageViewModel,
+  timeZone: string
+): LocalUsageCacheCoverage {
+  const scannedDates = scanned.byDay.map((row) => row.date).sort();
+  const fallback = previous ?? {
+    dailyStartDate: dateKey(scanned.calculatedAt ?? Date.now(), timeZone),
+    dailyEndDate: dateKey(scanned.calculatedAt ?? Date.now(), timeZone)
+  };
+  if (scannedDates.length === 0) {
+    return fallback;
+  }
+  return {
+    dailyStartDate: [fallback.dailyStartDate, scannedDates[0] ?? fallback.dailyStartDate].sort()[0] ?? fallback.dailyStartDate,
+    dailyEndDate: [fallback.dailyEndDate, scannedDates[scannedDates.length - 1] ?? fallback.dailyEndDate].sort().at(-1) ?? fallback.dailyEndDate
+  };
+}
+
+function createUsageCoverage(snapshot: DashboardLocalUsageViewModel): LocalUsageCacheCoverage {
+  const dates = snapshot.byDay.map((row) => row.date).sort();
+  const fallback = dateKey(snapshot.calculatedAt ?? Date.now(), snapshot.timeZone);
+  return {
+    dailyStartDate: dates[0] ?? fallback,
+    dailyEndDate: dates.at(-1) ?? fallback
+  };
+}
+
+function sumUsageTotals(rows: readonly DashboardLocalUsageTokenTotals[]): MutableTotals {
+  return rows.reduce<MutableTotals>((total, row) => {
+    addTotals(total, row);
+    return total;
+  }, emptyTotals());
+}
+
+function aggregateUsageModels(
+  rows: readonly DashboardLocalUsageDayModelViewModel[]
+): DashboardLocalUsageModelViewModel[] {
+  const models = new Map<string, DashboardLocalUsageModelViewModel>();
+  for (const row of rows) {
+    addTotals(getOrCreateModelBucket(models, row.model), row);
+  }
+  return sortModelBuckets(models);
+}
+
+function isWithinDailyRetention(date: string, now: number, timeZone: string): boolean {
+  const today = dateKey(now, timeZone);
+  return date >= shiftDateKey(today, -(LOCAL_USAGE_DAILY_RETENTION_DAYS - 1)) && date <= today;
 }
 
 function withRefreshWindow(
@@ -1142,6 +1389,26 @@ function getOrCreateDayModelBucket(
   return created;
 }
 
+function getOrCreateBucketModelBucket(
+  buckets: Map<string, DashboardLocalUsageBucketModelViewModel>,
+  startAt: number,
+  model: string
+): DashboardLocalUsageBucketModelViewModel {
+  const key = `${startAt}\u0000${model}`;
+  const existing = buckets.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const created: DashboardLocalUsageBucketModelViewModel = {
+    startAt,
+    model,
+    ...emptyTotals()
+  };
+  buckets.set(key, created);
+  return created;
+}
+
 function isSpawnedSubagentSession(payload: Record<string, unknown>): boolean {
   const source = asRecord(payload["source"]);
   const subagent = asRecord(source?.["subagent"]);
@@ -1333,6 +1600,42 @@ function recentDateKeys(now: number, periodDays: number, timeZone: string): stri
   return Array.from({ length: days }, (_, index) => shiftDateKey(today, index - days + 1));
 }
 
+function recent3HourBuckets(now: number, periodDays: number, timeZone: string): DashboardLocalUsageBucketViewModel[] {
+  const today = dateKey(now, timeZone);
+  const days = Math.max(1, Math.floor(periodDays));
+  const currentBucketStartAt = localUsageBucketStartAt(now, timeZone);
+  const buckets: DashboardLocalUsageBucketViewModel[] = [];
+  for (let dayOffset = -days + 1; dayOffset <= 0; dayOffset += 1) {
+    const date = shiftDateKey(today, dayOffset);
+    const [yearText, monthText, dayText] = date.split("-");
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    for (let hour = 0; hour < 24; hour += 3) {
+      const startAt = localDateTimeToTimestamp({ year, month, day, hour }, timeZone);
+      if (startAt > currentBucketStartAt) {
+        continue;
+      }
+      const endAt = localDateTimeToTimestamp({ year, month, day, hour: hour + 3 }, timeZone);
+      buckets.push({ startAt, endAt, eventCount: 0, ...emptyTotals() });
+    }
+  }
+  return buckets;
+}
+
+function localUsageBucketStartAt(timestamp: number, timeZone: string): number {
+  const local = zonedDateTimeParts(timestamp, timeZone);
+  return localDateTimeToTimestamp(
+    {
+      year: local.year,
+      month: local.month,
+      day: local.day,
+      hour: Math.floor(local.hour / 3) * 3
+    },
+    timeZone
+  );
+}
+
 function dateKey(timestamp: number, timeZone: string): string {
   return zonedDateTimeParts(timestamp, timeZone).date;
 }
@@ -1424,6 +1727,55 @@ function shiftDateKey(date: string, deltaDays: number): string {
   return shifted.toISOString().slice(0, 10);
 }
 
+function normalizeEnabledRanges(ranges: readonly DashboardLocalUsageRange[] | undefined): DashboardLocalUsageRange[] {
+  const configured = new Set(ranges ?? []);
+  const normalized = LOCAL_USAGE_RANGE_OPTIONS.filter((range) => configured.has(range));
+  return normalized.length > 0 ? [...normalized] : ["24h"];
+}
+
+function earliestRequiredDailyDate(today: string, ranges: readonly DashboardLocalUsageRange[]): string | undefined {
+  const starts = ranges.flatMap((range) => {
+    switch (range) {
+      case "7d":
+        return [shiftDateKey(today, -6)];
+      case "14d":
+        return [shiftDateKey(today, -13)];
+      case "7w": {
+        const currentWeekStart = startOfLocalWeek(today);
+        return [shiftDateKey(currentWeekStart, -42)];
+      }
+      case "7m":
+        return [shiftMonthKey(today, -6)];
+      default:
+        return [];
+    }
+  });
+  return starts.sort()[0];
+}
+
+function startOfLocalWeek(date: string): string {
+  const [yearText, monthText, dayText] = date.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  const daysSinceMonday = weekday === 0 ? 6 : weekday - 1;
+  return shiftDateKey(date, -daysSinceMonday);
+}
+
+function shiftMonthKey(date: string, deltaMonths: number): string {
+  const [yearText, monthText] = date.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  return new Date(Date.UTC(year, month - 1 + deltaMonths, 1)).toISOString().slice(0, 10);
+}
+
+function daysBetweenDateKeys(start: string, end: string): number {
+  const startAt = Date.parse(`${start}T00:00:00Z`);
+  const endAt = Date.parse(`${end}T00:00:00Z`);
+  return Math.max(0, Math.round((endAt - startAt) / DAY_MS));
+}
+
 async function findJsonlFiles(root: string, oldestRelevantMtime: number): Promise<string[]> {
   const files: string[] = [];
   await visit(root, files, oldestRelevantMtime);
@@ -1478,10 +1830,12 @@ function parseCache(raw: string): LocalUsageCache | undefined {
     }
 
     const snapshot = candidate["snapshot"];
-    return isUsageSnapshot(snapshot)
+    const coverage = candidate["coverage"];
+    return isUsageSnapshot(snapshot) && isUsageCoverage(coverage)
       ? {
           schemaVersion: CACHE_SCHEMA_VERSION,
-          snapshot
+          snapshot,
+          coverage
         }
       : undefined;
   } catch {
@@ -1515,17 +1869,32 @@ function isUsageSnapshot(value: unknown): value is DashboardLocalUsageViewModel 
 
   return (
     isFiniteNumber(candidate["periodDays"]) &&
+    typeof candidate["timeZone"] === "string" &&
     (candidate["calculatedAt"] == null || isFiniteNumber(candidate["calculatedAt"])) &&
     (candidate["nextRefreshAt"] == null || isFiniteNumber(candidate["nextRefreshAt"])) &&
     isFiniteNumber(candidate["sourceFileCount"]) &&
     isFiniteNumber(candidate["eventCount"]) &&
     isTokenTotals(candidate["total"]) &&
+    Array.isArray(candidate["by3Hour"]) &&
+    candidate["by3Hour"].every(isUsageBucket) &&
+    Array.isArray(candidate["by3HourAndModel"]) &&
+    candidate["by3HourAndModel"].every(isUsageBucketModel) &&
     Array.isArray(candidate["byDay"]) &&
     candidate["byDay"].every(isUsageDay) &&
     Array.isArray(candidate["byModel"]) &&
     candidate["byModel"].every(isUsageModel) &&
     Array.isArray(candidate["byDayAndModel"]) &&
     candidate["byDayAndModel"].every(isUsageDayModel)
+  );
+}
+
+function isUsageCoverage(value: unknown): value is LocalUsageCacheCoverage {
+  const candidate = asRecord(value);
+  return Boolean(
+    candidate &&
+    typeof candidate["dailyStartDate"] === "string" &&
+    typeof candidate["dailyEndDate"] === "string" &&
+    candidate["dailyStartDate"] <= candidate["dailyEndDate"]
   );
 }
 
@@ -1582,6 +1951,18 @@ function isUsageDay(value: unknown): value is DashboardLocalUsageDayViewModel {
   );
 }
 
+function isUsageBucket(value: unknown): value is DashboardLocalUsageBucketViewModel {
+  const candidate = asRecord(value);
+  return Boolean(
+    candidate &&
+    isFiniteNumber(candidate["startAt"]) &&
+    isFiniteNumber(candidate["endAt"]) &&
+    candidate["endAt"] > candidate["startAt"] &&
+    isFiniteNumber(candidate["eventCount"]) &&
+    isTokenTotals(candidate)
+  );
+}
+
 function isUsageModel(value: unknown): value is DashboardLocalUsageModelViewModel {
   const candidate = asRecord(value);
   return Boolean(candidate && typeof candidate["model"] === "string" && isTokenTotals(candidate));
@@ -1595,6 +1976,11 @@ function isUsageDayModel(value: unknown): value is DashboardLocalUsageDayModelVi
     typeof candidate["model"] === "string" &&
     isTokenTotals(candidate)
   );
+}
+
+function isUsageBucketModel(value: unknown): value is DashboardLocalUsageBucketModelViewModel {
+  const candidate = asRecord(value);
+  return Boolean(candidate && isFiniteNumber(candidate["startAt"]) && typeof candidate["model"] === "string" && isTokenTotals(candidate));
 }
 
 function isTokenTotals(value: unknown): value is DashboardLocalUsageTokenTotals {

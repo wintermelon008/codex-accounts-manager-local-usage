@@ -55,13 +55,13 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(cards.indexOf("copy.localUsagePrice")).toBeLessThan(cards.indexOf("copy.localUsageInput"));
     expect(section).toContain("<RangeSelector");
     expect(section).toContain("formatTokenAndPrice");
-    expect(section).toContain("label: row.date");
+    expect(section).toContain("label: row.label");
     expect(section).toContain("local-usage-title-row");
     expect(section).toContain("copy.localUsageRefreshBtn");
     expect(section).toContain('const visibleModels = range.byModel.filter((row) => row.model !== "unknown")');
     expect(section).toContain("`${tokenText} (${formatCompactUsd(price.amountUsd)})`");
     expect(section).not.toContain('unpricedTokens > 0 ? "+"');
-    expect(settings).toContain("localUsageDefaultRange");
+    expect(settings).toContain("localUsageEnabledRanges");
     expect(settings).not.toContain("localUsageDefaultRangeDays");
     expect(settings).toContain("localUsageShowEquivalentPrice");
     expect(stylesheet).toContain(".local-usage-refresh-btn");

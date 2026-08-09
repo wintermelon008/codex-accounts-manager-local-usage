@@ -31,6 +31,7 @@ const localUsage = {
   status: "ready" as const,
   isRefreshing: false,
   periodDays: 7,
+  timeZone: "Asia/Shanghai",
   calculatedAt: 1,
   nextRefreshAt: 2,
   sourceFileCount: 1,
@@ -42,6 +43,8 @@ const localUsage = {
     reasoningOutputTokens: 1,
     totalTokens: 15
   },
+  by3Hour: [],
+  by3HourAndModel: [],
   byDay: [],
   byModel: [],
   byDayAndModel: []
@@ -64,6 +67,7 @@ function createState(): DashboardState {
     settings: {
       dashboardTheme: "dark",
       localUsageDefaultRange: "7d",
+      localUsageEnabledRanges: ["24h", "7d"],
       localUsageShowEquivalentPrice: true,
       displayLanguage: "en",
       autoRefreshMinutes: 0,

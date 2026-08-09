@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
-import type { DashboardLocalUsageRange, DashboardSettings, DashboardThemeOption } from "../../domain/dashboard/types";
+import {
+  DASHBOARD_LOCAL_USAGE_RANGE_OPTIONS,
+  type DashboardLocalUsageRange,
+  type DashboardSettings,
+  type DashboardThemeOption
+} from "../../domain/dashboard/types";
 import type { SeamlessQuotaBandSize, SeamlessSwitchThreshold } from "../../core/types";
 import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } from "../../localization/languages";
 import { normalizeQuotaColorThresholds } from "../../utils";
@@ -19,10 +24,7 @@ export class ExtensionSettingsStore {
 
     return {
       dashboardTheme: normalizeDashboardTheme(config.get<string>("dashboardTheme", "auto")),
-      localUsageDefaultRange: normalizeLocalUsageRange(
-        explicitConfigurationValue(config, "localUsageDefaultRange") ??
-          config.get<number>("localUsageDefaultRangeDays", 7)
-      ),
+      ...resolveLocalUsageRanges(config),
       localUsageShowEquivalentPrice: config.get<boolean>("localUsageShowEquivalentPrice", true),
       codexAppRestartEnabled: config.get<boolean>("codexAppRestartEnabled", false),
       codexAppRestartMode: config.get<"auto" | "manual">("codexAppRestartMode") ?? "manual",
@@ -77,12 +79,53 @@ export function normalizeDashboardTheme(value: string | undefined): DashboardThe
 }
 
 export function normalizeLocalUsageRange(value: unknown): DashboardLocalUsageRange {
-  if (value === "7d" || value === "14d") {
-    return value;
+  if (typeof value === "string" && DASHBOARD_LOCAL_USAGE_RANGE_OPTIONS.includes(value as DashboardLocalUsageRange)) {
+    return value as DashboardLocalUsageRange;
   }
 
-  // Migrate the removed 24-hour/three-hour view and the old numeric setting.
   return value === 14 ? "14d" : "7d";
+}
+
+export function normalizeLocalUsageRanges(value: unknown): DashboardLocalUsageRange[] {
+  const configured = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const selected = new Set(
+    configured.filter((item): item is DashboardLocalUsageRange =>
+      DASHBOARD_LOCAL_USAGE_RANGE_OPTIONS.includes(item as DashboardLocalUsageRange)
+    )
+  );
+  const normalized = DASHBOARD_LOCAL_USAGE_RANGE_OPTIONS.filter((range) => selected.has(range));
+  return normalized.length > 0 ? normalized : ["24h"];
+}
+
+function resolveLocalUsageRanges(
+  config: ReadableCodexAccountsConfiguration
+): Pick<DashboardSettings, "localUsageDefaultRange" | "localUsageEnabledRanges"> {
+  const explicitlyConfigured = explicitConfigurationValue(config, "localUsageEnabledRanges");
+  const enabledRanges =
+    explicitlyConfigured !== undefined
+      ? normalizeLocalUsageRanges(explicitlyConfigured)
+      : resolveLegacyLocalUsageRanges(config);
+  return {
+    localUsageDefaultRange: enabledRanges[0] ?? "24h",
+    localUsageEnabledRanges: enabledRanges
+  };
+}
+
+function resolveLegacyLocalUsageRanges(config: ReadableCodexAccountsConfiguration): DashboardLocalUsageRange[] {
+  const legacyRange = explicitConfigurationValue(config, "localUsageDefaultRange");
+  if (legacyRange !== undefined) {
+    return [normalizeLocalUsageRange(legacyRange)];
+  }
+
+  const legacyDays =
+    explicitConfigurationValue(config, "localUsageDefaultRangeDays") ??
+    config.get<unknown>("localUsageDefaultRangeDays", undefined);
+  if (legacyDays !== undefined) {
+    return [normalizeLocalUsageRange(legacyDays)];
+  }
+
+  const configured = config.get<unknown>("localUsageEnabledRanges", ["24h"]);
+  return normalizeLocalUsageRanges(configured);
 }
 
 function explicitConfigurationValue(config: ReadableCodexAccountsConfiguration, key: string): unknown {

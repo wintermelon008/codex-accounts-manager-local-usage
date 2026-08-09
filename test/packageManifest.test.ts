@@ -43,7 +43,13 @@ describe("extension manifest configuration", () => {
         configuration?: {
           properties?: Record<
             string,
-            { type?: string; default?: unknown; enum?: unknown[]; markdownDescription?: string }
+            {
+              type?: string;
+              default?: unknown;
+              enum?: unknown[];
+              items?: { type?: string; enum?: unknown[] };
+              markdownDescription?: string;
+            }
           >;
         };
       };
@@ -54,6 +60,14 @@ describe("extension manifest configuration", () => {
       type: "string",
       default: "7d",
       enum: ["7d", "14d"]
+    });
+    expect(properties?.["codexAccounts.localUsageEnabledRanges"]).toMatchObject({
+      type: "array",
+      default: ["24h"]
+    });
+    expect(properties?.["codexAccounts.localUsageEnabledRanges"]?.items).toMatchObject({
+      type: "string",
+      enum: ["24h", "3d", "7d", "14d", "7w", "7m"]
     });
     expect(properties?.["codexAccounts.localUsageShowEquivalentPrice"]).toMatchObject({
       type: "boolean",
