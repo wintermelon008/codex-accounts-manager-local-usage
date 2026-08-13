@@ -275,6 +275,14 @@ describe("CodexHotSwitchBridge", () => {
       usageLimitExhaustionReady: true,
       observedUsageLimitFailures: 1
     });
+
+    await expect(bridge.resetUsageLimitObservation()).resolves.toEqual({ reset: true });
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      usageLimitObservationEnabled: true,
+      recentUsageLimitedThreads: 0,
+      usageLimitExhaustionReady: false,
+      observedUsageLimitFailures: 0
+    });
   }, 15_000);
 
   it("keeps the real Gateway key in memory and forwards it only through the loopback adapter", async () => {
@@ -349,7 +357,9 @@ describe("CodexHotSwitchBridge", () => {
       await waitForSocket(getHotSwitchSocketPath(process.pid));
       await expect(bridge.getStatus()).resolves.toMatchObject({
         gatewayActive: true,
-        providerKind: "gateway"
+        providerKind: "gateway",
+        gatewayBaseUrl,
+        gatewayModel: "gateway-test-model"
       });
       await expect(bridge.getGatewayStatus()).resolves.toMatchObject({ active: true, ready: false });
       await expect(messages.next((message) => message.method === "test/runtimeArgs")).resolves.toMatchObject({

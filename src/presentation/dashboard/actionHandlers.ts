@@ -132,6 +132,10 @@ async function runDashboardAction(
     case "refreshLocalUsage":
       await ctx.refreshLocalUsage?.();
       return undefined;
+    case "resetSeamlessSwitchRuntime":
+      await vscode.commands.executeCommand("codexAccounts.resetSeamlessSwitchRuntime");
+      await ctx.publishState(true);
+      return undefined;
     case "integrationAction":
       {
         const host = requireManagerIntegrationHost();

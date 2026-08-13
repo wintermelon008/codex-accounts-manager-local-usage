@@ -1,5 +1,11 @@
 # 变更日志
 
+## Unreleased
+
+- Manager `0.1.16-local.61`：Mailbox 的 OAuth 导入现在支持由统一停止按钮取消；OAuth 本地回调监听器确认成功绑定后才打开浏览器，端口冲突时不再出现已打开登录页但无法自动回调的误导状态。
+- Mailbox 0.2.2：Codex OAuth 导入纳入统一停止按钮；Manager 取消 OAuth 等待后不再弹出二次失败提示；OAuth 回调监听器绑定成功后才打开登录页面，避免端口冲突时误导用户。
+- Mailbox 0.2.1：详情面板填满 Webview 并恢复鼠标滚轮滚动；查询完成改为静默状态事件；Codex OAuth 导入期间仍可查询和接收验证码；活动操作支持停止与删除。
+
 ## 维护约定
 
 - `announcements.json` 只保留当前版本的更新公告（`releaseVersion` + 新 `id`），发布新版本时旧版本更新说明可直接移除对应项，避免历史版本在弹窗中继续出现。
@@ -23,13 +29,13 @@
 
 ### 验证说明
 
-- 通过 `npm run verify`、`npm test`、`npm run verify:customization`、`npm run audit:integration-portability` 和 `npm run package`。
+- 通过 `npm run verify`、`npm test`、`npm run audit:integration-portability` 和 `npm run package`。
 
 ## 0.1.16-local.59（2026-08-06）
 
 ### 发布修复
 
-- 将当前可复现核心 Manager 构建版本提升为 `0.1.16-local.59`，并同步定制基线审阅哈希，使干净 checkout 可以直接运行 `npm run package`。
+- 将当前可复现核心 Manager 构建版本提升为 `0.1.16-local.59`，并同步本地构建内容，使干净 checkout 可以直接运行 `npm run package`。
 - 核心 VSIX 不包含飞书导入器或 Sub2API 可选包。
 
 ### 验证说明

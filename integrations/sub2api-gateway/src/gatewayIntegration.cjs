@@ -11,6 +11,7 @@ const { GatewayUsageTracker } = require("./usageTracker.cjs");
 
 const INTEGRATION_ID = "sub2api-gateway";
 const SELECTION_STATE_KEY = "sub2apiGateway.selection.v1";
+const PROFILE_ID_STATE_KEY = "sub2apiGateway.profile.v1";
 const CARD_VISIBILITY_STATE_KEY = "sub2apiGateway.cardVisibility.v1";
 const RUNTIME_POLL_MS = 15_000;
 const FALLBACK_POLL_MS = 2_000;
@@ -28,6 +29,8 @@ class Sub2ApiGatewayIntegration {
     this.gateway = undefined;
     this.virtualRegistration = undefined;
     this.virtualDescriptorKey = undefined;
+    this.profiles = [];
+    this.profileId = undefined;
     this.config = undefined;
     this.configError = undefined;
     this.inventoryObserverError = undefined;
@@ -52,6 +55,7 @@ class Sub2ApiGatewayIntegration {
     this.gateway = this.api.registerGateway(INTEGRATION_ID);
     this.usageTracker.load();
     this.selection = readSelection(this.context.globalState.get(SELECTION_STATE_KEY));
+    this.profileId = readProfileId(this.context.globalState.get(PROFILE_ID_STATE_KEY));
     this.cardVisible = readBoolean(this.context.globalState.get(CARD_VISIBILITY_STATE_KEY), true);
     await this.reloadConfiguration(true);
     await this.syncVirtualAccountRegistration();
@@ -79,6 +83,7 @@ class Sub2ApiGatewayIntegration {
     return {
       integrationId: INTEGRATION_ID,
       details: [
+        { label: "配置", value: config?.displayName ?? "未配置", emphasis: config ? "normal" : "warning" },
         { label: "下游", value: config?.sub2api.baseUrl ?? "未配置", emphasis: config ? "normal" : "warning" },
         { label: "模型", value: config?.sub2api.model ?? "未配置" },
         {
@@ -96,6 +101,7 @@ class Sub2ApiGatewayIntegration {
         ? providerUsage(config.sub2api.model, usage.fiveHour, "5h")
         : undefined,
       actions: [
+        { id: "selectProfile", label: "选择配置", enabled: this.profiles.length > 1 },
         { id: "configureCredential", label: "保存下游密钥", enabled: Boolean(config), tooltip: "只存入本扩展的 VS Code SecretStorage" },
         { id: "refresh", label: "刷新", enabled: true },
         { id: "openConfig", label: "打开配置", enabled: true }
@@ -110,6 +116,9 @@ class Sub2ApiGatewayIntegration {
         return;
       case "deactivate":
         await this.deactivate();
+        return;
+      case "selectProfile":
+        await this.selectProfile();
         return;
       case "refresh":
         await this.refresh();
@@ -139,6 +148,9 @@ class Sub2ApiGatewayIntegration {
       this.publish();
       throw new Error(result.error);
     }
+    if (!result.requiresReload) {
+      await this.ensureActiveGatewayRoute();
+    }
     this.selection = "active";
     await this.context.globalState.update(SELECTION_STATE_KEY, this.selection);
     this.runtimeError = undefined;
@@ -148,6 +160,36 @@ class Sub2ApiGatewayIntegration {
     await promptReloadIfNeeded(this.vscode, result, "Sub2API Gateway 已选择。请重新加载窗口一次以启动本地回环适配器。");
     if (!result.requiresReload) {
       void this.vscode.window.showInformationMessage("Sub2API Gateway 已选择，无需重新加载窗口。");
+    }
+  }
+
+  async selectProfile() {
+    await this.reloadConfiguration(true);
+    if (this.profiles.length < 2) {
+      return;
+    }
+    const picked = await this.vscode.window.showQuickPick(
+      this.profiles.map((profile) => ({
+        label: profile.displayName,
+        description: profile.sub2api.baseUrl,
+        detail: profile.id === this.profileId ? "当前配置" : profile.id,
+        profile
+      })),
+      { title: "选择 Sub2API 配置" }
+    );
+    if (!picked || picked.profile.id === this.profileId) {
+      return;
+    }
+    this.profileId = picked.profile.id;
+    await this.context.globalState.update(PROFILE_ID_STATE_KEY, this.profileId);
+    this.health = undefined;
+    this.inventory = emptyInventory();
+    await this.reloadConfiguration(false);
+    await this.syncVirtualAccountRegistration();
+    if (this.selection === "active") {
+      await this.activate();
+    } else {
+      this.publish();
     }
   }
 
@@ -242,6 +284,7 @@ class Sub2ApiGatewayIntegration {
 
   async reloadConfiguration(createTemplateIfMissing) {
     this.config = undefined;
+    this.profiles = [];
     this.configError = undefined;
     this.inventoryObserverError = undefined;
     try {
@@ -250,8 +293,12 @@ class Sub2ApiGatewayIntegration {
         await ensureSub2ApiGatewayConfigFile(configPath);
       }
       const result = await readSub2ApiGatewayConfigWithDiagnostics(configPath);
-      this.config = result.config;
-      this.inventoryObserverError = result.inventoryObserverError;
+      this.profiles = result.profiles ?? [result.config];
+      const selected = this.profiles.find((profile) => profile.id === this.profileId) ?? this.profiles[0];
+      this.profileId = selected.id;
+      this.config = selected;
+      this.inventoryObserverError = selected.inventoryObserverError ?? result.inventoryObserverError;
+      await this.context.globalState.update(PROFILE_ID_STATE_KEY, this.profileId);
       this.credentialPresent = Boolean(await this.secretStore.get(this.config.sub2api.credentialRef));
       this.observerCredentialPresent = Boolean(
         this.config.inventoryObserver && (await this.secretStore.get(this.config.inventoryObserver.credentialRef))
@@ -259,6 +306,7 @@ class Sub2ApiGatewayIntegration {
       this.inventory = normalizeInventory(this.inventory, this.config.inventoryObserver, this.observerCredentialPresent);
     } catch (error) {
       this.configError = safeError(error, "Gateway 配置不可用。");
+      this.profileId = undefined;
       this.credentialPresent = false;
       this.observerCredentialPresent = false;
       this.inventory = emptyInventory();
@@ -275,7 +323,7 @@ class Sub2ApiGatewayIntegration {
       model: this.config.sub2api.model,
       credentialRef: this.config.sub2api.credentialRef
     };
-    const key = JSON.stringify(descriptor);
+    const key = JSON.stringify({ profileId: this.profileId, displayName: this.config.displayName, descriptor });
     if (key === this.virtualDescriptorKey && this.virtualRegistration) {
       return;
     }
@@ -308,6 +356,9 @@ class Sub2ApiGatewayIntegration {
         const credential = await this.requireCredential(config);
         const result = await this.gateway.activate(toRuntimeConfig(config), credential, options);
         if (!result.error) {
+          if (!result.requiresReload) {
+            await this.ensureActiveGatewayRoute();
+          }
           this.selection = "active";
           await this.context.globalState.update(SELECTION_STATE_KEY, this.selection);
           this.runtimeError = undefined;
@@ -335,6 +386,14 @@ class Sub2ApiGatewayIntegration {
       if (result.error) {
         this.selection = "inactive";
         await this.context.globalState.update(SELECTION_STATE_KEY, this.selection);
+      } else if (!result.requiresReload) {
+        try {
+          await this.ensureActiveGatewayRoute();
+        } catch (error) {
+          this.selection = "inactive";
+          await this.context.globalState.update(SELECTION_STATE_KEY, this.selection);
+          this.runtimeError = safeError(error, "Gateway runtime 未就绪。");
+        }
       }
     } catch (error) {
       this.runtimeError = safeError(error, "Gateway runtime 未就绪。");
@@ -351,7 +410,12 @@ class Sub2ApiGatewayIntegration {
       const status = await this.gateway.getStatus();
       this.runtimeStatus = status;
       await this.usageTracker.observe(status);
-      this.runtimeError = status.ready || status.route === "chatgpt" ? undefined : "Gateway 正在等待下游密钥。";
+      this.runtimeError =
+        this.selection === "active" && (status.active !== true || status.route !== "gateway")
+          ? "Gateway 实际路由未激活；请重新选择 Gateway。"
+          : status.ready || status.route === "chatgpt"
+            ? undefined
+            : "Gateway 正在等待下游密钥。";
       await this.observeQuotaExhaustion(status);
     } catch (error) {
       this.runtimeError = safeError(error, "Gateway runtime 未就绪。");
@@ -426,6 +490,16 @@ class Sub2ApiGatewayIntegration {
       });
     this.refreshingInventory = task;
     return task;
+  }
+
+  async ensureActiveGatewayRoute() {
+    const status = await this.gateway.getStatus();
+    if (status.active !== true || status.route !== "gateway") {
+      this.runtimeError = "Gateway 实际路由未激活；请重新选择 Gateway。";
+      this.publish();
+      throw new Error(this.runtimeError);
+    }
+    return status;
   }
 
   resetTimers() {
@@ -566,6 +640,10 @@ async function promptReloadIfNeeded(vscode, result, message) {
 
 function readSelection(value) {
   return value === "active" || value === "fallback" ? value : "inactive";
+}
+
+function readProfileId(value) {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
 }
 
 function readBoolean(value, fallback) {

@@ -1,0 +1,409 @@
+"use strict";
+
+const crypto = require("node:crypto");
+
+const MAILBOX_PANEL_VIEW_TYPE = "codexAccounts.mailbox";
+
+function createMailboxPanelHtml() {
+  const nonce = crypto.randomBytes(16).toString("base64").replace(/[^A-Za-z0-9]/gu, "");
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <title>Mailbox</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: var(--vscode-editor-background);
+      --panel: color-mix(in srgb, var(--vscode-editorWidget-background) 92%, transparent);
+      --panel-soft: color-mix(in srgb, var(--vscode-editorWidget-background) 70%, transparent);
+      --border: var(--vscode-editorWidget-border);
+      --text: var(--vscode-foreground);
+      --muted: var(--vscode-descriptionForeground);
+      --accent: var(--vscode-textLink-foreground);
+      --accent-strong: var(--vscode-button-background);
+      --accent-text: var(--vscode-button-foreground);
+      --danger: var(--vscode-errorForeground);
+      --success: var(--vscode-testing-iconPassed);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; min-height: 100vh; overflow: hidden; color: var(--text); background: var(--bg); font-family: var(--vscode-font-family); font-size: 13px; }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    button { border: 1px solid var(--border); border-radius: 6px; background: var(--panel-soft); padding: 7px 12px; cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button.primary { color: var(--accent-text); background: var(--accent-strong); border-color: var(--accent-strong); }
+    button.danger { color: var(--danger); }
+    button:disabled { opacity: .48; cursor: default; }
+    input, select, textarea { width: 100%; border: 1px solid var(--border); border-radius: 6px; background: var(--vscode-input-background); padding: 8px 10px; }
+    textarea { min-height: 150px; resize: vertical; line-height: 1.55; }
+    .shell { width: 100%; height: 100vh; min-height: 0; margin: 0; padding: 16px; display: flex; flex-direction: column; }
+    .topbar { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    .brand { display: flex; gap: 12px; align-items: center; min-width: 0; }
+    .logo { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 9px; color: var(--accent-text); background: var(--accent-strong); font-weight: 700; font-size: 18px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 24px; letter-spacing: -.02em; }
+    h2 { font-size: 17px; }
+    h3 { font-size: 14px; }
+    .subtitle, .muted { color: var(--muted); }
+    .subtitle { margin-top: 4px; }
+    .top-actions, .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .notice { display: none; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-soft); }
+    .notice.visible { display: block; }
+    .layout { flex: 1 1 auto; display: grid; grid-template-columns: minmax(240px, 310px) minmax(0, 1fr); gap: 14px; min-height: 0; }
+    #app { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .box { min-height: 0; height: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
+    .layout > .box:first-child { display: flex; flex-direction: column; }
+    .box-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 15px; border-bottom: 1px solid var(--border); }
+    .mailbox-list-header { align-items: flex-start; }
+    .mailbox-list-toolbar { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .mailbox-list-toolbar input { padding: 7px 9px; }
+    .mailbox-list { flex: 1; min-height: 0; max-height: none; overflow: auto; overscroll-behavior: contain; }
+    .mailbox-row-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; border-bottom: 1px solid var(--border); }
+    .mailbox-row-wrap:last-child { border-bottom: 0; }
+    .mailbox-row { display: block; width: 100%; min-width: 0; text-align: left; border: 0; border-radius: 0; background: transparent; padding: 13px 10px 13px 14px; }
+    .mailbox-row.selected { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
+    .mailbox-row:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+    .mailbox-row-actions { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 0; background: transparent; }
+    .mailbox-row-action { padding: 5px 6px; font-size: 11px; white-space: nowrap; }
+    .row-number { color: var(--muted); margin-right: 6px; }
+    .address { overflow-wrap: anywhere; word-break: break-word; }
+    .row-title { font-weight: 650; line-height: 1.4; }
+    .row-meta { display: flex; flex-wrap: wrap; gap: 6px 9px; margin-top: 7px; color: var(--muted); font-size: 12px; }
+    .tag { display: inline-flex; align-items: center; width: fit-content; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); font-size: 11px; }
+    .tag.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+    .tag.success { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+    .empty-list, .empty-detail { display: grid; place-items: center; min-height: 270px; padding: 28px; color: var(--muted); text-align: center; }
+    .detail { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .detail-header { flex: none; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+    .detail-header-actions { flex: none; display: flex; justify-content: flex-end; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--border); }
+    .detail-address { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; word-break: break-word; }
+    .detail-name { margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
+    .detail-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    .detail-actions { flex: none; padding: 12px 20px; border-bottom: 1px solid var(--border); }
+    .content { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 16px 20px 22px; }
+    .hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+    .hero-label { color: var(--muted); font-size: 12px; }
+    .code { margin-top: 3px; color: var(--accent); font-size: clamp(34px, 6vw, 62px); font-weight: 800; letter-spacing: .08em; line-height: 1.1; }
+    .hero-side { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 20px 0 10px; }
+    .messages { border: 1px solid var(--border); border-radius: 8px; overflow: visible; }
+    .message-entry { border-bottom: 1px solid var(--border); }
+    .message-entry:last-child { border-bottom: 0; }
+    .message-row { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; padding: 11px 12px; }
+    .message-entry:last-child .message-row { border-bottom: 0; }
+    .message-row.selected { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .message-subject { font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+    .message-time { margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .message-detail { border-top: 1px solid var(--border); padding: 15px; background: color-mix(in srgb, var(--accent) 4%, transparent); }
+    .message-detail h3 { margin-bottom: 9px; overflow-wrap: anywhere; }
+    .from { color: var(--muted); overflow-wrap: anywhere; }
+    .body { margin-top: 14px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+    .button-spinner { display: inline-block; width: 13px; height: 13px; margin-right: 6px; vertical-align: -2px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: mailbox-spin .75s linear infinite; }
+    .is-pending { opacity: .82; }
+    @keyframes mailbox-spin { to { transform: rotate(360deg); } }
+    .modal-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; background: color-mix(in srgb, #000 48%, transparent); }
+    .modal { width: min(700px, 100%); max-height: calc(100vh - 40px); overflow: auto; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--vscode-editorWidget-background); box-shadow: 0 18px 60px #0008; }
+    .modal h2 { margin-bottom: 16px; }
+    .field { margin-top: 13px; }
+    .field label { display: block; margin-bottom: 6px; font-weight: 600; }
+    .field-note { margin-top: 6px; color: var(--muted); line-height: 1.45; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    @media (max-width: 820px) {
+      body { padding: 0; }
+      .topbar { display: block; }
+      .top-actions { margin-top: 12px; justify-content: flex-start; }
+      body { overflow: auto; }
+      .shell { height: auto; min-height: 100vh; }
+      .layout { flex: none; grid-template-columns: 1fr; min-height: 0; }
+      .layout > .box { height: auto; }
+      .mailbox-list { flex: none; min-height: 180px; max-height: 280px; }
+      .mailbox-row-action { padding-inline: 5px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">M</div>
+        <div><h1>Mailbox</h1><p class="subtitle">邮箱列表与当前选中邮箱详情</p></div>
+      </div>
+      <div class="top-actions"><button class="primary" data-action="open-import">添加邮箱</button><button data-action="refresh">刷新本地状态</button></div>
+    </header>
+    <div id="notice" class="notice" role="status"></div>
+    <main id="app"></main>
+  </div>
+  <script nonce="${nonce}">
+    (() => {
+      const vscode = acquireVsCodeApi();
+      const app = document.getElementById("app");
+      const notice = document.getElementById("notice");
+      let state = { mailboxes: [], providers: [] };
+      let importOpen = false;
+      let importProvider = "";
+      let selectedMessageId = "";
+      let mailboxSearch = "";
+      let pendingActions = {};
+      let pendingCodexImports = {};
+      let editOpenMailboxId = "";
+      let editProvider = "";
+
+      window.addEventListener("message", (event) => {
+        const message = event.data || {};
+        if (message.type === "state") {
+          state = message.state || state;
+          pendingCodexImports = Object.fromEntries((state.codexImports || []).map((mailboxId) => [mailboxId, true]));
+          if (!importProvider && state.providers?.[0]) importProvider = state.providers[0].id;
+          if (state.selected?.detail?.messages && !state.selected.detail.messages.some((item) => item.id === selectedMessageId)) {
+            selectedMessageId = state.selected.detail.messages[0]?.id || "";
+          }
+          render();
+        }
+        if (message.type === "operation-complete") {
+          const mailboxId = message.mailboxId || state.selectedMailboxId;
+          if (mailboxId && pendingActions[mailboxId] === message.action) {
+            pendingActions[mailboxId] = "";
+          }
+          render();
+        }
+        if (message.type === "toast") {
+          if (message.level === "success" || message.level === "warning" || message.level === "error") {
+            const mailboxId = message.mailboxId || state.selectedMailboxId;
+            if (mailboxId && message.action === "codexImport") pendingCodexImports[mailboxId] = false;
+            if (mailboxId && (message.action === "stop" || !message.action || pendingActions[mailboxId] === message.action)) {
+              pendingActions[mailboxId] = "";
+            }
+          }
+          showNotice(message.message, message.level);
+          render();
+        }
+      });
+
+      document.addEventListener("click", (event) => {
+        const target = event.target.closest("[data-action]");
+        if (!target || target.disabled) return;
+        const action = target.dataset.action;
+        if (action === "select-mailbox") send("select", { mailboxId: target.dataset.mailboxId });
+        else if (action === "select-message") { selectedMessageId = target.dataset.messageId || ""; render(); }
+        else if (action === "open-import") { importOpen = true; render(); }
+        else if (action === "close-import") { importOpen = false; render(); }
+        else if (action === "close-edit") { editOpenMailboxId = ""; render(); }
+        else if (action === "edit-mailbox") openEditModal(target.dataset.mailboxId || "");
+        else if (action === "delete-mailbox") requestDelete(target.dataset.mailboxId || "");
+        else if (action === "codex-import") requestCodexImport(target.dataset.mailboxId || state.selectedMailboxId);
+        else if (action === "submit-query" || action === "submit-wait" || action === "submit-renewal" || action === "stop") {
+          requestAction(action.replace("submit-", ""), state.selectedMailboxId);
+        }
+        else if (action === "refresh") send("refresh");
+        else if (action === "copy-code") copyCode(target.dataset.code || "");
+      });
+
+      document.addEventListener("change", (event) => {
+        if (event.target.id === "providerId") { importProvider = event.target.value; render(); }
+        if (event.target.id === "editProviderId") { editProvider = event.target.value || ""; }
+      });
+      document.addEventListener("input", (event) => {
+        if (event.target.id === "mailboxSearch") { mailboxSearch = event.target.value || ""; render(); document.getElementById("mailboxSearch")?.focus(); }
+      });
+      document.addEventListener("submit", (event) => {
+        if (event.target.id === "editForm") {
+          event.preventDefault();
+          const form = new FormData(event.target);
+          const mailboxId = editOpenMailboxId;
+          if (!mailboxId) return;
+          pendingActions[mailboxId] = "edit";
+          editOpenMailboxId = "";
+          render();
+          send("edit", { mailboxId, providerId: form.get("providerId"), displayName: form.get("displayName"), input: form.get("input") });
+          return;
+        }
+        if (event.target.id !== "importForm") return;
+        event.preventDefault();
+        const form = new FormData(event.target);
+        send("import", { providerId: form.get("providerId"), displayName: form.get("displayName"), input: form.get("input") });
+        importOpen = false;
+      });
+
+      function render() {
+        const mailboxList = document.querySelector(".mailbox-list");
+        const content = document.querySelector(".content");
+        const searchInput = document.getElementById("mailboxSearch");
+        const keepSearchFocus = document.activeElement === searchInput;
+        const searchSelectionStart = searchInput?.selectionStart;
+        const searchSelectionEnd = searchInput?.selectionEnd;
+        const mailboxScrollTop = mailboxList?.scrollTop || 0;
+        const contentScrollTop = content?.scrollTop || 0;
+        document.querySelector(".modal-backdrop")?.remove();
+        app.innerHTML = renderLayout();
+        if (importOpen) document.body.insertAdjacentHTML("beforeend", renderImportModal());
+        if (editOpenMailboxId) document.body.insertAdjacentHTML("beforeend", renderEditModal());
+        const nextMailboxList = document.querySelector(".mailbox-list");
+        const nextContent = document.querySelector(".content");
+        if (nextMailboxList) nextMailboxList.scrollTop = mailboxScrollTop;
+        if (nextContent) nextContent.scrollTop = contentScrollTop;
+        if (keepSearchFocus) {
+          const nextSearchInput = document.getElementById("mailboxSearch");
+          nextSearchInput?.focus();
+          if (searchSelectionStart != null && searchSelectionEnd != null) {
+            nextSearchInput?.setSelectionRange(searchSelectionStart, searchSelectionEnd);
+          }
+        }
+      }
+
+      function renderLayout() {
+        const allMailboxes = state.mailboxes || [];
+        const query = mailboxSearch.trim().toLowerCase();
+        const filteredMailboxes = query
+          ? allMailboxes.filter((mailbox) => matchesMailboxSearch(mailbox, query))
+          : allMailboxes;
+        const rows = filteredMailboxes.length
+          ? filteredMailboxes.map((mailbox) => renderMailboxRow(mailbox, allMailboxes.indexOf(mailbox))).join("")
+          : '<div class="empty-list">' + (allMailboxes.length ? '没有匹配的邮箱。' : '还没有邮箱。<br>点击“添加邮箱”并在导入时选择来源。') + '</div>';
+        const selected = state.selected;
+        return '<div class="layout">' +
+          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag">' + (query ? filteredMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"></div><div class="mailbox-list">' + rows + '</div></section>' +
+          '<section class="box detail">' + (selected ? renderSelected(selected) : '<div class="empty-detail"><div><h2>选择一个邮箱</h2><p class="muted" style="margin-top:8px">其他邮箱的邮件详情不会在未选中时渲染或查询。</p></div></div>') + '</section>' +
+          '</div>';
+      }
+
+      function matchesMailboxSearch(mailbox, query) {
+        const address = String(mailbox.address || "").trim().toLowerCase();
+        const localPart = address.split("@", 1)[0];
+        const displayName = String(mailbox.displayName || "").trim().toLowerCase();
+        const providerId = String(mailbox.providerId || "").trim().toLowerCase();
+        return localPart.startsWith(query) || address.startsWith(query) || displayName.includes(query) || providerId.includes(query);
+      }
+
+      function renderMailboxRow(mailbox, index) {
+        const active = (state.operations || []).find((operation) => operation.mailboxId === mailbox.id);
+        const pending = pendingActions[mailbox.id] || (pendingCodexImports[mailbox.id] ? "codexImport" : "");
+        const status = active ? active.kind === "wait" ? "监听中" : active.kind === "renewal" ? "续期中" : "查询中" : mailbox.lastStatus || "未查询";
+        const statusClass = mailbox.lastStatus === "error" ? "error" : mailbox.latestCode ? "success" : "";
+        const codexLinked = isCodexLinked(mailbox);
+        return '<div class="mailbox-row-wrap"><button class="mailbox-row ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '" data-action="select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">' +
+          '<div class="row-title"><span class="row-number">' + (index + 1) + '</span><span class="address">' + esc(mailbox.displayName || mailbox.address) + '</span></div>' +
+          '<div class="row-meta"><span class="address">' + esc(mailbox.address) + '</span><span class="tag">' + esc(mailbox.providerId) + '</span><span class="tag ' + statusClass + '">' + esc(status) + '</span>' +
+          (state.codexImportAvailable ? '<span class="tag ' + (codexLinked ? 'success' : 'warning') + '">' + (codexLinked ? 'Codex 已接入' : '未接入 Codex') + '</span>' : '') +
+          (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
+      }
+
+      function renderSelected(selected) {
+        const mailbox = selected.mailbox;
+        const detail = selected.detail || { messages: [], codes: [] };
+        const operation = (state.operations || []).find((item) => item.mailboxId === mailbox.id);
+        const messages = detail.messages || [];
+        const provider = (state.providers || []).find((item) => item.id === mailbox.providerId);
+        const capability = provider?.capabilities?.history === "latest" ? "最近 1 封" : '最近 ' + (provider?.capabilities?.maxMessages || 10) + ' 封';
+        const requestedAction = pendingActions[mailbox.id] || "";
+        const codexImportPending = Boolean(pendingCodexImports[mailbox.id]);
+        const busyAction = requestedAction && requestedAction !== "codexImport"
+          ? requestedAction
+          : (operation?.kind || "");
+        const canStop = Boolean(
+          operation ||
+          (codexImportPending && state.codexImportCancellable) ||
+          requestedAction === "stop"
+        );
+        const codexLinked = isCodexLinked(mailbox);
+        const actionLabel = (action, label) => busyAction === action ? '<span class="button-spinner" aria-hidden="true"></span>' + ({ query: "查询中…", wait: "监听中…", renewal: "续期中…", stop: "停止中…", codexImport: "导入中…" }[action] || label) : label;
+        const codexImportButton = state.codexImportAvailable && !codexLinked
+          ? '<button class="primary ' + (codexImportPending ? 'is-pending' : '') + '" data-action="codex-import" data-mailbox-id="' + esc(mailbox.id) + '" ' + ((codexImportPending || operation || (requestedAction && !codexImportPending)) ? 'disabled' : '') + ' aria-busy="' + codexImportPending + '">' + (codexImportPending ? '<span class="button-spinner" aria-hidden="true"></span>导入中…' : 'Codex 导入') + '</button>'
+          : '';
+        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag">来源：' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag">' + capability + '</span><span class="tag">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span></div></div>' +
+          '<div class="detail-header-actions">' + codexImportButton + '<button data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">编辑账号</button><button class="danger" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">删除账号</button></div>' +
+          '<div class="detail-actions"><div class="actions">' +
+          '<button class="' + (busyAction === "query" ? 'is-pending' : '') + '" data-action="submit-query" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "query") + '">' + actionLabel("query", "查询邮件") + '</button>' +
+          '<button class="primary ' + (busyAction === "wait" ? 'is-pending' : '') + '" data-action="submit-wait" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "wait") + '">' + actionLabel("wait", "接收验证码") + '</button>' +
+          '<button class="' + (busyAction === "renewal" ? 'is-pending' : '') + '" data-action="submit-renewal" ' + (busyAction || !provider?.capabilities?.manualRenewal ? 'disabled' : '') + ' aria-busy="' + (busyAction === "renewal") + '">' + actionLabel("renewal", "人工续期") + '</button>' +
+          '<button data-action="stop" class="danger ' + (busyAction === "stop" ? 'is-pending' : '') + '" ' + (canStop ? '' : 'disabled') + ' aria-busy="' + (busyAction === "stop") + '">' + actionLabel("stop", "停止") + '</button>' +
+          '</div></div>' +
+          '<div class="content"><div class="hero"><div><div class="hero-label">最近一次验证码</div><div class="code">' + esc(detail.codes?.[0] || mailbox.latestCode || '—') + '</div><div class="muted">' + (detail.fetchedAt ? '查询于 ' + esc(formatDate(detail.fetchedAt)) : '尚未查询该邮箱') + '</div></div><div class="hero-side">' + (detail.codes?.[0] ? '<button class="primary" data-action="copy-code" data-code="' + esc(detail.codes[0]) + '">复制验证码</button>' : '') + '</div></div>' +
+          '<div class="section-title"><h2>邮件</h2><span class="muted">' + esc(capability) + '</span></div>' +
+          (messages.length ? '<div class="messages">' + messages.map(renderMessageEntry).join("") + '</div>' : '<div class="empty-detail" style="min-height:180px">暂无邮件结果。手动启动一次查询或验证码接收流程。</div>') + '</div>';
+      }
+
+      function renderMessageRow(message) {
+        const selected = message.id === selectedMessageId;
+        return '<button class="message-row ' + (selected ? 'selected' : '') + '" data-action="select-message" data-message-id="' + esc(message.id) + '" aria-expanded="' + selected + '"><div class="message-subject">' + esc(message.subject) + '</div><div class="message-time">' + esc(formatDate(message.receivedAt)) + (message.codes?.length ? ' · 验证码 ' + esc(message.codes.join('/')) : '') + '</div></button>';
+      }
+
+      function renderMessageEntry(message) {
+        return '<div class="message-entry">' + renderMessageRow(message) + (message.id === selectedMessageId ? '<article class="message-detail">' + renderMessageDetail(message) + '</article>' : '') + '</div>';
+      }
+
+      function renderMessageDetail(message) {
+        if (!message) return '<p class="muted">选择一封邮件查看详情。</p>';
+        const sender = [message.senderName, message.from].filter(Boolean).join(' <') + (message.from && message.senderName ? '>' : '');
+        return '<h3>' + esc(message.subject) + '</h3><div class="from">发件人：' + esc(sender || '未知') + '</div><div class="from">时间：' + esc(formatDate(message.receivedAt)) + '</div>' + (message.codes?.length ? '<div class="detail-meta">' + message.codes.map((code) => '<span class="tag success">验证码 ' + esc(code) + '</span>').join('') + '</div>' : '') + '<div class="body">' + esc(message.body || message.preview || '无正文') + '</div>';
+      }
+
+      function isCodexLinked(mailbox) {
+        if (!state.codexImportAvailable) return false;
+        const address = String(mailbox.address || "").trim().toLowerCase();
+        return (state.managedAccountEmails || []).some((email) => String(email || "").trim().toLowerCase() === address);
+      }
+
+      function renderImportModal() {
+        const provider = (state.providers || []).find((item) => item.id === importProvider) || state.providers?.[0];
+        if (!provider) return '';
+        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>添加邮箱</h2><form id="importForm"><div class="field"><label for="providerId">邮箱来源 / 格式</label><select id="providerId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider.id ? 'selected' : '') + '>' + esc(item.displayName) + '（' + esc(item.id) + '）</option>').join('') + '</select><div class="field-note">来源决定导入和查询协议。</div></div><div class="field"><label for="displayName">显示名称（可选）</label><input id="displayName" name="displayName" placeholder="可选显示名称"></div><div class="field"><label for="input">来源凭据</label><textarea id="input" name="input" required placeholder="粘贴所选邮箱来源的凭据"></textarea><div class="field-note">凭据只写入 Mailbox 私有存储。</div></div><div class="modal-actions"><button type="button" data-action="close-import">取消</button><button class="primary" type="submit">导入并加入列表</button></div></form></section></div>';
+      }
+
+      function renderEditModal() {
+        const mailbox = (state.mailboxes || []).find((item) => item.id === editOpenMailboxId);
+        if (!mailbox) return '';
+        const provider = (state.providers || []).find((item) => item.id === editProvider) || (state.providers || []).find((item) => item.id === mailbox.providerId);
+        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>编辑邮箱</h2><p class="muted">' + esc(mailbox.address) + '</p><form id="editForm"><div class="field"><label for="editProviderId">邮箱来源 / 格式</label><select id="editProviderId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider?.id ? 'selected' : '') + '>' + esc(item.displayName) + '（' + esc(item.id) + '）</option>').join('') + '</select></div><div class="field"><label for="displayName">显示名称</label><input id="displayName" name="displayName" value="' + esc(mailbox.displayName || mailbox.address) + '" required></div><div class="field"><label for="input">替换来源凭据（可选）</label><textarea id="input" name="input" placeholder="留空只修改显示名称；填写时请输入所选来源的单行凭据"></textarea><div class="field-note">当前凭据不会回显。切换邮箱来源 / 格式时必须填写凭据；邮箱地址保持不变。</div></div><div class="modal-actions"><button type="button" data-action="close-edit">取消</button><button class="primary" type="submit">保存修改</button></div></form></section></div>';
+      }
+
+      async function copyCode(code) {
+        if (!code) return;
+        try { await navigator.clipboard.writeText(code); showNotice('验证码已复制', 'success'); }
+        catch { showNotice('复制失败，请手动选择验证码', 'warning'); }
+      }
+
+      function openEditModal(mailboxId) {
+        if (!(state.mailboxes || []).some((mailbox) => mailbox.id === mailboxId)) return;
+        importOpen = false;
+        editOpenMailboxId = mailboxId;
+        editProvider = (state.mailboxes || []).find((mailbox) => mailbox.id === mailboxId)?.providerId || "";
+        render();
+      }
+
+      function requestDelete(mailboxId) {
+        const mailbox = (state.mailboxes || []).find((item) => item.id === mailboxId);
+        if (!mailbox || !window.confirm('确定删除邮箱 ' + mailbox.address + ' 吗？该邮箱的本地凭据和邮件详情也会一并清理。')) return;
+        pendingActions[mailboxId] = "delete";
+        render();
+        send("delete", { mailboxId });
+      }
+
+      function requestAction(action, mailboxId) {
+        if (!mailboxId) return;
+        pendingActions[mailboxId] = action;
+        render();
+        send(action, { mailboxId });
+      }
+
+      function requestCodexImport(mailboxId) {
+        if (!mailboxId || pendingCodexImports[mailboxId]) return;
+        pendingCodexImports[mailboxId] = true;
+        render();
+        send("codexImport", { mailboxId });
+      }
+
+      function send(action, payload = {}) { vscode.postMessage({ type: "mailbox:action", action, ...payload }); }
+      function showNotice(message, level) { notice.textContent = message || ""; notice.className = "notice visible"; if (level === "error") notice.style.color = "var(--danger)"; else notice.style.color = ""; }
+      function formatDate(value) { if (!value) return "未知时间"; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString(); }
+      function esc(value) { return String(value ?? "").replace(/[&<>"']/gu, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character])); }
+      render();
+      send("ready");
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+module.exports = { MAILBOX_PANEL_VIEW_TYPE, createMailboxPanelHtml };

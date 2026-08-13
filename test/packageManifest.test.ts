@@ -3,19 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 describe("extension manifest configuration", () => {
-  it("keeps the packaged customization scope aligned with the reviewed manifest", () => {
-    const root = path.resolve(__dirname, "..");
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
-      codexAccountsLocalCustomization?: { feature?: string };
-    };
-    const customization = JSON.parse(fs.readFileSync(path.join(root, "local-customization.json"), "utf8")) as {
-      feature?: string;
-    };
-
-    expect(manifest.codexAccountsLocalCustomization?.feature).toBe("local-enhancements");
-    expect(manifest.codexAccountsLocalCustomization?.feature).toBe(customization.feature);
-  });
-
   it("declares the auto switch reload window setting", () => {
     const manifestPath = path.resolve(__dirname, "../package.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {

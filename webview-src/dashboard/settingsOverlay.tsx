@@ -43,6 +43,7 @@ export function SettingsOverlay(props: {
   onPickCodexAppPath: () => void;
   onClearCodexAppPath: () => void;
   onIntegrationSettingToggle: (settingId: string, enabled: boolean) => void;
+  onResetSeamlessSwitchRuntime: () => void;
 }) {
   const patchAndSend = (key: DashboardSettingKey, value: DashboardSettingValue) => {
     props.onPatchSettings({ [key]: value } as Partial<DashboardSettings>);
@@ -534,6 +535,22 @@ export function SettingsOverlay(props: {
                   }
                 ]}
               />
+            </div>
+            <div class="settings-note">
+              {props.lang === "zh"
+                ? "清除额度基线、低额度观测和待重试状态；不会中断正在运行的对话。"
+                : props.lang === "zh-hant"
+                  ? "清除額度基線、低額度觀測和待重試狀態；不會中斷正在執行的對話。"
+                  : "Clear quota baselines, low-quota observations, and pending retries without interrupting active conversations."}
+            </div>
+            <div class="saved-actions settings-inline-actions">
+              <button type="button" onClick={props.onResetSeamlessSwitchRuntime}>
+                {props.lang === "zh"
+                  ? "复位无感切号状态"
+                  : props.lang === "zh-hant"
+                    ? "重設無感切換狀態"
+                    : "Reset seamless-switch state"}
+              </button>
             </div>
           </SettingsToggleBlock>
           <SettingsToggleBlock

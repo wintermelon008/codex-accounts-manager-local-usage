@@ -22,6 +22,8 @@ export type HotSwitchStatus = {
   gatewayActive: boolean;
   gatewayConfigured: boolean;
   gatewayAutoFallbackEnabled: boolean;
+  gatewayBaseUrl?: string;
+  gatewayModel?: string;
   /** Whether the shim records low-quota signals for automatic switching/recovery. */
   usageLimitObservationEnabled: boolean;
   /** Number of conversations waiting for model-capacity recovery. */
@@ -267,6 +269,10 @@ export class CodexHotSwitchBridge {
 
   async configureUsageLimitObservation(enabled: boolean): Promise<{ enabled: boolean }> {
     return this.request<{ enabled: boolean }>("runtime/usage/configure", { enabled }, REQUEST_TIMEOUT_MS);
+  }
+
+  async resetUsageLimitObservation(): Promise<{ reset: boolean }> {
+    return this.request<{ reset: boolean }>("runtime/usage/reset", {}, REQUEST_TIMEOUT_MS);
   }
 
   async activateUsageAttribution(params: HotSwitchUsageAttributionParams): Promise<HotSwitchUsageAttributionResult> {

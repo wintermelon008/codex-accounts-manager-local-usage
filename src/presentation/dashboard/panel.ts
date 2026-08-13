@@ -16,7 +16,6 @@ import { renderDashboardShell } from "./shell";
 import { buildDashboardStateSignature } from "./signature";
 import { executeDashboardActionMessage } from "./actionHandlers";
 import { clearDashboardCodexAppPath, dispatchDashboardClientMessage } from "./messageDispatcher";
-import { isLocalUsageCustomizationCompatible } from "./localUsageCompatibility";
 import { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
@@ -82,7 +81,6 @@ class DashboardPanelController {
   private publishTimer: NodeJS.Timeout | undefined;
   private lastPublishedStateSignature: string | undefined;
   private usageAnalytics: LocalUsageAnalyticsService | undefined;
-  private usageAnalyticsCompatibility: Promise<boolean> | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -212,7 +210,7 @@ class DashboardPanelController {
       },
       postMessage: (message) => this.panel!.webview.postMessage(message),
       schedulePublishState: () => this.schedulePublishState(),
-      usageAnalytics: await this.getUsageAnalytics(),
+      usageAnalytics: this.getUsageAnalytics(),
       lastPublishedStateSignature: this.lastPublishedStateSignature,
       force
     });
@@ -282,11 +280,7 @@ class DashboardPanelController {
   }
 
   private async refreshLocalUsage(): Promise<void> {
-    const usageAnalytics = await this.getUsageAnalytics();
-    if (!usageAnalytics) {
-      return;
-    }
-
+    const usageAnalytics = this.getUsageAnalytics();
     await usageAnalytics.refresh(() => this.schedulePublishState());
     await this.publishState(true);
   }
@@ -303,12 +297,7 @@ class DashboardPanelController {
     };
   }
 
-  private async getUsageAnalytics(): Promise<LocalUsageAnalyticsService | undefined> {
-    this.usageAnalyticsCompatibility ??= isLocalUsageCustomizationCompatible(this.context);
-    if (!(await this.usageAnalyticsCompatibility)) {
-      return undefined;
-    }
-
+  private getUsageAnalytics(): LocalUsageAnalyticsService {
     this.usageAnalytics ??= new LocalUsageAnalyticsService({
       globalStoragePath: this.context.globalStorageUri.fsPath,
       // Keep the Dashboard read-only at startup. The local session scan can

@@ -216,6 +216,15 @@ export function InfoIcon() {
   );
 }
 
+export function MailIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="5" width="18" height="14" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="m4.2 7 7.8 6 7.8-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  );
+}
+
 export function GlobeIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">

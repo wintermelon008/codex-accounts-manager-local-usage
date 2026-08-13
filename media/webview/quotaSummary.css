@@ -445,6 +445,26 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   padding: 9px 12px;
   font-size: 11px;
 }
+.mailbox-open-btn {
+  color: var(--text-primary);
+  border-color: var(--border-accent);
+  background: rgba(56, 139, 253, 0.12);
+}
+.hero-settings .mailbox-open-btn.action-btn.icon-only {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 10px;
+}
+.hero-settings .mailbox-open-btn .button-icon,
+.hero-settings .mailbox-open-btn .button-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.mailbox-open-btn:hover:not(:disabled),
+.mailbox-open-btn:focus-visible {
+  background: rgba(56, 139, 253, 0.2);
+}
 .toolbar-btn.disabled-like {
   border-color: var(--border-default);
   background: var(--bg-elevated);

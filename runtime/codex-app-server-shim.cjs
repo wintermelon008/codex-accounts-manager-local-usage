@@ -511,6 +511,11 @@ function handleControlLine(socket, line) {
     return;
   }
 
+  if (message.method === "runtime/usage/reset") {
+    sendControlResult(socket, message.id, resetUsageLimitObservation());
+    return;
+  }
+
   if (message.method === "runtime/usage/activate") {
     void activateUsageAttribution(message.params).then(
       (result) => sendControlResult(socket, message.id, result),
@@ -1391,6 +1396,8 @@ function runtimeStatus() {
     gatewayActive: gatewayRoute === "gateway",
     gatewayConfigured: Boolean(gatewayConfig),
     gatewayAutoFallbackEnabled: Boolean(gatewayConfig?.autoFallbackToChatGpt),
+    gatewayBaseUrl: gatewayConfig?.baseUrl,
+    gatewayModel: gatewayConfig?.model,
     usageLimitObservationEnabled,
     capacityRecoveryThreads: capacityRecoveryThreads.size,
     capacityRecoveryWaitingThreads: countCapacityRecoveryWaitingThreads(),
@@ -2249,6 +2256,13 @@ function configureUsageLimitObservation(params) {
   observedUsageLimitFailures = 0;
   resetUsageLimitExhaustionObservation();
   return { enabled: usageLimitObservationEnabled };
+}
+
+function resetUsageLimitObservation() {
+  recentUsageLimitedThreads.clear();
+  observedUsageLimitFailures = 0;
+  resetUsageLimitExhaustionObservation();
+  return { reset: true };
 }
 
 /**

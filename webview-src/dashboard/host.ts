@@ -30,7 +30,8 @@ export const BLOCKING_GLOBAL_ACTIONS = new Set<DashboardActionName>([
   "importSharedJson",
   "downloadJsonFile",
   "integrationAction",
-  "integrationSetting"
+  "integrationSetting",
+  "resetSeamlessSwitchRuntime"
 ]);
 
 let actionRequestSequence = 0;

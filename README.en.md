@@ -56,7 +56,7 @@ Obtain `codex-accounts-manager-<version>-local.<build>.vsix` from this repositor
 code --install-extension codex-accounts-manager-<version>-local.<build>.vsix
 ```
 
-Local capabilities depend on that VSIX. If you deliberately install a Marketplace update, reinstall a reviewed local VSIX afterward. See [local customization](docs/LOCAL_CUSTOMIZATION.md) for update boundaries and integrity checks.
+Local capabilities ship with that VSIX. If you deliberately install a Marketplace update, reinstall a local build afterward.
 
 ### Build from source
 
@@ -67,7 +67,7 @@ npm ci
 npm run package
 ```
 
-`npm run package` verifies the reviewed local customization before producing a `.vsix`. The detailed documentation is bundled in the VSIX, so the relative links in this README work after installation.
+`npm run package` runs the portability audit, compiles the extension, and produces a `.vsix`. The detailed documentation is bundled in the VSIX, so the relative links in this README work after installation.
 
 Optional packages are not bundled in the core VSIX. Build and configure `integrations/feishu-private-import`, `integrations/sub2api-gateway`, or `integrations/sub2api-importer` from their own READMEs; none copies existing services, credentials, accounts, or machine paths automatically.
 
@@ -82,7 +82,6 @@ If you only need upstream core account management, search the Extensions view fo
 - [Feishu private-chat M+/S+ importer](docs/integrations/feishu-private-import.md)
 - [Independent delivery, disablement, and migration](docs/integrations/README.md)
 - [Core local text import inbox](docs/LOCAL_IMPORT_INBOX.md)
-- [Local customization, updates, and build safety](docs/LOCAL_CUSTOMIZATION.md)
 - [Changelog](docs/CHANGELOG.md)
 
 Frequently used commands: `Add Account via OAuth`, `Import Current auth.json`, `Show Quota Summary`, `Refresh All Quotas`, and `Install/Remove Experimental Seamless Runtime`. Other actions are available from the Dashboard or Command Palette.

@@ -339,6 +339,42 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     }
   });
 
+  it("resets local retry state and the shim usage-limit journal", async () => {
+    vi.useFakeTimers();
+    const configurationDisposable = { dispose: vi.fn() };
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({
+        hotSwitchEnabled: true,
+        seamlessSwitchEnabled: true,
+        seamlessSwitchQuotaBandsEnabled: true,
+        seamlessSwitchLowQuotaEnabled: true,
+        seamlessSwitchThreshold: 1
+      })
+    );
+    vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
+    const resetUsageLimitObservation = vi.fn().mockResolvedValue(true);
+    const runtime = {
+      isEnabled: vi.fn(() => true),
+      getStatus: vi.fn().mockResolvedValue(runtimeStatus()),
+      getIdentity: vi.fn(),
+      resetUsageLimitObservation
+    };
+    const registration = registerSeamlessUsageLimitMonitor({
+      context: { subscriptions: [] } as never,
+      runtime: runtime as never,
+      onUsageLimitExceeded: vi.fn().mockResolvedValue(true)
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      await registration.reset();
+      expect(resetUsageLimitObservation).toHaveBeenCalledOnce();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("backs off a deferred usage-limit selection instead of retrying every poll", async () => {
     vi.useFakeTimers();
     const configurationDisposable = { dispose: vi.fn() };

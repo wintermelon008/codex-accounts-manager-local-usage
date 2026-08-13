@@ -30,6 +30,35 @@ npm --prefix integrations/sub2api-gateway run package
 
 虚拟账号只在 Manager 索引中保存下游入口描述（Base URL、模型、`credentialRef`）以及 `accountKind: "sub2api"`、`manualOnly: true` 能力标记。下游 API Key 继续只存放在本扩展 SecretStorage；Manager 不读取、映射或展示 Sub2API 上游账号，不向 `auth.json` 写入虚拟 OAuth token。虚拟账号卡片显示 `Gateway · 手动`，隐藏额度窗口、订阅、quota error、token 健康和重新授权操作。
 
+### 多配置选择
+
+同一张账号卡片支持多个 Sub2API 下游配置。保留当前本地配置的顶层 `sub2api`，并在顶层增加 `profiles` 数组；每个 profile 需要唯一 `id`、`displayName` 和独立的 `sub2api` 块：
+
+```json
+{
+  "schema": "codex-accounts-sub2api-gateway/v1",
+  "displayName": "Local Gateway",
+  "sub2api": {
+    "baseUrl": "http://127.0.0.1:8317/v1",
+    "model": "gpt-5",
+    "credentialRef": "local"
+  },
+  "profiles": [
+    {
+      "id": "external",
+      "displayName": "External Gateway",
+      "sub2api": {
+        "baseUrl": "https://gateway.example.invalid/v1",
+        "model": "gpt-5",
+        "credentialRef": "external"
+      }
+    }
+  ]
+}
+```
+
+在卡片中选择“选择配置”后，再使用“保存下游密钥”为当前 profile 保存密钥；密钥仍只进入本扩展 SecretStorage。所选 profile 会持久化。活动配置的地址、模型、显示名或自动回退设置发生变化时需要重新加载窗口；这些字段都相同而只更换密钥引用时可直接生效。
+
 可选的 `inventoryObserver` 使用与下游 Key 不同的只读管理密钥。它只会发出允许的 `GET` 请求，并只保留集成内部的聚合结果；这些上游库存不会注册到 Manager、不会进入账号卡片或切换候选，也不会保留上游账号 ID、名称、原始响应或管理端错误正文。
 
 Gateway 配置错误采用隔离处理：下游必需字段无效时仅禁用虚拟账号卡片，不影响核心 Manager；`inventoryObserver` 字段无效时只停用集成内部观察器，不在卡片展示上游库存，下游 Gateway 仍可保存密钥、刷新并启用。配置错误时“刷新”和“打开配置”仍可使用。

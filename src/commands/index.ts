@@ -21,7 +21,8 @@ export function registerCommands(
       source?: RuntimeSwitchSource
     ) => Promise<RuntimeAccountSwitchOutcome>;
   },
-  hotSwitchRuntime: CodexHotSwitchRuntime
+  hotSwitchRuntime: CodexHotSwitchRuntime,
+  options: { resetSeamlessSwitchRuntime?: () => void | Promise<void> } = {}
 ): void {
   const service = new AccountsCommandService(context, repo, view, hotSwitchRuntime);
 
@@ -64,6 +65,9 @@ export function registerCommands(
       (item?: CodexAccountRecord, options?: { privacyMode?: boolean }) => service.openDetails(item, options)
     ),
     vscode.commands.registerCommand("codexAccounts.openCodexHome", () => service.openCodexHome()),
-    vscode.commands.registerCommand("codexAccounts.showQuotaSummary", () => service.showQuotaSummary())
+    vscode.commands.registerCommand("codexAccounts.showQuotaSummary", () => service.showQuotaSummary()),
+    vscode.commands.registerCommand("codexAccounts.resetSeamlessSwitchRuntime", () =>
+      options.resetSeamlessSwitchRuntime?.()
+    )
   );
 }

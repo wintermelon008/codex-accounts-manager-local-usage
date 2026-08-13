@@ -27,9 +27,26 @@
     "model": "gpt-5",
     "credentialRef": "primary"
   },
-  "autoFallbackToChatGpt": false
+  "autoFallbackToChatGpt": false,
+  "profiles": []
 }
 ```
+
+要在同一张账号卡片中选择多个下游配置，保留现有顶层配置作为本地配置，在 `profiles` 中追加外部配置。每项都需要唯一的 `id`、显示名、`/v1` 地址、模型和自己的 `credentialRef`：
+
+```json
+{
+  "id": "external",
+  "displayName": "External Gateway",
+  "sub2api": {
+    "baseUrl": "https://external.example.invalid/v1",
+    "model": "gpt-5",
+    "credentialRef": "external"
+  }
+}
+```
+
+保存配置文件后，在账号卡片选择“选择配置”，再为当前配置选择“保存下游密钥”。所选配置会持久化；如果切换后的地址、模型、显示名或自动回退设置不同，runtime 会提示重新加载窗口后生效。
 
 `inventoryObserver` 是可选块。它必须使用与下游 API Key 不同的 `credentialRef`，且只会向 Sub2API 管理端发出 `GET` 请求；聚合结果只由本扩展内部使用，不会注册为 Manager 账号、不会显示上游账号或参与切换。
 
