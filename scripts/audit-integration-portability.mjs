@@ -36,7 +36,6 @@ function isDeliverable(file) {
     file === "README.en.md" ||
     file === "package.json" ||
     file === "package-lock.json" ||
-    file === "local-customization.json" ||
     file === ".vscodeignore" ||
     file.startsWith("docs/") ||
     file.startsWith("integrations/") ||

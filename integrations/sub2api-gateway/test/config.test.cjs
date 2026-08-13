@@ -68,6 +68,35 @@ test("a malformed optional observer does not discard valid downstream Gateway se
   assert.match(result.inventoryObserverError, /Observer admin base URL must not include a path/u);
 });
 
+test("parses multiple Gateway profiles and keeps the legacy single profile shape", () => {
+  const first = createSub2ApiGatewayConfigTemplate();
+  const result = parseSub2ApiGatewayConfigWithDiagnostics({
+    schema: SUB2API_GATEWAY_CONFIG_SCHEMA,
+    profiles: [
+      {
+        id: "local",
+        displayName: "Local",
+        sub2api: first.sub2api,
+        autoFallbackToChatGpt: false
+      },
+      {
+        id: "external",
+        displayName: "External",
+        sub2api: {
+          baseUrl: "https://external.example.invalid/v1",
+          model: "gpt-5.5",
+          credentialRef: "external"
+        },
+        autoFallbackToChatGpt: false
+      }
+    ]
+  });
+
+  assert.deepEqual(result.profiles.map((profile) => profile.id), ["local", "external"]);
+  assert.equal(result.profiles[1].sub2api.baseUrl, "https://external.example.invalid/v1");
+  assert.equal(Object.hasOwn(parseSub2ApiGatewayConfig(first), "id"), false);
+});
+
 async function expectConfig(configPath) {
   const config = await readSub2ApiGatewayConfig(configPath);
   assert.equal(config.schema, SUB2API_GATEWAY_CONFIG_SCHEMA);

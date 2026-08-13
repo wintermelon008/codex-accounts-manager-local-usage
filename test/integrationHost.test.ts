@@ -2,6 +2,33 @@ import { describe, expect, it, vi } from "vitest";
 import { ManagerIntegrationHost } from "../src/integrations";
 
 describe("ManagerIntegrationHost", () => {
+  it("exposes the optional sanitized account directory and direct OAuth handoff", async () => {
+    const gateway = createGateway();
+    const getManagedAccountEmails = vi.fn(async () => ["linked@example.com"] as const);
+    const startOAuthAccountImport = vi.fn(async (options: { expectedEmail?: string } = {}) => ({
+      accountId: "account-1",
+      email: options.expectedEmail ?? "linked@example.com",
+      quotaRefreshed: true
+    }));
+    const cancelOAuthAccountImport = vi.fn();
+    const host = new ManagerIntegrationHost(gateway.operations, undefined, {
+      getManagedAccountEmails,
+      startOAuthAccountImport,
+      cancelOAuthAccountImport
+    });
+
+    await expect(host.api.getManagedAccountEmails?.()).resolves.toEqual(["linked@example.com"]);
+    await expect(host.api.startOAuthAccountImport?.({ expectedEmail: "mailbox@example.com" })).resolves.toMatchObject({
+      accountId: "account-1",
+      email: "mailbox@example.com"
+    });
+    expect(getManagedAccountEmails).toHaveBeenCalledOnce();
+    expect(startOAuthAccountImport).toHaveBeenCalledWith({ expectedEmail: "mailbox@example.com" });
+    host.api.cancelOAuthAccountImport?.("mailbox-operation-1");
+    expect(cancelOAuthAccountImport).toHaveBeenCalledWith("mailbox-operation-1");
+    host.dispose();
+  });
+
   it("exposes only registered Dashboard cards and declared actions", async () => {
     const gateway = createGateway();
     const host = new ManagerIntegrationHost(gateway.operations);
@@ -211,6 +238,40 @@ describe("ManagerIntegrationHost", () => {
     expect(gateway.operations.activate).not.toHaveBeenCalled();
     expect(virtual.activate).not.toHaveBeenCalled();
     expect(host.getVisibleVirtualAccountIds()).toContain("virtual:sub2api-gateway");
+    host.dispose();
+  });
+
+  it("does not mark a virtual provider active before a required runtime reload", async () => {
+    const gateway = createGateway();
+    gateway.operations.activate = vi.fn(async () => {
+      return { enabled: true, configured: false, requiresReload: true };
+    });
+    const virtual = {
+      upsert: vi.fn(async () => undefined),
+      activate: vi.fn(async () => undefined),
+      deactivate: vi.fn(async () => undefined)
+    };
+    const host = new ManagerIntegrationHost(gateway.operations, virtual);
+    await host.api.registerVirtualAccount({
+      id: "sub2api-gateway",
+      displayName: "Sub2API Gateway",
+      descriptor: {
+        integrationId: "sub2api-gateway",
+        baseUrl: "https://gateway.invalid/v1",
+        model: "gpt-5",
+        credentialRef: "primary"
+      },
+      activate: vi.fn(async () => ({ enabled: true, configured: true, requiresReload: false }))
+    });
+    const lease = host.api.registerGateway("sub2api-gateway");
+
+    await expect(
+      lease.activate({ displayName: "Gateway", baseUrl: "https://gateway.invalid/v1", model: "gpt-5" })
+    ).resolves.toMatchObject({ requiresReload: true });
+
+    expect(lease.isActive()).toBe(false);
+    expect(virtual.activate).not.toHaveBeenCalled();
+    expect(virtual.deactivate).toHaveBeenCalledOnce();
     host.dispose();
   });
 });

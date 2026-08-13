@@ -56,7 +56,7 @@
 code --install-extension codex-accounts-manager-<version>-local.<build>.vsix
 ```
 
-本地能力依赖这份 VSIX；如果刻意安装 Marketplace 更新，需重新安装经审阅的本地 VSIX。详细的更新边界与定制校验见 [本地定制说明](docs/LOCAL_CUSTOMIZATION.md)。
+本地能力随这份 VSIX 一起提供；如果刻意安装 Marketplace 更新，需要重新安装本地构建。
 
 ### 从源码构建
 
@@ -67,7 +67,7 @@ npm ci
 npm run package
 ```
 
-`npm run package` 会先执行本地定制完整性校验，再生成 `.vsix`。详细文档会一并打进该 VSIX，安装后 README 中的相对链接仍可用。
+`npm run package` 会执行可移植性审计、编译并生成 `.vsix`。详细文档会一并打进该 VSIX，安装后 README 中的相对链接仍可用。
 
 可选包不包含在核心 VSIX 中。分别进入 `integrations/feishu-private-import`、`integrations/sub2api-gateway` 或 `integrations/sub2api-importer` 按各自 README 构建和配置；它们不会自动复制旧服务、凭据、账号或设备路径。
 
@@ -82,7 +82,6 @@ npm run package
 - [飞书私聊 M+/S+ 导入机器人](docs/integrations/feishu-private-import.md)
 - [核心与可选组件的独立交付、停用和迁移](docs/integrations/README.md)
 - [核心本地文本导入收件箱](docs/LOCAL_IMPORT_INBOX.md)
-- [本地定制、更新与构建安全](docs/LOCAL_CUSTOMIZATION.md)
 - [变更日志](docs/CHANGELOG.md)
 
 常用命令：`Add Account via OAuth`、`Import Current auth.json`、`Show Quota Summary`、`Refresh All Quotas`、`Install/Remove Experimental Seamless Runtime`。其余操作可从 Dashboard 或命令面板进入。

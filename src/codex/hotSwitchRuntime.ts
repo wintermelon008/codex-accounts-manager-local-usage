@@ -157,6 +157,10 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       await this.setGatewayRuntimeState({ config: normalized, active: true });
       return { enabled: true, configured: true, requiresReload: false };
     }
+    if (this.bridge && current) {
+      await this.setGatewayRuntimeState({ config: normalized, active: true });
+      return { enabled: true, configured: false, requiresReload: true };
+    }
     await this.setGatewayRuntimeState({ config: normalized, active: true });
     return this.configureRuntime();
   }
@@ -288,6 +292,14 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("Codex hot switch is not configured");
     }
     await this.bridge.configureUsageLimitObservation(enabled);
+  }
+
+  async resetUsageLimitObservation(): Promise<boolean> {
+    if (!this.bridge) {
+      return false;
+    }
+    await this.bridge.resetUsageLimitObservation();
+    return true;
   }
 
   async switchAccount(accountId: string, options: RuntimeAccountSwitchOptions = {}): Promise<HotSwitchAccountResult> {
@@ -617,7 +629,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
               status.httpTransportForced !== true ||
               status.gatewayConfigured !== Boolean(gatewayState) ||
               status.gatewayActive !== Boolean(gatewayState?.active) ||
-              status.gatewayAutoFallbackEnabled !== Boolean(gatewayState?.config.autoFallbackToChatGpt);
+              status.gatewayAutoFallbackEnabled !== Boolean(gatewayState?.config.autoFallbackToChatGpt) ||
+              status.gatewayBaseUrl !== gateway?.baseUrl ||
+              status.gatewayModel !== gateway?.model;
           } catch {
             requiresReload = true;
           }

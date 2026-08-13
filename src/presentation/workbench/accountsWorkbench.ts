@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
-import { maybeSeamlessBalanceSwitchForActiveQuota, refreshSingleQuota } from "../../application/accounts/quota";
+import { loginWithOAuth } from "../../auth";
+import {
+  maybeSeamlessBalanceSwitchForActiveQuota,
+  refreshImportedAccountQuota,
+  refreshSingleQuota
+} from "../../application/accounts/quota";
 import { RuntimeSwitchCoordinator, RuntimeSwitchSource } from "../../application/accounts/runtimeSwitchCoordinator";
 import { registerCommands } from "../../commands";
 import {
@@ -13,20 +18,24 @@ import { registerDebugOutput, t } from "../../utils";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import { isSub2ApiAccount } from "../../core/types";
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
-import { initSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
+import { initSeamlessSwitchRuntimeState, resetSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
 import { LocalImportInbox } from "./localImportInbox";
 import { selectFreshGatewayFallbackCandidate } from "../../application/accounts/gatewayFallbackSelection";
 import {
   ManagerIntegrationHost,
   setActiveManagerIntegrationHost,
-  type CodexAccountsIntegrationApi
+  type CodexAccountsIntegrationApi,
+  type OAuthAccountImportOptions,
+  type OAuthAccountImportResult
 } from "../../integrations";
+import { extractClaims } from "../../utils/jwt";
 import { refreshQuotaSummaryPanel } from "../dashboard/panel";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
 import {
   registerAutoRefreshScheduler,
   registerSeamlessUsageLimitMonitor,
-  registerTokenRefreshScheduler
+  registerTokenRefreshScheduler,
+  type SeamlessUsageLimitMonitor
 } from "./schedulerRegistration";
 
 const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -40,6 +49,8 @@ export class AccountsWorkbench {
   private readonly runtimeSwitchCoordinator: RuntimeSwitchCoordinator;
   private readonly localImportInbox: LocalImportInbox | undefined;
   private readonly integrationHost: ManagerIntegrationHost;
+  private readonly oauthImportCancellationSources = new Map<string, vscode.CancellationTokenSource>();
+  private seamlessUsageLimitMonitor: SeamlessUsageLimitMonitor | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.repo = new AccountsRepository(context);
@@ -67,6 +78,20 @@ export class AccountsWorkbench {
       deactivate: async () => {
         await this.repo.switchProviderRoute();
       }
+    }, {
+      getManagedAccountEmails: async () => {
+        const accounts = await this.repo.listAccounts();
+        return [
+          ...new Set(
+            accounts
+              .filter((account) => !isSub2ApiAccount(account))
+              .map((account) => normalizeEmail(account.email))
+              .filter((email): email is string => Boolean(email))
+          )
+        ];
+      },
+      startOAuthAccountImport: (options) => this.startOAuthAccountImport(options),
+      cancelOAuthAccountImport: (operationId) => this.cancelOAuthAccountImport(operationId)
     });
     this.localImportInbox = isLocalImportInboxEnabled()
       ? new LocalImportInbox(this.repo, () => {
@@ -123,7 +148,9 @@ export class AccountsWorkbench {
       ): Promise<RuntimeAccountSwitchOutcome> => this.switchRuntimeAccount(accountId, options, source)
     };
     await measureStep("registerCommands", () => {
-      registerCommands(this.context, this.repo, refreshers, this.hotSwitchRuntime);
+      registerCommands(this.context, this.repo, refreshers, this.hotSwitchRuntime, {
+        resetSeamlessSwitchRuntime: () => this.resetSeamlessSwitchRuntime()
+      });
     });
     await measureStep("registerAuthFileWatcher", () => {
       this.context.subscriptions.push(this.refreshCoordinator.registerAuthFileWatcher(refreshers));
@@ -138,17 +165,16 @@ export class AccountsWorkbench {
       );
     });
     await measureStep("registerSeamlessUsageLimitMonitor", () => {
-      this.context.subscriptions.push(
-        registerSeamlessUsageLimitMonitor({
-          context: this.context,
-          runtime: this.hotSwitchRuntime,
-          onUsageLimitExceeded: (activeAccountId, trigger) =>
-            maybeSeamlessBalanceSwitchForActiveQuota(this.repo, refreshers, {
-              trigger,
-              activeAccountId
-            })
-        })
-      );
+      this.seamlessUsageLimitMonitor = registerSeamlessUsageLimitMonitor({
+        context: this.context,
+        runtime: this.hotSwitchRuntime,
+        onUsageLimitExceeded: (activeAccountId, trigger) =>
+          maybeSeamlessBalanceSwitchForActiveQuota(this.repo, refreshers, {
+            trigger,
+            activeAccountId
+          })
+      });
+      this.context.subscriptions.push(this.seamlessUsageLimitMonitor);
     });
     await measureStep("registerTokenRefreshScheduler", () => {
       this.context.subscriptions.push(
@@ -197,6 +223,11 @@ export class AccountsWorkbench {
   }
 
   dispose(): void {
+    this.oauthImportCancellationSources.forEach((source) => {
+      source.cancel();
+      source.dispose();
+    });
+    this.oauthImportCancellationSources.clear();
     this.refreshCoordinator.dispose();
     this.hotSwitchRuntime.dispose();
     this.localImportInbox?.dispose();
@@ -207,6 +238,67 @@ export class AccountsWorkbench {
 
   getIntegrationApi(): CodexAccountsIntegrationApi {
     return this.integrationHost.api;
+  }
+
+  private async startOAuthAccountImport(options: OAuthAccountImportOptions = {}): Promise<OAuthAccountImportResult> {
+    const operationId = options.operationId?.trim();
+    const cancellationSource = operationId ? new vscode.CancellationTokenSource() : undefined;
+    if (operationId && cancellationSource) {
+      this.oauthImportCancellationSources.get(operationId)?.cancel();
+      this.oauthImportCancellationSources.get(operationId)?.dispose();
+      this.oauthImportCancellationSources.set(operationId, cancellationSource);
+    }
+    const expectedEmail = normalizeEmail(options.expectedEmail);
+    const clipboardText = options.clipboardText?.trim() || expectedEmail;
+    if (clipboardText) {
+      try {
+        await vscode.env.clipboard.writeText(clipboardText);
+      } catch {
+        // Clipboard convenience must not block OAuth account import.
+      }
+    }
+
+    try {
+      throwIfOAuthImportCancelled(cancellationSource);
+      const tokens = await loginWithOAuth(cancellationSource?.token);
+      throwIfOAuthImportCancelled(cancellationSource);
+      const claims = extractClaims(tokens.idToken, tokens.accessToken);
+      const authorizedEmail = normalizeEmail(claims.email);
+      if (expectedEmail && authorizedEmail !== expectedEmail) {
+        throw new Error(`OAuth account does not match mailbox ${expectedEmail}. No changes were applied.`);
+      }
+
+      throwIfOAuthImportCancelled(cancellationSource);
+      const account = await this.repo.upsertFromTokens(tokens, false);
+      throwIfOAuthImportCancelled(cancellationSource);
+      const quota = await refreshImportedAccountQuota(this.repo, account.id);
+      void refreshQuotaSummaryPanel();
+      return {
+        accountId: account.id,
+        email: account.email,
+        quotaRefreshed: !quota.error,
+        quotaError: quota.error?.message
+      };
+    } finally {
+      if (operationId && this.oauthImportCancellationSources.get(operationId) === cancellationSource) {
+        this.oauthImportCancellationSources.delete(operationId);
+        cancellationSource?.dispose();
+      }
+    }
+  }
+
+  private cancelOAuthAccountImport(operationId: string): void {
+    const normalizedId = typeof operationId === "string" ? operationId.trim() : "";
+    if (!normalizedId) {
+      return;
+    }
+    const source = this.oauthImportCancellationSources.get(normalizedId);
+    if (!source) {
+      return;
+    }
+    source.cancel();
+    source.dispose();
+    this.oauthImportCancellationSources.delete(normalizedId);
   }
 
   private async fallbackGatewayToChatGpt(): Promise<RuntimeAccountSwitchOutcome> {
@@ -258,6 +350,15 @@ export class AccountsWorkbench {
     };
   }
 
+  private async resetSeamlessSwitchRuntime(): Promise<void> {
+    resetSeamlessSwitchRuntimeState();
+    if (this.seamlessUsageLimitMonitor) {
+      await this.seamlessUsageLimitMonitor.reset();
+      return;
+    }
+    await this.hotSwitchRuntime.resetUsageLimitObservation();
+  }
+
   private async switchRuntimeAccount(
     accountId: string,
     options: RuntimeAccountSwitchOptions | undefined,
@@ -287,4 +388,15 @@ export class AccountsWorkbench {
       void vscode.window.showWarningMessage(translate("message.indexRecoveryFailed"));
     }
   }
+}
+
+function throwIfOAuthImportCancelled(source: vscode.CancellationTokenSource | undefined): void {
+  if (source?.token.isCancellationRequested) {
+    throw new Error("OAuth login cancelled by user.");
+  }
+}
+
+function normalizeEmail(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
 }

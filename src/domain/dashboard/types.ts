@@ -658,6 +658,7 @@ export type DashboardActionName =
   | "batchRemove"
   | "refreshView"
   | "refreshLocalUsage"
+  | "resetSeamlessSwitchRuntime"
   | "integrationAction"
   | "integrationSetting"
   | "reloadPrompt"

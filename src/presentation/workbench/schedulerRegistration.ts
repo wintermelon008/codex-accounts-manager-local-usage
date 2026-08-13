@@ -37,14 +37,17 @@ export const SEAMLESS_USAGE_LIMIT_RETRY_MS = 10_000;
 export const SEAMLESS_USAGE_LIMIT_FAILURE_BACKOFF_MS = 30_000;
 
 type SeamlessUsageLimitRuntime = Pick<CodexHotSwitchRuntime, "isEnabled" | "getStatus" | "getIdentity"> &
-  Partial<Pick<CodexHotSwitchRuntime, "configureUsageLimitObservation">>;
+  Partial<Pick<CodexHotSwitchRuntime, "configureUsageLimitObservation" | "resetUsageLimitObservation">>;
 export type SeamlessUsageLimitTrigger = "runtimeUsageLimit" | "runtimeUsageLimitExhaustion";
+export type SeamlessUsageLimitMonitor = vscode.Disposable & {
+  reset(): Promise<void>;
+};
 
 export function registerSeamlessUsageLimitMonitor(params: {
   context: vscode.ExtensionContext;
   runtime: SeamlessUsageLimitRuntime;
   onUsageLimitExceeded: (activeAccountId: string | undefined, trigger: SeamlessUsageLimitTrigger) => Promise<boolean>;
-}): vscode.Disposable {
+}): SeamlessUsageLimitMonitor {
   let timer: NodeJS.Timeout | undefined;
   let disposed = false;
   let inFlight = false;
@@ -209,6 +212,10 @@ export function registerSeamlessUsageLimitMonitor(params: {
   params.context.subscriptions.push(configDisposable);
 
   return {
+    async reset(): Promise<void> {
+      resetRuntimeObservation();
+      await params.runtime.resetUsageLimitObservation?.();
+    },
     dispose(): void {
       disposed = true;
       generation += 1;

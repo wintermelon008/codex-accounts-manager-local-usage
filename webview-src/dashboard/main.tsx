@@ -22,7 +22,7 @@ import {
   resolveOverviewAccount
 } from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
-import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon } from "./icons";
+import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon, MailIcon } from "./icons";
 import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
 import { SavedAccountCard } from "./savedAccountCard";
 import { LocalUsageSection } from "./localUsageSection";
@@ -225,6 +225,8 @@ function App() {
   const setAccountGroupPending = isActionPending("setAccountGroup");
   const localUsageRefreshPending = isActionPending("refreshLocalUsage");
   const integrationActionPending = isActionPending("integrationAction");
+  const mailboxIntegration = snapshot.integrations?.find((integration) => integration.id === "mailbox");
+  const mailboxOpenAction = mailboxIntegration?.actions.find((action) => action.id === "open");
   const invalidAccountCount = snapshot.accounts.filter(
     (account) =>
       !account.dismissedHealth &&
@@ -399,6 +401,27 @@ function App() {
                   {resolveAboutTitle(snapshot.lang)}
                 </span>
               </button>
+              {mailboxIntegration && mailboxOpenAction ? (
+                <ActionButton
+                  class="settings-btn mailbox-open-btn"
+                  icon={<MailIcon />}
+                  iconOnly
+                  label="Mailbox"
+                  pending={integrationActionPending}
+                  disabled={
+                    hasGlobalPendingAction ||
+                    mailboxOpenAction.enabled === false ||
+                    snapshot.indexHealth.status === "corrupted_unrecoverable"
+                  }
+                  tooltip={mailboxOpenAction.tooltip}
+                  onClick={() =>
+                    sendAction("integrationAction", undefined, {
+                      integrationId: mailboxIntegration.id,
+                      integrationActionId: mailboxOpenAction.id
+                    })
+                  }
+                />
+              ) : null}
             </div>
           </div>
           <OverviewSection
@@ -641,7 +664,7 @@ function App() {
           </section>
         ) : null}
         <IntegrationCards
-          integrations={snapshot.integrations ?? []}
+          integrations={(snapshot.integrations ?? []).filter((integration) => integration.id !== "mailbox")}
           busy={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
           actionPending={integrationActionPending}
           onAction={(integrationId, integrationActionId) =>
@@ -676,6 +699,7 @@ function App() {
         onIntegrationSettingToggle={(settingId, enabled) =>
           sendAction("integrationSetting", undefined, { integrationSettingId: settingId, enabled })
         }
+        onResetSeamlessSwitchRuntime={() => sendAction("resetSeamlessSwitchRuntime")}
       />
 
       <AnnouncementCenter

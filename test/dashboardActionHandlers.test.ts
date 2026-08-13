@@ -74,6 +74,32 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
+  it("resets seamless-switch runtime state through the registered command", async () => {
+    const executeCommandMock = vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
+    const publishState = vi.fn().mockResolvedValue(undefined);
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: {} as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState: vi.fn(),
+        publishState,
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "resetSeamlessSwitchRuntime",
+        requestId: "req-seamless-reset"
+      }
+    );
+
+    expect(executeCommandMock).toHaveBeenCalledWith("codexAccounts.resetSeamlessSwitchRuntime");
+    expect(publishState).toHaveBeenCalledWith(true);
+    expect(result.status).toBe("completed");
+  });
+
   it("waits for quota refresh after consuming a reset credit", async () => {
     vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Reset Rate Limit" as never);
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined);

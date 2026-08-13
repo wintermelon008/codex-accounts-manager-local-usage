@@ -5,7 +5,11 @@ vi.mock("vscode", () => ({
     language: "en",
     clipboard: {
       writeText: vi.fn()
-    }
+    },
+    openExternal: vi.fn(async () => true)
+  },
+  Uri: {
+    parse: vi.fn((value: string) => ({ toString: () => value }))
   },
   commands: {
     executeCommand: vi.fn()

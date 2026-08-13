@@ -17,6 +17,7 @@ function createSub2ApiGatewayConfigTemplate() {
       credentialRef: "primary"
     },
     autoFallbackToChatGpt: false,
+    profiles: [],
     inventoryObserver: {
       adminBaseUrl: "https://gateway.example.invalid",
       group: "default",
@@ -79,29 +80,67 @@ async function readGatewayConfigRaw(configPath) {
 }
 
 function parseSub2ApiGatewayConfig(raw) {
-  const config = parseGatewayCoreConfig(raw);
-  const inventoryObserver = raw.inventoryObserver === undefined ? undefined : parseInventoryObserver(raw.inventoryObserver, config.sub2api.credentialRef);
-  return {
-    ...config,
-    ...(inventoryObserver ? { inventoryObserver } : {})
-  };
+  const { id, ...config } = parseGatewayProfiles(raw, false)[0];
+  return config;
 }
 
 function parseSub2ApiGatewayConfigWithDiagnostics(raw) {
+  const profiles = parseGatewayProfiles(raw, true);
+  const config = profiles[0];
+  return {
+    config,
+    profiles,
+    ...(config.inventoryObserverError ? { inventoryObserverError: config.inventoryObserverError } : {})
+  };
+}
+
+function parseGatewayProfiles(raw, allowObserverDiagnostics) {
+  if (!isRecord(raw) || raw.schema !== SUB2API_GATEWAY_CONFIG_SCHEMA) {
+    throw new Error("Gateway configuration schema is invalid.");
+  }
+  let entries;
+  if (raw.profiles === undefined) {
+    entries = [raw];
+  } else {
+    if (!Array.isArray(raw.profiles)) {
+      throw new Error("Gateway profiles must be an array.");
+    }
+    entries = raw.sub2api ? [raw, ...raw.profiles] : raw.profiles;
+  }
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new Error("Gateway configuration must contain at least one profile.");
+  }
+  const ids = new Set();
+  return entries.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error("Gateway profile configuration is invalid.");
+    }
+    const id = normalizeProfileId(entry.id ?? (index === 0 ? "default" : `profile-${index + 1}`));
+    if (ids.has(id)) {
+      throw new Error("Gateway profile IDs must be unique.");
+    }
+    ids.add(id);
+    const profile = parseGatewayProfile({ ...entry, schema: raw.schema }, allowObserverDiagnostics);
+    return { ...profile, id };
+  });
+}
+
+function parseGatewayProfile(raw, allowObserverDiagnostics) {
   const config = parseGatewayCoreConfig(raw);
   if (raw.inventoryObserver === undefined) {
-    return { config };
+    return config;
   }
   try {
     return {
-      config: {
-        ...config,
-        inventoryObserver: parseInventoryObserver(raw.inventoryObserver, config.sub2api.credentialRef)
-      }
+      ...config,
+      inventoryObserver: parseInventoryObserver(raw.inventoryObserver, config.sub2api.credentialRef)
     };
   } catch (error) {
+    if (!allowObserverDiagnostics) {
+      throw error;
+    }
     return {
-      config,
+      ...config,
       inventoryObserverError: safeObserverConfigurationError(error)
     };
   }
@@ -163,6 +202,14 @@ function normalizeCredentialRef(value) {
   const result = requiredText(value, "Credential reference").toLowerCase();
   if (!CREDENTIAL_REF_PATTERN.test(result)) {
     throw new Error("Credential reference is invalid.");
+  }
+  return result;
+}
+
+function normalizeProfileId(value) {
+  const result = requiredText(value, "Gateway profile ID").toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/u.test(result)) {
+    throw new Error("Gateway profile ID is invalid.");
   }
   return result;
 }

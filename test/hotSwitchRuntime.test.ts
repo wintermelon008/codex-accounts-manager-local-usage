@@ -604,6 +604,49 @@ describe("Codex hot-switch runtime setup", () => {
       expect.objectContaining({ route: "chatgpt", longTurnPolicy: expect.any(String) })
     );
   });
+
+  it("requires a reload when an active Gateway profile changes its endpoint or model", async () => {
+    const enabledConfiguration = {
+      get: (key: string, defaultValue?: unknown) => (key === "hotSwitchEnabled" ? true : defaultValue),
+      update: vi.fn(),
+      inspect: vi.fn()
+    } as unknown as vscode.WorkspaceConfiguration;
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(enabledConfiguration);
+    const currentConfig = {
+      displayName: "Local Gateway",
+      baseUrl: "https://local.example.invalid/v1",
+      model: "gpt-5"
+    };
+    const nextConfig = {
+      displayName: "External Gateway",
+      baseUrl: "https://external.example.invalid/v1",
+      model: "gpt-5.5"
+    };
+    const globalState = new Map<string, unknown>([
+      ["gateway.runtimeConfig", { config: currentConfig, active: true }]
+    ]);
+    const runtime = new CodexHotSwitchRuntime(
+      {
+        globalState: {
+          get: (key: string) => globalState.get(key),
+          update: async (key: string, value: unknown) => globalState.set(key, value)
+        }
+      } as unknown as vscode.ExtensionContext,
+      {} as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+    const switchGatewayRoute = vi.fn();
+    (runtime as unknown as { bridge: { switchGatewayRoute: typeof switchGatewayRoute } }).bridge = {
+      switchGatewayRoute
+    };
+
+    await expect(runtime.activateGateway(nextConfig, "external-key")).resolves.toEqual({
+      enabled: true,
+      configured: false,
+      requiresReload: true
+    });
+    expect(globalState.get("gateway.runtimeConfig")).toEqual({ config: nextConfig, active: true });
+    expect(switchGatewayRoute).not.toHaveBeenCalled();
+  });
 });
 
 function createUnsignedJwt(payload: Record<string, unknown>): string {

@@ -35,6 +35,8 @@ interface OAuthSession {
 }
 
 interface OAuthCodeWaiter {
+  /** Resolves only after the local callback server has successfully bound its port. */
+  ready: Promise<void>;
   promise: Promise<string>;
   dispose: () => void;
 }
@@ -181,24 +183,37 @@ export async function runPreparedOAuthLoginSession(
   };
   const codeWaiter = createCodeWaiter(runtimeSession, cancellationToken);
 
-  const opened = await vscode.env.openExternal(vscode.Uri.parse(session.authUrl));
-  if (!opened) {
-    codeWaiter.dispose();
-    void vscode.env.clipboard.writeText(session.authUrl);
-    throw new AuthError("Unable to open the browser automatically. The authorization URL was copied to your clipboard.", {
-      code: ErrorCode.AUTH_OAUTH_FAILED
-    });
-  }
+  try {
+    // Do not open the browser until the callback listener is actually ready.
+    // Otherwise an EADDRINUSE error can arrive after the login page was opened,
+    // leaving the user with a misleading manual-callback message.
+    await codeWaiter.ready;
 
-  if (cancellationToken?.isCancellationRequested) {
-    codeWaiter.dispose();
-    throw new AuthError("OAuth login cancelled by user.", {
-      code: ErrorCode.AUTH_OAUTH_FAILED
-    });
-  }
+    if (cancellationToken?.isCancellationRequested) {
+      throw new AuthError("OAuth login cancelled by user.", {
+        code: ErrorCode.AUTH_OAUTH_FAILED
+      });
+    }
 
-  const code = await codeWaiter.promise;
-  return exchangeCodeForTokens(code, session.verifier, session.redirectUri);
+    const opened = await vscode.env.openExternal(vscode.Uri.parse(session.authUrl));
+    if (!opened) {
+      void vscode.env.clipboard.writeText(session.authUrl);
+      throw new AuthError("Unable to open the browser automatically. The authorization URL was copied to your clipboard.", {
+        code: ErrorCode.AUTH_OAUTH_FAILED
+      });
+    }
+
+    if (cancellationToken?.isCancellationRequested) {
+      throw new AuthError("OAuth login cancelled by user.", {
+        code: ErrorCode.AUTH_OAUTH_FAILED
+      });
+    }
+
+    const code = await codeWaiter.promise;
+    return exchangeCodeForTokens(code, session.verifier, session.redirectUri);
+  } finally {
+    codeWaiter.dispose();
+  }
 }
 
 export function extractCodeFromCallbackUrl(callbackUrl: string, redirectUri: string, expectedState: string): string {
@@ -222,8 +237,29 @@ export function extractCodeFromCallbackUrl(callbackUrl: string, redirectUri: str
 
 function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.CancellationToken): OAuthCodeWaiter {
   let settled = false;
+  let readySettled = false;
+  let closeWhenListening = false;
   let timeout: NodeJS.Timeout | undefined;
   let cancelDisposable: vscode.Disposable | undefined;
+  let resolveReady!: () => void;
+  let rejectReady!: (reason?: unknown) => void;
+
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+
+  const finishReady = (error?: unknown): void => {
+    if (readySettled) {
+      return;
+    }
+    readySettled = true;
+    if (error) {
+      rejectReady(error);
+    } else {
+      resolveReady();
+    }
+  };
 
   const finish = (callback?: () => void): void => {
     if (settled) {
@@ -234,29 +270,33 @@ function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.Canc
       clearTimeout(timeout);
     }
     cancelDisposable?.dispose();
-    session.server.close();
+    if (session.server.listening) {
+      session.server.close();
+    } else {
+      // Cancellation can race the asynchronous listen() call. Close as soon
+      // as Node reports a late successful bind so no listener is leaked.
+      closeWhenListening = true;
+    }
     callback?.();
   };
 
-  return {
-    promise: new Promise<string>((resolve, reject) => {
+  const createAuthError = (message: string): AuthError =>
+    new AuthError(message, { code: ErrorCode.AUTH_OAUTH_FAILED });
+
+  const promise = new Promise<string>((resolve, reject) => {
       timeout = setTimeout(() => {
+        const error = createAuthError("OAuth login was not completed in the browser.");
+        finishReady(error);
         finish(() => {
-          reject(
-            new AuthError("OAuth login was not completed in the browser.", {
-              code: ErrorCode.AUTH_OAUTH_FAILED
-            })
-          );
+          reject(error);
         });
       }, 300_000);
 
       cancelDisposable = cancellationToken?.onCancellationRequested(() => {
+        const error = createAuthError("OAuth login cancelled by user.");
+        finishReady(error);
         finish(() => {
-          reject(
-            new AuthError("OAuth login cancelled by user.", {
-              code: ErrorCode.AUTH_OAUTH_FAILED
-            })
-          );
+          reject(error);
         });
       });
 
@@ -301,20 +341,42 @@ function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.Canc
       session.server.once("error", (error) => {
         const isAddrInUse =
           error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
+        const authError = createAuthError(
+          isAddrInUse
+            ? `Automatic OAuth callback listener is unavailable on ${session.redirectUri}. Use the Add Account dialog to complete the callback manually.`
+            : `Unable to bind OAuth callback port: ${String(error)}`
+        );
+        finishReady(authError);
         finish(() => {
-          reject(
-            new AuthError(
-              isAddrInUse
-                ? `Automatic OAuth callback listener is unavailable on ${session.redirectUri}. Use the Add Account dialog to complete the callback manually.`
-                : `Unable to bind OAuth callback port: ${String(error)}`,
-              { code: ErrorCode.AUTH_OAUTH_FAILED }
-            )
-          );
+          reject(authError);
         });
       });
 
-      session.server.listen(Number(new URL(session.redirectUri).port), "127.0.0.1");
-    }),
+      session.server.once("listening", () => {
+        finishReady();
+        if (closeWhenListening || settled) {
+          session.server.close();
+        }
+      });
+      try {
+        session.server.listen(Number(new URL(session.redirectUri).port), "127.0.0.1");
+      } catch (error) {
+        const authError = createAuthError(`Unable to bind OAuth callback port: ${String(error)}`);
+        finishReady(authError);
+        finish(() => {
+          reject(authError);
+        });
+      }
+    });
+
+  // A bind failure rejects `ready` before the caller can await the callback
+  // promise. Mark that secondary rejection as handled while still returning
+  // the original promise to the normal callback path.
+  void promise.catch(() => undefined);
+
+  return {
+    ready,
+    promise,
     dispose: () => {
       finish();
     }

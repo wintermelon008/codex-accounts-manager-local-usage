@@ -38,8 +38,8 @@ test("an invalid optional observer keeps the downstream Gateway configurable", a
   assert.equal(action(card, "configureCredential").enabled, true);
   assert.equal(action(card, "refresh").enabled, true);
   assert.equal(api.dashboardRegistrations, 0);
-  assert.deepEqual(card.details.map((entry) => entry.label), ["下游", "模型", "下游密钥"]);
-  assert.deepEqual(card.actions.map((entry) => entry.id), ["configureCredential", "refresh", "openConfig"]);
+  assert.deepEqual(card.details.map((entry) => entry.label), ["配置", "下游", "模型", "下游密钥"]);
+  assert.deepEqual(card.actions.map((entry) => entry.id), ["selectProfile", "configureCredential", "refresh", "openConfig"]);
   assert.equal(card.usage.range, "5h");
   assert.equal(card.usage.status, "waiting");
   assert.equal(card.usage.byModel[0].model, "gpt-5");
@@ -90,6 +90,46 @@ test("the Manager setting only persists card visibility and never changes the Ga
   assert.equal(context.globalState.get("sub2apiGateway.cardVisibility.v1"), false);
   assert.equal(api.gatewayActivateCalls, 0);
   assert.equal(api.gatewayDeactivateCalls, 0);
+  integration.dispose();
+});
+
+test("selects an external profile from the account card", async (t) => {
+  const storage = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-integration-"));
+  t.after(() => fs.rm(storage, { recursive: true, force: true }));
+  const template = createSub2ApiGatewayConfigTemplate();
+  await fs.writeFile(
+    path.join(storage, "sub2api-gateway.json"),
+    `${JSON.stringify(
+      {
+        ...template,
+        profiles: [
+          {
+            id: "external",
+            displayName: "External Gateway",
+            sub2api: {
+              baseUrl: "https://external.example.invalid/v1",
+              model: "gpt-5.5",
+              credentialRef: "external"
+            }
+          }
+        ]
+      },
+      null,
+      2
+    )}\n`,
+    { mode: 0o600 }
+  );
+
+  const api = createApi();
+  const integration = new Sub2ApiGatewayIntegration(createVscode(1), createContext(storage), api);
+  await integration.initialize();
+  assert.equal(action(integration.getCardViewModel(), "selectProfile").enabled, true);
+
+  await integration.runAction("selectProfile");
+
+  assert.equal(detail(integration.getCardViewModel(), "配置").value, "External Gateway");
+  assert.equal(detail(integration.getCardViewModel(), "下游").value, "https://external.example.invalid/v1");
+  assert.equal(api.virtualRegistrations.at(-1).descriptor.baseUrl, "https://external.example.invalid/v1");
   integration.dispose();
 });
 
@@ -162,7 +202,7 @@ function createApi() {
   return api;
 }
 
-function createVscode() {
+function createVscode(pickIndex = undefined) {
   return {
     EventEmitter: class {
       constructor() {
@@ -183,7 +223,11 @@ function createVscode() {
     },
     workspace: { openTextDocument: async () => undefined },
     Uri: { file: (value) => value },
-    window: { showTextDocument: async () => undefined, showInformationMessage: async () => undefined },
+    window: {
+      showTextDocument: async () => undefined,
+      showInformationMessage: async () => undefined,
+      showQuickPick: async (items) => (pickIndex === undefined ? undefined : items[pickIndex])
+    },
     commands: { executeCommand: async () => undefined }
   };
 }

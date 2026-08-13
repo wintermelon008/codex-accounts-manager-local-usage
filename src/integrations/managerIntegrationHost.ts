@@ -71,11 +71,39 @@ export type VirtualAccountOperations = {
   deactivate: () => Promise<void>;
 };
 
+export type OAuthAccountImportOptions = {
+  /** Optional opaque operation id used by an optional integration to cancel the browser wait. */
+  operationId?: string;
+  /** Optional mailbox identity used to prevent importing the wrong account. */
+  expectedEmail?: string;
+  /** Text copied before the browser flow starts, normally the mailbox address. */
+  clipboardText?: string;
+};
+
+export type OAuthAccountImportResult = {
+  accountId: string;
+  email: string;
+  quotaRefreshed: boolean;
+  quotaError?: string;
+};
+
+export type AccountImportOperations = {
+  getManagedAccountEmails: () => Promise<readonly string[]>;
+  startOAuthAccountImport: (options?: OAuthAccountImportOptions) => Promise<OAuthAccountImportResult>;
+  cancelOAuthAccountImport?: (operationId: string) => void;
+};
+
 export type CodexAccountsIntegrationApi = {
   readonly apiVersion: typeof MANAGER_INTEGRATION_API_VERSION;
   registerDashboardIntegration: (registration: DashboardIntegrationRegistration) => vscode.Disposable;
   registerGateway: (integrationId: string) => GatewayRuntimeLease;
   registerVirtualAccount: (registration: VirtualAccountRegistration) => Promise<vscode.Disposable>;
+  /** Optional sanitized account-directory capability for integrations such as Mailbox. */
+  getManagedAccountEmails?: () => Promise<readonly string[]>;
+  /** Optional direct OAuth handoff; this intentionally does not open the Dashboard modal. */
+  startOAuthAccountImport?: (options?: OAuthAccountImportOptions) => Promise<OAuthAccountImportResult>;
+  /** Optional cancellation for an in-flight direct OAuth handoff. */
+  cancelOAuthAccountImport?: (operationId: string) => void;
 };
 
 type GatewayRuntimeOperations = {
@@ -107,7 +135,8 @@ type GatewayRuntimeLeaseState = {
 /**
  * The only Manager surface available to optional integrations. It deliberately
  * does not expose extension storage, account tokens, settings, workspace
- * paths, or any provider-specific controller.
+ * paths, or any provider-specific controller. Optional account-import helpers
+ * expose only sanitized mailbox matching and a controlled OAuth handoff.
  */
 export class ManagerIntegrationHost implements vscode.Disposable {
   readonly api: CodexAccountsIntegrationApi;
@@ -124,14 +153,45 @@ export class ManagerIntegrationHost implements vscode.Disposable {
 
   constructor(
     private readonly gateway: GatewayRuntimeOperations,
-    private readonly virtualAccountOperations?: VirtualAccountOperations
+    private readonly virtualAccountOperations?: VirtualAccountOperations,
+    private readonly accountImportOperations?: AccountImportOperations
   ) {
     this.api = {
       apiVersion: MANAGER_INTEGRATION_API_VERSION,
       registerDashboardIntegration: (registration) => this.registerDashboardIntegration(registration),
       registerGateway: (integrationId) => this.registerGateway(integrationId),
-      registerVirtualAccount: (registration) => this.registerVirtualAccount(registration)
+      registerVirtualAccount: (registration) => this.registerVirtualAccount(registration),
+      ...(this.accountImportOperations
+        ? {
+            getManagedAccountEmails: () => this.getManagedAccountEmails(),
+            startOAuthAccountImport: (options?: OAuthAccountImportOptions) => this.startOAuthAccountImport(options),
+            ...(this.accountImportOperations.cancelOAuthAccountImport
+              ? { cancelOAuthAccountImport: (operationId: string) => this.cancelOAuthAccountImport(operationId) }
+              : {})
+          }
+        : {})
     };
+  }
+
+  async getManagedAccountEmails(): Promise<readonly string[]> {
+    this.throwIfDisposed();
+    if (!this.accountImportOperations) {
+      return [];
+    }
+    return this.accountImportOperations.getManagedAccountEmails();
+  }
+
+  async startOAuthAccountImport(options?: OAuthAccountImportOptions): Promise<OAuthAccountImportResult> {
+    this.throwIfDisposed();
+    if (!this.accountImportOperations) {
+      throw new Error("OAuth account import is unavailable in this Manager build");
+    }
+    return this.accountImportOperations.startOAuthAccountImport(options);
+  }
+
+  cancelOAuthAccountImport(operationId: string): void {
+    this.throwIfDisposed();
+    this.accountImportOperations?.cancelOAuthAccountImport?.(operationId);
   }
 
   onDidChange(listener: () => void): vscode.Disposable {
@@ -474,9 +534,11 @@ export class ManagerIntegrationHost implements vscode.Disposable {
           shouldDeactivateOnFailure = true;
           assertLease();
           this.configuredGatewayOwner = id;
-          this.activeGatewayOwner = this.gateway.isActive() ? id : undefined;
+          this.activeGatewayOwner = !result.requiresReload && this.gateway.isActive() ? id : undefined;
           if (this.activeGatewayOwner && this.virtualAccounts.has(`virtual:${id}`)) {
             await this.virtualAccountOperations?.activate(`virtual:${id}`);
+          } else if (result.requiresReload && this.virtualAccounts.has(`virtual:${id}`)) {
+            await this.virtualAccountOperations?.deactivate();
           }
           shouldDeactivateOnFailure = false;
           this.fireDidChange();
