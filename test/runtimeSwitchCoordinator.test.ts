@@ -79,6 +79,49 @@ describe("RuntimeSwitchCoordinator", () => {
     expect(lease.release).toHaveBeenCalledOnce();
   });
 
+  it("returns from the Gateway and switches the selected ChatGPT account in one transaction", async () => {
+    const lease = { renew: vi.fn(async () => true), release: vi.fn(async () => undefined) };
+    let gatewayActive = true;
+    const runtime = createRuntime();
+    runtime.isGatewayActive.mockImplementation(() => gatewayActive);
+    const repo = { tryAcquireSchedulerLease: vi.fn(async () => lease) };
+    const coordinator = new RuntimeSwitchCoordinator(repo as never, runtime as never, () => true);
+    const deactivateGateway = vi.fn(async () => {
+      gatewayActive = false;
+      return switched("virtual:sub2api-gateway");
+    });
+
+    await expect(
+      coordinator.returnFromGatewayAndSwitchAccount("account-b", { gracePeriodMs: 0 }, deactivateGateway)
+    ).resolves.toMatchObject({ status: "switched", accountId: "account-b" });
+
+    expect(deactivateGateway).toHaveBeenCalledWith(expect.objectContaining({ operationId: expect.any(String) }));
+    expect(runtime.switchAccount).toHaveBeenCalledWith(
+      "account-b",
+      expect.objectContaining({ gracePeriodMs: 0, operationId: expect.any(String) })
+    );
+    expect(repo.tryAcquireSchedulerLease).toHaveBeenCalledOnce();
+    expect(lease.release).toHaveBeenCalledOnce();
+  });
+
+  it("does not switch the selected ChatGPT account if Gateway deactivation does not complete", async () => {
+    const lease = { renew: vi.fn(async () => true), release: vi.fn(async () => undefined) };
+    const runtime = createRuntime({ gatewayActive: true });
+    const repo = { tryAcquireSchedulerLease: vi.fn(async () => lease) };
+    const coordinator = new RuntimeSwitchCoordinator(repo as never, runtime as never, () => true);
+    const deactivateGateway = vi.fn(async () => ({
+      status: "suppressed" as const,
+      reason: "operationInProgress" as const
+    }));
+
+    await expect(
+      coordinator.returnFromGatewayAndSwitchAccount("account-b", undefined, deactivateGateway)
+    ).resolves.toEqual({ status: "suppressed", reason: "operationInProgress" });
+
+    expect(runtime.switchAccount).not.toHaveBeenCalled();
+    expect(lease.release).toHaveBeenCalledOnce();
+  });
+
   it("permits the manual OAuth handoff immediately after Gateway deactivation", async () => {
     const lease = { renew: vi.fn(async () => true), release: vi.fn(async () => undefined) };
     const runtime = createRuntime({ gatewayActive: false });

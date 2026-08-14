@@ -8,13 +8,7 @@ import { findAccountTokenUsageWindow, type AccountTokenUsageSnapshot } from "../
 import { AccountsRepository } from "../../storage";
 import { ExtensionSettingsStore } from "../../infrastructure/config/extensionSettings";
 import { formatAccountStructure, formatAuthProvider, formatPlanType, getDashboardCopy } from "./copy";
-import {
-  CodexAccountRecord,
-  CodexCreditsSummary,
-  CodexTokens,
-  isSub2ApiAccount,
-  type CodexAnnouncementState
-} from "../../core/types";
+import { CodexAccountRecord, CodexTokens, isSub2ApiAccount, type CodexAnnouncementState } from "../../core/types";
 import { resolveCodexAppLaunchPath } from "../../utils/codexApp";
 import { getCurrentWindowRuntimeAccountId } from "../../presentation/workbench/windowRuntimeAccount";
 import { getQuotaIssueKind } from "../../utils/quotaIssue";
@@ -201,7 +195,6 @@ function mapAccount(
     statusColor: virtual ? "var(--accent-blue)" : account.isActive ? "var(--accent-green)" : health.kind === "healthy" ? undefined : "#ef4444",
     planTypeLabel: virtual ? "Sub2API Gateway" : formatPlanTypeWithQuota(account, lang),
     planType: virtual ? undefined : account.planType,
-    creditsText: virtual ? undefined : formatCreditsText(account.quotaSummary?.credits, lang),
     userId: virtual ? undefined : account.userId,
     accountId: virtual ? undefined : account.accountId,
     organizationId: virtual ? undefined : account.organizationId,
@@ -430,21 +423,6 @@ function formatPlanTypeWithQuota(account: CodexAccountRecord, lang: DashboardSta
 
   const multiplier = inferProQuotaMultiplier(account);
   return multiplier ? `Pro ${multiplier}` : base;
-}
-
-function formatCreditsText(credits: CodexCreditsSummary | undefined, lang: DashboardState["lang"]): string | undefined {
-  if (!credits) {
-    return undefined;
-  }
-
-  const zh = lang === "zh" || lang === "zh-hant";
-  const value = credits.unlimited
-    ? zh
-      ? "无限"
-      : "Unlimited"
-    : credits.balance || (credits.hasCredits ? (zh ? "可用" : "Available") : "0");
-  const label = zh ? "剩余额度" : "Credits left";
-  return `${label}: ${value}`;
 }
 
 function inferProQuotaMultiplier(account: CodexAccountRecord): "5x" | "20x" | undefined {

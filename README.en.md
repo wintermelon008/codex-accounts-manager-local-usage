@@ -50,10 +50,10 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 ### Use the local build
 
-Obtain `codex-accounts-manager-<version>-local.<build>.vsix` from this repository, then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
+Obtain `codex-accounts-manager-<version>.vsix` from this repository (`0.1.16-dev` for development, then `0.1.16-l1`, `0.1.16-l2`, and so on for distributed local releases), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
 
 ```bash
-code --install-extension codex-accounts-manager-<version>-local.<build>.vsix
+code --install-extension codex-accounts-manager-<version>.vsix --force
 ```
 
 Local capabilities ship with that VSIX. If you deliberately install a Marketplace update, reinstall a local build afterward.

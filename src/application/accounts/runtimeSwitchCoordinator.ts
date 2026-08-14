@@ -76,9 +76,43 @@ export class RuntimeSwitchCoordinator {
     execute: (options: RuntimeAccountSwitchOptions) => Promise<RuntimeAccountSwitchOutcome>
   ): Promise<RuntimeAccountSwitchOutcome> {
     const operationId = randomUUID();
-    return this.runSharedRuntimeTransaction(operationId, () =>
-      execute({ ...(options ?? {}), operationId })
-    );
+    return this.runSharedRuntimeTransaction(operationId, () => execute({ ...(options ?? {}), operationId }));
+  }
+
+  /**
+   * A manual OAuth selection may intentionally leave an active Gateway route.
+   * Return the route first, then switch the requested ChatGPT Auth account
+   * without releasing the shared runtime transaction between those steps.
+   */
+  async returnFromGatewayAndSwitchAccount(
+    accountId: string,
+    options: RuntimeAccountSwitchOptions | undefined,
+    deactivateGateway: (options: RuntimeAccountSwitchOptions) => Promise<RuntimeAccountSwitchOutcome>
+  ): Promise<RuntimeAccountSwitchOutcome> {
+    if (!this.isSeamlessSwitchEnabled() && options?.allowManualWhenSeamlessDisabled !== true) {
+      return { status: "unavailable" };
+    }
+    if (!this.runtime.isEnabled()) {
+      return {
+        status: "failed",
+        message: "Seamless Switching is enabled, but its runtime is not installed"
+      };
+    }
+
+    const switchOperationId = randomUUID();
+    return this.runSharedRuntimeTransaction(switchOperationId, async () => {
+      const gatewayResult = await deactivateGateway({ ...(options ?? {}), operationId: randomUUID() });
+      if (gatewayResult.status !== "switched") {
+        return gatewayResult;
+      }
+      if (this.runtime.isGatewayActive()) {
+        return {
+          status: "failed",
+          message: "The Gateway route remains active after the return to ChatGPT Auth"
+        };
+      }
+      return this.runtime.switchAccount(accountId, { ...(options ?? {}), operationId: switchOperationId });
+    });
   }
 
   async fallbackGatewayToChatGpt(

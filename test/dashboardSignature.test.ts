@@ -41,6 +41,8 @@ function createState(overrides?: {
       autoSwitchReloadWindowEnabled: false,
       autoSwitchHourlyThreshold: 20,
       autoSwitchWeeklyThreshold: 20,
+      hideWeeklyQuotaThreshold: 3,
+      unhideWeeklyQuotaThreshold: 90,
       autoSwitchLockMinutes: 0,
       quotaWarningEnabled: false,
       quotaWarningThreshold: 20,

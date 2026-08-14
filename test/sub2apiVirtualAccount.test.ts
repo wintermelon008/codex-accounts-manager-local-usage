@@ -113,7 +113,7 @@ describe("Sub2API virtual account boundaries", () => {
     expect(getTokens).not.toHaveBeenCalled();
     expect(rendered.displayName).toBe("Sub2API Gateway");
     expect(rendered.metrics).toEqual([]);
-    expect(rendered.creditsText).toBeUndefined();
+    expect(rendered).not.toHaveProperty("creditsText");
     expect(rendered.subscriptionText).toBe("");
     expect(rendered.quotaIssueKind).toBeUndefined();
     expect(rendered.lastTokenRefreshAt).toBeUndefined();

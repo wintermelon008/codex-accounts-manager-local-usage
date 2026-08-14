@@ -60,39 +60,43 @@ export class AccountsWorkbench {
     this.runtimeSwitchCoordinator = new RuntimeSwitchCoordinator(this.repo, this.hotSwitchRuntime, () =>
       isSeamlessSwitchEnabled()
     );
-    this.integrationHost = new ManagerIntegrationHost({
-      isActive: () => this.hotSwitchRuntime.isGatewayActive(),
-      isConfigured: () => this.hotSwitchRuntime.isGatewayConfigured(),
-      activate: (config, credential, options) => this.hotSwitchRuntime.activateGateway(config, credential, options),
-      deactivate: (options) => this.hotSwitchRuntime.deactivateGateway(options),
-      configureCredential: (credential) => this.hotSwitchRuntime.configureGatewayCredential(credential),
-      getStatus: () => this.hotSwitchRuntime.getGatewayStatus(),
-      fallbackToChatGpt: () => this.fallbackGatewayToChatGpt()
-    }, {
-      upsert: async (descriptor, displayName) => {
-        await this.repo.upsertVirtualAccount(descriptor, displayName);
+    this.integrationHost = new ManagerIntegrationHost(
+      {
+        isActive: () => this.hotSwitchRuntime.isGatewayActive(),
+        isConfigured: () => this.hotSwitchRuntime.isGatewayConfigured(),
+        activate: (config, credential, options) => this.hotSwitchRuntime.activateGateway(config, credential, options),
+        deactivate: (options) => this.hotSwitchRuntime.deactivateGateway(options),
+        configureCredential: (credential) => this.hotSwitchRuntime.configureGatewayCredential(credential),
+        getStatus: () => this.hotSwitchRuntime.getGatewayStatus(),
+        fallbackToChatGpt: () => this.fallbackGatewayToChatGpt()
       },
-      activate: async (accountId) => {
-        await this.repo.switchProviderRoute(accountId);
+      {
+        upsert: async (descriptor, displayName) => {
+          await this.repo.upsertVirtualAccount(descriptor, displayName);
+        },
+        activate: async (accountId) => {
+          await this.repo.switchProviderRoute(accountId);
+        },
+        deactivate: async () => {
+          await this.repo.switchProviderRoute();
+        }
       },
-      deactivate: async () => {
-        await this.repo.switchProviderRoute();
+      {
+        getManagedAccountEmails: async () => {
+          const accounts = await this.repo.listAccounts();
+          return [
+            ...new Set(
+              accounts
+                .filter((account) => !isSub2ApiAccount(account))
+                .map((account) => normalizeEmail(account.email))
+                .filter((email): email is string => Boolean(email))
+            )
+          ];
+        },
+        startOAuthAccountImport: (options) => this.startOAuthAccountImport(options),
+        cancelOAuthAccountImport: (operationId) => this.cancelOAuthAccountImport(operationId)
       }
-    }, {
-      getManagedAccountEmails: async () => {
-        const accounts = await this.repo.listAccounts();
-        return [
-          ...new Set(
-            accounts
-              .filter((account) => !isSub2ApiAccount(account))
-              .map((account) => normalizeEmail(account.email))
-              .filter((email): email is string => Boolean(email))
-          )
-        ];
-      },
-      startOAuthAccountImport: (options) => this.startOAuthAccountImport(options),
-      cancelOAuthAccountImport: (operationId) => this.cancelOAuthAccountImport(operationId)
-    });
+    );
     this.localImportInbox = isLocalImportInboxEnabled()
       ? new LocalImportInbox(this.repo, () => {
           void this.statusBar.refresh();
@@ -371,6 +375,20 @@ export class AccountsWorkbench {
       }
       return this.runtimeSwitchCoordinator.runProviderSwitch(options, (transactionOptions) =>
         this.integrationHost.switchVirtualAccount(accountId, transactionOptions)
+      );
+    }
+    if (source === "manual" && this.hotSwitchRuntime.isGatewayActive()) {
+      const gatewayAccount = (await this.repo.listAccounts()).find(
+        (candidate) => isSub2ApiAccount(candidate) && candidate.providerActive
+      );
+      if (!gatewayAccount) {
+        return {
+          status: "failed",
+          message: "The Gateway route is active, but its selected virtual account is unavailable"
+        };
+      }
+      return this.runtimeSwitchCoordinator.returnFromGatewayAndSwitchAccount(accountId, options, (transactionOptions) =>
+        this.integrationHost.deactivateVirtualAccount(gatewayAccount.id, transactionOptions)
       );
     }
     return this.runtimeSwitchCoordinator.switchAccount(accountId, options, source);

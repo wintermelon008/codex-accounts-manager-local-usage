@@ -1,12 +1,13 @@
+import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type {
   DashboardAccountViewModel,
   DashboardActionPayload,
   DashboardCopy,
+  DashboardLocalUsageTokenTotals,
   DashboardSettings,
   DashboardState
 } from "../../src/domain/dashboard/types";
-import type { DashboardProviderUsageViewModel } from "../../src/domain/dashboard/types";
 import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCountdown";
 import { getSensitiveDisplayValue, renderTagList } from "./helpers";
 import {
@@ -106,6 +107,20 @@ export function SavedAccountCard(props: {
       account.healthKind === "quota");
   const gatewayActive = virtual && account.providerActive;
   const providerCard = virtual ? account.providerCard : undefined;
+  const profileSelectionActions =
+    providerCard?.actions?.filter((action) => action.id.startsWith("selectProfile:")) ?? [];
+  const providerActions = providerCard?.actions?.filter((action) => !action.id.startsWith("selectProfile:")) ?? [];
+  const selectedProfileAction = profileSelectionActions.find((action) => action.enabled === false);
+  const usesGatewayActionIcons = providerCard?.integrationId === "sub2api-gateway";
+  const runProviderAction = (actionId: string): void => {
+    if (!providerCard) {
+      return;
+    }
+    onAction("integrationAction", account.id, {
+      integrationId: providerCard.integrationId,
+      integrationActionId: actionId
+    });
+  };
   const cardStateClass = [
     account.isActive || account.providerActive ? "active" : "",
     gatewayActive ? "gateway-active" : "",
@@ -242,12 +257,9 @@ export function SavedAccountCard(props: {
           </div>
 
           <div class="saved-progress">
-            {virtual && providerCard?.usage ? (
+            {virtual && providerCard?.metrics?.length ? (
               <div class="saved-provider-usage">
-                <div class="saved-token-usage-line" title={formatProviderUsageTitle(providerCard.usage, props.lang)}>
-                  {formatProviderUsage(providerCard.usage, props.lang)}
-                </div>
-                {providerCard.metrics?.map((metric) => (
+                {providerCard.metrics.map((metric) => (
                   <div class="saved-provider-metric" key={`${metric.label}:${metric.value}`} title={metric.description}>
                     <span>{metric.label}</span>
                     <strong>{metric.value}</strong>
@@ -271,7 +283,6 @@ export function SavedAccountCard(props: {
               <div class="quota-empty-placeholder">{copy.resetUnknown}</div>
             )}
           </div>
-          {account.creditsText ? <div class="saved-credits-line">{account.creditsText}</div> : null}
           {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
             <div class="saved-credits-line saved-reset-credits-line">
               {copy.resetCreditsLabel ?? "重置次数"}: {account.resetCreditsAvailable}
@@ -281,9 +292,14 @@ export function SavedAccountCard(props: {
             </div>
           ) : null}
           {account.tokenUsage ? (
-            <div class="saved-token-usage-line" title={formatAccountTokenUsageTitle(account, props.lang)}>
-              {formatAccountTokenUsage(account, props.lang)}
-            </div>
+            <>
+              <div class="saved-token-usage-line" title={formatAccountTokenUsageTitle(account, props.lang)}>
+                {formatAccountTokenUsage(account, props.lang)}
+              </div>
+              {account.tokenUsage.status === "tracking" ? (
+                <div class="saved-token-usage-details">{formatAccountTokenUsageDetails(account, props.lang)}</div>
+              ) : null}
+            </>
           ) : null}
           <div class="saved-card-divider"></div>
           <div class="saved-actions" onClick={stopFlip}>
@@ -340,31 +356,52 @@ export function SavedAccountCard(props: {
               disabled={props.busy || account.isHidden}
               onClick={() => onAction("switch", account.id)}
             />
-            {providerCard?.actions?.map((action) => (
+            {profileSelectionActions.length > 1 ? (
+              <select
+                class="saved-provider-profile-select"
+                aria-label="选择 Gateway 配置"
+                title={selectedProfileAction?.tooltip ?? "选择 Gateway 配置"}
+                value={selectedProfileAction?.id ?? profileSelectionActions[0]?.id ?? ""}
+                disabled={props.busy || props.providerActionPending}
+                onChange={(event) => {
+                  const action = profileSelectionActions.find(
+                    (candidate) => candidate.id === event.currentTarget.value
+                  );
+                  if (!action || action.enabled === false) {
+                    return;
+                  }
+                  runProviderAction(action.id);
+                }}
+              >
+                {profileSelectionActions.map((action) => (
+                  <option key={action.id} value={action.id} disabled={action.enabled === false} title={action.tooltip}>
+                    {action.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {providerActions.map((action) => (
               <ActionButton
                 key={action.id}
-                iconOnly={false}
+                icon={usesGatewayActionIcons ? renderProviderActionIcon(action.id) : undefined}
+                iconOnly={usesGatewayActionIcons}
                 label={action.label}
+                tooltip={action.tooltip}
                 pending={props.providerActionPending}
                 disabled={props.busy || action.enabled === false}
-                onClick={() =>
-                  onAction("integrationAction", account.id, {
-                    integrationId: providerCard.integrationId,
-                    integrationActionId: action.id
-                  })
-                }
-              >
-                {action.label}
-              </ActionButton>
+                onClick={() => runProviderAction(action.id)}
+              />
             ))}
-            {!virtual ? <ActionButton
-              icon={renderRefreshIcon()}
-              iconOnly
-              label={copy.refreshBtn}
-              pending={props.refreshPending}
-              disabled={props.busy}
-              onClick={() => onAction("refresh", account.id)}
-            /> : null}
+            {!virtual ? (
+              <ActionButton
+                icon={renderRefreshIcon()}
+                iconOnly
+                label={copy.refreshBtn}
+                pending={props.refreshPending}
+                disabled={props.busy}
+                onClick={() => onAction("refresh", account.id)}
+              />
+            ) : null}
             {!virtual && showQuotaCountdownStart ? (
               <ActionButton
                 icon={renderQuotaCountdownStartIcon()}
@@ -455,6 +492,21 @@ export function SavedAccountCard(props: {
   );
 }
 
+function renderProviderActionIcon(actionId: string): ComponentChildren {
+  switch (actionId) {
+    case "deactivate":
+      return renderSwitchIcon();
+    case "configureCredential":
+      return renderReauthorizeIcon();
+    case "refresh":
+      return renderRefreshIcon();
+    case "openConfig":
+      return renderDetailsIcon();
+    default:
+      return renderDetailsIcon();
+  }
+}
+
 function resolveBackLabel(
   key: "workspace" | "subscription" | "addMethod" | "createdAt" | "status",
   lang: DashboardState["lang"]
@@ -536,12 +588,12 @@ function formatAccountTokenUsage(account: DashboardAccountViewModel, lang: Dashb
   if (!usage) {
     return "";
   }
-  const label = resolveTokenUsageLabel(lang, usage.window);
+  const label = resolveTokenUsageLabel(lang);
   if (usage.status === "loading") {
     return `${label}: ${lang === "zh" ? "统计中" : lang === "zh-hant" ? "統計中" : "Calculating"}`;
   }
   if (usage.status === "waiting") {
-    return `${label}: ${lang === "zh" ? "等待受管会话" : lang === "zh-hant" ? "等待受管會話" : "Waiting for a managed turn"}`;
+    return `${label}: ${lang === "zh" ? "待启用账号" : lang === "zh-hant" ? "待啟用帳號" : "Account pending activation"}`;
   }
 
   const price = formatAccountTokenUsagePrice(usage.byModel, lang);
@@ -554,40 +606,34 @@ function formatAccountTokenUsage(account: DashboardAccountViewModel, lang: Dashb
   return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
 }
 
-function formatProviderUsage(usage: DashboardProviderUsageViewModel, lang: DashboardState["lang"]): string {
-  const label = resolveProviderUsageLabel(lang, usage.range);
-  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
-  if (usage.status === "waiting") {
-    return `${label}: ${lang === "zh" ? "尚未观察到完成 Token" : lang === "zh-hant" ? "尚未觀察到完成 Token" : "No completed tokens observed"} · ${price}`;
+function formatAccountTokenUsageDetails(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
+  const usage = account.tokenUsage;
+  if (usage?.status !== "tracking") {
+    return "";
   }
-  return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
+
+  return formatTokenUsageDetails(usage, lang);
 }
 
-function formatProviderUsageTitle(usage: DashboardProviderUsageViewModel, lang: DashboardState["lang"]): string {
-  const label = resolveProviderUsageLabel(lang, usage.range);
-  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
-  return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}`;
-}
-
-function resolveProviderUsageLabel(
-  lang: DashboardState["lang"],
-  range: DashboardProviderUsageViewModel["range"]
+function formatTokenUsageDetails(
+  usage: Pick<DashboardLocalUsageTokenTotals, "inputTokens" | "cachedInputTokens" | "outputTokens">,
+  lang: DashboardState["lang"]
 ): string {
-  if (lang === "zh") {
-    return range === "today" ? "今日 Gateway 用量" : range === "5h" ? "5 小时 Gateway 用量" : "7 天 Gateway 用量";
-  }
-  if (lang === "zh-hant") {
-    return range === "today" ? "今日 Gateway 用量" : range === "5h" ? "5 小時 Gateway 用量" : "7 天 Gateway 用量";
-  }
-  return range === "today" ? "Today's Gateway usage" : range === "5h" ? "5-hour Gateway usage" : "7-day Gateway usage";
+  const labels =
+    lang === "zh"
+      ? { input: "输入", cached: "缓存", output: "输出" }
+      : lang === "zh-hant"
+        ? { input: "輸入", cached: "快取", output: "輸出" }
+        : { input: "Input", cached: "Cached", output: "Output" };
+  return `${labels.input}: ${formatCompactTokenCount(usage.inputTokens)} (${labels.cached}: ${formatCompactTokenCount(usage.cachedInputTokens)}) · ${labels.output}: ${formatCompactTokenCount(usage.outputTokens)}`;
 }
 
 function formatAccountTokenUsageTitle(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
   const usage = account.tokenUsage;
-  if (!usage || usage.status !== "tracking") {
+  if (usage?.status !== "tracking") {
     return formatAccountTokenUsage(account, lang);
   }
-  const label = resolveTokenUsageLabel(lang, usage.window);
+  const label = resolveTokenUsageLabel(lang);
   const price = formatAccountTokenUsagePrice(usage.byModel, lang);
   if (lang === "zh") {
     return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}`;
@@ -611,17 +657,14 @@ function formatAccountTokenUsagePrice(
   return `${label}: ${value}`;
 }
 
-function resolveTokenUsageLabel(
-  lang: DashboardState["lang"],
-  window: NonNullable<DashboardAccountViewModel["tokenUsage"]>["window"]
-): string {
+function resolveTokenUsageLabel(lang: DashboardState["lang"]): string {
   if (lang === "zh") {
-    return window === "hourly" ? "本五小时窗口 Token" : "本周窗口 Token";
+    return "本轮窗口 Token";
   }
   if (lang === "zh-hant") {
-    return window === "hourly" ? "本五小時窗口 Token" : "本週窗口 Token";
+    return "本輪窗口 Token";
   }
-  return window === "hourly" ? "This 5-hour window tokens" : "This weekly window tokens";
+  return "Current window tokens";
 }
 
 function formatCompactTokenCount(value: number): string {

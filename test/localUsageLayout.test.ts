@@ -117,7 +117,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     const accountViews = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/accountViews.tsx"), "utf8");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
 
-    expect(accountViews).toContain("移出无感切号池");
+    expect(accountViews).toContain("移出无感池");
     expect(accountViews).toContain("onRemoveFromBalancePool");
     expect(main).toContain('sendAction("removeFromBalancePool"');
   });
@@ -153,19 +153,66 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain("margin-right: auto");
   });
 
-  it("renders only the quota-window token total and price in the paginated account card", () => {
+  it("renders Gateway profile choices as a compact card dropdown", () => {
+    const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
+    const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
+
+    expect(card).toContain("saved-provider-profile-select");
+    expect(card).toContain('action.id.startsWith("selectProfile:")');
+    expect(stylesheet).toContain(".saved-provider-profile-select");
+    expect(stylesheet).toContain("max-width: 168px");
+  });
+
+  it("renders Sub2API card actions as icon buttons with hover descriptions", () => {
+    const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
+    const primitives = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/primitives.tsx"), "utf8");
+
+    expect(card).toContain('providerCard?.integrationId === "sub2api-gateway"');
+    expect(card).toContain("renderProviderActionIcon(action.id)");
+    expect(card).toContain("iconOnly={usesGatewayActionIcons}");
+    expect(primitives).toContain("const tooltip = props.tooltip ?? accessibleLabel");
+  });
+
+  it("renders quota-window token totals and detailed input/output usage in the paginated account card", () => {
     const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
     const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
 
     expect(card).toContain("saved-token-usage-line");
+    expect(card).toContain("saved-token-usage-details");
     expect(card).toContain("formatAccountTokenUsage");
+    expect(card).toContain("formatAccountTokenUsageDetails");
     expect(card).toContain("formatAccountTokenUsagePrice");
-    expect(card).not.toContain("usage.inputTokens");
-    expect(card).not.toContain("usage.outputTokens");
-    expect(card).not.toContain("usage.cachedInputTokens");
-    expect(card).not.toContain("usage.reasoningOutputTokens");
+    expect(card).toContain("usage.inputTokens");
+    expect(card).toContain("usage.outputTokens");
+    expect(card).toContain("usage.cachedInputTokens");
+    expect(card).toContain("providerCard.metrics.map");
+    expect(card).not.toContain("formatProviderTokenUsage");
+    expect(card).not.toContain("formatProviderUsage");
+    expect(card).toContain("本轮窗口 Token");
+    expect(card).toContain("待启用账号");
+    expect(card).not.toContain("本周窗口 Token");
+    expect(card).not.toContain("本五小时窗口 Token");
+    expect(card).not.toContain("creditsText");
     expect(stylesheet).toContain(".saved-token-usage-line");
+    expect(stylesheet).toContain(".saved-token-usage-details");
+    expect(stylesheet).toContain(".saved-provider-metric");
     expect(stylesheet).toContain("text-overflow: ellipsis");
+  });
+
+  it("lets saved cards grow when multiple quota windows are visible", () => {
+    const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
+    const cardLayout = stylesheet.slice(
+      stylesheet.indexOf(".saved-card-container"),
+      stylesheet.indexOf(".saved-card-inner.flipped")
+    );
+    const savedCard = stylesheet.slice(stylesheet.indexOf(".saved-card {"), stylesheet.indexOf(".saved-card::before"));
+
+    expect(cardLayout).toContain("--saved-card-min-height: 238px");
+    expect(cardLayout).toContain("min-height: var(--saved-card-min-height)");
+    expect(cardLayout).toContain("grid-template-rows: minmax(var(--saved-card-min-height), auto)");
+    expect(cardLayout).not.toContain("height: var(--saved-card-height)");
+    expect(savedCard).toContain("min-height: var(--saved-card-min-height)");
+    expect(savedCard).not.toContain("height: 100%");
   });
 
   it("places a conditional quota countdown starter beside the manual refresh action", () => {
@@ -188,9 +235,11 @@ describe("local usage dashboard placement and responsive guards", () => {
     const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
 
     expect(accountViews).toContain("隐藏账号");
-    expect(accountViews).toContain("解除隐藏");
+    expect(accountViews).toContain("显示账号");
     expect(accountViews).toContain("onHide");
     expect(accountViews).toContain("onUnhide");
+    expect(accountViews).not.toContain("addTagsBtn");
+    expect(accountViews).not.toContain("removeTagsBtn");
     expect(main).toContain('sendAction("hideAccounts"');
     expect(main).toContain('sendAction("unhideAccounts"');
     expect(main).toContain("hiddenAccountsToggleButton");

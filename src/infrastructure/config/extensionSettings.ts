@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import {
   DASHBOARD_LOCAL_USAGE_RANGE_OPTIONS,
+  DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD,
+  DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD,
   type DashboardLocalUsageRange,
   type DashboardSettings,
   type DashboardThemeOption
@@ -10,6 +12,11 @@ import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } 
 import { normalizeQuotaColorThresholds } from "../../utils";
 
 const CODEX_ACCOUNTS_SECTION = "codexAccounts";
+
+export interface WeeklyQuotaThresholds {
+  hide: number;
+  unhide: number;
+}
 
 type ReadableCodexAccountsConfiguration = Pick<vscode.WorkspaceConfiguration, "get"> &
   Partial<Pick<vscode.WorkspaceConfiguration, "inspect">>;
@@ -21,6 +28,7 @@ export class ExtensionSettingsStore {
       config.get<number>("quotaGreenThreshold", 60),
       config.get<number>("quotaYellowThreshold", 20)
     );
+    const weeklyQuotaThresholds = resolveWeeklyQuotaThresholds(config);
 
     return {
       dashboardTheme: normalizeDashboardTheme(config.get<string>("dashboardTheme", "auto")),
@@ -48,6 +56,8 @@ export class ExtensionSettingsStore {
       autoSwitchReloadWindowEnabled: config.get<boolean>("autoSwitchReloadWindowEnabled", false),
       autoSwitchHourlyThreshold: normalizeAutoSwitchThreshold(config.get<number>("autoSwitchHourlyThreshold", 20)),
       autoSwitchWeeklyThreshold: normalizeAutoSwitchThreshold(config.get<number>("autoSwitchWeeklyThreshold", 20)),
+      hideWeeklyQuotaThreshold: weeklyQuotaThresholds.hide,
+      unhideWeeklyQuotaThreshold: weeklyQuotaThresholds.unhide,
       autoSwitchLockMinutes: normalizeAutoSwitchLockMinutes(config.get<number>("autoSwitchLockMinutes", 0)),
       codexAppPath: config.get<string>("codexAppPath", ""),
       resolvedCodexAppPath: "",
@@ -266,6 +276,31 @@ export function normalizeAutoSwitchThreshold(value: number): number {
   }
 
   return Math.max(0, Math.min(20, Math.round(value)));
+}
+
+export function isValidWeeklyQuotaThreshold(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+export function normalizeWeeklyQuotaThreshold(value: unknown, fallback: number): number {
+  return isValidWeeklyQuotaThreshold(value) ? value : fallback;
+}
+
+export function resolveWeeklyQuotaThresholds(
+  config: ReadableCodexAccountsConfiguration = getCodexAccountsConfiguration()
+): WeeklyQuotaThresholds {
+  const hide = normalizeWeeklyQuotaThreshold(
+    config.get<unknown>("hideWeeklyQuotaThreshold", DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD),
+    DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD
+  );
+  const unhide = normalizeWeeklyQuotaThreshold(
+    config.get<unknown>("unhideWeeklyQuotaThreshold", DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD),
+    DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD
+  );
+
+  return hide <= unhide
+    ? { hide, unhide }
+    : { hide: DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD, unhide: DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD };
 }
 
 export function normalizeQuotaWarningThreshold(value: number): number {

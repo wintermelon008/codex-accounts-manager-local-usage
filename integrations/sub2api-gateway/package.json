@@ -2,7 +2,7 @@
   "name": "codex-accounts-sub2api-gateway",
   "displayName": "Codex Accounts Sub2API Gateway",
   "description": "Optional local Sub2API Gateway integration for Codex Accounts Manager.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "codex-accounts",
   "license": "MIT",
   "repository": {

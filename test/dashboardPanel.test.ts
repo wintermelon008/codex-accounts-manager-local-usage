@@ -23,7 +23,8 @@ import {
   getDashboardAccountPage,
   getDashboardVisibleAccounts,
   getHighWeeklyQuotaHiddenAccountIds,
-  getLowWeeklyQuotaAccountIds
+  getLowWeeklyQuotaAccountIds,
+  parsePercentageInput
 } from "../webview-src/dashboard/helpers";
 import { createInitialState, reducer } from "../webview-src/dashboard/state";
 
@@ -88,6 +89,8 @@ function createState(): DashboardState {
       autoSwitchReloadWindowEnabled: false,
       autoSwitchHourlyThreshold: 20,
       autoSwitchWeeklyThreshold: 20,
+      hideWeeklyQuotaThreshold: 3,
+      unhideWeeklyQuotaThreshold: 90,
       autoSwitchLockMinutes: 0,
       quotaWarningEnabled: false,
       quotaWarningThreshold: 20,
@@ -164,7 +167,7 @@ describe("Dashboard account selection", () => {
     });
   });
 
-  it("only targets visible, non-hidden accounts whose weekly quota is below 3%", () => {
+  it("only targets visible, non-hidden accounts whose weekly quota is at or below 3%", () => {
     const accounts = [
       {
         id: "below-threshold",
@@ -188,10 +191,10 @@ describe("Dashboard account selection", () => {
       }
     ] as DashboardState["accounts"];
 
-    expect(getLowWeeklyQuotaAccountIds(accounts)).toEqual(["below-threshold"]);
+    expect(getLowWeeklyQuotaAccountIds(accounts)).toEqual(["below-threshold", "at-threshold"]);
   });
 
-  it("targets hidden accounts above 90% weekly quota across all groups", () => {
+  it("targets hidden accounts at or above 90% weekly quota across all groups", () => {
     const accounts = [
       {
         id: "above-threshold",
@@ -217,7 +220,35 @@ describe("Dashboard account selection", () => {
       }
     ] as DashboardState["accounts"];
 
-    expect(getHighWeeklyQuotaHiddenAccountIds(accounts)).toEqual(["above-threshold"]);
+    expect(getHighWeeklyQuotaHiddenAccountIds(accounts)).toEqual(["above-threshold", "at-threshold"]);
+  });
+
+  it("uses custom inclusive weekly quota thresholds", () => {
+    const accounts = [
+      {
+        id: "hide-at-custom-threshold",
+        isHidden: false,
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 4.5, visible: true }]
+      },
+      {
+        id: "show-at-custom-threshold",
+        isHidden: true,
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 87.5, visible: true }]
+      }
+    ] as DashboardState["accounts"];
+
+    expect(getLowWeeklyQuotaAccountIds(accounts, 4.5)).toEqual(["hide-at-custom-threshold"]);
+    expect(getHighWeeklyQuotaHiddenAccountIds(accounts, 87.5)).toEqual(["show-at-custom-threshold"]);
+  });
+
+  it("accepts only percentage-formatted values in the weekly quota inputs", () => {
+    expect(parsePercentageInput("3%")).toBe(3);
+    expect(parsePercentageInput(" 3.5% ")).toBe(3.5);
+    expect(parsePercentageInput("0%")).toBe(0);
+    expect(parsePercentageInput("100%")).toBe(100);
+    expect(parsePercentageInput("3")).toBeUndefined();
+    expect(parsePercentageInput("101%")).toBeUndefined();
+    expect(parsePercentageInput("-1%")).toBeUndefined();
   });
 
   it("deselects only accounts that were actually hidden", () => {

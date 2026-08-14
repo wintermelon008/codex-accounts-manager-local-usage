@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import type { RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import type { RuntimeSwitchSource } from "./runtimeSwitchCoordinator";
-import { createError } from "../../core";
+import { createError, getErrorMessage } from "../../core";
 import {
   CodexAccountRecord,
   isAutomaticAccount,
@@ -32,7 +32,10 @@ import {
   observeSeamlessQuotaBand,
   recordSeamlessSelection
 } from "../../presentation/workbench/seamlessSwitchState";
-import { clearTokenAutomationError } from "../../presentation/workbench/tokenAutomationState";
+import {
+  clearTokenAutomationError,
+  markTokenAutomationRefreshFailure
+} from "../../presentation/workbench/tokenAutomationState";
 import { getCommandCopy, getLanguage, getQuotaWarningCopy } from "../../utils";
 import { getDashboardCopy } from "../dashboard/copy";
 import { autoReloadWindowForAccount, handleCodexAppRestartPreference } from "./switchEffects";
@@ -110,7 +113,22 @@ export async function refreshSingleQuota(
     throw createError.accountNotFound(account.email);
   }
 
-  const result = await refreshQuota(account, tokens, forceRefresh);
+  let result: QuotaRefreshResult;
+  try {
+    result = await refreshQuota(account, tokens, forceRefresh);
+  } catch (error) {
+    const message = getErrorMessage(error);
+    markTokenAutomationRefreshFailure(accountId, message);
+    if (shouldRefreshView) {
+      view.refresh();
+    }
+    if (announce) {
+      const copy = getCommandCopy();
+      const label = formatAccountToastLabel(account);
+      void vscode.window.showWarningMessage(copy.failedToRefresh(label, message));
+    }
+    throw error;
+  }
   const updatedAccount = await repo.updateQuota(
     accountId,
     result.quota,
