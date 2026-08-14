@@ -7,5 +7,7 @@ module.exports = {
   ...require("./messages.cjs"),
   ...require("./provider.cjs"),
   ...require("./providers/eight92.cjs"),
+  ...require("./providers/boya.cjs"),
+  ...require("./providers/cdns.cjs"),
   ...require("./providers/index.cjs")
 };

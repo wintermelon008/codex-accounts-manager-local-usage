@@ -34,6 +34,20 @@ test("activation loads local state, registers a generic Manager card, and does n
   integration.dispose();
 });
 
+test("default integration registers the built-in 8t92, boya and cdns providers", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+
+  const providers = await integration.getPanelState();
+  assert.deepEqual(providers.providers.map((provider) => provider.id), ["8t92", "boya", "cdns"]);
+  assert.equal(providers.providers.find((provider) => provider.id === "boya").displayName, "boya");
+  assert.equal(providers.providers.find((provider) => provider.id === "cdns").displayName, "cdns");
+  integration.dispose();
+});
+
 test("Manager card opens a parallel editor panel and panel messages select/query without QuickPick", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -88,6 +102,88 @@ test("Manager card opens a parallel editor panel and panel messages select/query
     ),
     true
   );
+  integration.dispose();
+});
+
+test("selected mailbox ids support a parallel batch query and batch delete", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let registration;
+  const queried = [];
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      return {
+        entries: String(input).split("\n").filter(Boolean).map((line) => ({
+          address: line.split("|")[0],
+          credentials: { credential: line.split("|")[1] }
+        })),
+        failed: []
+      };
+    },
+    async query(account) {
+      queried.push(account.address);
+      return { ok: true, providerId: "mock", address: account.address, messages: [], codes: [] };
+    }
+  };
+  const api = { registerDashboardIntegration(value) { registration = value; return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await registration.runAction("open");
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "import", providerId: "mock", input: "one@example.com|credential\ntwo@example.com|credential" });
+  const ids = integration.pool.listMetadata().map((mailbox) => mailbox.id);
+
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "batchQuery", mailboxIds: ids });
+  await waitFor(() => integration.coordinator.isActive() === false && queried.length === 2);
+  assert.deepEqual(queried.sort(), ["one@example.com", "two@example.com"]);
+
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "batchDelete", mailboxIds: ids });
+  assert.equal(integration.pool.listMetadata().length, 0);
+  integration.dispose();
+});
+
+test("provider failures remain visible as safe mailbox status details", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let registration;
+  const provider = {
+    apiVersion: 1,
+    id: "mock-error",
+    displayName: "Mock error provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query(account) {
+      return {
+        ok: false,
+        providerId: "mock-error",
+        address: account.address,
+        messages: [],
+        codes: [],
+        error: { stage: "auth", code: "invalid_credentials", message: "固定安全错误", retryable: false }
+      };
+    }
+  };
+  const api = { registerDashboardIntegration(value) { registration = value; return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await registration.runAction("open");
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "import", providerId: "mock-error", input: "error@example.com|opaque-secret" });
+  const mailboxId = integration.pool.listMetadata()[0].id;
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "query", mailboxId });
+  await waitFor(() => integration.coordinator.isActive() === false);
+
+  const state = await integration.getPanelState();
+  assert.equal(state.mailboxes[0].lastError.code, "invalid_credentials");
+  assert.equal(state.mailboxes[0].lastError.message, "固定安全错误");
+  assert.doesNotMatch(JSON.stringify(state), /opaque-secret/u);
   integration.dispose();
 });
 

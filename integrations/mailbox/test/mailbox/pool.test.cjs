@@ -2,6 +2,8 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const { BoyaProvider } = require("../../src/core/providers/boya.cjs");
+const { CdnsProvider } = require("../../src/core/providers/cdns.cjs");
 const { Eight92Provider } = require("../../src/core/providers/eight92.cjs");
 const { createMailboxProvider } = require("../../src/core/provider.cjs");
 const { MailboxPool, METADATA_KEY, detailKey, secretKey } = require("../../src/mailbox/storage.cjs");
@@ -27,6 +29,42 @@ test("metadata stores complete mailbox identity but never stores provider creden
   assert.equal(stores.metadata.values.get(METADATA_KEY).accounts[0].address, "one@example.com");
   assert.equal("credentials" in stores.metadata.values.get(METADATA_KEY).accounts[0], false);
   assert.match(stores.secretStore.values.get(secretKey(result.imported[0].id)), /refresh-one/u);
+});
+
+test("boya private tokens stay in the Mailbox secret store and out of public metadata", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new BoyaProvider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+
+  const result = await pool.importProvider({
+    provider,
+    input: "boya-user@example.com----boya-private-token"
+  });
+  const mailboxId = result.imported[0].id;
+
+  assert.doesNotMatch(JSON.stringify(pool.listMetadata()), /boya-private-token/u);
+  assert.doesNotMatch(JSON.stringify(stores.metadata.values.get(METADATA_KEY)), /boya-private-token/u);
+  assert.match(stores.secretStore.values.get(secretKey(mailboxId)), /boya-private-token/u);
+  assert.equal((await pool.getAccount(mailboxId)).credentials.privateToken, "boya-private-token");
+});
+
+test("cdns credentials stay in the Mailbox secret store and out of public metadata", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new CdnsProvider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+
+  const result = await pool.importProvider({
+    provider,
+    input: "cdns-user@example.com----cdns-password----cdns-receive-token----cdns-public-ref"
+  });
+  const mailboxId = result.imported[0].id;
+
+  assert.doesNotMatch(JSON.stringify(pool.listMetadata()), /cdns-password|cdns-receive-token|cdns-public-ref/u);
+  assert.doesNotMatch(JSON.stringify(stores.metadata.values.get(METADATA_KEY)), /cdns-password|cdns-receive-token|cdns-public-ref/u);
+  assert.match(stores.secretStore.values.get(secretKey(mailboxId)), /cdns-receive-token/u);
+  assert.equal((await pool.getAccount(mailboxId)).credentials.publicRef, "cdns-public-ref");
 });
 
 test("query details are persisted separately and only selected details need to be read", async () => {

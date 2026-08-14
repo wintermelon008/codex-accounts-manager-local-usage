@@ -1,6 +1,6 @@
 # Mailbox 可选集成
 
-`integrations/mailbox` 是 Manager 的独立可选 VSIX。它定义通用 Mailbox/provider 边界，当前内置 8t92 provider，后续第三方只需要实现同一 provider 合约。
+`integrations/mailbox` 是 Manager 的独立可选 VSIX。它定义通用 Mailbox/provider 边界，当前内置 `8t92`、`boya` 和 `cdns` provider，后续第三方只需要实现同一 provider 合约。
 
 ## 边界
 
@@ -27,6 +27,26 @@ OAuth 导入会带一个仅用于取消控制的不透明操作 ID。用户按�
 
 续期结果中只有明确的新凭据才会写入该 provider 的 SecretStorage；旧凭据可用但没有变化、失败、取消或响应异常都会保留原凭据。续期仍是人工动作，不做后台自动续期。
 
+邮箱池面板默认按显示名称升序显示，支持名称升/降序、最近查询、已出码优先、按来源筛选和“仅未接入 Codex”筛选。“仅未接入 Codex”依据当前 Manager 返回的已接入账号邮箱目录判断；当 Manager 不提供该目录时，筛选项会禁用。用户可以勾选邮箱并全选当前筛选结果，然后批量查询、批量监听、批量停止或批量删除；Coordinator 继续为每个邮箱维护独立操作和结果。
+
+## boya 接入
+
+`boya` 使用 `http://freemail.boya.one/api/user/codes` 查询验证码。导入时每行填写 `邮箱----private token`，例如 `user@example.com----private_token`。该来源声明 `history: "latest"`、最多一封邮件且不支持续期；返回的 `code` 和 `message` 会转换成统一 Mailbox 消息模型。
+
+Boya 的 private token 只作为 provider 凭据存入 Mailbox 私有 `SecretStorage`，不会进入邮箱池公共元数据、Manager API 或错误提示。面板可以显示固定错误码和安全原因（例如 `invalid_credentials`），但不透传第三方原始响应，避免其携带敏感内容。
+
+## cdns 接入
+
+`cdns` 使用 `https://ai.cdns.ccwu.cc/mail-receive/` 对应的公开接口。导入时每行填写四段格式：
+
+```text
+邮箱----密码----接码令牌----public_ref
+```
+
+查询按 CDNS 前端相同的两步协议执行：先 POST `/api/card-withdraw/public-proxy/account-sources/resolve`，用邮箱和 `public_ref` 解析来源；成功后再 POST `/api/card-withdraw/public-proxy/mail/receive`，提交邮箱、密码、接码令牌、`public_ref` 和解析得到的 `source_upstream_key`。该来源声明 `history: "latest"`、最多一封邮件且不支持续期；响应中的 `code`、`subject`、`message` 和 `received_at` 会转换为统一 Mailbox 消息模型。
+
+CDNS 的密码、接码令牌和 `public_ref` 只存入 Mailbox 私有 `SecretStorage`，不会进入邮箱池公共元数据、Manager API 或测试文件。来源未匹配、凭据错误和上游异常会转换为固定安全错误，并对异常回显的凭据做脱敏。
+
 ## 构建和验证
 
 ```bash
@@ -35,4 +55,4 @@ npm --prefix integrations/mailbox run package:check
 npm --prefix integrations/mailbox run package
 ```
 
-当前测试使用占位行和 mock HTTP 响应；没有使用真实邮箱、refresh token，也没有把真实第三方响应当作验证结果。
+当前测试使用占位行和 mock HTTP 响应；没有使用真实邮箱、private token 或 refresh token。运行时仅在用户手动执行查询/监听时请求 provider。
