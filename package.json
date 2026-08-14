@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.16-local.61",
+  "version": "0.1.16-l1",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -248,6 +248,20 @@
           "maximum": 20,
           "default": 20,
           "markdownDescription": "Automatic account switching threshold for the weekly quota. Switching is triggered when the active account drops to or below this percentage."
+        },
+        "codexAccounts.hideWeeklyQuotaThreshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 3,
+          "markdownDescription": "Hide accounts when their visible weekly remaining quota is at or below this percentage."
+        },
+        "codexAccounts.unhideWeeklyQuotaThreshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 90,
+          "markdownDescription": "Show hidden accounts when their visible weekly remaining quota is at or above this percentage."
         },
         "codexAccounts.autoSwitchLockMinutes": {
           "type": "number",

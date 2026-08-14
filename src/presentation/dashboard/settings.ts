@@ -11,7 +11,9 @@ import {
   normalizeLocalUsageRange,
   normalizeLocalUsageRanges,
   normalizeSeamlessQuotaBandSize,
-  normalizeSeamlessSwitchThreshold
+  normalizeSeamlessSwitchThreshold,
+  isValidWeeklyQuotaThreshold,
+  resolveWeeklyQuotaThresholds
 } from "../../infrastructure/config/extensionSettings";
 import { isDashboardLanguageOption } from "../../localization/languages";
 import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchState";
@@ -94,6 +96,20 @@ export async function handleDashboardSettingUpdate(
       if (typeof value === "number") {
         await updateDashboardConfiguration(config, key, value);
         updated = true;
+      }
+      break;
+    case "hideWeeklyQuotaThreshold":
+    case "unhideWeeklyQuotaThreshold":
+      if (isValidWeeklyQuotaThreshold(value)) {
+        const current = resolveWeeklyQuotaThresholds(config);
+        const next =
+          key === "hideWeeklyQuotaThreshold"
+            ? { hide: value, unhide: current.unhide }
+            : { hide: current.hide, unhide: value };
+        if (next.hide <= next.unhide) {
+          await updateDashboardConfiguration(config, key, value);
+          updated = true;
+        }
       }
       break;
     case "hotSwitchGraceSeconds":

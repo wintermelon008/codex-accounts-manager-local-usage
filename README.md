@@ -50,10 +50,10 @@
 
 ### 使用本地版本
 
-从本仓库获得 `codex-accounts-manager-<version>-local.<build>.vsix`，然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
+从本仓库获得 `codex-accounts-manager-<version>.vsix`（开发版使用 `0.1.16-dev`，发布版使用 `0.1.16-l1`、`0.1.16-l2` 等），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
 
 ```bash
-code --install-extension codex-accounts-manager-<version>-local.<build>.vsix
+code --install-extension codex-accounts-manager-<version>.vsix --force
 ```
 
 本地能力随这份 VSIX 一起提供；如果刻意安装 Marketplace 更新，需要重新安装本地构建。

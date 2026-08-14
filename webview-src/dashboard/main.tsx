@@ -139,8 +139,14 @@ function App() {
   const hiddenAccountCount = snapshot.accounts.filter((account) => account.isHidden).length;
   const displayedAccountPage = getDashboardAccountPage(displayedAccounts, accountsPage);
   const pageAccounts = displayedAccountPage.accounts;
-  const lowWeeklyQuotaAccountIds = getLowWeeklyQuotaAccountIds(pageAccounts);
-  const highWeeklyQuotaHiddenAccountIds = getHighWeeklyQuotaHiddenAccountIds(snapshot.accounts);
+  const lowWeeklyQuotaAccountIds = getLowWeeklyQuotaAccountIds(
+    pageAccounts,
+    snapshot.settings.hideWeeklyQuotaThreshold
+  );
+  const highWeeklyQuotaHiddenAccountIds = getHighWeeklyQuotaHiddenAccountIds(
+    snapshot.accounts,
+    snapshot.settings.unhideWeeklyQuotaThreshold
+  );
   const hiddenAccountsToggleLabel = resolveHiddenAccountsToggleLabel(
     snapshot.lang,
     showHiddenAccounts,
@@ -217,9 +223,6 @@ function App() {
   const batchRefreshPending = isActionPending("batchRefresh");
   const batchResyncPending = isActionPending("batchResyncProfile");
   const batchRemovePending = isActionPending("batchRemove");
-  const batchTagsPending = state.pendingActions.some(
-    (request) => request.action === "updateTags" && request.accountId == null
-  );
   const hideAccountsPending = isActionPending("hideAccounts");
   const unhideAccountsPending = isActionPending("unhideAccounts");
   const setAccountGroupPending = isActionPending("setAccountGroup");
@@ -247,16 +250,6 @@ function App() {
   const handleEditAccountTags = (account: DashboardAccountViewModel): void => {
     sendAction("updateTags", account.id, {
       mode: "set"
-    });
-  };
-
-  const handleBatchTagMutation = (mode: "add" | "remove"): void => {
-    if (!selectedCount) {
-      return;
-    }
-    sendAction("updateTags", undefined, {
-      accountIds: state.selectedAccountIds,
-      mode
     });
   };
 
@@ -537,7 +530,11 @@ function App() {
                     })
                   }
                 >
-                  {resolveHideLowWeeklyQuotaLabel(snapshot.lang, lowWeeklyQuotaAccountIds.length)}
+                  {resolveHideLowWeeklyQuotaLabel(
+                    snapshot.lang,
+                    lowWeeklyQuotaAccountIds.length,
+                    snapshot.settings.hideWeeklyQuotaThreshold
+                  )}
                 </ActionButton>
                 <ActionButton
                   class="toolbar-btn"
@@ -555,7 +552,11 @@ function App() {
                     })
                   }
                 >
-                  {resolveUnhideHighWeeklyQuotaLabel(snapshot.lang, highWeeklyQuotaHiddenAccountIds.length)}
+                  {resolveUnhideHighWeeklyQuotaLabel(
+                    snapshot.lang,
+                    highWeeklyQuotaHiddenAccountIds.length,
+                    snapshot.settings.unhideWeeklyQuotaThreshold
+                  )}
                 </ActionButton>
                 {selectedCount > 0 ? (
                   <BatchSelectionBar
@@ -566,7 +567,6 @@ function App() {
                     resyncPending={batchResyncPending}
                     removePending={batchRemovePending}
                     sharePending={sharePending}
-                    tagsPending={batchTagsPending}
                     hidePending={hideAccountsPending}
                     unhidePending={unhideAccountsPending}
                     groupPending={setAccountGroupPending}
@@ -576,8 +576,6 @@ function App() {
                     }
                     onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
                     onShare={handleShareTokens}
-                    onAddTags={() => handleBatchTagMutation("add")}
-                    onRemoveTags={() => handleBatchTagMutation("remove")}
                     onSetBalancePool={() =>
                       sendAction("setBalancePool", undefined, { accountIds: state.selectedAccountIds })
                     }
@@ -804,24 +802,24 @@ function resolveHiddenAccountsEmptyLabel(lang: string): string {
   return "All accounts are hidden. Use the eye button above to show them.";
 }
 
-function resolveHideLowWeeklyQuotaLabel(lang: string, count: number): string {
+function resolveHideLowWeeklyQuotaLabel(lang: string, count: number, threshold: number): string {
   if (lang === "zh") {
-    return `隐藏周额度 <3%（${count}）`;
+    return `隐藏周额度 ≤${threshold}%（${count}）`;
   }
   if (lang === "zh-hant") {
-    return `隱藏週額度 <3%（${count}）`;
+    return `隱藏週額度 ≤${threshold}%（${count}）`;
   }
-  return `Hide weekly <3% (${count})`;
+  return `Hide weekly ≤${threshold}% (${count})`;
 }
 
-function resolveUnhideHighWeeklyQuotaLabel(lang: string, count: number): string {
+function resolveUnhideHighWeeklyQuotaLabel(lang: string, count: number, threshold: number): string {
   if (lang === "zh") {
-    return `解除隐藏周额度 >90%（${count}）`;
+    return `解除隐藏周额度 ≥${threshold}%（${count}）`;
   }
   if (lang === "zh-hant") {
-    return `解除隱藏週額度 >90%（${count}）`;
+    return `解除隱藏週額度 ≥${threshold}%（${count}）`;
   }
-  return `Unhide weekly >90% (${count})`;
+  return `Show weekly ≥${threshold}% (${count})`;
 }
 
 function resolveAccountPaginationLabel(

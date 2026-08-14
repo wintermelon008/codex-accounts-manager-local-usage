@@ -12,7 +12,7 @@
 4. 在配置中填入目标 Sub2API 下游地址、模型和逻辑密钥引用；再用卡片“保存下游密钥”。此处必须填可调用 `/v1` 的普通 API Key，不是管理端登录令牌；可粘贴带 `Bearer ` 前缀的值，扩展会安全归一化。密钥仅存入本扩展的 VS Code SecretStorage。
 5. 选择“使用 Sub2API”。首次安装 runtime 可能需要重新加载 VS Code 窗口一次；之后 ChatGPT Auth ↔ Sub2API 手动切换不需要 reload。
 
-账号卡片内还提供“保存下游密钥”和“刷新”按钮，并显示 Base URL、模型、密钥状态，以及 tracker 观察到的 5 小时/7 天/今日 token 用量和按配置模型估算的标准 API 价格。价格是估算值，不代表 Sub2API 账单；未观察到 token 时不会填入伪造额度。安装并注册本扩展后，Manager 设置中会出现“显示 Sub2API 账号卡片”开关；它只控制卡片可见性，不会直接切换路由；未安装时该设置项不存在。
+账号卡片内还提供“保存下游密钥”和“刷新”按钮，并显示 Base URL、模型、密钥状态，以及 tracker 观察到的今日/7 天 token 用量和按配置模型估算的标准 API 价格。价格是估算值，不代表 Sub2API 账单；未观察到 token 时不会填入伪造额度。安装并注册本扩展后，Manager 设置中会出现“显示 Sub2API 账号卡片”开关；它只控制卡片可见性，不会直接切换路由；未安装时该设置项不存在。
 
 虚拟账号仅保存 Base URL、模型和 `credentialRef` 描述，并标记为 `manualOnly`/`quotaMode: "none"`。Manager 不读取 Sub2API 上游账号、不保存下游 API Key，也不为虚拟账号创建 OAuth token 或写入 `auth.json`。账号卡片只显示 `Gateway · 手动`，不显示额度、订阅、quota error 或 token 健康操作。
 

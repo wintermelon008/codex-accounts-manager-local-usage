@@ -3,10 +3,16 @@ import * as vscode from "vscode";
 import type { CodexAccountRecord, CodexTokens } from "../src/core/types";
 import type { AccountsRepository } from "../src/storage";
 
-const { refreshQuotaMock, fetchResetCreditsMock, clearTokenAutomationErrorMock } = vi.hoisted(() => ({
+const {
+  refreshQuotaMock,
+  fetchResetCreditsMock,
+  clearTokenAutomationErrorMock,
+  markTokenAutomationRefreshFailureMock
+} = vi.hoisted(() => ({
   refreshQuotaMock: vi.fn(),
   fetchResetCreditsMock: vi.fn(),
-  clearTokenAutomationErrorMock: vi.fn()
+  clearTokenAutomationErrorMock: vi.fn(),
+  markTokenAutomationRefreshFailureMock: vi.fn()
 }));
 
 const { handleCodexAppRestartPreferenceMock, autoReloadWindowForAccountMock } = vi.hoisted(() => ({
@@ -20,7 +26,8 @@ vi.mock("../src/services", () => ({
 }));
 
 vi.mock("../src/presentation/workbench/tokenAutomationState", () => ({
-  clearTokenAutomationError: clearTokenAutomationErrorMock
+  clearTokenAutomationError: clearTokenAutomationErrorMock,
+  markTokenAutomationRefreshFailure: markTokenAutomationRefreshFailureMock
 }));
 
 vi.mock("../src/application/accounts/switchEffects", () => ({
@@ -60,6 +67,7 @@ describe("refreshSingleQuota token automation state", () => {
     refreshQuotaMock.mockReset();
     fetchResetCreditsMock.mockReset();
     clearTokenAutomationErrorMock.mockReset();
+    markTokenAutomationRefreshFailureMock.mockReset();
     handleCodexAppRestartPreferenceMock.mockReset();
     autoReloadWindowForAccountMock.mockReset();
   });
@@ -92,6 +100,36 @@ describe("refreshSingleQuota token automation state", () => {
     });
 
     expect(clearTokenAutomationErrorMock).toHaveBeenCalledWith(account.id);
+  });
+
+  it("marks thrown manual refresh failures so the account asks for reauthorization", async () => {
+    const hiddenAccount: CodexAccountRecord = {
+      ...account,
+      isActive: false,
+      isHidden: true
+    };
+    const repo: QuotaRefreshRepo = {
+      getAccount: vi.fn(async () => hiddenAccount),
+      getTokens: vi.fn(async () => tokens),
+      updateQuota: vi.fn(async () => hiddenAccount),
+      refreshSubscriptionState: vi.fn(async () => undefined),
+      updateResetCreditsSnapshot: vi.fn(async () => undefined)
+    };
+    const view = { refresh: vi.fn() };
+    const error = new Error("Token refresh failed: refresh token reused");
+    refreshQuotaMock.mockRejectedValue(error);
+    const showWarning = vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue(undefined);
+
+    await expect(
+      refreshSingleQuota(repo as AccountsRepository, view, hiddenAccount.id, {
+        forceRefresh: true,
+        warnQuota: false
+      })
+    ).rejects.toThrow(error);
+
+    expect(markTokenAutomationRefreshFailureMock).toHaveBeenCalledWith(hiddenAccount.id, error.message);
+    expect(view.refresh).toHaveBeenCalledOnce();
+    expect(showWarning).toHaveBeenCalledWith(expect.stringContaining(error.message));
   });
 
   it("persists refreshed subscription metadata from quota refresh results", async () => {

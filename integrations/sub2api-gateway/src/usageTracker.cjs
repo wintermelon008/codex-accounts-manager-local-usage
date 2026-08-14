@@ -8,15 +8,19 @@ const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_BUCKETS = Math.ceil(SEVEN_DAY_MS / BUCKET_MS) + 4;
 
 class GatewayUsageTracker {
-  constructor(globalState, now = () => Date.now()) {
+  constructor(globalState, now = () => Date.now(), sourceKey) {
     this.globalState = globalState;
     this.now = now;
+    this.storageKey =
+      typeof sourceKey === "string" && sourceKey.trim()
+        ? `${USAGE_STATE_KEY}.${encodeURIComponent(sourceKey.trim())}`
+        : USAGE_STATE_KEY;
     this.checkpoints = {};
     this.buckets = [];
   }
 
   load() {
-    const stored = this.globalState.get(USAGE_STATE_KEY);
+    const stored = this.globalState.get(this.storageKey);
     if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
       return;
     }
@@ -70,7 +74,7 @@ class GatewayUsageTracker {
   }
 
   persist() {
-    return this.globalState.update(USAGE_STATE_KEY, { checkpoints: this.checkpoints, buckets: this.buckets });
+    return this.globalState.update(this.storageKey, { checkpoints: this.checkpoints, buckets: this.buckets });
   }
 }
 

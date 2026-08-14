@@ -6,7 +6,11 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { createSub2ApiGatewayConfigTemplate } = require("../src/config.cjs");
-const { Sub2ApiGatewayIntegration, checkGatewayHealth, normalizeDownstreamCredential } = require("../src/gatewayIntegration.cjs");
+const {
+  Sub2ApiGatewayIntegration,
+  checkGatewayHealth,
+  normalizeDownstreamCredential
+} = require("../src/gatewayIntegration.cjs");
 
 test("an invalid optional observer keeps the downstream Gateway configurable", async (t) => {
   const storage = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-integration-"));
@@ -38,12 +42,24 @@ test("an invalid optional observer keeps the downstream Gateway configurable", a
   assert.equal(action(card, "configureCredential").enabled, true);
   assert.equal(action(card, "refresh").enabled, true);
   assert.equal(api.dashboardRegistrations, 0);
-  assert.deepEqual(card.details.map((entry) => entry.label), ["配置", "下游", "模型", "下游密钥"]);
-  assert.deepEqual(card.actions.map((entry) => entry.id), ["selectProfile", "configureCredential", "refresh", "openConfig"]);
-  assert.equal(card.usage.range, "5h");
-  assert.equal(card.usage.status, "waiting");
-  assert.equal(card.usage.byModel[0].model, "gpt-5");
-  assert.equal(card.details.some((entry) => entry.label.includes("上游") || entry.label.includes("库存")), false);
+  assert.deepEqual(
+    card.details.map((entry) => entry.label),
+    ["配置", "下游", "模型", "下游密钥"]
+  );
+  assert.deepEqual(
+    card.actions.map((entry) => entry.id),
+    ["configureCredential", "refresh", "openConfig"]
+  );
+  assert.equal(Object.hasOwn(card, "usage"), false);
+  assert.deepEqual(
+    card.metrics.map((entry) => entry.label),
+    ["今日 Token", "7 天 Token"]
+  );
+  assert.equal(card.metrics.some((entry) => entry.label.includes("5 小时")), false);
+  assert.equal(
+    card.details.some((entry) => entry.label.includes("上游") || entry.label.includes("库存")),
+    false
+  );
   assert.deepEqual(api.virtualRegistrations[0].descriptor, {
     integrationId: "sub2api-gateway",
     baseUrl: "https://gateway.example.invalid/v1",
@@ -93,7 +109,26 @@ test("the Manager setting only persists card visibility and never changes the Ga
   integration.dispose();
 });
 
-test("selects an external profile from the account card", async (t) => {
+test("offers a card action to return from an active Gateway to ChatGPT Auth", async (t) => {
+  const storage = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-integration-"));
+  t.after(() => fs.rm(storage, { recursive: true, force: true }));
+  const api = createApi();
+  const integration = new Sub2ApiGatewayIntegration(createVscode(), createContext(storage), api);
+  await integration.initialize();
+
+  assert.equal(action(integration.getCardViewModel(), "deactivate"), undefined);
+  integration.selection = "active";
+  assert.equal(action(integration.getCardViewModel(), "deactivate").label, "使用 ChatGPT Auth");
+
+  await integration.runAction("deactivate");
+
+  assert.equal(api.gatewayDeactivateCalls, 1);
+  assert.equal(integration.selection, "inactive");
+  assert.equal(action(integration.getCardViewModel(), "deactivate"), undefined);
+  integration.dispose();
+});
+
+test("exposes and selects external profiles from the account card without a QuickPick", async (t) => {
   const storage = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-integration-"));
   t.after(() => fs.rm(storage, { recursive: true, force: true }));
   const template = createSub2ApiGatewayConfigTemplate();
@@ -121,14 +156,19 @@ test("selects an external profile from the account card", async (t) => {
   );
 
   const api = createApi();
-  const integration = new Sub2ApiGatewayIntegration(createVscode(1), createContext(storage), api);
+  const vscode = createVscode();
+  const integration = new Sub2ApiGatewayIntegration(vscode, createContext(storage), api);
   await integration.initialize();
-  assert.equal(action(integration.getCardViewModel(), "selectProfile").enabled, true);
+  const initialCard = integration.getCardViewModel();
+  assert.equal(action(initialCard, "selectProfile:default").enabled, false);
+  assert.equal(action(initialCard, "selectProfile:external").label, "External Gateway");
 
-  await integration.runAction("selectProfile");
+  await integration.runAction("selectProfile:external");
 
   assert.equal(detail(integration.getCardViewModel(), "配置").value, "External Gateway");
   assert.equal(detail(integration.getCardViewModel(), "下游").value, "https://external.example.invalid/v1");
+  assert.equal(action(integration.getCardViewModel(), "selectProfile:external").enabled, false);
+  assert.equal(vscode.quickPickCalls, 0);
   assert.equal(api.virtualRegistrations.at(-1).descriptor.baseUrl, "https://external.example.invalid/v1");
   integration.dispose();
 });
@@ -202,8 +242,9 @@ function createApi() {
   return api;
 }
 
-function createVscode(pickIndex = undefined) {
-  return {
+function createVscode() {
+  const vscode = {
+    quickPickCalls: 0,
     EventEmitter: class {
       constructor() {
         this.listeners = new Set();
@@ -226,8 +267,12 @@ function createVscode(pickIndex = undefined) {
     window: {
       showTextDocument: async () => undefined,
       showInformationMessage: async () => undefined,
-      showQuickPick: async (items) => (pickIndex === undefined ? undefined : items[pickIndex])
+      showQuickPick: async () => {
+        vscode.quickPickCalls += 1;
+        throw new Error("Profile selection must stay inside the account card.");
+      }
     },
     commands: { executeCommand: async () => undefined }
   };
+  return vscode;
 }

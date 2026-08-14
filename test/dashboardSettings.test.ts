@@ -1,9 +1,68 @@
 import { describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
+import {
+  DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD,
+  DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD
+} from "../src/domain/dashboard/types";
 import { ExtensionSettingsStore } from "../src/infrastructure/config/extensionSettings";
 import { handleDashboardSettingUpdate } from "../src/presentation/dashboard/settings";
 
 describe("handleDashboardSettingUpdate", () => {
+  it("reads valid weekly quota thresholds and falls back when their order is invalid", () => {
+    const get = vi.fn((key: string, fallback: unknown) => {
+      if (key === "hideWeeklyQuotaThreshold") {
+        return 4.5;
+      }
+      if (key === "unhideWeeklyQuotaThreshold") {
+        return 87.5;
+      }
+      return fallback;
+    });
+    const inspect = vi.fn(() => undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({ get, inspect } as never);
+
+    const settings = new ExtensionSettingsStore().getDashboardSettings();
+    expect(settings.hideWeeklyQuotaThreshold).toBe(4.5);
+    expect(settings.unhideWeeklyQuotaThreshold).toBe(87.5);
+
+    get.mockImplementation((key: string, fallback: unknown) => {
+      if (key === "hideWeeklyQuotaThreshold") {
+        return 95;
+      }
+      if (key === "unhideWeeklyQuotaThreshold") {
+        return 90;
+      }
+      return fallback;
+    });
+    const fallbackSettings = new ExtensionSettingsStore().getDashboardSettings();
+    expect(fallbackSettings.hideWeeklyQuotaThreshold).toBe(DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD);
+    expect(fallbackSettings.unhideWeeklyQuotaThreshold).toBe(DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD);
+  });
+
+  it("rejects invalid or crossed weekly quota threshold updates", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    const values: Record<string, unknown> = {
+      hideWeeklyQuotaThreshold: 3,
+      unhideWeeklyQuotaThreshold: 90
+    };
+    const get = vi.fn((key: string, fallback: unknown) => values[key] ?? fallback);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get,
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+    } as never);
+
+    await expect(handleDashboardSettingUpdate("hideWeeklyQuotaThreshold", 4.5)).resolves.toBe(true);
+    values.hideWeeklyQuotaThreshold = 4.5;
+    await expect(handleDashboardSettingUpdate("unhideWeeklyQuotaThreshold", 4)).resolves.toBe(false);
+    await expect(handleDashboardSettingUpdate("unhideWeeklyQuotaThreshold", 87.5)).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("hideWeeklyQuotaThreshold", 101)).resolves.toBe(false);
+
+    expect(update).toHaveBeenNthCalledWith(1, "hideWeeklyQuotaThreshold", 4.5, vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(2, "unhideWeeklyQuotaThreshold", 87.5, vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenCalledTimes(2);
+  });
+
   it("updates the workspace value when an effective setting is overridden there", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({

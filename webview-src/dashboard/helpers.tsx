@@ -1,6 +1,8 @@
 import type { ComponentChildren } from "preact";
 import {
   DASHBOARD_ACCOUNTS_PAGE_SIZE,
+  DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD,
+  DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD,
   type DashboardAccountViewModel,
   type DashboardAccountPlanFilter,
   type DashboardSettings,
@@ -10,8 +12,8 @@ import { formatResetRelativeTime } from "../../src/utils/resetTime";
 
 type SensitiveKind = "email" | "id" | "name";
 
-export const LOW_WEEKLY_QUOTA_HIDE_THRESHOLD = 3;
-export const HIGH_WEEKLY_QUOTA_UNHIDE_THRESHOLD = 90;
+export const LOW_WEEKLY_QUOTA_HIDE_THRESHOLD = DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD;
+export const HIGH_WEEKLY_QUOTA_UNHIDE_THRESHOLD = DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD;
 
 export type DashboardAccountPage<T> = {
   page: number;
@@ -108,36 +110,42 @@ function resolveDashboardAccountPlanFilter(planType: string | undefined): Dashbo
 }
 
 /**
- * Finds non-hidden accounts whose reported weekly window is below the bulk-hide threshold.
+ * Finds non-hidden accounts whose reported weekly window is at or below the bulk-hide threshold.
  * The caller supplies the current display scope, so group filters remain respected.
  */
-export function getLowWeeklyQuotaAccountIds(accounts: DashboardAccountViewModel[]): string[] {
+export function getLowWeeklyQuotaAccountIds(
+  accounts: DashboardAccountViewModel[],
+  threshold = LOW_WEEKLY_QUOTA_HIDE_THRESHOLD
+): string[] {
   return accounts.flatMap((account) => {
     const weeklyMetric = account.metrics.find((metric) => metric.key === "weekly");
-    const isBelowThreshold =
+    const isAtOrBelowThreshold =
       weeklyMetric?.visible === true &&
       typeof weeklyMetric.percentage === "number" &&
       Number.isFinite(weeklyMetric.percentage) &&
-      weeklyMetric.percentage < LOW_WEEKLY_QUOTA_HIDE_THRESHOLD;
+      weeklyMetric.percentage <= threshold;
 
-    return !account.isHidden && isBelowThreshold ? [account.id] : [];
+    return !account.isHidden && isAtOrBelowThreshold ? [account.id] : [];
   });
 }
 
 /**
- * Finds hidden accounts whose reported weekly window is above the bulk-unhide threshold.
+ * Finds hidden accounts whose reported weekly window is at or above the bulk-unhide threshold.
  * Hidden accounts are considered across the full snapshot so a disabled group cannot trap them.
  */
-export function getHighWeeklyQuotaHiddenAccountIds(accounts: DashboardAccountViewModel[]): string[] {
+export function getHighWeeklyQuotaHiddenAccountIds(
+  accounts: DashboardAccountViewModel[],
+  threshold = HIGH_WEEKLY_QUOTA_UNHIDE_THRESHOLD
+): string[] {
   return accounts.flatMap((account) => {
     const weeklyMetric = account.metrics.find((metric) => metric.key === "weekly");
-    const isAboveThreshold =
+    const isAtOrAboveThreshold =
       weeklyMetric?.visible === true &&
       typeof weeklyMetric.percentage === "number" &&
       Number.isFinite(weeklyMetric.percentage) &&
-      weeklyMetric.percentage > HIGH_WEEKLY_QUOTA_UNHIDE_THRESHOLD;
+      weeklyMetric.percentage >= threshold;
 
-    return account.isHidden && isAboveThreshold ? [account.id] : [];
+    return account.isHidden && isAtOrAboveThreshold ? [account.id] : [];
   });
 }
 
@@ -188,6 +196,17 @@ export function colorForPercentage(value: number | undefined, settings: Dashboar
 
 export function formatPercent(value?: number): string {
   return typeof value === "number" ? `${value}%` : "--";
+}
+
+export function parsePercentageInput(value: string): number | undefined {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(?:\d+(?:\.\d+)?|\.\d+)%$/);
+  if (!match) {
+    return undefined;
+  }
+
+  const parsed = Number(trimmed.slice(0, -1));
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : undefined;
 }
 
 export function formatRequestsLabel(requestsLeft?: number, requestsLimit?: number): string {

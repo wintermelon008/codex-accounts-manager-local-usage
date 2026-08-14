@@ -14,7 +14,8 @@ import {
   SettingsSegmentBlock,
   SettingsThemeBlock,
   SettingsThresholdBlock,
-  SettingsToggleBlock
+  SettingsToggleBlock,
+  SettingsWeeklyQuotaThresholdBlock
 } from "./components";
 import { formatTemplate, formatTimestamp } from "./helpers";
 
@@ -577,6 +578,11 @@ export function SettingsOverlay(props: {
             settings={props.settings}
             onPreview={props.onThresholdPreview}
             onCommit={props.onThresholdCommit}
+          />
+          <SettingsWeeklyQuotaThresholdBlock
+            lang={props.lang}
+            settings={props.settings}
+            onCommit={(key, value) => patchAndSend(key, value)}
           />
           <SettingsToggleBlock
             title={props.copy.tokenAutomationTitle}

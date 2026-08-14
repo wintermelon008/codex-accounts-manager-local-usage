@@ -14,6 +14,8 @@ import type {
  * used by the automatic quota refresh scheduler for its visible first page.
  */
 export const DASHBOARD_ACCOUNTS_PAGE_SIZE = 50;
+export const DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD = 3;
+export const DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD = 90;
 
 export type DashboardSettingKey =
   | "dashboardTheme"
@@ -39,6 +41,8 @@ export type DashboardSettingKey =
   | "autoSwitchReloadWindowEnabled"
   | "autoSwitchHourlyThreshold"
   | "autoSwitchWeeklyThreshold"
+  | "hideWeeklyQuotaThreshold"
+  | "unhideWeeklyQuotaThreshold"
   | "autoSwitchLockMinutes"
   | "quotaWarningEnabled"
   | "quotaWarningThreshold"
@@ -72,6 +76,8 @@ export interface DashboardSettings {
   autoSwitchReloadWindowEnabled: boolean;
   autoSwitchHourlyThreshold: number;
   autoSwitchWeeklyThreshold: number;
+  hideWeeklyQuotaThreshold: number;
+  unhideWeeklyQuotaThreshold: number;
   autoSwitchLockMinutes: number;
   codexAppPath: string;
   resolvedCodexAppPath: string;
@@ -419,7 +425,6 @@ export interface DashboardAccountViewModel {
   statusColor?: string;
   planTypeLabel: string;
   planType?: string;
-  creditsText?: string;
   userId?: string;
   accountId?: string;
   organizationId?: string;
@@ -461,14 +466,6 @@ export interface DashboardProviderAccountCardViewModel {
   details?: DashboardIntegrationDetail[];
   metrics?: DashboardIntegrationMetric[];
   actions?: DashboardIntegrationAction[];
-  usage?: DashboardProviderUsageViewModel;
-}
-
-export interface DashboardProviderUsageViewModel extends DashboardLocalUsageTokenTotals {
-  range: "today" | "5h" | "7d";
-  status: "tracking" | "waiting";
-  observedSince?: number;
-  byModel: DashboardLocalUsageModelViewModel[];
 }
 
 /**

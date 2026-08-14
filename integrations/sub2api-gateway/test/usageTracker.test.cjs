@@ -30,6 +30,24 @@ test("usage tracker ignores a reset counter instead of fabricating a negative de
   assert.equal(tracker.snapshot().sevenDay.totalTokens, 0);
 });
 
+test("usage tracker keeps each configured source in a separate rolling history", async () => {
+  let now = Date.parse("2026-01-02T10:00:00.000Z");
+  const saved = new Map();
+  const state = { get: (key) => saved.get(key), update: async (key, value) => saved.set(key, value) };
+  const sourceA = new GatewayUsageTracker(state, () => now, "profile-a");
+  const sourceB = new GatewayUsageTracker(state, () => now, "profile-b");
+
+  sourceA.load();
+  await sourceA.observe(status(1, 10));
+  await sourceA.observe(status(3, 30));
+  sourceB.load();
+
+  assert.equal(sourceA.snapshot(now).today.totalTokens, 20);
+  assert.equal(sourceB.snapshot(now).today.totalTokens, 0);
+  assert.notEqual(saved.get("sub2apiGateway.usage.v1.profile-a"), undefined);
+  assert.equal(saved.get("sub2apiGateway.usage.v1.profile-b"), undefined);
+});
+
 function status(requestCount, totalTokens) {
   return {
     instanceId: "runtime-a",

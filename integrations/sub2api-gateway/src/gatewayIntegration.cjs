@@ -24,7 +24,7 @@ class Sub2ApiGatewayIntegration {
     this.context = context;
     this.api = api;
     this.secretStore = new Sub2ApiGatewaySecretStore(context.secrets);
-    this.usageTracker = new GatewayUsageTracker(context.globalState);
+    this.usageTrackers = new Map();
     this.events = new vscode.EventEmitter();
     this.gateway = undefined;
     this.virtualRegistration = undefined;
@@ -53,7 +53,6 @@ class Sub2ApiGatewayIntegration {
 
   async initialize() {
     this.gateway = this.api.registerGateway(INTEGRATION_ID);
-    this.usageTracker.load();
     this.selection = readSelection(this.context.globalState.get(SELECTION_STATE_KEY));
     this.profileId = readProfileId(this.context.globalState.get(PROFILE_ID_STATE_KEY));
     this.cardVisible = readBoolean(this.context.globalState.get(CARD_VISIBILITY_STATE_KEY), true);
@@ -79,7 +78,16 @@ class Sub2ApiGatewayIntegration {
 
   getCardViewModel() {
     const config = this.config;
-    const usage = this.usageTracker.snapshot();
+    const usage = this.getUsageTracker().snapshot();
+    const profileActions =
+      this.profiles.length > 1
+        ? this.profiles.map((profile) => ({
+            id: `selectProfile:${profile.id}`,
+            label: profile.displayName,
+            enabled: profile.id !== this.profileId,
+            tooltip: profile.sub2api.baseUrl
+          }))
+        : [];
     return {
       integrationId: INTEGRATION_ID,
       details: [
@@ -93,16 +101,34 @@ class Sub2ApiGatewayIntegration {
         }
       ],
       metrics: [
-        { label: "5 小时 Token", value: formatTokens(usage.fiveHour.totalTokens), description: usage.fiveHour.observedSince ? "仅统计本扩展观察到的完成 token。" : "尚未观察到完成 token。" },
-        { label: "7 天 Token", value: formatTokens(usage.sevenDay.totalTokens), description: usage.sevenDay.observedSince ? "仅统计本扩展观察到的完成 token。" : "尚未观察到完成 token。" },
-        { label: "今日 Token", value: formatTokens(usage.today.totalTokens), description: usage.today.observedSince ? "仅统计本扩展观察到的完成 token。" : "尚未观察到完成 token。" }
+        {
+          label: "今日 Token",
+          value: formatTokens(usage.today.totalTokens),
+          description: usage.today.observedSince ? "仅统计本扩展观察到的完成 token。" : "尚未观察到完成 token。"
+        },
+        {
+          label: "7 天 Token",
+          value: formatTokens(usage.sevenDay.totalTokens),
+          description: usage.sevenDay.observedSince ? "仅统计本扩展观察到的完成 token。" : "尚未观察到完成 token。"
+        }
       ],
-      usage: config
-        ? providerUsage(config.sub2api.model, usage.fiveHour, "5h")
-        : undefined,
       actions: [
-        { id: "selectProfile", label: "选择配置", enabled: this.profiles.length > 1 },
-        { id: "configureCredential", label: "保存下游密钥", enabled: Boolean(config), tooltip: "只存入本扩展的 VS Code SecretStorage" },
+        ...profileActions,
+        ...(this.selection === "active"
+          ? [
+              {
+                id: "deactivate",
+                label: "使用 ChatGPT Auth",
+                tooltip: "在安全的 turn/stream 边界切回 ChatGPT Auth"
+              }
+            ]
+          : []),
+        {
+          id: "configureCredential",
+          label: "保存下游密钥",
+          enabled: Boolean(config),
+          tooltip: "只存入本扩展的 VS Code SecretStorage"
+        },
         { id: "refresh", label: "刷新", enabled: true },
         { id: "openConfig", label: "打开配置", enabled: true }
       ]
@@ -110,15 +136,16 @@ class Sub2ApiGatewayIntegration {
   }
 
   async runAction(actionId) {
+    if (actionId.startsWith("selectProfile:")) {
+      await this.selectProfile(actionId.slice("selectProfile:".length));
+      return;
+    }
     switch (actionId) {
       case "activate":
         await this.activate();
         return;
       case "deactivate":
         await this.deactivate();
-        return;
-      case "selectProfile":
-        await this.selectProfile();
         return;
       case "refresh":
         await this.refresh();
@@ -163,24 +190,14 @@ class Sub2ApiGatewayIntegration {
     }
   }
 
-  async selectProfile() {
+  async selectProfile(profileId) {
     await this.reloadConfiguration(true);
-    if (this.profiles.length < 2) {
+    const profile = this.profiles.find((candidate) => candidate.id === profileId);
+    if (!profile || profile.id === this.profileId) {
+      this.publish();
       return;
     }
-    const picked = await this.vscode.window.showQuickPick(
-      this.profiles.map((profile) => ({
-        label: profile.displayName,
-        description: profile.sub2api.baseUrl,
-        detail: profile.id === this.profileId ? "当前配置" : profile.id,
-        profile
-      })),
-      { title: "选择 Sub2API 配置" }
-    );
-    if (!picked || picked.profile.id === this.profileId) {
-      return;
-    }
-    this.profileId = picked.profile.id;
+    this.profileId = profile.id;
     await this.context.globalState.update(PROFILE_ID_STATE_KEY, this.profileId);
     this.health = undefined;
     this.inventory = emptyInventory();
@@ -222,7 +239,9 @@ class Sub2ApiGatewayIntegration {
     }
     const credential = normalizeDownstreamCredential(await this.secretStore.get(config.sub2api.credentialRef));
     this.credentialPresent = Boolean(credential);
-    this.health = credential ? await checkGatewayHealth(config, credential) : { kind: "credential_required", message: "需要保存下游密钥。" };
+    this.health = credential
+      ? await checkGatewayHealth(config, credential)
+      : { kind: "credential_required", message: "需要保存下游密钥。" };
     await this.refreshRuntimeStatus();
     await this.refreshInventory();
     this.resetTimers();
@@ -303,7 +322,11 @@ class Sub2ApiGatewayIntegration {
       this.observerCredentialPresent = Boolean(
         this.config.inventoryObserver && (await this.secretStore.get(this.config.inventoryObserver.credentialRef))
       );
-      this.inventory = normalizeInventory(this.inventory, this.config.inventoryObserver, this.observerCredentialPresent);
+      this.inventory = normalizeInventory(
+        this.inventory,
+        this.config.inventoryObserver,
+        this.observerCredentialPresent
+      );
     } catch (error) {
       this.configError = safeError(error, "Gateway 配置不可用。");
       this.profileId = undefined;
@@ -409,7 +432,7 @@ class Sub2ApiGatewayIntegration {
     try {
       const status = await this.gateway.getStatus();
       this.runtimeStatus = status;
-      await this.usageTracker.observe(status);
+      await this.getUsageTracker().observe(status);
       this.runtimeError =
         this.selection === "active" && (status.active !== true || status.route !== "gateway")
           ? "Gateway 实际路由未激活；请重新选择 Gateway。"
@@ -421,6 +444,17 @@ class Sub2ApiGatewayIntegration {
       this.runtimeError = safeError(error, "Gateway runtime 未就绪。");
     }
     this.publish();
+  }
+
+  getUsageTracker() {
+    const sourceKey = this.profileId ?? "default";
+    let tracker = this.usageTrackers.get(sourceKey);
+    if (!tracker) {
+      tracker = new GatewayUsageTracker(this.context.globalState, undefined, sourceKey);
+      tracker.load();
+      this.usageTrackers.set(sourceKey, tracker);
+    }
+    return tracker;
   }
 
   async observeQuotaExhaustion(status) {
@@ -550,7 +584,10 @@ class Sub2ApiGatewayIntegration {
     }
     if (this.gateway?.isActive?.() === true) {
       if (this.inventoryObserverError) {
-        return { kind: "warning", message: `本地回环 Gateway 已激活；只读库存观察配置有误：${this.inventoryObserverError}` };
+        return {
+          kind: "warning",
+          message: `本地回环 Gateway 已激活；只读库存观察配置有误：${this.inventoryObserverError}`
+        };
       }
       return { kind: "active", message: this.health?.message ?? "本地回环 Gateway 已激活。" };
     }
@@ -605,7 +642,10 @@ async function checkGatewayHealth(config, credential, options = {}) {
       return { kind: "healthy", message: "下游健康检查成功。" };
     }
     if (response.status === 401 || response.status === 403) {
-      return { kind: "warning", message: `下游拒绝 API Key（HTTP ${response.status}）。请保存可调用 /v1 的普通 API Key；管理端登录令牌不能用于此处。` };
+      return {
+        kind: "warning",
+        message: `下游拒绝 API Key（HTTP ${response.status}）。请保存可调用 /v1 的普通 API Key；管理端登录令牌不能用于此处。`
+      };
     }
     return { kind: "warning", message: `下游健康检查返回 HTTP ${response.status}。` };
   } catch {
@@ -672,25 +712,15 @@ function normalizeInventory(inventory, observer, credentialPresent) {
   return inventory?.group === observer.group ? inventory : emptyInventory(observer, true);
 }
 
-function providerUsage(model, usage, range) {
-  const totals = {
-    inputTokens: usage.inputTokens,
-    cachedInputTokens: usage.cachedInputTokens,
-    outputTokens: usage.outputTokens,
-    reasoningOutputTokens: usage.reasoningTokens,
-    totalTokens: usage.totalTokens
-  };
-  return {
-    ...totals,
-    range,
-    status: usage.totalTokens > 0 ? "tracking" : "waiting",
-    observedSince: usage.observedSince,
-    byModel: [{ model, ...totals }]
-  };
-}
-
 function formatTokens(value) {
-  return new Intl.NumberFormat().format(Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0);
+  const tokens = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+  if (tokens >= 1_000_000) {
+    return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 0 : 1)}M`;
+  }
+  if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(tokens >= 10_000 ? 0 : 1)}K`;
+  }
+  return new Intl.NumberFormat().format(tokens);
 }
 
 function safeError(error, fallback) {
@@ -700,4 +730,10 @@ function safeError(error, fallback) {
   return fallback;
 }
 
-module.exports = { INTEGRATION_ID, Sub2ApiGatewayIntegration, checkGatewayHealth, emptyInventory, normalizeDownstreamCredential };
+module.exports = {
+  INTEGRATION_ID,
+  Sub2ApiGatewayIntegration,
+  checkGatewayHealth,
+  emptyInventory,
+  normalizeDownstreamCredential
+};
