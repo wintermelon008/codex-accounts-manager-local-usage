@@ -2,7 +2,7 @@
   "name": "codex-accounts-mailbox",
   "displayName": "Codex Accounts Mailbox",
   "description": "Optional provider-neutral mailbox query and manual credential renewal integration for Codex Accounts Manager.",
-  "version": "0.2.2",
+  "version": "0.2.7",
   "publisher": "codex-accounts",
   "license": "MIT",
   "repository": {
@@ -33,7 +33,7 @@
   },
   "scripts": {
     "test": "node --test test/core/*.test.cjs test/mailbox/*.test.cjs test/operations/*.test.cjs test/integration/*.test.cjs test/ui/*.test.cjs",
-    "check": "node -e \"for (const file of ['src/managerApi.cjs','src/core/account.cjs','src/core/codes.cjs','src/core/errors.cjs','src/core/messages.cjs','src/core/provider.cjs','src/core/providers/eight92.cjs','src/core/providers/index.cjs','src/core/index.cjs','src/mailbox/storage.cjs','src/operations/coordinator.cjs','src/operations/index.cjs','src/ui/panel.cjs','src/ui/integration.cjs']) require('./' + file)\"",
+    "check": "node -e \"for (const file of ['src/managerApi.cjs','src/core/account.cjs','src/core/codes.cjs','src/core/errors.cjs','src/core/messages.cjs','src/core/provider.cjs','src/core/providers/eight92.cjs','src/core/providers/boya.cjs','src/core/providers/cdns.cjs','src/core/providers/index.cjs','src/core/index.cjs','src/mailbox/storage.cjs','src/operations/coordinator.cjs','src/operations/index.cjs','src/ui/panel.cjs','src/ui/integration.cjs']) require('./' + file)\"",
     "audit:portability": "node scripts/audit-portability.cjs",
     "package:check": "npm run check && npm run audit:portability && node scripts/check-package.cjs",
     "package": "npm test && npm run package:check && node scripts/prepare-dist.cjs && npx --no-install vsce package --no-dependencies --out dist/codex-accounts-mailbox.vsix"

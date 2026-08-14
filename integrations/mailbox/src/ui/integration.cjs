@@ -1,6 +1,8 @@
 "use strict";
 
 const { Eight92Provider } = require("../core/providers/eight92.cjs");
+const { BoyaProvider } = require("../core/providers/boya.cjs");
+const { CdnsProvider } = require("../core/providers/cdns.cjs");
 const { MailboxProviderRegistry } = require("../core/providers/index.cjs");
 const { MailboxPool } = require("../mailbox/storage.cjs");
 const { MailboxOperationCoordinator } = require("../operations/coordinator.cjs");
@@ -20,7 +22,11 @@ class MailboxIntegration {
     this.context = context;
     this.api = api;
     this.events = new vscode.EventEmitter();
-    this.providerInstances = providers ?? [new Eight92Provider().asProvider()];
+    this.providerInstances = providers ?? [
+      new Eight92Provider().asProvider(),
+      new BoyaProvider().asProvider(),
+      new CdnsProvider().asProvider()
+    ];
     this.providers = new MailboxProviderRegistry(this.providerInstances);
     this.pool = new MailboxPool({ metadataStore: context.globalState, secretStore: context.secrets });
     this.coordinator = new MailboxOperationCoordinator({
@@ -138,13 +144,39 @@ class MailboxIntegration {
         case "query":
           await this.runQuery(message.mailboxId);
           return;
+        case "batchQuery":
+          await this.runQueryMany(message.mailboxIds);
+          return;
         case "wait":
           await this.runWait(message.mailboxId);
+          return;
+        case "batchWait":
+          await this.runWaitMany(message.mailboxIds);
           return;
         case "renewal":
           await this.runRenewal(message.mailboxId);
           return;
+        case "batchRenewal":
+          await this.runRenewalMany(message.mailboxIds);
+          return;
+        case "batchStop": {
+          const mailboxIds = this.requireMailboxIds(message.mailboxIds, "请先选择要停止的邮箱");
+          const stopped = await this.stopMailboxes(mailboxIds);
+          await this.publishPanelState();
+          this.postPanelMessage({
+            type: "toast",
+            level: stopped ? "success" : "warning",
+            action: "batchStop",
+            mailboxIds,
+            message: stopped ? `已停止 ${mailboxIds.length} 个邮箱的操作` : "选中的邮箱没有可停止的操作"
+          });
+          return;
+        }
+        case "batchDelete":
+          await this.deleteMailboxes(message.mailboxIds);
+          return;
         case "stop":
+          {
           const stopped = await this.stopMailbox(message.mailboxId);
           await this.publishPanelState();
           this.postPanelMessage({
@@ -155,6 +187,7 @@ class MailboxIntegration {
             message: stopped ? "邮箱操作已停止" : "没有可停止的邮箱操作"
           });
           return;
+          }
         default:
           throw new Error("Unsupported Mailbox panel action.");
       }
@@ -242,15 +275,33 @@ class MailboxIntegration {
     await this.publishPanelState();
   }
 
+  async runQueryMany(mailboxIds) {
+    const ids = this.requireMailboxIds(mailboxIds, "请先选择要查询的邮箱");
+    void this.runOperation(ids, "query", () => this.coordinator.queryOnce(ids)).catch(() => undefined);
+    await this.publishPanelState();
+  }
+
   async runWait(mailboxId) {
     const id = this.requireSelectedId(mailboxId);
     void this.runOperation(id, "wait", () => this.coordinator.waitForCodes([id], { timeoutMs: 120_000, pollMs: 5_000 })).catch(() => undefined);
     await this.publishPanelState();
   }
 
+  async runWaitMany(mailboxIds) {
+    const ids = this.requireMailboxIds(mailboxIds, "请先选择要监听的邮箱");
+    void this.runOperation(ids, "wait", () => this.coordinator.waitForCodes(ids, { timeoutMs: 120_000, pollMs: 5_000 })).catch(() => undefined);
+    await this.publishPanelState();
+  }
+
   async runRenewal(mailboxId) {
     const id = this.requireSelectedId(mailboxId);
     void this.runOperation(id, "renewal", () => this.coordinator.renew([id])).catch(() => undefined);
+    await this.publishPanelState();
+  }
+
+  async runRenewalMany(mailboxIds) {
+    const ids = this.requireMailboxIds(mailboxIds, "请先选择要续期的邮箱");
+    void this.runOperation(ids, "renewal", () => this.coordinator.renew(ids)).catch(() => undefined);
     await this.publishPanelState();
   }
 
@@ -310,22 +361,26 @@ class MailboxIntegration {
   }
 
   async runOperation(id, kind, operation) {
+    const ids = Array.isArray(id) ? id : [id];
+    const notificationTarget = ids.length === 1 ? { mailboxId: ids[0] } : { mailboxIds: ids };
     try {
       const result = await operation();
       const failed = result.results.filter((entry) => !entry.ok).length;
       if (failed > 0 && !result.stopped) {
+        const firstError = result.results.find((entry) => !entry.ok)?.error;
+        const reason = firstError?.message ? `：${safeError(firstError.message, "")}` : "";
         this.postPanelMessage({
           type: "toast",
           level: "warning",
           action: kind,
-          mailboxId: id,
-          message: `${OPERATION_LABELS[kind]}有 ${failed} 个邮箱失败`
+          ...notificationTarget,
+          message: `${OPERATION_LABELS[kind]}有 ${failed}/${ids.length} 个邮箱失败${reason}`
         });
       }
-      this.postPanelMessage({ type: "operation-complete", action: kind, mailboxId: id });
+      this.postPanelMessage({ type: "operation-complete", action: kind, ...notificationTarget });
       return result;
     } catch (error) {
-      this.postPanelMessage({ type: "toast", level: "error", action: kind, mailboxId: id, message: safeError(error, "Mailbox 操作失败") });
+      this.postPanelMessage({ type: "toast", level: "error", action: kind, ...notificationTarget, message: safeError(error, "Mailbox 操作失败") });
       throw error;
     } finally {
       await this.publishPanelState();
@@ -368,6 +423,44 @@ class MailboxIntegration {
     } while (true);
   }
 
+  async stopMailboxes(ids) {
+    const mailboxIds = this.requireMailboxIds(ids, "请先选择要停止的邮箱");
+    let stopped = false;
+    for (const mailboxId of mailboxIds) {
+      stopped = (await this.stopMailbox(mailboxId)) || stopped;
+    }
+    return stopped;
+  }
+
+  async deleteMailboxes(ids, { action = "batchDelete" } = {}) {
+    const mailboxIds = this.requireMailboxIds(ids, "请先选择要删除的邮箱");
+    for (const mailboxId of mailboxIds) {
+      if (this.coordinator.isActive(mailboxId) || this.codexImports.has(mailboxId)) {
+        const stopped = await this.stopMailbox(mailboxId);
+        if (!stopped && (this.coordinator.isActive(mailboxId) || this.codexImports.has(mailboxId))) {
+          throw new Error("请先停止邮箱当前操作");
+        }
+      }
+    }
+    for (const mailboxId of mailboxIds) {
+      await this.pool.deleteAccount(mailboxId);
+    }
+    if (mailboxIds.includes(this.selectedMailboxId)) {
+      this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
+      await this.context.globalState.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+    }
+    const target = mailboxIds.length === 1 ? { mailboxId: mailboxIds[0] } : { mailboxIds };
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action,
+      ...target,
+      message: `已删除 ${mailboxIds.length} 个邮箱`
+    });
+    await this.publishPanelState();
+    this.publish();
+  }
+
   requireSelectedId(id) {
     const selected = this.requireMailboxId(id || this.selectedMailboxId, "请先在列表中选择一个邮箱");
     this.selectedMailboxId = selected;
@@ -379,6 +472,16 @@ class MailboxIntegration {
       throw new Error(message);
     }
     return id;
+  }
+
+  requireMailboxIds(ids, message = "邮箱不存在") {
+    const candidates = Array.isArray(ids) ? ids : [ids];
+    const known = new Set(this.pool.listMetadata().map((mailbox) => mailbox.id));
+    const normalized = [...new Set(candidates.filter((id) => typeof id === "string" && known.has(id)))];
+    if (normalized.length === 0) {
+      throw new Error(message);
+    }
+    return normalized;
   }
 
   async getPanelState() {
@@ -478,7 +581,7 @@ function sanitizeProvider(provider) {
 function toPanelMailbox(mailbox) {
   // The list receives only identity and summary fields. Full message bodies
   // are fetched from the local detail key for the selected mailbox alone.
-  const { latestMessage: _latestMessage, lastError: _lastError, ...summary } = mailbox;
+  const { latestMessage: _latestMessage, ...summary } = mailbox;
   return summary;
 }
 
