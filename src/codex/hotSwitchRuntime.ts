@@ -754,7 +754,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
   }
 
   private async activateLocalAccount(localAccountId: string): Promise<void> {
-    await this.repo.switchAccount(localAccountId);
+    // RuntimeSwitchCoordinator already owns the shared runtime-switch lease
+    // for the bridge transaction; do not try to acquire the same lease again.
+    await this.repo.switchAccount(localAccountId, { runtimeLeaseHeld: true });
     setCurrentWindowRuntimeAccountId(localAccountId);
   }
 

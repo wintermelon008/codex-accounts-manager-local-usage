@@ -28,6 +28,23 @@ describe("Codex hot-switch runtime setup", () => {
     setCurrentWindowRuntimeAccountId(undefined);
   });
 
+  it("reuses the coordinator-owned lease for bridge-driven local activation", async () => {
+    const switchAccount = vi.fn(async () => undefined);
+    const runtime = new CodexHotSwitchRuntime(
+      {} as vscode.ExtensionContext,
+      { switchAccount } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+
+    await (
+      runtime as unknown as {
+        activateLocalAccount: (localAccountId: string) => Promise<void>;
+      }
+    ).activateLocalAccount("local-b");
+
+    expect(switchAccount).toHaveBeenCalledWith("local-b", { runtimeLeaseHeld: true });
+    expect(getCurrentWindowRuntimeAccountId()).toBe("local-b");
+  });
+
   it("uses the local account identity when workspace identifiers are shared", () => {
     const accounts = [
       {

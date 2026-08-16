@@ -37,7 +37,7 @@ function sleep(ms: number): Promise<void> {
 /**
  * 创建一个异步互斥锁，保证同一 key 的任务串行执行。
  *
- * 用于切号/刷新 token 等需要按账号串行化的场景，避免切号与后台续期并发刷新同一账号 token。
+ * 用于切号等需要按资源串行化的场景，避免共享文件提交相互覆盖。
  */
 export function createKeyedMutex(): {
   runExclusive<T>(key: string, task: () => Promise<T>): Promise<T>;

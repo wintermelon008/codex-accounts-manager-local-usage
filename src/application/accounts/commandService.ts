@@ -227,49 +227,36 @@ export class AccountsCommandService {
       return;
     }
 
-    let returnedFromGateway = false;
     let previousGatewayAccountId: string | undefined;
-    let oauthCommittedWithoutRuntime = false;
     if (!virtualAccount && gatewayRouteActive) {
       previousGatewayAccountId = (await this.repo.listAccounts()).find(
         (candidate) => isSub2ApiAccount(candidate) && candidate.providerActive
       )?.id;
-      const routeResult = await this.hotSwitchRuntime.deactivateGateway();
-      if (routeResult.error) {
-        void vscode.window.showWarningMessage(`Unable to return to ChatGPT Auth: ${routeResult.error}`);
-        return;
-      }
-      if (routeResult.requiresReload) {
-        void vscode.window.showWarningMessage("Returning to ChatGPT Auth requires one runtime reload before switching.");
-        return;
-      }
-      returnedFromGateway = true;
     }
 
     const runtimeOutcome = await this.withProgress<RuntimeAccountSwitchOutcome>(
       copy.progressSwitch(account.email),
       async () => {
-          const outcome = (await this.view.switchRuntimeAccount?.(
-            account.id,
-            returnedFromGateway ? { allowManualWhenSeamlessDisabled: true } : undefined,
-            "manual"
-          )) ?? {
+        const outcome = (await this.view.switchRuntimeAccount?.(
+          account.id,
+          !virtualAccount && gatewayRouteActive ? { allowManualWhenSeamlessDisabled: true } : undefined,
+          "manual"
+        )) ?? {
           status: "unavailable" as const
         };
-        if (outcome.status === "unavailable" && !virtualAccount) {
-          try {
-            await this.repo.switchAccount(account.id);
-            oauthCommittedWithoutRuntime = true;
-          } catch (error) {
-            const restoreError = await this.restoreGatewayProvider(previousGatewayAccountId);
-            throw restoreError ? new Error(`${getErrorMessage(error)}; ${restoreError}`) : error;
-          }
+        if (outcome.status === "unavailable" && !virtualAccount && !gatewayRouteActive) {
+          await this.repo.switchAccount(account.id);
         }
         return outcome;
       }
     );
 
-    if (returnedFromGateway && runtimeOutcome.status !== "switched" && !oauthCommittedWithoutRuntime) {
+    if (
+      gatewayRouteActive &&
+      !virtualAccount &&
+      runtimeOutcome.status !== "switched" &&
+      !this.hotSwitchRuntime.isGatewayActive()
+    ) {
       const restoreError = await this.restoreGatewayProvider(previousGatewayAccountId);
       if (restoreError) {
         void vscode.window.showWarningMessage(restoreError);

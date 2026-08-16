@@ -176,6 +176,72 @@ describe("AccountsRepository token persistence", () => {
     repo.dispose();
   });
 
+  it("serializes account switches across repository instances before committing auth.json", async () => {
+    const accountDefinitions = [
+      { id: "account-a", email: "a@example.com", accountId: "acct_a", isActive: true },
+      { id: "account-b", email: "b@example.com", accountId: "acct_b", isActive: false },
+      { id: "account-c", email: "c@example.com", accountId: "acct_c", isActive: false }
+    ];
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        currentAccountId: "account-a",
+        accounts: accountDefinitions.map((account) => ({ ...account, createdAt: 1, updatedAt: 1 }))
+      }),
+      "utf8"
+    );
+
+    const createContext = (): vscode.ExtensionContext => {
+      const secrets = new Map<string, string>();
+      for (const account of accountDefinitions) {
+        secrets.set(
+          `codex.account.${account.id}`,
+          JSON.stringify(createTokens(account.accountId, account.email))
+        );
+      }
+      return {
+        globalStorageUri: { fsPath: tempDir },
+        secrets: {
+          get: vi.fn(async (key: string) => secrets.get(key)),
+          store: vi.fn(async (key: string, value: string) => {
+            secrets.set(key, value);
+          }),
+          delete: vi.fn(async (key: string) => {
+            secrets.delete(key);
+          })
+        }
+      } as unknown as vscode.ExtensionContext;
+    };
+
+    const firstRepo = new AccountsRepository(createContext());
+    const secondRepo = new AccountsRepository(createContext());
+    let releaseFirstWrite!: () => void;
+    const firstWrite = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    writeAuthFileMock.mockImplementationOnce(async () => firstWrite).mockResolvedValue(undefined);
+
+    const firstSwitch = firstRepo.switchAccount("account-b");
+    await vi.waitFor(() => expect(writeAuthFileMock).toHaveBeenCalledTimes(1));
+
+    const secondSwitch = secondRepo.switchAccount("account-c");
+    await Promise.resolve();
+    expect(writeAuthFileMock).toHaveBeenCalledTimes(1);
+
+    releaseFirstWrite();
+    await expect(Promise.all([firstSwitch, secondSwitch])).resolves.toHaveLength(2);
+    expect(writeAuthFileMock.mock.calls.map(([tokens]) => (tokens as CodexTokens).accountId)).toEqual([
+      "acct_b",
+      "acct_c"
+    ]);
+    expect(JSON.parse(await fs.readFile(path.join(tempDir, "accounts-index.json"), "utf8"))).toMatchObject({
+      currentAccountId: "account-c"
+    });
+
+    firstRepo.dispose();
+    secondRepo.dispose();
+  });
+
   it("syncs active auth.json when quota refresh produces updated tokens", async () => {
     const secrets = new Map<string, string>();
     const context = {

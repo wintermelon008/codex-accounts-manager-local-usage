@@ -107,6 +107,9 @@ import {
 const CACHE_TTL_MS = 5000;
 /** 防抖延迟 (毫秒) */
 const DEBOUNCE_DELAY_MS = 100;
+/** 切换提交使用与运行时事务相同的跨宿主租约。 */
+const ACCOUNT_SWITCH_LEASE_MS = 60_000;
+const ACCOUNT_SWITCH_LEASE_WAIT_MS = 5_000;
 
 const INDEX_FILE = "accounts-index.json";
 const INDEX_TEMP_SUFFIX = ".tmp";
@@ -130,7 +133,7 @@ export class AccountsRepository {
   private readonly secretStore: SecretStore;
   private readonly indexPath: string;
   private readonly state = createAccountsRepositoryState();
-  /** 按账号串行化切号/刷新，避免并发刷新同一账号 token */
+  /** 串行化本宿主内的切换提交，避免不同目标同时改写全局 auth.json */
   private readonly accountMutex = createKeyedMutex();
   /** getTokens 内存缓存，减少 SecretStore/Keychain 重复读取 */
   private readonly tokenCache = new Map<string, TokenCacheEntry>();
@@ -287,11 +290,16 @@ export class AccountsRepository {
     this.invalidateTokenCache();
   }
 
-  async tryAcquireSchedulerLease(name: string, leaseMs: number): Promise<SharedFileLease | undefined> {
+  async tryAcquireSchedulerLease(
+    name: string,
+    leaseMs: number,
+    waitTimeoutMs = 0
+  ): Promise<SharedFileLease | undefined> {
     const safeName = name.trim().replace(/[^a-zA-Z0-9._-]/g, "_") || "scheduler";
     return tryAcquireSharedFileLease(
       path.join(this.context.globalStorageUri.fsPath, `.codex-accounts-${safeName}.lease`),
-      leaseMs
+      leaseMs,
+      waitTimeoutMs
     );
   }
 
@@ -957,14 +965,31 @@ export class AccountsRepository {
    * 切换账号
    *
    * @param accountId - 目标账号 ID
+   * @param options - Runtime bridge 回调在 coordinator 已持有租约时传入此标记
    * @returns 切换后的账号记录
    */
-  async switchAccount(accountId: string): Promise<CodexAccountRecord> {
-    // 按账号串行化，避免切号与后台续期并发刷新同一账号 token
-    return this.accountMutex.runExclusive(accountId, () => this.switchAccountLocked(accountId));
+  async switchAccount(accountId: string, options: { runtimeLeaseHeld?: boolean } = {}): Promise<CodexAccountRecord> {
+    // 切换会共同改写全局 auth.json、当前账号镜像和索引，不能按目标账号分片串行化。
+    return this.accountMutex.runExclusive("switch", async () => {
+      const lease = options.runtimeLeaseHeld
+        ? undefined
+        : await this.tryAcquireSchedulerLease("runtime-switch", ACCOUNT_SWITCH_LEASE_MS, ACCOUNT_SWITCH_LEASE_WAIT_MS);
+      if (!options.runtimeLeaseHeld && !lease) {
+        throw new StorageError("Another account switch is in progress; try again shortly.", {
+          code: ErrorCode.STORAGE_WRITE_FAILED
+        });
+      }
+
+      try {
+        return await this.switchAccountLocked(accountId);
+      } finally {
+        await lease?.release();
+      }
+    });
   }
 
   private async switchAccountLocked(accountId: string): Promise<CodexAccountRecord> {
+    this.invalidateExternalStateCaches();
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
 
@@ -1014,6 +1039,7 @@ export class AccountsRepository {
     await mirrorAideckCodexAccount(nextAccount, effectiveTokens);
     await mirrorAideckCurrentAccount(accountId);
     this.writeIndex(index);
+    await this.flushPendingSave();
 
     return nextAccount;
   }
