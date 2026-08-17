@@ -1,0 +1,6 @@
+dist/**
+test/**
+scripts/**
+node_modules/**
+*.vsix
+*.log

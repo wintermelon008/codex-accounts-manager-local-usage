@@ -22,7 +22,7 @@ import {
   resolveOverviewAccount
 } from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
-import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon, MailIcon } from "./icons";
+import { BellIcon, BugTeamIcon, EyeIcon, EyeOffIcon, GitHubIcon, GlobeIcon, InfoIcon, MailIcon } from "./icons";
 import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
 import { SavedAccountCard } from "./savedAccountCard";
 import { LocalUsageSection } from "./localUsageSection";
@@ -228,8 +228,15 @@ function App() {
   const setAccountGroupPending = isActionPending("setAccountGroup");
   const localUsageRefreshPending = isActionPending("refreshLocalUsage");
   const integrationActionPending = isActionPending("integrationAction");
-  const mailboxIntegration = snapshot.integrations?.find((integration) => integration.id === "mailbox");
-  const mailboxOpenAction = mailboxIntegration?.actions.find((action) => action.id === "open");
+  const topButtonIntegrations = (snapshot.integrations ?? []).flatMap((integration) => {
+    const topButton =
+      integration.topButton ??
+      (integration.id === "mailbox"
+        ? { actionId: "open", label: "Mailbox", tooltip: "打开独立 Mailbox 面板", icon: "mail" as const }
+        : undefined);
+    const action = topButton ? integration.actions.find((candidate) => candidate.id === topButton.actionId) : undefined;
+    return action && topButton ? [{ integration, topButton, action }] : [];
+  });
   const invalidAccountCount = snapshot.accounts.filter(
     (account) =>
       !account.dismissedHealth &&
@@ -394,27 +401,28 @@ function App() {
                   {resolveAboutTitle(snapshot.lang)}
                 </span>
               </button>
-              {mailboxIntegration && mailboxOpenAction ? (
+              {topButtonIntegrations.map(({ integration, topButton, action }) => (
                 <ActionButton
-                  class="settings-btn mailbox-open-btn"
-                  icon={<MailIcon />}
+                  key={integration.id}
+                  class="settings-btn integration-top-button"
+                  icon={renderIntegrationTopButtonIcon(topButton.icon)}
                   iconOnly
-                  label="Mailbox"
+                  label={topButton.label}
                   pending={integrationActionPending}
                   disabled={
                     hasGlobalPendingAction ||
-                    mailboxOpenAction.enabled === false ||
+                    action.enabled === false ||
                     snapshot.indexHealth.status === "corrupted_unrecoverable"
                   }
-                  tooltip={mailboxOpenAction.tooltip}
+                  tooltip={topButton.tooltip ?? action.tooltip}
                   onClick={() =>
                     sendAction("integrationAction", undefined, {
-                      integrationId: mailboxIntegration.id,
-                      integrationActionId: mailboxOpenAction.id
+                      integrationId: integration.id,
+                      integrationActionId: action.id
                     })
                   }
                 />
-              ) : null}
+              ))}
             </div>
           </div>
           <OverviewSection
@@ -662,7 +670,9 @@ function App() {
           </section>
         ) : null}
         <IntegrationCards
-          integrations={(snapshot.integrations ?? []).filter((integration) => integration.id !== "mailbox")}
+          integrations={(snapshot.integrations ?? []).filter(
+            (integration) => !topButtonIntegrations.some((item) => item.integration.id === integration.id)
+          )}
           busy={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
           actionPending={integrationActionPending}
           onAction={(integrationId, integrationActionId) =>
@@ -770,6 +780,16 @@ function App() {
       />
     </>
   );
+}
+
+function renderIntegrationTopButtonIcon(icon: "mail" | "bugteam" | "default" | undefined) {
+  if (icon === "mail") {
+    return <MailIcon />;
+  }
+  if (icon === "bugteam") {
+    return <BugTeamIcon />;
+  }
+  return <GlobeIcon />;
 }
 
 function resolveAboutTitle(lang: string): string {

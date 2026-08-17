@@ -78,6 +78,12 @@ class MailboxIntegration {
       title: "Mailbox",
       status: this.loadError ? "error" : "ready",
       statusMessage: this.loadError ? this.loadError : "独立邮箱面板",
+      topButton: {
+        actionId: "open",
+        label: "Mailbox",
+        tooltip: "打开独立 Mailbox 面板",
+        icon: "mail"
+      },
       actions: [
         { id: "open", label: "Mailbox", enabled: !this.loadError, tone: "primary", tooltip: "打开独立 Mailbox 面板" }
       ]

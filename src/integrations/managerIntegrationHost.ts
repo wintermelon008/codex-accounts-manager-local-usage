@@ -6,7 +6,7 @@ import type {
   DashboardIntegrationViewModel,
   DashboardProviderAccountCardViewModel
 } from "../domain/dashboard/types";
-import type { CodexVirtualRouteDescriptor } from "../core/types";
+import type { CodexVirtualRouteDescriptor, SharedCodexAccountJson } from "../core/types";
 
 const INTEGRATION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 export const MANAGER_INTEGRATION_API_VERSION = 1 as const;
@@ -87,10 +87,25 @@ export type OAuthAccountImportResult = {
   quotaError?: string;
 };
 
+export type BalancePoolImportResult = {
+  status: "completed" | "partial" | "failed";
+  total: number;
+  imported: number;
+  poolEnabled: number;
+  refreshFailed: number;
+  notEligible: number;
+  authFailed: number;
+  importFailed: number;
+};
+
 export type AccountImportOperations = {
   getManagedAccountEmails: () => Promise<readonly string[]>;
   startOAuthAccountImport: (options?: OAuthAccountImportOptions) => Promise<OAuthAccountImportResult>;
   cancelOAuthAccountImport?: (operationId: string) => void;
+  /** Controlled credential-bearing handoff for trusted local integrations. */
+  importSharedAccountsToBalancePool?: (
+    input: SharedCodexAccountJson | SharedCodexAccountJson[]
+  ) => Promise<BalancePoolImportResult>;
 };
 
 export type CodexAccountsIntegrationApi = {
@@ -104,6 +119,10 @@ export type CodexAccountsIntegrationApi = {
   startOAuthAccountImport?: (options?: OAuthAccountImportOptions) => Promise<OAuthAccountImportResult>;
   /** Optional cancellation for an in-flight direct OAuth handoff. */
   cancelOAuthAccountImport?: (operationId: string) => void;
+  /** Optional controlled handoff that quarantines, validates, and enables pool accounts. */
+  importSharedAccountsToBalancePool?: (
+    input: SharedCodexAccountJson | SharedCodexAccountJson[]
+  ) => Promise<BalancePoolImportResult>;
 };
 
 type GatewayRuntimeOperations = {
@@ -136,7 +155,8 @@ type GatewayRuntimeLeaseState = {
  * The only Manager surface available to optional integrations. It deliberately
  * does not expose extension storage, account tokens, settings, workspace
  * paths, or any provider-specific controller. Optional account-import helpers
- * expose only sanitized mailbox matching and a controlled OAuth handoff.
+ * expose only sanitized mailbox matching, a controlled OAuth handoff, and a
+ * quarantined credential-bearing shared-account import that validates live quota before pool enrollment.
  */
 export class ManagerIntegrationHost implements vscode.Disposable {
   readonly api: CodexAccountsIntegrationApi;
@@ -167,6 +187,12 @@ export class ManagerIntegrationHost implements vscode.Disposable {
             startOAuthAccountImport: (options?: OAuthAccountImportOptions) => this.startOAuthAccountImport(options),
             ...(this.accountImportOperations.cancelOAuthAccountImport
               ? { cancelOAuthAccountImport: (operationId: string) => this.cancelOAuthAccountImport(operationId) }
+              : {}),
+            ...(this.accountImportOperations.importSharedAccountsToBalancePool
+              ? {
+                  importSharedAccountsToBalancePool: (input: SharedCodexAccountJson | SharedCodexAccountJson[]) =>
+                    this.importSharedAccountsToBalancePool(input)
+                }
               : {})
           }
         : {})
@@ -192,6 +218,19 @@ export class ManagerIntegrationHost implements vscode.Disposable {
   cancelOAuthAccountImport(operationId: string): void {
     this.throwIfDisposed();
     this.accountImportOperations?.cancelOAuthAccountImport?.(operationId);
+  }
+
+  async importSharedAccountsToBalancePool(
+    input: SharedCodexAccountJson | SharedCodexAccountJson[]
+  ): Promise<BalancePoolImportResult> {
+    this.throwIfDisposed();
+    const importer = this.accountImportOperations?.importSharedAccountsToBalancePool;
+    if (!importer) {
+      throw new Error("Balance-pool account import is unavailable in this Manager build");
+    }
+    const result = await importer(input);
+    this.fireDidChange();
+    return result;
   }
 
   onDidChange(listener: () => void): vscode.Disposable {

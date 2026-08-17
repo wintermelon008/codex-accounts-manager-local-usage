@@ -16,7 +16,11 @@ import { AccountsRepository } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
 import { registerDebugOutput, t } from "../../utils";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
-import { isSub2ApiAccount } from "../../core/types";
+import { isSub2ApiAccount, type SharedCodexAccountJson } from "../../core/types";
+import {
+  importSharedAccountsIntoBalancePool,
+  type BalancePoolImportSummary
+} from "../../application/accounts/importIntoBalancePool";
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState, resetSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
 import { LocalImportInbox } from "./localImportInbox";
@@ -94,7 +98,8 @@ export class AccountsWorkbench {
           ];
         },
         startOAuthAccountImport: (options) => this.startOAuthAccountImport(options),
-        cancelOAuthAccountImport: (operationId) => this.cancelOAuthAccountImport(operationId)
+        cancelOAuthAccountImport: (operationId) => this.cancelOAuthAccountImport(operationId),
+        importSharedAccountsToBalancePool: (input) => this.importSharedAccountsToBalancePool(input)
       }
     );
     this.localImportInbox = isLocalImportInboxEnabled()
@@ -303,6 +308,15 @@ export class AccountsWorkbench {
     source.cancel();
     source.dispose();
     this.oauthImportCancellationSources.delete(normalizedId);
+  }
+
+  private async importSharedAccountsToBalancePool(
+    input: SharedCodexAccountJson | SharedCodexAccountJson[]
+  ): Promise<BalancePoolImportSummary> {
+    const result = await importSharedAccountsIntoBalancePool(this.repo, input);
+    void this.statusBar.refresh();
+    void refreshQuotaSummaryPanel();
+    return result;
   }
 
   private async fallbackGatewayToChatGpt(): Promise<RuntimeAccountSwitchOutcome> {

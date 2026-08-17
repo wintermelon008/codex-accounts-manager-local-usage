@@ -1,11 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { refreshImportedAccountQuota } from "../../application/accounts/quota";
-import { getBalanceQuotaCapability } from "../../application/accounts/balanceScheduler";
-import type { CodexAccountRecord, SharedCodexAccountJson } from "../../core/types";
-import { getQuotaIssueKind } from "../../utils/quotaIssue";
+import type { SharedCodexAccountJson } from "../../core/types";
 import type { AccountsRepository } from "../../storage";
+import { importSharedAccountsIntoBalancePool } from "../../application/accounts/importIntoBalancePool";
 
 export const LOCAL_IMPORT_POLL_INTERVAL_MS = 3_000;
 const LOCAL_IMPORT_LEASE_MS = 2 * 60 * 1000;
@@ -191,67 +189,19 @@ export class LocalImportInbox {
   }
 
   private async importAccounts(job: LocalImportJob): Promise<LocalImportResult> {
-    let imported = 0;
-    let poolEnabled = 0;
-    let refreshFailed = 0;
-    let notEligible = 0;
-    let authFailed = 0;
-    let importFailed = 0;
-
-    for (const entry of job.accounts) {
-      let account: CodexAccountRecord;
-      try {
-        const accounts = await this.repo.importSharedAccountsForLocalInbox(entry);
-        const importedAccount = accounts[0];
-        if (!importedAccount) {
-          throw new Error("empty import result");
-        }
-        account = importedAccount;
-        imported += 1;
-      } catch {
-        importFailed += 1;
-        continue;
-      }
-
-      try {
-        const refresh = await refreshImportedAccountQuota(this.repo, account.id);
-        const updated = await this.repo.getAccount(account.id);
-        const eligible = !refresh.error && updated ? getBalanceQuotaCapability(updated) !== "unknown" : false;
-        await this.repo.setBalancePoolMembership(account.id, eligible);
-        if (eligible) {
-          poolEnabled += 1;
-        } else if (refresh.error) {
-          refreshFailed += 1;
-          if (getQuotaIssueKind(refresh.error) === "auth") {
-            authFailed += 1;
-          }
-        } else {
-          notEligible += 1;
-        }
-      } catch {
-        await this.repo.setBalancePoolMembership(account.id, false).catch(() => undefined);
-        refreshFailed += 1;
-      }
-    }
-
-    const status =
-      imported === 0
-        ? "failed"
-        : imported === job.accounts.length && poolEnabled === imported
-          ? "completed"
-          : "partial";
+    const summary = await importSharedAccountsIntoBalancePool(this.repo, job.accounts);
     return {
       schema: IMPORT_RESULT_SCHEMA,
       id: job.id,
-      status,
+      status: summary.status,
       processed_at: new Date().toISOString(),
-      total: job.accounts.length,
-      imported,
-      pool_enabled: poolEnabled,
-      refresh_failed: refreshFailed,
-      not_eligible: notEligible,
-      auth_failed: authFailed,
-      import_failed: importFailed
+      total: summary.total,
+      imported: summary.imported,
+      pool_enabled: summary.poolEnabled,
+      refresh_failed: summary.refreshFailed,
+      not_eligible: summary.notEligible,
+      auth_failed: summary.authFailed,
+      import_failed: summary.importFailed
     };
   }
 }

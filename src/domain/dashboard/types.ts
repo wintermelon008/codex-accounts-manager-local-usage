@@ -556,6 +556,15 @@ export interface DashboardIntegrationViewModel {
   details?: DashboardIntegrationDetail[];
   metrics?: DashboardIntegrationMetric[];
   actions: DashboardIntegrationAction[];
+  /** Optional compact action rendered in the Dashboard hero toolbar. */
+  topButton?: DashboardIntegrationTopButton;
+}
+
+export interface DashboardIntegrationTopButton {
+  actionId: string;
+  label: string;
+  tooltip?: string;
+  icon?: "mail" | "bugteam" | "default";
 }
 
 export interface DashboardIntegrationDetail {

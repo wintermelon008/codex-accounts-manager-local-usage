@@ -1,0 +1,22 @@
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "..");
+const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+if (packageJson.main !== "./src/extension.cjs") {
+  throw new Error("BugTeam package main must remain the optional extension entry");
+}
+if (!packageJson.activationEvents?.includes("onStartupFinished")) {
+  throw new Error("BugTeam package must activate only as an optional startup integration");
+}
+if (packageJson.dependencies && Object.keys(packageJson.dependencies).length > 0) {
+  throw new Error("BugTeam package must not ship runtime dependencies");
+}
+for (const file of ["README.md", ".vscodeignore", "src/extension.cjs"]) {
+  if (!fs.existsSync(path.join(root, file))) {
+    throw new Error(`BugTeam package is missing ${file}`);
+  }
+}
+process.stdout.write("BugTeam package shape passed\n");

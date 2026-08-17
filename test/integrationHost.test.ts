@@ -11,10 +11,21 @@ describe("ManagerIntegrationHost", () => {
       quotaRefreshed: true
     }));
     const cancelOAuthAccountImport = vi.fn();
+    const importSharedAccountsToBalancePool = vi.fn(async () => ({
+      status: "completed" as const,
+      total: 1,
+      imported: 1,
+      poolEnabled: 1,
+      refreshFailed: 0,
+      notEligible: 0,
+      authFailed: 0,
+      importFailed: 0
+    }));
     const host = new ManagerIntegrationHost(gateway.operations, undefined, {
       getManagedAccountEmails,
       startOAuthAccountImport,
-      cancelOAuthAccountImport
+      cancelOAuthAccountImport,
+      importSharedAccountsToBalancePool
     });
 
     await expect(host.api.getManagedAccountEmails?.()).resolves.toEqual(["linked@example.com"]);
@@ -26,6 +37,16 @@ describe("ManagerIntegrationHost", () => {
     expect(startOAuthAccountImport).toHaveBeenCalledWith({ expectedEmail: "mailbox@example.com" });
     host.api.cancelOAuthAccountImport?.("mailbox-operation-1");
     expect(cancelOAuthAccountImport).toHaveBeenCalledWith("mailbox-operation-1");
+    await expect(
+      host.api.importSharedAccountsToBalancePool?.({
+        account_id: "account-1",
+        tokens: { id_token: "id-token", access_token: "access-token" }
+      })
+    ).resolves.toMatchObject({ status: "completed", poolEnabled: 1 });
+    expect(importSharedAccountsToBalancePool).toHaveBeenCalledWith({
+      account_id: "account-1",
+      tokens: { id_token: "id-token", access_token: "access-token" }
+    });
     host.dispose();
   });
 

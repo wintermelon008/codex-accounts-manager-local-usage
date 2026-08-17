@@ -45,6 +45,7 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 - [Feishu private-chat M+/S+ import package](docs/integrations/feishu-private-import.md): accepts only administrator one-to-one text messages. M+ writes to Manager's explicit local inbox; S+ writes only to a separate private queue.
 - [Standalone Sub2API Gateway and S+ importer](docs/integrations/sub2api-gateway.md): the Gateway VSIX, administrative importer, and core Manager install and stop independently; the Gateway appears as a manual-only saved virtual account with card-local actions and tracker usage, but never becomes an OAuth account or normal pool member.
+- [BugTeam one-hour account integration](docs/integrations/bugteam.md): a standalone VSIX shows balance, products, current pickup shelves, and explicit purchase/reservation actions; completed Sub2 JSON is imported and eligible accounts are enabled in the seamless pool without switching the current account.
 
 ## Install and update
 
@@ -69,7 +70,17 @@ npm run package
 
 `npm run package` runs the portability audit, compiles the extension, and produces a `.vsix`. The detailed documentation is bundled in the VSIX, so the relative links in this README work after installation.
 
-Optional packages are not bundled in the core VSIX. Build and configure `integrations/feishu-private-import`, `integrations/sub2api-gateway`, or `integrations/sub2api-importer` from their own READMEs; none copies existing services, credentials, accounts, or machine paths automatically.
+Optional components are built separately:
+
+```bash
+npm --prefix integrations/feishu-private-import run package
+npm --prefix integrations/sub2api-gateway run package
+npm --prefix integrations/mailbox run package
+npm --prefix integrations/bugteam run package
+npm --prefix integrations/sub2api-importer run package
+```
+
+Optional packages are not bundled in the core VSIX. Build and configure `integrations/feishu-private-import`, `integrations/sub2api-gateway`, `integrations/mailbox`, `integrations/bugteam`, or `integrations/sub2api-importer` from their own READMEs; none copies existing services, credentials, accounts, or machine paths automatically.
 
 ### Use the upstream Marketplace build
 
@@ -80,6 +91,7 @@ If you only need upstream core account management, search the Extensions view fo
 - [Seamless switching, quota bands, and thresholds](docs/HOT_SWITCH.md)
 - [Standalone Sub2API Gateway, S+ importer, and migration](docs/integrations/sub2api-gateway.md)
 - [Feishu private-chat M+/S+ importer](docs/integrations/feishu-private-import.md)
+- [BugTeam one-hour account integration](docs/integrations/bugteam.md)
 - [Independent delivery, disablement, and migration](docs/integrations/README.md)
 - [Core local text import inbox](docs/LOCAL_IMPORT_INBOX.md)
 - [Changelog](docs/CHANGELOG.md)
