@@ -225,6 +225,22 @@ export function MailIcon() {
   );
 }
 
+export function BugTeamIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M8 8.5A4 4 0 0 1 12 5a4 4 0 0 1 4 3.5v5a4 4 0 0 1-4 4 4 4 0 0 1-4-4v-5Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+      />
+      <path d="M5 10h3M16 10h3M5 14h3M16 14h3M10 5 9 3M14 5l1-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <circle cx="10.5" cy="11.5" r=".8" fill="currentColor" />
+      <circle cx="13.5" cy="11.5" r=".8" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function GlobeIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">

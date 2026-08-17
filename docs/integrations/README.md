@@ -8,6 +8,7 @@
 | 飞书私聊 M+/S+ 机器人 | `feishu-private-import` tarball | 由用户提供私有飞书应用配置后启动；只接受管理员一对一文本 | 停止机器人进程或服务，再卸载其 Node 包；不会删除 Manager、Gateway 或远端服务数据 |
 | Sub2API Gateway | 独立 Gateway VSIX | 安装后从已保存账号中的 Sub2API 卡片配置、保存密钥并选择 Gateway；设置中会出现动态卡片显示开关 | 先在账号卡片切回 ChatGPT Auth，再卸载 Gateway VSIX |
 | Mailbox | `integrations/mailbox` 独立 VSIX | 用户在导入时选择邮箱 provider 后，从 Mailbox 面板手动查询、启动验证码监听或人工续期 | 先停止邮箱操作，再卸载可选 VSIX；不影响 Manager 账号和 Sub2API |
+| BugTeam | `integrations/bugteam` 独立 VSIX | 用户在 BugTeam 面板保存 API Token，查看余额、1h 商品和当前发车货架；可明确选择档位购买或创建候补订单，完成后自动导入并启用符合条件的无感池账号 | 先完成或确认候补订单，在面板清除本地 Token，再卸载可选 VSIX；不会自动切换当前账号 |
 | S+ 导入器 | `sub2api-importer` tarball | 用户提供私有管理端配置后启动队列消费者；新账号按独立包策略配置代理、分组、并发与模型映射 | 停止消费者，再卸载其 Node 包；未消费任务不会被 Manager 自动处理 |
 
 从源码构建全部产物：
@@ -17,6 +18,7 @@ npm run package
 npm --prefix integrations/feishu-private-import run package
 npm --prefix integrations/sub2api-gateway run package
 npm --prefix integrations/mailbox run package
+npm --prefix integrations/bugteam run package
 npm --prefix integrations/sub2api-importer run package
 ```
 

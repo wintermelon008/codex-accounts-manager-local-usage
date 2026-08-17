@@ -450,6 +450,26 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   border-color: var(--border-accent);
   background: rgba(56, 139, 253, 0.12);
 }
+.integration-top-button {
+  color: var(--text-primary);
+  border-color: var(--border-accent);
+  background: rgba(56, 139, 253, 0.12);
+}
+.hero-settings .integration-top-button.action-btn.icon-only {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 10px;
+}
+.hero-settings .integration-top-button .button-icon,
+.hero-settings .integration-top-button .button-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.integration-top-button:hover:not(:disabled),
+.integration-top-button:focus-visible {
+  background: rgba(56, 139, 253, 0.2);
+}
 .hero-settings .mailbox-open-btn.action-btn.icon-only {
   width: 32px;
   height: 32px;
