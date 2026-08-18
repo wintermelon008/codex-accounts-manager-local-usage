@@ -20,7 +20,7 @@ This table applies only to local builds from this repository.
 
 | Category               | Feature                                                                                                               | What is required                                                                                                                                                                                                            |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ready after install    | Multi-account OAuth/import, quota cards, manual quota-countdown start, switching, details, backup/restore, status bar, and cross-window sync | Import an account. The starter appears only while a server-reported quota window has not started (for example, a five-hour, seven-day, or thirty-day window).                                                                                                    |
+| Ready after install    | Multi-account OAuth/import, quota cards, per-account import JSON copy, manual quota-countdown start, switching, details, backup/restore, status bar, and cross-window sync | Import an account. Each real Codex account card can copy Manager-compatible import JSON; the starter appears only while a server-reported quota window has not started.                                                                                                    |
 | Ready after install    | Local Codex token usage, six time categories, and multi-select Free/Plus/Pro filters                                 | Local sessions and imported accounts make the relevant views available. The usage view reads metadata only, never conversation bodies.                                                                                      |
 | Opt-in settings        | Upstream Auto Switch, quota warnings, timed quota refresh, and Codex App restart                                      | Enable the relevant Dashboard setting. No automatic switch is enabled by default.                                                                                                                                           |
 | One-time bundled setup | Experimental seamless switching and quota bands                                                                       | On Linux/macOS, run the install command, reload once, then prepare at least two fresh accounts and configure their pool. Windows is not supported yet.                                                                      |
@@ -45,7 +45,7 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 - [Feishu private-chat M+/S+ import package](docs/integrations/feishu-private-import.md): accepts only administrator one-to-one text messages. M+ writes to Manager's explicit local inbox; S+ writes only to a separate private queue.
 - [Standalone Sub2API Gateway and S+ importer](docs/integrations/sub2api-gateway.md): the Gateway VSIX, administrative importer, and core Manager install and stop independently; the Gateway appears as a manual-only saved virtual account with card-local actions and tracker usage, but never becomes an OAuth account or normal pool member.
-- [BugTeam one-hour account integration](docs/integrations/bugteam.md): a standalone VSIX shows balance, products, current pickup shelves, and explicit purchase/reservation actions; completed Sub2 JSON is imported and eligible accounts are enabled in the seamless pool without switching the current account.
+- [Multi-source BugTeam account integration](docs/integrations/bugteam.md): a standalone VSIX keeps the official BugTeam API and the Tingbai storefront in separate source cards, supports server-side or local stock waitlists, and imports completed Sub2 deliveries into the seamless pool without switching the current account.
 
 ## Install and update
 
@@ -91,7 +91,7 @@ If you only need upstream core account management, search the Extensions view fo
 - [Seamless switching, quota bands, and thresholds](docs/HOT_SWITCH.md)
 - [Standalone Sub2API Gateway, S+ importer, and migration](docs/integrations/sub2api-gateway.md)
 - [Feishu private-chat M+/S+ importer](docs/integrations/feishu-private-import.md)
-- [BugTeam one-hour account integration](docs/integrations/bugteam.md)
+- [Multi-source BugTeam account integration](docs/integrations/bugteam.md)
 - [Independent delivery, disablement, and migration](docs/integrations/README.md)
 - [Core local text import inbox](docs/LOCAL_IMPORT_INBOX.md)
 - [Changelog](docs/CHANGELOG.md)

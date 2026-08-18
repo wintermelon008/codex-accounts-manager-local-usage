@@ -26,7 +26,8 @@ vi.mock("vscode", () => ({
   window: {
     showOpenDialog: vi.fn(),
     showWarningMessage: vi.fn(),
-    showInformationMessage: vi.fn()
+    showInformationMessage: vi.fn(),
+    showErrorMessage: vi.fn()
   },
   ConfigurationTarget: {
     Global: 1,

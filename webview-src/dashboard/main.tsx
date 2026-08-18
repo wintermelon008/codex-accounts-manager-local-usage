@@ -615,6 +615,8 @@ function App() {
                   reauthorizePending={isActionPending("reauthorize", account.id)}
                   resyncProfilePending={isActionPending("resyncProfile", account.id)}
                   refreshPending={isActionPending("refresh", account.id)}
+                  copyImportJsonPending={isActionPending("copyAccountImportJson", account.id)}
+                  copyImportJsonSucceeded={modals.copyFeedbackKey === `account-import-json:${account.id}`}
                   quotaCountdownStartPending={isActionPending("startQuotaCountdown", account.id)}
                   detailsPending={isActionPending("details", account.id)}
                   removePending={isActionPending("remove", account.id)}

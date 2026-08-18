@@ -1,8 +1,8 @@
 {
   "name": "codex-accounts-bugteam",
   "displayName": "Codex Accounts BugTeam",
-  "description": "Optional BugTeam one-hour account purchase and balance-pool import integration for Codex Accounts Manager.",
-  "version": "0.1.0",
+  "description": "Optional multi-source BugTeam purchase, waitlist, and balance-pool import integration for Codex Accounts Manager.",
+  "version": "0.1.1",
   "publisher": "codex-accounts",
   "license": "MIT",
   "repository": {
@@ -33,7 +33,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.cjs",
-    "check": "node --check src/extension.cjs && node -e \"for (const file of ['src/managerApi.cjs','src/api/client.cjs','src/core/product.cjs','src/core/sub2.cjs','src/storage.cjs','src/ui/panel.cjs','src/ui/integration.cjs']) require('./' + file)\"",
+    "check": "node --check src/extension.cjs && node -e \"for (const file of ['src/managerApi.cjs','src/api/client.cjs','src/api/tingbaiClient.cjs','src/core/product.cjs','src/core/sub2.cjs','src/storage.cjs','src/tingbaiSource.cjs','src/ui/panel.cjs','src/ui/integration.cjs']) require('./' + file)\"",
     "audit:portability": "node scripts/audit-portability.cjs",
     "package:check": "npm run check && npm run audit:portability && node scripts/check-package.cjs",
     "package": "npm test && npm run package:check && node scripts/prepare-dist.cjs && npx --no-install vsce package --no-dependencies --out dist/codex-accounts-bugteam.vsix"

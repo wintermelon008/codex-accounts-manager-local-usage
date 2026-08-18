@@ -74,6 +74,98 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
+  it("copies one saved account as Manager-importable JSON without returning tokens to the Webview", async () => {
+    const writeText = vi.mocked(vscode.env.clipboard.writeText);
+    writeText.mockClear();
+    const account = {
+      id: "account-copy",
+      email: "copy@example.com",
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const shared = [
+      {
+        id: account.id,
+        email: account.email,
+        tokens: {
+          id_token: "secret-id-token",
+          access_token: "secret-access-token",
+          refresh_token: "secret-refresh-token"
+        },
+        created_at: 1,
+        last_used: 1
+      }
+    ];
+    const exportSharedAccounts = vi.fn().mockResolvedValue(shared);
+    const repo = {
+      getAccount: vi.fn().mockResolvedValue(account),
+      exportSharedAccounts
+    } as unknown as DashboardActionContext["repo"];
+
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo,
+        resolveLanguage: () => "zh",
+        schedulePublishState: vi.fn(),
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "copyAccountImportJson",
+        requestId: "req-copy-account-json",
+        accountId: account.id
+      }
+    );
+
+    expect(exportSharedAccounts).toHaveBeenCalledWith([account.id]);
+    expect(writeText).toHaveBeenCalledWith(JSON.stringify(shared, null, 2));
+    expect(result.status).toBe("completed");
+    expect(result.payload).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("secret-access-token");
+  });
+
+  it("does not offer export credentials for a manual virtual account", async () => {
+    const writeText = vi.mocked(vscode.env.clipboard.writeText);
+    writeText.mockClear();
+    const exportSharedAccounts = vi.fn();
+    const repo = {
+      getAccount: vi.fn().mockResolvedValue({
+        id: "gateway-account",
+        email: "gateway@example.com",
+        accountKind: "sub2api",
+        manualOnly: true
+      }),
+      exportSharedAccounts
+    } as unknown as DashboardActionContext["repo"];
+
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo,
+        resolveLanguage: () => "zh",
+        schedulePublishState: vi.fn(),
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "copyAccountImportJson",
+        requestId: "req-copy-virtual-json",
+        accountId: "gateway-account"
+      }
+    );
+
+    expect(result.status).toBe("failed");
+    expect(exportSharedAccounts).not.toHaveBeenCalled();
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
   it("resets seamless-switch runtime state through the registered command", async () => {
     const executeCommandMock = vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
     const publishState = vi.fn().mockResolvedValue(undefined);

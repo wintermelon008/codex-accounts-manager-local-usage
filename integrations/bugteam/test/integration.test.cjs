@@ -68,6 +68,55 @@ test("BugTeam submits a selected dispatch shelf and shows a success toast", asyn
   assert.equal(creates[0].expiryBucketStart, bucketStart);
   assert.equal(integration.getPanelState().shelves[0].available, 2);
   assert.ok(vscode.panels[0].webview.messages.some((message) => message.type === "toast" && message.level === "success"));
+  assert.ok(vscode.panels[0].webview.messages.some((message) => message.type === "actionResult" && message.action === "purchaseShelf" && message.level === "success"));
+  integration.dispose();
+});
+
+test("Tingbai credential validation publishes state without losing the final button result", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const clientFactory = () => ({
+    authenticated: false,
+    async login(username) {
+      this.authenticated = true;
+      return { csrf_token: "csrf", buyer: { username, balance_fen: 900, currency: "CNY" } };
+    },
+    async getCatalog() {
+      return { products: [{ code: "team-7d", name: "Team 7D", unit_price_fen: 300, available: 0 }] };
+    },
+    async getWallet() {
+      return { buyer: { username: "buyer-one", balance_fen: 900, currency: "CNY" } };
+    }
+  });
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async importSharedAccountsToBalancePool() { return {}; }
+  };
+  const integration = new BugTeamIntegration(vscode, context, api, { tingbaiClientFactory: clientFactory });
+
+  await integration.initialize();
+  await integration.openPanel();
+  await vscode.panels[0].webview.emit({
+    type: "bugteam:action",
+    action: "tingbaiSetCredentials",
+    username: "buyer-one",
+    password: "password-one"
+  });
+
+  assert.equal(integration.getPanelState().tingbai.credentialsConfigured, true);
+  assert.ok(vscode.panels[0].webview.messages.some((message) => message.type === "state" && message.state.tingbai.credentialsConfigured));
+  assert.ok(vscode.panels[0].webview.messages.some((message) => message.type === "actionResult" && message.action === "tingbaiSetCredentials" && message.level === "success"));
+
+  await vscode.panels[0].webview.emit({
+    type: "bugteam:action",
+    action: "tingbaiStartWaitlist",
+    minTotalFen: 300,
+    maxTotalFen: 450
+  });
+
+  assert.equal(integration.getPanelState().tingbai.waitlist.minTotalFen, 300);
+  assert.equal(integration.getPanelState().tingbai.waitlist.maxTotalFen, 450);
+  assert.ok(vscode.panels[0].webview.messages.some((message) => message.type === "actionResult" && message.action === "tingbaiStartWaitlist" && message.level === "success"));
   integration.dispose();
 });
 
@@ -103,7 +152,26 @@ test("BugTeam creates one idempotent order, downloads Sub2, and imports the acco
     },
     async importSharedAccountsToBalancePool(accounts) {
       calls.imports.push(accounts);
-      return { status: "completed", total: accounts.length, imported: accounts.length, poolEnabled: accounts.length, refreshFailed: 0, notEligible: 0, authFailed: 0, importFailed: 0 };
+      return {
+        status: "completed",
+        total: accounts.length,
+        imported: accounts.length,
+        poolEnabled: accounts.length,
+        refreshFailed: 0,
+        notEligible: 0,
+        authFailed: 0,
+        importFailed: 0,
+        accounts: [{
+          accountId: "account-one",
+          email: "one@example.test",
+          planType: "team",
+          hourlyPercentage: 82,
+          weeklyPercentage: 94,
+          creditsBalance: "12.50",
+          poolEnabled: true,
+          status: "ready"
+        }]
+      };
     }
   };
   const integration = new BugTeamIntegration(vscode, context, api, {
@@ -122,6 +190,16 @@ test("BugTeam creates one idempotent order, downloads Sub2, and imports the acco
   assert.equal(calls.imports[0][0].tokens.access_token, "access");
   assert.equal(integration.getPanelState().order.imported, true);
   assert.equal(integration.getPanelState().order.importResult.poolEnabled, 1);
+  assert.deepEqual(integration.getPanelState().order.importResult.accounts[0], {
+    accountId: "account-one",
+    email: "one@example.test",
+    planType: "team",
+    hourlyPercentage: 82,
+    weeklyPercentage: 94,
+    creditsBalance: "12.50",
+    poolEnabled: true,
+    status: "ready"
+  });
   assert.equal(context.secrets.getValue("codexAccounts.bugteam.apiToken.v1"), "cfk_test");
   await integration.clearToken();
   assert.equal(context.secrets.getValue("codexAccounts.bugteam.apiToken.v1"), undefined);
@@ -165,6 +243,7 @@ test("BugTeam retries an uncertain create with the same idempotency key", async 
 test("BugTeam keeps a completed order pending when pool enrollment is partial", async () => {
   const vscode = createVscode();
   const context = createContext();
+  let importAttempts = 0;
   const client = {
     async getDashboard() { return { products: [{ code: "oauth_1h", billing_base_seconds: 3600, price_fen: 300 }] }; },
     async getBalance() { return { available_fen: 1000 }; },
@@ -176,6 +255,10 @@ test("BugTeam keeps a completed order pending when pool enrollment is partial", 
   const api = {
     registerDashboardIntegration() { return { dispose() {} }; },
     async importSharedAccountsToBalancePool() {
+      importAttempts += 1;
+      if (importAttempts > 1) {
+        return { status: "completed", total: 1, imported: 1, poolEnabled: 1, refreshFailed: 0, notEligible: 0, authFailed: 0, importFailed: 0 };
+      }
       return { status: "partial", total: 1, imported: 1, poolEnabled: 0, refreshFailed: 1, notEligible: 0, authFailed: 1, importFailed: 0 };
     }
   };
@@ -189,6 +272,58 @@ test("BugTeam keeps a completed order pending when pool enrollment is partial", 
   assert.equal(integration.getPanelState().order.imported, false);
   assert.equal(integration.getPanelState().order.importResult.poolEnabled, 0);
   assert.match(integration.getPanelState().order.lastImportError, /仅 0\/1 个启用无感池/u);
+  assert.notEqual(integration.pollTimer, undefined);
+
+  integration.lastImportAttemptAt = 0;
+  await integration.pollOrder();
+
+  assert.equal(importAttempts, 2);
+  assert.equal(integration.getPanelState().order.imported, true);
+  assert.equal(integration.pollTimer, undefined);
+  integration.dispose();
+});
+
+test("BugTeam resumes a persisted completed order that still needs pool enrollment", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  await context.secrets.store("codexAccounts.bugteam.apiToken.v1", "cfk_test");
+  await context.globalState.update("codexAccounts.bugteam.order.v1", {
+    orderId: "order-resume",
+    state: "completed",
+    imported: false,
+    lastImportError: "账号已导入，但仅 0/1 个启用无感池"
+  });
+  let releaseDashboard;
+  const dashboardReady = new Promise((resolve) => { releaseDashboard = resolve; });
+  const client = {
+    async getDashboard() {
+      await dashboardReady;
+      return { products: [{ code: "oauth_1h", billing_base_seconds: 3600, price_fen: 300 }] };
+    },
+    async getBalance() { return { available_fen: 1000 }; },
+    async getInventory() { return { hold_total_fen: 300 }; },
+    async getPickupOrder() { return { order_id: "order-resume", state: "completed", quantity: 1, delivered_quantity: 1 }; },
+    async downloadSub2() { return { accounts: [{ tokens: { id_token: "id", access_token: "access" } }] }; }
+  };
+  let importAttempts = 0;
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async importSharedAccountsToBalancePool() {
+      importAttempts += 1;
+      return { status: "completed", total: 1, imported: 1, poolEnabled: 1, refreshFailed: 0, notEligible: 0, authFailed: 0, importFailed: 0 };
+    }
+  };
+  const integration = new BugTeamIntegration(vscode, context, api, { clientFactory: () => client, pollIntervalMs: 60_000 });
+
+  await integration.initialize();
+
+  assert.match(integration.getViewModel().statusMessage, /仅 0\/1 个启用无感池/u);
+  assert.notEqual(integration.pollTimer, undefined);
+  releaseDashboard();
+  await waitFor(() => integration.getPanelState().order.imported === true);
+
+  assert.equal(importAttempts, 1);
+  assert.equal(integration.getPanelState().order.imported, true);
   integration.dispose();
 });
 
@@ -251,4 +386,12 @@ function createContext() {
       getValue(key) { return secrets.get(key); }
     }
   };
+}
+
+async function waitFor(predicate, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for condition");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }

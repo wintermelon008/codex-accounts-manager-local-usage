@@ -778,7 +778,7 @@ describe("CodexHotSwitchBridge", () => {
     }
   }, 15_000);
 
-  it("writes only compact thread-to-local-account attribution records", async () => {
+  it("backfills active threads when usage attribution activates and writes only compact records", async () => {
     const root = path.resolve(__dirname, "..");
     const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-runtime-attribution-"));
     const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
@@ -810,11 +810,6 @@ describe("CodexHotSwitchBridge", () => {
         chatgptPlanType: "plus"
       }));
       await waitForSocket(getHotSwitchSocketPath(process.pid));
-      await bridge.activateUsageAttribution({
-        localAccountId: "local-account-a",
-        accountId: "workspace-sensitive-marker",
-        expectedEmail: "a@example.invalid"
-      });
 
       shim.stdin.write(
         `${JSON.stringify({
@@ -824,6 +819,20 @@ describe("CodexHotSwitchBridge", () => {
         })}\n`
       );
       await messages.next((message) => message.id === "start-attributed-turn");
+      await bridge.activateUsageAttribution({
+        localAccountId: "local-account-a",
+        accountId: "workspace-sensitive-marker",
+        expectedEmail: "a@example.invalid"
+      });
+
+      shim.stdin.write(
+        `${JSON.stringify({
+          id: "start-later-attributed-turn",
+          method: "turn/start",
+          params: { threadId: "thread-b", input: [] }
+        })}\n`
+      );
+      await messages.next((message) => message.id === "start-later-attributed-turn");
 
       const exited = new Promise<void>((resolve) => shim?.once("exit", () => resolve()));
       bridge.dispose();
@@ -833,6 +842,7 @@ describe("CodexHotSwitchBridge", () => {
       await exited;
       const journal = await readFile(path.join(attributionDirectory, `${shim.pid}.jsonl`), "utf8");
       expect(journal).toContain('"th":"thread-a"');
+      expect(journal).toContain('"th":"thread-b"');
       expect(journal).toContain('"a":"local-account-a"');
       expect(journal).not.toContain("a@example.invalid");
       expect(journal).not.toContain("workspace-sensitive-marker");

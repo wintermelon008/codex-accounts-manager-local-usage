@@ -27,6 +27,9 @@ export function useDashboardModals(params: {
         return;
       case "dashboard:action-result":
         params.dispatch({ type: "resolve-action", requestId: message.requestId });
+        if (message.action === "copyAccountImportJson" && message.status === "completed" && message.accountId) {
+          feedback.showCopyFeedback(`account-import-json:${message.accountId}`);
+        }
         if (
           message.action === "hideAccounts" &&
           message.status === "completed" &&

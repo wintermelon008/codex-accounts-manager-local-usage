@@ -19,7 +19,17 @@ describe("ManagerIntegrationHost", () => {
       refreshFailed: 0,
       notEligible: 0,
       authFailed: 0,
-      importFailed: 0
+      importFailed: 0,
+      accounts: [
+        {
+          accountId: "account-1",
+          email: "linked@example.com",
+          hourlyPercentage: 80,
+          weeklyPercentage: 95,
+          poolEnabled: true,
+          status: "ready" as const
+        }
+      ]
     }));
     const host = new ManagerIntegrationHost(gateway.operations, undefined, {
       getManagedAccountEmails,

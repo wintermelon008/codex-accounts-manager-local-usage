@@ -1523,6 +1523,7 @@ async function activateUsageAttribution(params) {
       localAccountId: params.localAccountId,
       expectedEmail: params.expectedEmail
     };
+    recordActiveUsageAttribution();
     return { active: true, localAccountId: usageAttributionAccount.localAccountId };
   }
   if (!actualEmail || normalizeEmail(actualEmail) !== normalizeEmail(params.expectedEmail)) {
@@ -1534,6 +1535,7 @@ async function activateUsageAttribution(params) {
     localAccountId: params.localAccountId,
     expectedEmail: params.expectedEmail
   };
+  recordActiveUsageAttribution();
   return { active: true, localAccountId: usageAttributionAccount.localAccountId };
 }
 
@@ -1821,6 +1823,12 @@ function getActiveThreadIds() {
     }
   }
   return threadIds;
+}
+
+function recordActiveUsageAttribution() {
+  for (const threadId of getActiveThreadIds()) {
+    recordUsageAttribution(threadId);
+  }
 }
 
 function rememberActiveTurn(turnId, threadId, workGeneration) {
