@@ -83,23 +83,16 @@ describe("executeDashboardActionMessage", () => {
       createdAt: 1,
       updatedAt: 1
     };
-    const shared = [
-      {
-        id: account.id,
-        email: account.email,
-        tokens: {
-          id_token: "secret-id-token",
-          access_token: "secret-access-token",
-          refresh_token: "secret-refresh-token"
-        },
-        created_at: 1,
-        last_used: 1
-      }
-    ];
-    const exportSharedAccounts = vi.fn().mockResolvedValue(shared);
+    const tokens = {
+      idToken: "secret-id-token",
+      accessToken: "secret-access-token",
+      refreshToken: "secret-refresh-token",
+      accountId: "account-token-id"
+    };
+    const getTokens = vi.fn().mockResolvedValue(tokens);
     const repo = {
       getAccount: vi.fn().mockResolvedValue(account),
-      exportSharedAccounts
+      getTokens
     } as unknown as DashboardActionContext["repo"];
 
     const result = await executeDashboardActionMessage(
@@ -121,8 +114,19 @@ describe("executeDashboardActionMessage", () => {
       }
     );
 
-    expect(exportSharedAccounts).toHaveBeenCalledWith([account.id]);
-    expect(writeText).toHaveBeenCalledWith(JSON.stringify(shared, null, 2));
+    expect(getTokens).toHaveBeenCalledWith(account.id);
+    const copied = JSON.parse(writeText.mock.calls[0]?.[0] as string);
+    expect(copied).toEqual({
+      auth_mode: "chatgpt",
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: tokens.idToken,
+        access_token: tokens.accessToken,
+        refresh_token: tokens.refreshToken,
+        account_id: tokens.accountId
+      },
+      last_refresh: expect.any(String)
+    });
     expect(result.status).toBe("completed");
     expect(result.payload).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain("secret-access-token");
@@ -131,7 +135,7 @@ describe("executeDashboardActionMessage", () => {
   it("does not offer export credentials for a manual virtual account", async () => {
     const writeText = vi.mocked(vscode.env.clipboard.writeText);
     writeText.mockClear();
-    const exportSharedAccounts = vi.fn();
+    const getTokens = vi.fn();
     const repo = {
       getAccount: vi.fn().mockResolvedValue({
         id: "gateway-account",
@@ -139,7 +143,7 @@ describe("executeDashboardActionMessage", () => {
         accountKind: "sub2api",
         manualOnly: true
       }),
-      exportSharedAccounts
+      getTokens
     } as unknown as DashboardActionContext["repo"];
 
     const result = await executeDashboardActionMessage(
@@ -162,7 +166,7 @@ describe("executeDashboardActionMessage", () => {
     );
 
     expect(result.status).toBe("failed");
-    expect(exportSharedAccounts).not.toHaveBeenCalled();
+    expect(getTokens).not.toHaveBeenCalled();
     expect(writeText).not.toHaveBeenCalled();
   });
 

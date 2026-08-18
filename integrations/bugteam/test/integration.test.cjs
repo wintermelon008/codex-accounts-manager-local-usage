@@ -120,6 +120,28 @@ test("Tingbai credential validation publishes state without losing the final but
   integration.dispose();
 });
 
+test("Website actions return final button feedback", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const opened = [];
+  vscode.env.openExternal = async (uri) => { opened.push(uri); return true; };
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async importSharedAccountsToBalancePool() { return {}; }
+  };
+  const integration = new BugTeamIntegration(vscode, context, api);
+
+  await integration.initialize();
+  await integration.openPanel();
+  await vscode.panels[0].webview.emit({ type: "bugteam:action", action: "openWebsite" });
+  await vscode.panels[0].webview.emit({ type: "bugteam:action", action: "tingbaiOpenWebsite" });
+
+  assert.equal(opened.length, 2);
+  assert.ok(vscode.panels[0].webview.messages.some((message) => message.type === "actionResult" && message.action === "openWebsite" && message.level === "success"));
+  assert.ok(vscode.panels[0].webview.messages.some((message) => message.type === "actionResult" && message.action === "tingbaiOpenWebsite" && message.level === "success"));
+  integration.dispose();
+});
+
 test("BugTeam creates one idempotent order, downloads Sub2, and imports the account into the pool", async () => {
   const vscode = createVscode();
   const context = createContext();
