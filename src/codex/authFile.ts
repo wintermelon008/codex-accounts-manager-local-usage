@@ -78,6 +78,30 @@ export async function writeAuthFile(tokens: CodexTokens): Promise<void> {
 }
 
 /**
+ * Build the credential JSON used by the Dashboard's per-account copy action.
+ * This is intentionally the import shape accepted by Manager/Codex tooling;
+ * it does not write auth.json or change the on-disk auth_mode compatibility
+ * behavior above.
+ */
+export function buildCodexImportFile(
+  tokens: CodexTokens,
+  accountId?: string,
+  lastRefresh = new Date().toISOString()
+): CodexAuthFile {
+  return {
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: tokens.idToken,
+      access_token: tokens.accessToken,
+      refresh_token: tokens.refreshToken,
+      account_id: tokens.accountId ?? accountId
+    },
+    last_refresh: lastRefresh
+  };
+}
+
+/**
  * 构建 auth.json 内容。OAuth 账号不写 auth_mode。
  */
 function buildAuthFile(tokens: CodexTokens): CodexAuthFile {

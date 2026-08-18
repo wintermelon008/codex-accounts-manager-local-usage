@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { TingbaiClient } = require("../src/api/tingbaiClient.cjs");
+const { TingbaiApiError, TingbaiClient } = require("../src/api/tingbaiClient.cjs");
 const { BugTeamStorage } = require("../src/storage.cjs");
 const {
   DEFAULT_TINGBAI_POLL_INTERVAL_MS,
@@ -10,7 +10,8 @@ const {
   TingbaiSource,
   calculateEstimatedExplosionAt,
   calculatePollDelayMs,
-  normalizeCatalog
+  normalizeCatalog,
+  normalizeQuote
 } = require("../src/tingbaiSource.cjs");
 
 test("Tingbai waitlist polls every 3 seconds with less than 1 second of jitter", () => {
@@ -54,10 +55,82 @@ test("Tingbai client keeps the HttpOnly session cookie and sends CSRF plus idemp
   assert.equal(JSON.parse(requests[1].options.body).expected_total_fen, 300);
 });
 
+test("Tingbai catalog retries one transient network failure and reports a readable error", async () => {
+  let calls = 0;
+  const client = new TingbaiClient({
+    baseUrl: "https://tingbai.example.test",
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) throw new TypeError("fetch failed");
+      return jsonResponse({ products: [{ code: "team-7d", available: 0 }] });
+    }
+  });
+
+  const payload = await client.getCatalog();
+  assert.equal(calls, 2);
+  assert.equal(payload.products[0].code, "team-7d");
+
+  const failingClient = new TingbaiClient({
+    baseUrl: "https://tingbai.example.test",
+    fetchImpl: async () => { throw new TypeError("fetch failed"); }
+  });
+  await assert.rejects(
+    failingClient.getCatalog(),
+    (error) => error instanceof TingbaiApiError
+      && error.code === "network_error"
+      && error.message.includes("网络请求失败")
+      && !error.message.includes("fetch failed")
+  );
+});
+
 test("Tingbai catalog calculates the displayed estimated explosion time", () => {
   const products = normalizeCatalog(catalogPayload({ available: 2 }));
   assert.equal(products[0].estimatedExplosionAt, "2026-08-18T02:00:00.000Z");
   assert.equal(calculateEstimatedExplosionAt("2026-08-18T01:00:00.000Z", 3600), "2026-08-18T02:00:00.000Z");
+});
+
+test("Tingbai honors explicit purchasable and quote can-buy signals", () => {
+  const products = normalizeCatalog({ products: [{
+    code: "team-low",
+    name: "低价 Team",
+    unit_price_fen: 199,
+    available: 0,
+    purchasable: true
+  }] });
+  assert.equal(products[0].purchasable, true);
+  const quote = normalizeQuote({ quote: {
+    estimated_unit_price_fen: 199,
+    estimated_total_fen: 199,
+    can_buy: true
+  } }, products[0], 1);
+  assert.equal(quote.canBuy, true);
+  assert.equal(quote.totalFen, 199);
+});
+
+test("Tingbai submits a low-price product when the API marks it purchasable", async () => {
+  const context = createContext();
+  const storage = new BugTeamStorage(context);
+  const requests = [];
+  const client = createFakeClient(requests, [{ products: [{
+    code: "team-low",
+    name: "低价 Team",
+    unit_price_fen: 199,
+    available: 0,
+    purchasable: true
+  }] }], 199, { omitQuoteAvailable: true });
+  const source = new TingbaiSource({
+    storage,
+    clientFactory: () => client,
+    pollIntervalMs: 60_000,
+    importBundle: async () => ({ status: "completed", total: 1, imported: 1, poolEnabled: 1 })
+  });
+
+  await source.initialize();
+  await source.setCredentials("buyer-one", "password-one");
+  await source.startWaitlist({ maxTotalFen: 199 });
+
+  assert.equal(requests.find((request) => request.type === "create").product, "team-low");
+  source.dispose();
 });
 
 test("Tingbai waitlist includes both amount boundaries when buying and imports the result", async () => {
@@ -156,6 +229,91 @@ test("Tingbai waitlist does not restrict the quote amount when both boundaries a
   source.dispose();
 });
 
+test("Tingbai waitlist follows the stocked product when the catalog product changes", async () => {
+  const context = createContext();
+  const storage = new BugTeamStorage(context);
+  const requests = [];
+  const catalogs = [
+    catalogPayload({ available: 0 }),
+    catalogPayload({ available: 0 }),
+    {
+      products: [
+        catalogPayload({ available: 0 }).products[0],
+        catalogPayload({ available: 1, code: "team-live" }).products[0]
+      ]
+    }
+  ];
+  const client = createFakeClient(requests, catalogs);
+  const source = new TingbaiSource({
+    storage,
+    clientFactory: () => client,
+    pollIntervalMs: 60_000,
+    importBundle: async () => ({ status: "completed", total: 1, imported: 1, poolEnabled: 1 })
+  });
+
+  await source.initialize();
+  await source.setCredentials("buyer-one", "password-one");
+  await source.startWaitlist();
+
+  assert.equal(requests.some((request) => request.type === "create"), false);
+  assert.ok(source.getViewModel().nextPollAt > Date.now());
+  await source.runCycle();
+
+  const create = requests.find((request) => request.type === "create");
+  assert.equal(create.product, "team-live");
+  assert.equal(source.getViewModel().order.imported, true);
+  source.dispose();
+});
+
+test("Tingbai waitlist starts and persists when the catalog is temporarily empty", async () => {
+  const context = createContext();
+  const storage = new BugTeamStorage(context);
+  const requests = [];
+  const client = createFakeClient(requests, [{ products: [] }]);
+  const source = new TingbaiSource({
+    storage,
+    clientFactory: () => client,
+    pollIntervalMs: 60_000,
+    importBundle: async () => { throw new Error("must not import"); }
+  });
+
+  await source.initialize();
+  await source.setCredentials("buyer-one", "password-one");
+  await source.startWaitlist();
+
+  const view = source.getViewModel();
+  assert.equal(view.waitlist.active, true);
+  assert.equal(view.product, undefined);
+  assert.ok(view.nextPollAt > Date.now());
+  source.dispose();
+});
+
+test("Tingbai does not treat a failed historical order as an active waitlist", async () => {
+  const context = createContext();
+  const storage = new BugTeamStorage(context);
+  await storage.setTingbaiCredentials("buyer-one", "password-one");
+  await context.globalState.update("codexAccounts.bugteam.tingbai.state.v1", {
+    waitlist: { active: false, productCode: "team-old", startedAt: "2026-08-17T01:00:00.000Z" },
+    order: { orderId: "old-order", state: "failed", imported: false },
+    records: [{ orderId: "old-order", state: "failed", imported: false }]
+  });
+  const client = createFakeClient([], [catalogPayload({ available: 0 })]);
+  const source = new TingbaiSource({
+    storage,
+    clientFactory: () => client,
+    pollIntervalMs: 60_000,
+    importBundle: async () => ({ status: "completed", total: 1, imported: 1, poolEnabled: 1 })
+  });
+
+  await source.initialize();
+  const view = source.getViewModel();
+  assert.equal(view.waitlist.active, false);
+  assert.equal(view.attemptPending, false);
+  assert.equal(view.nextPollAt, undefined);
+  assert.equal(source.shouldContinuePolling(), false);
+  source.dispose();
+});
+
 test("Tingbai waitlist rejects an inverted amount range", async () => {
   const context = createContext();
   const storage = new BugTeamStorage(context);
@@ -206,7 +364,7 @@ test("Tingbai resumes an uncertain purchase with the persisted idempotency key",
   second.dispose();
 });
 
-function createFakeClient(requests, catalogs, quoteTotalFen = 300) {
+function createFakeClient(requests, catalogs, quoteTotalFen = 300, options = {}) {
   return {
     authenticated: false,
     async login(username) {
@@ -225,7 +383,9 @@ function createFakeClient(requests, catalogs, quoteTotalFen = 300) {
     },
     async getQuote() {
       requests.push({ type: "quote" });
-      return { quote: { estimated_unit_price_fen: quoteTotalFen, estimated_total_fen: quoteTotalFen, available: 1, can_buy: true, quote_id: "quote-one" } };
+      const quote = { estimated_unit_price_fen: quoteTotalFen, estimated_total_fen: quoteTotalFen, can_buy: true, quote_id: "quote-one" };
+      if (!options.omitQuoteAvailable) quote.available = 1;
+      return { quote };
     },
     async createOrder(input) {
       requests.push({ type: "create", ...input });
@@ -242,10 +402,10 @@ function createFakeClient(requests, catalogs, quoteTotalFen = 300) {
   };
 }
 
-function catalogPayload({ available }) {
+function catalogPayload({ available, code = "team-7d" }) {
   return {
     products: [{
-      code: "team-7d",
+      code,
       name: "普通 Team · 7D",
       unit_price_fen: 300,
       available,

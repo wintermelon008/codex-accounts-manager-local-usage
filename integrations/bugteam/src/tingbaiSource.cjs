@@ -22,6 +22,7 @@ class TingbaiSource {
     this.remote = { product: undefined, balance: undefined, checkedAt: undefined };
     this.lastError = undefined;
     this.pollTimer = undefined;
+    this.nextPollAt = undefined;
     this.cycleInFlight = false;
     this.purchaseInFlight = false;
     this.importInFlight = false;
@@ -44,6 +45,8 @@ class TingbaiSource {
       product: this.remote.product,
       balance: this.remote.balance,
       checkedAt: this.remote.checkedAt,
+      checking: this.cycleInFlight,
+      nextPollAt: this.nextPollAt,
       waitlist: publicWaitlist(this.data.waitlist),
       attemptPending: Boolean(this.data.attempt),
       order: publicOrder(this.data.order),
@@ -106,14 +109,11 @@ class TingbaiSource {
     if (minTotalFen !== undefined && maxTotalFen !== undefined && minTotalFen > maxTotalFen) {
       throw new Error("候补金额下限不能大于上限");
     }
-    await this.refreshCatalog();
-    await this.refreshWallet();
     const product = this.remote.product;
-    if (!product || !product.code) throw new Error("当前没有可候补的商品");
     this.data.waitlist = {
       active: true,
-      productCode: product.code,
-      productName: product.name,
+      productCode: product?.code,
+      productName: product?.name,
       quantity: 1,
       minTotalFen,
       maxTotalFen,
@@ -122,7 +122,16 @@ class TingbaiSource {
     this.lastError = undefined;
     await this.persist();
     this.syncPolling();
+    this.notify();
+    try {
+      await this.refreshCatalog();
+      await this.refreshWallet();
+    } catch (error) {
+      this.lastError = safeError(error, "超级炸弹车候补初始化失败", this.credentials?.password);
+      await this.persist();
+    }
     await this.considerPurchase();
+    this.syncPolling();
     this.notify();
   }
 
@@ -150,8 +159,9 @@ class TingbaiSource {
   async runCycle() {
     if (this.cycleInFlight || this.disposed) return;
     this.cycleInFlight = true;
+    this.lastError = undefined;
+    this.notify();
     try {
-      this.lastError = undefined;
       if (this.data.order && !this.data.order.imported && !isFailedOrder(this.data.order)) {
         await this.pollOrder({ forceImport: false });
       } else if (this.data.attempt) {
@@ -172,8 +182,13 @@ class TingbaiSource {
   async refreshCatalog() {
     const payload = await this.client.getCatalog();
     const products = normalizeCatalog(payload);
-    const selectedCode = this.data.waitlist?.productCode ?? this.data.attempt?.product;
-    this.remote.product = products.find((product) => product.code === selectedCode) ?? products[0];
+    const selectedCode = this.data.attempt?.product ?? this.data.waitlist?.productCode;
+    const availableProduct = !this.data.attempt
+      ? products.find((product) => product.purchasable)
+      : undefined;
+    this.remote.product = availableProduct
+      ?? products.find((product) => product.code === selectedCode)
+      ?? products[0];
     this.remote.checkedAt = new Date().toISOString();
     return this.remote.product;
   }
@@ -187,8 +202,8 @@ class TingbaiSource {
   async considerPurchase() {
     const waitlist = this.data.waitlist;
     const product = this.remote.product;
-    if (!waitlist?.active || !product || product.code !== waitlist.productCode) return;
-    if (!product.purchasable || product.available < waitlist.quantity || this.purchaseInFlight) return;
+    if (!waitlist?.active || !product) return;
+    if (!product.purchasable || this.purchaseInFlight) return;
 
     this.purchaseInFlight = true;
     try {
@@ -207,6 +222,8 @@ class TingbaiSource {
         await this.persist();
         return;
       }
+      waitlist.productCode = product.code;
+      waitlist.productName = product.name;
       this.data.attempt = {
         idempotencyKey: createIdempotencyKey(),
         product: product.code,
@@ -350,14 +367,20 @@ class TingbaiSource {
 
   syncPolling() {
     if (this.shouldContinuePolling() && !this.pollTimer && !this.disposed) {
+      const delayMs = calculatePollDelayMs(this.pollIntervalMs);
+      this.nextPollAt = Date.now() + delayMs;
       this.pollTimer = setTimeout(() => {
         this.pollTimer = undefined;
+        this.nextPollAt = undefined;
         void this.runCycle().finally(() => this.syncPolling());
-      }, calculatePollDelayMs(this.pollIntervalMs));
+      }, delayMs);
       this.pollTimer.unref?.();
     } else if (!this.shouldContinuePolling() && this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
+      this.nextPollAt = undefined;
+    } else if (!this.shouldContinuePolling()) {
+      this.nextPollAt = undefined;
     }
   }
 
@@ -378,6 +401,7 @@ class TingbaiSource {
     this.disposed = true;
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = undefined;
+    this.nextPollAt = undefined;
   }
 }
 
@@ -391,8 +415,17 @@ function normalizeCatalog(payload) {
     const supply = product?.supply && typeof product.supply === "object" ? product.supply : {};
     const refreshedAt = readString(supply.refreshed_at);
     const minimumRemainingSeconds = nonNegativeIntegerOrUndefined(supply.minimum_remaining_seconds);
-    const available = nonNegativeInteger(product?.available);
-    const explicitPurchasable = typeof product?.purchasable === "boolean" ? product.purchasable : undefined;
+    const availableValue = product?.available ?? product?.stock ?? product?.stock_count ?? product?.available_quantity ?? product?.quantity;
+    const available = nonNegativeInteger(availableValue);
+    const availableKnown = availableValue !== undefined && availableValue !== null && availableValue !== "" && Number.isFinite(Number(availableValue));
+    const explicitPurchasable = readBoolean(product?.purchasable ?? product?.can_buy ?? product?.canBuy ?? product?.available_for_sale);
+    const explicitInStock = readBoolean(product?.in_stock ?? product?.inStock);
+    const status = readString(product?.status)?.toLowerCase();
+    const unavailableState = ["disabled", "offline", "inactive", "sold_out", "unavailable"].includes(status);
+    const purchasable = explicitPurchasable
+      ?? (explicitInStock === false
+        ? false
+        : !unavailableState && (!availableKnown || available > 0));
     return {
       code: readString(product?.code),
       name: readString(product?.name) ?? readString(product?.code) ?? "商品",
@@ -400,7 +433,8 @@ function normalizeCatalog(payload) {
       priceFen: nonNegativeInteger(product?.unit_price_fen ?? product?.price_fen),
       currency: readString(product?.currency) ?? "CNY",
       available,
-      purchasable: (explicitPurchasable ?? available > 0) && available > 0,
+      availableKnown,
+      purchasable,
       refreshedAt,
       minimumRemainingSeconds,
       maximumRemainingSeconds: nonNegativeIntegerOrUndefined(supply.maximum_remaining_seconds),
@@ -414,17 +448,15 @@ function normalizeQuote(payload, product, quantity) {
   const quote = payload?.quote && typeof payload.quote === "object" ? payload.quote : payload;
   const unitFen = nonNegativeInteger(quote?.estimated_unit_price_fen ?? quote?.unit_price_fen ?? product.priceFen);
   const totalFen = nonNegativeInteger(quote?.estimated_total_fen ?? quote?.total_fen ?? quote?.amount_fen ?? unitFen * quantity);
-  const available = nonNegativeInteger(quote?.available ?? quote?.available_quantity);
-  const explicitCanBuy = typeof quote?.can_buy === "boolean"
-    ? quote.can_buy
-    : typeof quote?.purchasable === "boolean"
-      ? quote.purchasable
-      : undefined;
+  const availableValue = quote?.available ?? quote?.available_quantity ?? quote?.deliverable_quantity ?? quote?.deliverable;
+  const available = nonNegativeIntegerOrUndefined(availableValue);
+  const needsProduction = quote?.needs_production === true || quote?.needsProduction === true || quote?.backorder === true;
+  const explicitCanBuy = readBoolean(quote?.can_buy ?? quote?.canBuy ?? quote?.purchasable ?? quote?.available_for_sale);
   return {
     unitFen,
     totalFen,
     available,
-    canBuy: explicitCanBuy ?? available >= quantity,
+    canBuy: explicitCanBuy ?? (available === undefined ? !needsProduction : available >= quantity),
     quoteId: readString(quote?.quote_id ?? quote?.id)
   };
 }
@@ -560,6 +592,16 @@ function readWaitlistBound(value, label) {
 
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readBoolean(value) {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0) return false;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "yes", "enabled", "1"].includes(normalized)) return true;
+  if (["false", "no", "disabled", "0"].includes(normalized)) return false;
+  return undefined;
 }
 
 function safeError(error, fallback, secret) {

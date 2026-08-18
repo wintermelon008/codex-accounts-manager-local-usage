@@ -204,7 +204,7 @@ class BugTeamIntegration {
           break;
         case "openWebsite":
           await this.vscode.env.openExternal(this.vscode.Uri.parse(DEFAULT_BASE_URL));
-          return;
+          break;
         case "tingbaiSetCredentials":
           await this.tingbai.setCredentials(message.username, message.password);
           await this.postToast("success", "超级炸弹车买家账号已验证");
@@ -231,7 +231,7 @@ class BugTeamIntegration {
           break;
         case "tingbaiOpenWebsite":
           await this.vscode.env.openExternal(this.vscode.Uri.parse("https://tingbai.top/bugteam/"));
-          return;
+          break;
         default:
           throw new Error("Unsupported BugTeam panel action.");
       }

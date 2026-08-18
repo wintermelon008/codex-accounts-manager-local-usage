@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Manager 主 Dashboard 的每个真实 Codex 账号卡片新增“一键复制 Codex 导入凭据”；扩展宿主直接将单账号可导入 JSON 写入剪贴板，Token 不进入 Webview，Gateway/手动虚拟账号不显示该入口。
+- 修复超级炸弹车候补锁定启动时无货商品编码、补货切换商品后无法下单的问题；候补现在会先持久化任务，即使目录为空或一次刷新失败也会继续轮询。按网站契约尊重 `purchasable`/`can_buy`，不再因库存字段短暂为 0 或缺失漏掉低价可购商品。失败、退款或取消的历史订单可重新开始候补；状态新增“正在刷新库存”和下一次刷新实时倒计时。目录瞬时网络失败会安全重试一次，连续失败显示可读错误，不会把“候补未启动”与历史订单混淆。BugTeam 面板所有按钮新增按压反馈，网站入口补齐进行中、成功、失败回执，货架档位显示明确选中结果。
+- Manager 主 Dashboard 的每个真实 Codex 账号卡片新增“一键复制 Codex 导入凭据”；扩展宿主直接将单账号 `auth_mode: "chatgpt"`、`OPENAI_API_KEY: null`、`tokens`、`last_refresh` 格式的可导入 JSON 写入剪贴板，Token 不进入 Webview，Gateway/手动虚拟账号不显示该入口。
 - Manager 受限无感池导入结果新增逐账号脱敏额度摘要，包括套餐、5h/周额度、Credits 余额和入池状态。
 - 修复 Manager 启动归因握手晚于活动 turn 时，当前启用账号的本轮窗口 Token 无法归属的问题；身份确认后会立即补记当前活动 thread。
 - Manager `0.1.16-local.61`：Mailbox 的 OAuth 导入现在支持由统一停止按钮取消；OAuth 本地回调监听器确认成功绑定后才打开浏览器，端口冲突时不再出现已打开登录页但无法自动回调的误导状态。

@@ -23,6 +23,7 @@ import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from ".
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { getActiveManagerIntegrationHost } from "../../integrations";
 import { startQuotaCountdownForAccount } from "../../application/accounts/quotaCountdown";
+import { buildCodexImportFile } from "../../codex/authFile";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -333,12 +334,13 @@ async function handleCopyAccountImportJson(
       throw new Error(resolveCopyAccountImportJsonUnavailableMessage(language));
     }
 
-    const shared = await repo.exportSharedAccounts([account.id]);
-    if (shared.length !== 1) {
+    const tokens = await repo.getTokens(account.id);
+    if (!tokens?.idToken || !tokens.accessToken) {
       throw new Error(resolveCopyAccountImportJsonUnavailableMessage(language));
     }
 
-    await vscode.env.clipboard.writeText(JSON.stringify(shared, null, 2));
+    const importFile = buildCodexImportFile(tokens, account.accountId);
+    await vscode.env.clipboard.writeText(JSON.stringify(importFile, null, 2));
     void vscode.window.showInformationMessage(resolveCopyAccountImportJsonSuccessMessage(language));
     return undefined;
   } catch (error) {

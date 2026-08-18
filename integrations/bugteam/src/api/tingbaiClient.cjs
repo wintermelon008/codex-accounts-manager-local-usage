@@ -2,6 +2,7 @@
 
 const TINGBAI_BASE_URL = "https://tingbai.top";
 const STORE_PATH = "/bugteam-api/store";
+const CATALOG_RETRY_DELAY_MS = 250;
 
 class TingbaiApiError extends Error {
   constructor(message, { status, code, payload, retryAfterMs } = {}) {
@@ -33,7 +34,7 @@ class TingbaiClient {
   }
 
   getCatalog() {
-    return this.request(`${STORE_PATH}/catalog`);
+    return this.requestWithNetworkRetry(`${STORE_PATH}/catalog`);
   }
 
   async login(username, password) {
@@ -105,11 +106,19 @@ class TingbaiClient {
     const cookie = this.cookieHeader();
     if (cookie) headers.set("Cookie", cookie);
 
-    const response = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
-      ...options,
-      headers,
-      cache: "no-store"
-    });
+    let response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
+        ...options,
+        headers,
+        cache: "no-store"
+      });
+    } catch (error) {
+      throw new TingbaiApiError("超级炸弹车网络请求失败，请检查网络连接或服务是否可达", {
+        code: "network_error",
+        payload: { cause: error instanceof Error ? error.message : String(error) }
+      });
+    }
     this.updateCookies(response.headers);
     const payload = await readPayload(response);
     if (!response.ok) {
@@ -122,6 +131,16 @@ class TingbaiClient {
       });
     }
     return payload;
+  }
+
+  async requestWithNetworkRetry(pathname, options = {}) {
+    try {
+      return await this.request(pathname, options);
+    } catch (error) {
+      if (!(error instanceof TingbaiApiError) || error.code !== "network_error") throw error;
+      await delay(CATALOG_RETRY_DELAY_MS);
+      return this.request(pathname, options);
+    }
   }
 
   cookieHeader() {
@@ -190,10 +209,15 @@ function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 module.exports = {
   STORE_PATH,
   TINGBAI_BASE_URL,
   TingbaiApiError,
   TingbaiClient,
+  CATALOG_RETRY_DELAY_MS,
   normalizeBaseUrl
 };

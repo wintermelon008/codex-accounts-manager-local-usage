@@ -32,6 +32,9 @@ test("BugTeam panel exposes token, balance, dispatch shelf actions, and refresh 
   assert.match(html, /id="account-balances"/u);
   assert.match(html, /actionResult/u);
   assert.match(html, /action-busy/u);
+  assert.match(html, /下次刷新/u);
+  assert.match(html, /3 秒轮询 \+ 0–1 秒随机偏移/u);
+  assert.match(html, /shelf-chip\.selected::after/u);
   assert.doesNotMatch(html, /id="order"/u);
   assert.doesNotMatch(html, /data-action="purchase"/u);
   assert.doesNotMatch(html, /Manager 导入/u);
@@ -77,7 +80,7 @@ test("Tingbai waitlist sends optional inclusive amount boundaries in fen", () =>
   const request = panel.posted.findLast((message) => message.action === "tingbaiStartWaitlist");
   assert.equal(request.minTotalFen, 325);
   assert.equal(request.maxTotalFen, 450);
-  assert.match(panel.confirmations[0], />= ¥3\.25 且 <= ¥4\.50/u);
+  assert.equal(panel.confirmations.length, 0);
   assert.equal(panel.element("tingbai-start").textContent, "启动中…");
 });
 
@@ -89,7 +92,99 @@ test("Tingbai waitlist omits both amount boundaries when the inputs are blank", 
   const request = panel.posted.findLast((message) => message.action === "tingbaiStartWaitlist");
   assert.equal(Object.hasOwn(request, "minTotalFen"), false);
   assert.equal(Object.hasOwn(request, "maxTotalFen"), false);
-  assert.match(panel.confirmations[0], /不限制金额/u);
+  assert.equal(panel.confirmations.length, 0);
+});
+
+test("Tingbai waitlist displays checking and next-refresh countdown states", () => {
+  const panel = runPanelScript(createBugTeamPanelHtml());
+  panel.message({
+    type: "state",
+    state: {
+      tingbai: {
+        credentialsConfigured: true,
+        product: { code: "team-7d", name: "Team 7D", priceFen: 300, available: 0 },
+        waitlist: { active: true, quantity: 1 },
+        nextPollAt: Date.now() + 3_000,
+        checking: false,
+        records: []
+      }
+    }
+  });
+
+  assert.equal(panel.element("tingbai-waitlist-label").textContent, "候补运行中");
+  assert.match(panel.element("tingbai-waitlist-countdown").textContent, /下次刷新 \d+\.\d 秒/u);
+  assert.match(panel.element("tingbai-waitlist-progress").className, /active/u);
+
+  panel.message({ type: "state", state: { tingbai: { waitlist: { active: true }, checking: true, records: [] } } });
+  assert.equal(panel.element("tingbai-waitlist-label").textContent, "正在刷新库存…");
+  assert.match(panel.element("tingbai-waitlist-progress").className, /checking/u);
+});
+
+test("Tingbai allows a new waitlist after a failed historical order", () => {
+  const panel = runPanelScript(createBugTeamPanelHtml());
+  panel.message({
+    type: "state",
+    state: {
+      tingbai: {
+        credentialsConfigured: true,
+        product: { code: "team-7d", name: "Team 7D", priceFen: 300, available: 0 },
+        order: { orderId: "failed-order", state: "failed", imported: false },
+        records: []
+      }
+    }
+  });
+
+  assert.equal(panel.element("tingbai-start").disabled, false);
+  assert.equal(panel.element("tingbai-min-amount").disabled, false);
+  assert.equal(panel.element("tingbai-max-amount").disabled, false);
+});
+
+test("Tingbai refresh errors remain separate from the inactive waitlist state", () => {
+  const panel = runPanelScript(createBugTeamPanelHtml());
+  panel.message({
+    type: "state",
+    state: {
+      tingbai: {
+        credentialsConfigured: true,
+        lastError: "超级炸弹车网络请求失败，请检查网络连接或服务是否可达",
+        records: []
+      }
+    }
+  });
+
+  assert.equal(panel.element("tingbai-waitlist-label").textContent, "候补未启动");
+  assert.doesNotMatch(panel.element("tingbai-waitlist-progress").className, /active|checking/u);
+  assert.match(panel.element("tingbai-message").textContent, /候补未启动/u);
+  assert.match(panel.element("tingbai-message").textContent, /最近一次同步或操作失败：超级炸弹车网络请求失败/u);
+});
+
+test("Tingbai start remains available when no product is currently listed", () => {
+  const panel = runPanelScript(createBugTeamPanelHtml());
+  panel.message({
+    type: "state",
+    state: {
+      tingbai: {
+        credentialsConfigured: true,
+        records: []
+      }
+    }
+  });
+
+  assert.equal(panel.element("tingbai-start").disabled, false);
+});
+
+test("Website buttons show progress and completion feedback", () => {
+  const panel = runPanelScript(createBugTeamPanelHtml());
+
+  panel.click("openWebsite");
+  assert.equal(panel.element("open-website").textContent, "打开中…");
+  panel.message({ type: "actionResult", action: "openWebsite", level: "success" });
+  assert.equal(panel.element("open-website").textContent, "已打开 ✓");
+
+  panel.click("tingbaiOpenWebsite");
+  assert.equal(panel.element("tingbai-open-website").textContent, "打开中…");
+  panel.message({ type: "actionResult", action: "tingbaiOpenWebsite", level: "error" });
+  assert.equal(panel.element("tingbai-open-website").textContent, "打开失败");
 });
 
 test("BugTeam panel renders each imported account quota without credentials", () => {
@@ -135,6 +230,7 @@ function runPanelScript(html) {
     addEventListener(type, listener) { windowListeners.set(type, listener); },
     clearTimeout() {},
     setTimeout() { return 1; },
+    setInterval() { return 2; },
     confirm(message) { confirmations.push(message); return true; }
   };
   const documentObject = {
