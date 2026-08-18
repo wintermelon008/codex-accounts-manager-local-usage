@@ -1,6 +1,14 @@
 import type * as vscode from "vscode";
-import type { GatewayRuntimeStatus, HotSwitchAccountResult, RuntimeAccountSwitchOutcome } from "../codex/hotSwitchBridge";
-import type { GatewayRuntimeConfig, HotSwitchSetupResult, RuntimeAccountSwitchOptions } from "../codex/hotSwitchRuntime";
+import type {
+  GatewayRuntimeStatus,
+  HotSwitchAccountResult,
+  RuntimeAccountSwitchOutcome
+} from "../codex/hotSwitchBridge";
+import type {
+  GatewayRuntimeConfig,
+  HotSwitchSetupResult,
+  RuntimeAccountSwitchOptions
+} from "../codex/hotSwitchRuntime";
 import type {
   DashboardIntegrationSettingViewModel,
   DashboardIntegrationViewModel,
@@ -96,6 +104,18 @@ export type BalancePoolImportResult = {
   notEligible: number;
   authFailed: number;
   importFailed: number;
+  accounts: BalancePoolAccountResult[];
+};
+
+export type BalancePoolAccountResult = {
+  accountId?: string;
+  email?: string;
+  planType?: string;
+  hourlyPercentage?: number;
+  weeklyPercentage?: number;
+  creditsBalance?: string;
+  poolEnabled: boolean;
+  status: "ready" | "refresh_failed" | "not_eligible" | "import_failed";
 };
 
 export type AccountImportOperations = {

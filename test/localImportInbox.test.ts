@@ -17,6 +17,7 @@ vi.mock("../src/application/accounts/balanceScheduler", () => ({
 }));
 
 import { getLocalImportInboxPath, LocalImportInbox } from "../src/presentation/workbench/localImportInbox";
+import { importSharedAccountsIntoBalancePool } from "../src/application/accounts/importIntoBalancePool";
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -57,7 +58,15 @@ describe("LocalImportInbox", () => {
     const queuePath = path.join(temporaryDirectory, "inbox");
     await writeJob(queuePath, JOB_ID);
     const release = vi.fn().mockResolvedValue(undefined);
-    const account = { id: "account-1", email: "one@example.test", isActive: false, createdAt: 1, updatedAt: 1 };
+    const account = {
+      id: "account-1",
+      email: "one@example.test",
+      planType: "team",
+      isActive: false,
+      quotaSummary: { hourlyPercentage: 80, weeklyPercentage: 95, credits: { balance: "12.50" } },
+      createdAt: 1,
+      updatedAt: 1
+    };
     const repo = {
       tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release }),
       importSharedAccountsForLocalInbox: vi.fn().mockResolvedValue([account]),
@@ -116,6 +125,44 @@ describe("LocalImportInbox", () => {
       refresh_failed: 1,
       auth_failed: 1
     });
+  });
+
+  it("returns sanitized quota details for every imported account", async () => {
+    const account = {
+      id: "account-1",
+      email: "one@example.test",
+      planType: "team",
+      isActive: false,
+      quotaSummary: { hourlyPercentage: 82, weeklyPercentage: 94, credits: { balance: "12.50" } },
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const repo = {
+      importSharedAccountsForLocalInbox: vi.fn().mockResolvedValue([account]),
+      getAccount: vi.fn().mockResolvedValue(account),
+      setBalancePoolMembership: vi.fn().mockResolvedValue(account)
+    };
+    refreshImportedAccountQuotaMock.mockResolvedValue({ quota: account.quotaSummary });
+    getBalanceQuotaCapabilityMock.mockReturnValue("windowed");
+
+    const result = await importSharedAccountsIntoBalancePool(repo as never, {
+      email: account.email,
+      tokens: { id_token: "id-token", access_token: "access-token" }
+    });
+
+    expect(result.accounts).toEqual([
+      {
+        accountId: "account-1",
+        email: "one@example.test",
+        planType: "team",
+        hourlyPercentage: 82,
+        weeklyPercentage: 94,
+        creditsBalance: "12.50",
+        poolEnabled: true,
+        status: "ready"
+      }
+    ]);
+    expect(JSON.stringify(result.accounts)).not.toContain("token");
   });
 });
 

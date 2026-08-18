@@ -249,6 +249,7 @@ export interface DashboardCopy {
   login: string;
   switchBtn: string;
   refreshBtn: string;
+  copyAccountImportJsonBtn: string;
   resetCreditsBtn: string;
   resetCreditsLabel: string;
   detailsBtn: string;
@@ -640,6 +641,7 @@ export type DashboardActionName =
   | "markAnnouncementRead"
   | "markAllAnnouncementsRead"
   | "shareTokens"
+  | "copyAccountImportJson"
   | "restoreFromBackup"
   | "restoreFromAuthJson"
   | "copyText"

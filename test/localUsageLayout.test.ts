@@ -228,6 +228,24 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(starterIndex).toBeGreaterThan(refreshIndex);
   });
 
+  it("adds host-side Codex import JSON copy feedback to every real account card", () => {
+    const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+    const modalHooks = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/modalHooks.ts"), "utf8");
+    const copyActionIndex = card.indexOf('onAction("copyAccountImportJson", account.id)');
+    const virtualGuardIndex = card.lastIndexOf("{!virtual ? (", copyActionIndex);
+
+    expect(copyActionIndex).toBeGreaterThan(-1);
+    expect(virtualGuardIndex).toBeGreaterThan(-1);
+    expect(copyActionIndex - virtualGuardIndex).toBeLessThan(700);
+    expect(card).toContain("copyImportJsonPending");
+    expect(card).toContain("copyImportJsonSucceeded");
+    expect(card).toContain("<CopyIcon />");
+    expect(card).toContain("<SuccessIcon />");
+    expect(main).toContain('isActionPending("copyAccountImportJson", account.id)');
+    expect(modalHooks).toContain('feedback.showCopyFeedback(`account-import-json:${message.accountId}`)');
+  });
+
   it("supports hiding selected accounts and filtering them from the saved-account grid", () => {
     const accountViews = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/accountViews.tsx"), "utf8");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");

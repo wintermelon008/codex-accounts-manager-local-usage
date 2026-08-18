@@ -103,6 +103,8 @@ async function runDashboardAction(
       return undefined;
     case "shareTokens":
       return handleShareTokens(ctx.repo, payload, translate);
+    case "copyAccountImportJson":
+      return handleCopyAccountImportJson(ctx.repo, account, ctx.resolveLanguage());
     case "restoreFromBackup":
       return handleRestoreFromBackup(ctx.repo, ctx.schedulePublishState, translate);
     case "restoreFromAuthJson":
@@ -319,6 +321,61 @@ async function handleShareTokens(
     void vscode.window.showErrorMessage(message);
     throw new Error(message);
   }
+}
+
+async function handleCopyAccountImportJson(
+  repo: AccountsRepository,
+  account: CodexAccountRecord | undefined,
+  language: DashboardLanguage
+): Promise<undefined> {
+  try {
+    if (!account || isSub2ApiAccount(account)) {
+      throw new Error(resolveCopyAccountImportJsonUnavailableMessage(language));
+    }
+
+    const shared = await repo.exportSharedAccounts([account.id]);
+    if (shared.length !== 1) {
+      throw new Error(resolveCopyAccountImportJsonUnavailableMessage(language));
+    }
+
+    await vscode.env.clipboard.writeText(JSON.stringify(shared, null, 2));
+    void vscode.window.showInformationMessage(resolveCopyAccountImportJsonSuccessMessage(language));
+    return undefined;
+  } catch (error) {
+    const message = resolveCopyAccountImportJsonErrorMessage(language, toFailureMessage(error));
+    void vscode.window.showErrorMessage(message);
+    throw new Error(message);
+  }
+}
+
+function resolveCopyAccountImportJsonSuccessMessage(language: DashboardLanguage): string {
+  if (language === "zh") {
+    return "已复制该账号的 Codex 导入凭据 JSON。";
+  }
+  if (language === "zh-hant") {
+    return "已複製該帳號的 Codex 匯入憑證 JSON。";
+  }
+  return "Copied this account's Codex import JSON.";
+}
+
+function resolveCopyAccountImportJsonUnavailableMessage(language: DashboardLanguage): string {
+  if (language === "zh") {
+    return "该账号没有可导出的 Codex OAuth 凭据";
+  }
+  if (language === "zh-hant") {
+    return "該帳號沒有可匯出的 Codex OAuth 憑證";
+  }
+  return "This account has no exportable Codex OAuth credentials";
+}
+
+function resolveCopyAccountImportJsonErrorMessage(language: DashboardLanguage, message: string): string {
+  if (language === "zh") {
+    return `复制 Codex 导入凭据失败：${message}`;
+  }
+  if (language === "zh-hant") {
+    return `複製 Codex 匯入憑證失敗：${message}`;
+  }
+  return `Failed to copy Codex import JSON: ${message}`;
 }
 
 async function handleRestoreFromBackup(

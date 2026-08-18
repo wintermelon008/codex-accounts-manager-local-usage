@@ -4,17 +4,23 @@ const { BugTeamApiError, BugTeamClient, DEFAULT_BASE_URL } = require("../api/cli
 const { selectOneHourProduct } = require("../core/product.cjs");
 const { normalizeSub2Bundle } = require("../core/sub2.cjs");
 const { BugTeamStorage } = require("../storage.cjs");
+const { TingbaiSource } = require("../tingbaiSource.cjs");
 const { createBugTeamPanelHtml, BUGTEAM_PANEL_VIEW_TYPE } = require("./panel.cjs");
 
 const INTEGRATION_ID = "bugteam";
-const TERMINAL_ORDER_STATES = new Set(["completed", "cancelled"]);
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const SHELF_POLL_INTERVAL_MS = 5_000;
 const IMPORT_RETRY_DELAY_MS = 30_000;
 const MAX_TOKEN_LENGTH = 1_024;
 
 class BugTeamIntegration {
-  constructor(vscode, context, api, { clientFactory, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS } = {}) {
+  constructor(vscode, context, api, options = {}) {
+    const {
+      clientFactory,
+      pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+      tingbaiClientFactory,
+      tingbaiPollIntervalMs
+    } = options;
     this.vscode = vscode;
     this.context = context;
     this.api = api;
@@ -37,6 +43,16 @@ class BugTeamIntegration {
     this.remote = { balance: undefined, product: undefined, inventory: undefined, shelves: [] };
     this.lastError = undefined;
     this.disposed = false;
+    this.tingbai = new TingbaiSource({
+      storage: this.storage,
+      clientFactory: tingbaiClientFactory,
+      pollIntervalMs: tingbaiPollIntervalMs,
+      importBundle: (bundle) => this.importSharedBundle(bundle),
+      onDidChange: () => {
+        this.publish();
+        void this.publishPanelState();
+      }
+    });
   }
 
   async initialize() {
@@ -45,9 +61,16 @@ class BugTeamIntegration {
       this.order = await this.storage.getOrder();
       if (this.order.uncertain && this.order.lastError) {
         this.lastError = this.order.lastError;
+      } else if (this.order.state === "completed" && !this.order.imported && this.order.lastImportError) {
+        this.lastError = this.order.lastImportError;
       }
     } catch (error) {
       this.lastError = safeError(error, "BugTeam 本地状态不可用");
+    }
+    try {
+      await this.tingbai.initialize();
+    } catch (error) {
+      this.tingbai.recordError(error);
     }
 
     this.context.subscriptions.push(
@@ -68,25 +91,28 @@ class BugTeamIntegration {
   }
 
   getViewModel() {
-    const hasPendingOrder = this.shouldContinuePolling();
-    const status = this.lastError ? "warning" : hasPendingOrder ? "active" : this.token ? "ready" : "inactive";
+    const tingbai = this.tingbai.getViewModel();
+    const hasPendingOrder = this.shouldContinuePolling() || tingbai.waitlist?.active || tingbai.attemptPending || Boolean(tingbai.order && !tingbai.order.imported);
+    const sourceError = this.lastError ?? tingbai.lastError;
+    const hasConfiguredSource = Boolean(this.token || tingbai.credentialsConfigured);
+    const status = sourceError ? "warning" : hasPendingOrder ? "active" : hasConfiguredSource ? "ready" : "inactive";
     const balance = this.remote.balance;
     const product = this.remote.product;
     return {
       id: INTEGRATION_ID,
       title: "BugTeam",
       status,
-      statusMessage: this.lastError
-        ? this.lastError
+      statusMessage: sourceError
+        ? sourceError
         : hasPendingOrder
-          ? `订单 ${this.order.orderId ?? "处理中"}`
-          : this.token
-            ? "API 已连接"
-            : "待配置 API Token",
-      description: "查看余额并购买 1h 账号",
+          ? `后台任务 ${this.order.orderId ?? tingbai.order?.orderId ?? "候补中"}`
+          : hasConfiguredSource
+            ? "服务来源已连接"
+            : "待配置服务来源",
+      description: "从多个 BugTeam 来源购买并自动导入无感池",
       details: [
-        { label: "可用余额", value: balance ? formatMoney(balance.availableFen) : "—" },
-        { label: "1h 商品", value: product ? `${product.name} · ${product.code}` : "—" }
+        { label: "BugTeam 余额", value: balance ? formatMoney(balance.availableFen) : "—" },
+        { label: "超级炸弹车余额", value: tingbai.balance ? formatMoney(tingbai.balance.balanceFen) : "—" }
       ],
       metrics: [
         { label: "订单", value: this.order.state ? orderStateLabel(this.order.state) : "无" },
@@ -140,7 +166,18 @@ class BugTeamIntegration {
     try {
       switch (message.action) {
         case "ready":
-          if (this.token) await this.refreshRemoteState();
+          if (this.token) {
+            try {
+              await this.refreshRemoteState();
+            } catch (error) {
+              await this.recordError(error);
+            }
+          }
+          try {
+            await this.tingbai.refresh();
+          } catch (error) {
+            this.tingbai.recordError(error);
+          }
           await this.publishPanelState();
           return;
         case "setToken":
@@ -168,14 +205,49 @@ class BugTeamIntegration {
         case "openWebsite":
           await this.vscode.env.openExternal(this.vscode.Uri.parse(DEFAULT_BASE_URL));
           return;
+        case "tingbaiSetCredentials":
+          await this.tingbai.setCredentials(message.username, message.password);
+          await this.postToast("success", "超级炸弹车买家账号已验证");
+          break;
+        case "tingbaiClearCredentials":
+          await this.tingbai.clearCredentials();
+          break;
+        case "tingbaiRefresh":
+          await this.tingbai.refresh();
+          await this.postToast("success", "超级炸弹车状态已同步");
+          break;
+        case "tingbaiStartWaitlist":
+          await this.tingbai.startWaitlist({
+            minTotalFen: message.minTotalFen,
+            maxTotalFen: message.maxTotalFen
+          });
+          await this.postToast("success", "候补已启动，发现库存后将按金额范围自动购买 1 个");
+          break;
+        case "tingbaiStopWaitlist":
+          await this.tingbai.stopWaitlist();
+          break;
+        case "tingbaiRetryImport":
+          await this.tingbai.retryImport();
+          break;
+        case "tingbaiOpenWebsite":
+          await this.vscode.env.openExternal(this.vscode.Uri.parse("https://tingbai.top/bugteam/"));
+          return;
         default:
           throw new Error("Unsupported BugTeam panel action.");
       }
       await this.publishPanelState();
       this.publish();
+      await this.postActionResult(message.action, "success");
     } catch (error) {
+      if (String(message.action ?? "").startsWith("tingbai")) {
+        const messageText = this.tingbai.recordError(error);
+        await this.postToast("error", messageText);
+        await this.postActionResult(message.action, "error");
+        return;
+      }
       await this.recordError(error);
       await this.postToast("error", this.lastError);
+      await this.postActionResult(message.action, "error");
     }
   }
 
@@ -189,7 +261,8 @@ class BugTeamIntegration {
       shelves: this.remote.shelves,
       order: this.order.orderId || this.order.uncertain || this.order.creationPending ? publicOrder(this.order) : undefined,
       managerImportAvailable: typeof this.api.importSharedAccountsToBalancePool === "function",
-      lastError: this.lastError
+      lastError: this.lastError,
+      tingbai: this.tingbai.getViewModel()
     };
   }
 
@@ -373,16 +446,11 @@ class BugTeamIntegration {
   async processCompletedOrder(force = false) {
     if (!this.order.orderId || this.order.state !== "completed" || this.order.imported || this.importInFlight) return;
     if (!force && Date.now() - this.lastImportAttemptAt < IMPORT_RETRY_DELAY_MS) return;
-    if (typeof this.api.importSharedAccountsToBalancePool !== "function") {
-      throw new Error("当前 Manager 未提供无感账号池导入能力");
-    }
     this.importInFlight = true;
     this.lastImportAttemptAt = Date.now();
     try {
       const bundle = await this.requireClient().downloadSub2(this.order.orderId);
-      const accounts = normalizeSub2Bundle(bundle);
-      const result = await this.api.importSharedAccountsToBalancePool(accounts);
-      const summary = normalizeImportResult(result);
+      const summary = await this.importSharedBundle(bundle);
       this.order.importResult = summary;
       this.order.imported = summary.imported === summary.total && summary.poolEnabled === summary.total;
       this.order.lastImportError = this.order.imported
@@ -399,6 +467,15 @@ class BugTeamIntegration {
     } finally {
       this.importInFlight = false;
     }
+  }
+
+  async importSharedBundle(bundle) {
+    if (typeof this.api.importSharedAccountsToBalancePool !== "function") {
+      throw new Error("当前 Manager 未提供无感账号池导入能力");
+    }
+    const accounts = normalizeSub2Bundle(bundle);
+    const result = await this.api.importSharedAccountsToBalancePool(accounts);
+    return normalizeImportResult(result);
   }
 
   applyOrder(order) {
@@ -434,7 +511,7 @@ class BugTeamIntegration {
   }
 
   hasOpenOrder() {
-    return Boolean(this.order.orderId && !TERMINAL_ORDER_STATES.has(this.order.state) && !this.order.imported);
+    return Boolean(this.order.orderId && this.order.state !== "cancelled" && !this.order.imported);
   }
 
   syncPolling() {
@@ -503,6 +580,12 @@ class BugTeamIntegration {
     }
   }
 
+  async postActionResult(action, level) {
+    if (this.panel) {
+      await this.panel.webview.postMessage({ type: "actionResult", action, level });
+    }
+  }
+
   closePanel() {
     this.stopShelfPolling();
     for (const disposable of this.panelDisposables.splice(0)) disposable.dispose?.();
@@ -513,6 +596,7 @@ class BugTeamIntegration {
     this.disposed = true;
     this.stopPolling();
     this.stopShelfPolling();
+    this.tingbai.dispose();
     for (const disposable of this.panelDisposables.splice(0)) disposable.dispose?.();
     this.panel?.dispose?.();
     this.panel = undefined;
@@ -611,7 +695,8 @@ function normalizeImportResult(result) {
     refreshFailed: nonNegativeInteger(result.refreshFailed),
     notEligible: nonNegativeInteger(result.notEligible),
     authFailed: nonNegativeInteger(result.authFailed),
-    importFailed: nonNegativeInteger(result.importFailed)
+    importFailed: nonNegativeInteger(result.importFailed),
+    accounts: Array.isArray(result.accounts) ? result.accounts.map(normalizeAccountBalance).filter(Boolean) : []
   };
   if (
     !["completed", "partial", "failed"].includes(summary.status) ||
@@ -622,6 +707,31 @@ function normalizeImportResult(result) {
     throw new Error("Manager 导入结果计数无效");
   }
   return summary;
+}
+
+function normalizeAccountBalance(value) {
+  if (!value || typeof value !== "object") return undefined;
+  const status = ["ready", "refresh_failed", "not_eligible", "import_failed"].includes(value.status)
+    ? value.status
+    : value.poolEnabled === true
+      ? "ready"
+      : "not_eligible";
+  return {
+    accountId: readString(value.accountId),
+    email: readString(value.email),
+    planType: readString(value.planType),
+    hourlyPercentage: percentageOrUndefined(value.hourlyPercentage),
+    weeklyPercentage: percentageOrUndefined(value.weeklyPercentage),
+    creditsBalance: readString(value.creditsBalance),
+    poolEnabled: value.poolEnabled === true,
+    status
+  };
+}
+
+function percentageOrUndefined(value) {
+  if (value === null || value === undefined) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : undefined;
 }
 
 function publicOrder(order, includeSecrets = false) {

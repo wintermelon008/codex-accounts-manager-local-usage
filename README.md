@@ -20,7 +20,7 @@
 
 | 类别       | 功能                                                                       | 需要做什么                                                                                                                                       |
 | ---------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 直接可用   | 多账号 OAuth/导入、配额卡片、手动启动额度倒计时、切换、详情、备份/恢复、状态栏、跨窗口同步 | 安装后导入账号即可使用；倒计时启动按钮仅在服务端报告的额度窗口尚未启动时显示（例如 5 小时、7 天或 30 天窗口）。                                                                  |
+| 直接可用   | 多账号 OAuth/导入、配额卡片、单账号导入凭据复制、手动启动额度倒计时、切换、详情、备份/恢复、状态栏、跨窗口同步 | 安装后导入账号即可使用；真实 Codex 账号可从卡片直接复制 Manager 可识别的导入 JSON；倒计时启动按钮仅在服务端报告的额度窗口尚未启动时显示。                                                                  |
 | 直接可用   | 本机 Codex token 用量、六类时间范围、Free/Plus/Pro 多选筛选                 | 读取已缓存的本机元数据；首次使用或需要最新值时点击“刷新用量”，不读取会话正文。                                                                    |
 | 设置后启用 | 官方自动切号、低额度提醒、配额定时刷新、Codex App 重启                     | 在 Dashboard 设置中显式打开相应开关；默认不会自动切号。                                                                                          |
 | 一次性安装 | 实验性无感切号与额度分档                                                   | Linux/macOS 运行安装命令、按提示 reload 一次、准备至少两个新鲜账号并在 Dashboard 配置账号池。Windows 目前不支持。                                |
@@ -45,7 +45,7 @@
 
 - [飞书私聊 M+/S+ 导入包](docs/integrations/feishu-private-import.md)：仅接收管理员一对一文本消息；M+ 写入 Manager 的显式本地收件箱，S+ 只写入独立私有队列。
 - [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；Gateway 以“手动 / Gateway”虚拟账号出现在已保存账号和手动切换列表，卡片内显示 tracker 用量/估算价格和配置动作，但不伪造 OAuth 账号或进入任何自动账号池。
-- [BugTeam 1h 账号集成](docs/integrations/bugteam.md)：独立 VSIX 提供余额、商品、当前发车货架和明确的购买/候补入口；订单完成后，Sub2 JSON 会自动导入并启用符合额度条件的无感池账号，但不会自动切换当前账号。
+- [多来源 BugTeam 账号集成](docs/integrations/bugteam.md)：独立 VSIX 按来源卡片维护 BugTeam 官方 API 与超级炸弹车；支持服务端候补或本地库存候补，订单完成后统一导入并启用符合额度条件的无感池账号，但不会自动切换当前账号。
 
 ## 安装与更新
 
@@ -91,7 +91,7 @@ npm --prefix integrations/sub2api-importer run package
 - [无感切号、额度分档与阈值](docs/HOT_SWITCH.md)
 - [独立 Sub2API Gateway、S+ 导入器与迁移](docs/integrations/sub2api-gateway.md)
 - [飞书私聊 M+/S+ 导入机器人](docs/integrations/feishu-private-import.md)
-- [BugTeam 1h 账号集成](docs/integrations/bugteam.md)
+- [多来源 BugTeam 账号集成](docs/integrations/bugteam.md)
 - [核心与可选组件的独立交付、停用和迁移](docs/integrations/README.md)
 - [核心本地文本导入收件箱](docs/LOCAL_IMPORT_INBOX.md)
 - [变更日志](docs/CHANGELOG.md)

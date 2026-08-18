@@ -15,6 +15,18 @@ export type BalancePoolImportSummary = {
   notEligible: number;
   authFailed: number;
   importFailed: number;
+  accounts: BalancePoolAccountSummary[];
+};
+
+export type BalancePoolAccountSummary = {
+  accountId?: string;
+  email?: string;
+  planType?: string;
+  hourlyPercentage?: number;
+  weeklyPercentage?: number;
+  creditsBalance?: string;
+  poolEnabled: boolean;
+  status: "ready" | "refresh_failed" | "not_eligible" | "import_failed";
 };
 
 /**
@@ -37,6 +49,7 @@ export async function importSharedAccountsIntoBalancePool(
   let notEligible = 0;
   let authFailed = 0;
   let importFailed = 0;
+  const accounts: BalancePoolAccountSummary[] = [];
 
   for (const entry of entries) {
     let account: CodexAccountRecord;
@@ -50,6 +63,12 @@ export async function importSharedAccountsIntoBalancePool(
       imported += 1;
     } catch {
       importFailed += 1;
+      accounts.push({
+        accountId: readResultString(entry.account_id ?? entry.id),
+        email: readResultString(entry.email),
+        poolEnabled: false,
+        status: "import_failed"
+      });
       continue;
     }
 
@@ -68,9 +87,19 @@ export async function importSharedAccountsIntoBalancePool(
       } else {
         notEligible += 1;
       }
+      accounts.push(
+        toAccountSummary(
+          updated ?? account,
+          eligible,
+          refresh.error ? "refresh_failed" : eligible ? "ready" : "not_eligible",
+          !refresh.error
+        )
+      );
     } catch {
       await repo.setBalancePoolMembership(account.id, false).catch(() => undefined);
       refreshFailed += 1;
+      const updated = await repo.getAccount(account.id).catch(() => undefined);
+      accounts.push(toAccountSummary(updated ?? account, false, "refresh_failed", false));
     }
   }
 
@@ -83,6 +112,34 @@ export async function importSharedAccountsIntoBalancePool(
     refreshFailed,
     notEligible,
     authFailed,
-    importFailed
+    importFailed,
+    accounts
   };
+}
+
+function toAccountSummary(
+  account: CodexAccountRecord,
+  poolEnabled: boolean,
+  status: BalancePoolAccountSummary["status"],
+  includeQuota: boolean
+): BalancePoolAccountSummary {
+  const quota = includeQuota ? account.quotaSummary : undefined;
+  return {
+    accountId: readResultString(account.id),
+    email: readResultString(account.email),
+    planType: readResultString(account.planType),
+    hourlyPercentage: finiteNumber(quota?.hourlyPercentage),
+    weeklyPercentage: finiteNumber(quota?.weeklyPercentage),
+    creditsBalance: readResultString(quota?.credits?.balance),
+    poolEnabled,
+    status
+  };
+}
+
+function finiteNumber(value: number | undefined): number | undefined {
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function readResultString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 160) : undefined;
 }

@@ -11,7 +11,9 @@ import type {
 import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCountdown";
 import { getSensitiveDisplayValue, renderTagList } from "./helpers";
 import {
+  CopyIcon,
   EditTagsIcon,
+  SuccessIcon,
   renderDetailsIcon,
   renderQuotaCountdownStartIcon,
   renderRefreshIcon,
@@ -39,6 +41,8 @@ export function SavedAccountCard(props: {
   reauthorizePending: boolean;
   resyncProfilePending: boolean;
   refreshPending: boolean;
+  copyImportJsonPending: boolean;
+  copyImportJsonSucceeded: boolean;
   quotaCountdownStartPending: boolean;
   detailsPending: boolean;
   removePending: boolean;
@@ -58,6 +62,7 @@ export function SavedAccountCard(props: {
       | "reauthorize"
       | "resyncProfile"
       | "refresh"
+      | "copyAccountImportJson"
       | "startQuotaCountdown"
       | "remove"
       | "toggleStatusBar"
@@ -400,6 +405,16 @@ export function SavedAccountCard(props: {
                 pending={props.refreshPending}
                 disabled={props.busy}
                 onClick={() => onAction("refresh", account.id)}
+              />
+            ) : null}
+            {!virtual ? (
+              <ActionButton
+                icon={props.copyImportJsonSucceeded ? <SuccessIcon /> : <CopyIcon />}
+                iconOnly
+                label={props.copyImportJsonSucceeded ? copy.copySuccess : copy.copyAccountImportJsonBtn}
+                pending={props.copyImportJsonPending}
+                disabled={props.busy}
+                onClick={() => onAction("copyAccountImportJson", account.id)}
               />
             ) : null}
             {!virtual && showQuotaCountdownStart ? (

@@ -36,6 +36,9 @@ function createBugTeamPanelHtml() {
     button:hover:not(:disabled) { border-color: var(--accent); }
     button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     button.primary { color: var(--button-text); background: var(--button); border-color: var(--button); }
+    button.action-busy::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 7px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: action-spin .7s linear infinite; }
+    button.action-success { border-color: var(--success); color: var(--success); }
+    button.action-error { border-color: var(--danger); color: var(--danger); }
     button:disabled { opacity: .48; cursor: default; }
     input { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--vscode-input-background); }
     .shell { max-width: 920px; min-height: 100vh; margin: 0 auto; padding: 18px; }
@@ -54,7 +57,11 @@ function createBugTeamPanelHtml() {
     .notice.visible { display: block; }
     .notice.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
     .notice.success { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
-    .section { margin-top: 14px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+    .source-card { margin-top: 16px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+    .source-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--border); }
+    .source-head p { margin-top: 4px; }
+    .source-block { padding: 16px; border-top: 1px solid var(--border); }
+    .source-head + .source-block { border-top: 0; }
     .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
     .section-head p { margin-top: 4px; }
     .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
@@ -64,6 +71,9 @@ function createBugTeamPanelHtml() {
     .metric-value.ok { color: var(--success); }
     .metric-value.warn { color: var(--warning); }
     .form-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+    .credentials-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .credentials-form .actions { grid-column: 1 / -1; }
+    .amount-range-form { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 12px; }
     .field-label { display: block; margin-bottom: 6px; font-weight: 650; }
     .hint { margin-top: 7px; line-height: 1.45; font-size: 12px; }
     .product { padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); }
@@ -89,6 +99,21 @@ function createBugTeamPanelHtml() {
     .toast.error { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); color: var(--danger); }
     .empty { padding: 24px 10px; color: var(--muted); text-align: center; }
     .security { margin-top: 12px; color: var(--muted); line-height: 1.5; font-size: 12px; }
+    .source-message { margin-top: 12px; color: var(--muted); line-height: 1.5; white-space: pre-wrap; }
+    .source-message.error { color: var(--danger); }
+    .records { display: grid; gap: 9px; margin-top: 12px; }
+    .record { padding: 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); }
+    .record-head { display: flex; justify-content: space-between; gap: 10px; }
+    .record-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 9px; }
+    .record-grid span { color: var(--muted); font-size: 11px; }
+    .record-grid strong { display: block; margin-top: 3px; overflow-wrap: anywhere; }
+    .account-balances { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 9px; }
+    .account-balance { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); }
+    .account-balance-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .account-balance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }
+    .account-balance-grid span { color: var(--muted); font-size: 11px; }
+    .account-balance-grid strong { display: block; margin-top: 3px; overflow-wrap: anywhere; }
+    @keyframes action-spin { to { transform: rotate(360deg); } }
     @media (max-width: 680px) { .topbar { display: block; } .topbar .actions { justify-content: flex-start; margin-top: 12px; } .metrics, .shelf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .form-row { grid-template-columns: 1fr; } .shelf-actions button { flex: 1 1 160px; } }
     @media (max-width: 420px) { .shelf-grid { grid-template-columns: 1fr; } }
   </style>
@@ -96,38 +121,71 @@ function createBugTeamPanelHtml() {
 <body>
   <main class="shell">
     <header class="topbar">
-      <div class="brand"><div class="logo">BT</div><div><h1>BugTeam</h1><p class="subtitle">余额、1h 商品与候补订单</p></div></div>
-      <div class="actions"><button type="button" data-action="openWebsite">打开 BugTeam 网页</button><button id="refresh" type="button" data-action="refresh">刷新</button></div>
+      <div class="brand"><div class="logo">BT</div><div><h1>BugTeam 服务来源</h1><p class="subtitle">各来源独立购入，统一导入 Manager 无感池</p></div></div>
     </header>
     <div id="notice" class="notice" role="status"></div>
-    <section class="section">
+    <article class="source-card">
+      <div class="source-head"><div><h2>BugTeam 官方 API</h2><p class="hint">API Token、1h 商品与服务端候补订单</p></div><div class="actions"><button type="button" data-action="openWebsite">打开网站</button><button id="refresh" type="button" data-action="refresh">刷新</button></div></div>
+    <section class="source-block">
       <div class="section-head"><div><h2>API 连接</h2><p class="hint">Token 仅保存到本扩展的 SecretStorage，不会显示在页面状态中。</p></div><span id="connection-status" class="status">未配置</span></div>
       <form id="token-form" class="form-row">
         <label><span class="field-label">BugTeam API Token</span><input id="token" type="password" autocomplete="off" placeholder="粘贴 cfk_ Token"></label>
-        <div class="actions"><button class="primary" type="submit">保存并连接</button><button id="clear-token" type="button" data-action="clearToken">清除本地 Token</button></div>
+        <div class="actions"><button id="token-save" class="primary" type="submit">保存并连接</button><button id="clear-token" type="button" data-action="clearToken">清除本地 Token</button></div>
       </form>
       <p class="security">建议在 BugTeam API 页面创建长期 Token。扩展不会保存 BugTeam 密码，也不会把 Token 写入日志或 Manager 公共 API。</p>
     </section>
-    <section class="section">
+    <section class="source-block">
       <div class="section-head"><div><h2>当前发车</h2><p class="hint">显示当前货架档位；选中有库存的档位后可直接购买，也可以提交新鲜候补。</p></div><span id="shelf-status" class="status">未同步</span></div>
       <div id="shelves" class="shelf-grid"></div>
       <p id="shelf-selection" class="shelf-selection">未选档：可下新鲜候补订单（有多少发多少）</p>
       <div class="shelf-actions"><button id="shelf-purchase" class="primary" type="button" data-action="purchaseShelf">选择档位立即购买</button><button id="fresh-reserve" type="button" data-action="reserve">下候补订单</button></div>
     </section>
-    <section class="section">
+    <section class="source-block">
       <div class="section-head"><div><h2>账户与商品</h2><p class="hint">1h 商品由 BugTeam 商品目录动态识别，网页示例商品编码不会被硬编码。</p></div></div>
       <div id="metrics" class="metrics"></div>
       <div id="product" class="product"></div>
     </section>
+    </article>
+    <article class="source-card">
+      <div class="source-head"><div><h2>超级炸弹车</h2><p class="hint">tingbai.top · 发现库存后自动余额购买并导入</p></div><div class="actions"><button type="button" data-action="tingbaiOpenWebsite">打开网站</button><button id="tingbai-refresh" type="button" data-action="tingbaiRefresh">刷新</button></div></div>
+      <section class="source-block">
+        <div class="section-head"><div><h3>买家账户</h3><p class="hint">账号和密码仅保存到本扩展的 SecretStorage，用于候补期间恢复网页登录会话。</p></div><span id="tingbai-status" class="status">未配置</span></div>
+        <form id="tingbai-credentials-form" class="form-row credentials-form">
+          <label><span class="field-label">买家账号</span><input id="tingbai-username" type="text" autocomplete="username" maxlength="64" placeholder="输入买家账号"></label>
+          <label><span class="field-label">密码</span><input id="tingbai-password" type="password" autocomplete="off" maxlength="128" placeholder="输入密码"></label>
+          <div class="actions"><button id="tingbai-save" class="primary" type="submit">保存并验证</button><button id="tingbai-clear" type="button" data-action="tingbaiClearCredentials">清除凭据</button></div>
+        </form>
+      </section>
+      <section class="source-block">
+        <div class="section-head"><div><h3>库存候补</h3><p class="hint">候补固定购买 1 个；金额下限或上限可单独留空，两者都不填则不限制金额。</p></div></div>
+        <div id="tingbai-metrics" class="metrics"></div>
+        <div id="tingbai-product" class="product"></div>
+        <div class="form-row amount-range-form">
+          <label><span class="field-label">候补金额下限（元）</span><input id="tingbai-min-amount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="不限制"></label>
+          <label><span class="field-label">候补金额上限（元）</span><input id="tingbai-max-amount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="不限制"></label>
+        </div>
+        <p id="tingbai-message" class="source-message"></p>
+        <div class="shelf-actions"><button id="tingbai-start" class="primary" type="button" data-action="tingbaiStartWaitlist">开始候补</button><button id="tingbai-stop" type="button" data-action="tingbaiStopWaitlist">停止候补</button><button id="tingbai-retry-import" type="button" data-action="tingbaiRetryImport">重试导入</button></div>
+      </section>
+      <section class="source-block">
+        <div class="section-head"><div><h3>购买记录</h3><p class="hint">记录自动下单时观测到的预计炸车时间与最终入池结果。</p></div></div>
+        <div id="tingbai-records" class="records"></div>
+      </section>
+    </article>
+    <article class="source-card">
+      <div class="source-head"><div><h2>已购账号额度</h2><p class="hint">显示各来源最近导入账号的脱敏额度结果，不包含 Token。</p></div></div>
+      <section class="source-block"><div id="account-balances" class="account-balances"></div></section>
+    </article>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   </main>
   <script nonce="${nonce}">
     (() => {
       const vscode = acquireVsCodeApi();
-      const appState = { tokenConfigured: false, balance: undefined, product: undefined, inventory: undefined, shelves: [], order: undefined, managerImportAvailable: false, lastError: undefined };
+      const appState = { tokenConfigured: false, balance: undefined, product: undefined, inventory: undefined, shelves: [], order: undefined, managerImportAvailable: false, lastError: undefined, tingbai: {} };
       const notice = document.getElementById("notice");
       const toast = document.getElementById("toast");
       const token = document.getElementById("token");
+      const tokenSave = document.getElementById("token-save");
       const status = document.getElementById("connection-status");
       const refreshButton = document.getElementById("refresh");
       const metrics = document.getElementById("metrics");
@@ -138,23 +196,39 @@ function createBugTeamPanelHtml() {
       const shelfPurchase = document.getElementById("shelf-purchase");
       const freshReserve = document.getElementById("fresh-reserve");
       const clearToken = document.getElementById("clear-token");
+      const tingbaiUsername = document.getElementById("tingbai-username");
+      const tingbaiPassword = document.getElementById("tingbai-password");
+      const tingbaiSave = document.getElementById("tingbai-save");
+      const tingbaiStatus = document.getElementById("tingbai-status");
+      const tingbaiRefresh = document.getElementById("tingbai-refresh");
+      const tingbaiClear = document.getElementById("tingbai-clear");
+      const tingbaiMetrics = document.getElementById("tingbai-metrics");
+      const tingbaiProduct = document.getElementById("tingbai-product");
+      const tingbaiMinAmount = document.getElementById("tingbai-min-amount");
+      const tingbaiMaxAmount = document.getElementById("tingbai-max-amount");
+      const tingbaiMessage = document.getElementById("tingbai-message");
+      const tingbaiStart = document.getElementById("tingbai-start");
+      const tingbaiStop = document.getElementById("tingbai-stop");
+      const tingbaiRetryImport = document.getElementById("tingbai-retry-import");
+      const tingbaiRecords = document.getElementById("tingbai-records");
+      const accountBalances = document.getElementById("account-balances");
       let busy = false;
       let activeAction = "";
+      let feedbackAction = "";
+      let feedbackLevel = "";
       let selectedShelfBucketStart = "";
       let toastTimer;
+      let feedbackTimer;
 
       window.addEventListener("message", (event) => {
         const message = event.data || {};
         if (message.type === "state") {
           Object.assign(appState, message.state || {});
-          busy = false;
-          activeAction = "";
-          render();
+          renderSafely();
         } else if (message.type === "toast") {
-          busy = false;
-          activeAction = "";
           showToast(message.message, message.level);
-          render();
+        } else if (message.type === "actionResult") {
+          finishAction(message.action, message.level);
         }
       });
 
@@ -162,26 +236,53 @@ function createBugTeamPanelHtml() {
         const target = event.target?.closest?.("[data-action]");
         if (!target || target.disabled) return;
         const action = target.dataset.action;
-        if (action === "selectShelf") { selectedShelfBucketStart = target.dataset.bucketStart || ""; render(); }
-        else if (action === "purchaseShelf") { busy = true; activeAction = "purchaseShelf"; render(); send("purchaseShelf", { bucketStart: selectedShelfBucketStart }); }
-        else if (action === "purchase" || action === "reserve") { busy = true; activeAction = "reserve"; render(); send("reserve"); }
-        else if (action === "refresh") { busy = true; activeAction = "refresh"; render(); send("refresh"); }
+        if (action === "selectShelf") { selectedShelfBucketStart = target.dataset.bucketStart || ""; renderSafely(); }
+        else if (action === "purchaseShelf") { beginAction("purchaseShelf"); send("purchaseShelf", { bucketStart: selectedShelfBucketStart }); }
+        else if (action === "purchase" || action === "reserve") { beginAction("reserve"); send("reserve"); }
+        else if (action === "refresh") { beginAction("refresh"); send("refresh"); }
         else if (action === "openWebsite") send("openWebsite");
         else if (action === "clearToken") {
-          if (window.confirm("清除本地 BugTeam Token？进行中的订单需要先完成或确认。")) { busy = true; activeAction = "clearToken"; render(); send("clearToken"); }
+          if (window.confirm("清除本地 BugTeam Token？进行中的订单需要先完成或确认。")) { beginAction("clearToken"); send("clearToken"); }
         }
-        else if (action === "retryImport") { busy = true; activeAction = "retryImport"; render(); send("retryImport"); }
+        else if (action === "retryImport") { beginAction("retryImport"); send("retryImport"); }
+        else if (action === "tingbaiRefresh") { beginAction(action); send(action); }
+        else if (action === "tingbaiOpenWebsite") send(action);
+        else if (action === "tingbaiClearCredentials") {
+          if (window.confirm("清除超级炸弹车买家凭据？")) { beginAction(action); send(action); }
+        }
+        else if (action === "tingbaiStartWaitlist") {
+          const minTotalFen = readAmountFen(tingbaiMinAmount, "候补金额下限");
+          const maxTotalFen = readAmountFen(tingbaiMaxAmount, "候补金额上限");
+          if (minTotalFen === null || maxTotalFen === null) return;
+          if (minTotalFen !== undefined && maxTotalFen !== undefined && minTotalFen > maxTotalFen) {
+            showNotice("候补金额下限不能大于上限", "error");
+            return;
+          }
+          const payload = {};
+          if (minTotalFen !== undefined) payload.minTotalFen = minTotalFen;
+          if (maxTotalFen !== undefined) payload.maxTotalFen = maxTotalFen;
+          if (window.confirm("发现库存后将自动购买 1 个，实时总价需满足 " + amountRange(minTotalFen, maxTotalFen) + "。确认开始候补？")) { beginAction(action); send(action, payload); }
+        }
+        else if (action === "tingbaiStopWaitlist" || action === "tingbaiRetryImport") { beginAction(action); send(action); }
       });
 
       document.getElementById("token-form").addEventListener("submit", (event) => {
         event.preventDefault();
         const value = token.value.trim();
         if (!value) { showNotice("请先粘贴 BugTeam API Token", "error"); return; }
-        busy = true;
-        activeAction = "setToken";
+        beginAction("setToken");
         token.value = "";
-        render();
         send("setToken", { token: value });
+      });
+
+      document.getElementById("tingbai-credentials-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const username = tingbaiUsername.value.trim();
+        const password = tingbaiPassword.value;
+        if (!username || !password) { showNotice("请输入超级炸弹车买家账号和密码", "error"); return; }
+        beginAction("tingbaiSetCredentials");
+        tingbaiPassword.value = "";
+        send("tingbaiSetCredentials", { username, password });
       });
 
       function render() {
@@ -201,13 +302,93 @@ function createBugTeamPanelHtml() {
         product.innerHTML = appState.product ? '<strong>' + esc(appState.product.name) + '</strong><div class="hint">商品编码：' + esc(appState.product.code) + ' · 基准有效期：' + duration(appState.product.billingBaseSeconds) + ' · 基准价：' + money(appState.product.priceFen) + '</div>' + (inv ? '<div class="hint">本次报价锁款：' + money(inv.hold_total_fen) + ' · 预计总额：' + money(inv.estimated_total_fen) + '</div>' : '') : '<div class="empty">连接后读取 1h 商品目录。</div>';
         renderShelves();
         refreshButton.disabled = busy;
-        refreshButton.textContent = activeAction === "refresh" ? "同步中…" : "刷新";
         const selectedShelf = (Array.isArray(appState.shelves) ? appState.shelves : []).find((shelf) => shelf.bucketStart === selectedShelfBucketStart && shelf.available > 0);
         shelfPurchase.disabled = busy || !canCreateOrder || !selectedShelf || retryingUncertainOrder;
-        shelfPurchase.textContent = activeAction === "purchaseShelf" ? "购买中…" : "选择档位立即购买";
         freshReserve.disabled = busy || !canCreateOrder;
-        freshReserve.textContent = activeAction === "reserve" ? "候补中…" : "下候补订单";
         clearToken.disabled = busy || !appState.tokenConfigured;
+        tokenSave.disabled = busy;
+        renderTingbai();
+        renderAccountBalances();
+        setActionButton(tokenSave, "setToken", "保存并连接", "连接中…", "连接成功 ✓", "连接失败");
+        setActionButton(refreshButton, "refresh", "刷新", "同步中…", "已同步 ✓", "同步失败");
+        setActionButton(shelfPurchase, "purchaseShelf", "选择档位立即购买", "购买中…", "已提交 ✓", "购买失败");
+        setActionButton(freshReserve, "reserve", "下候补订单", "候补中…", "已提交 ✓", "提交失败");
+        setActionButton(clearToken, "clearToken", "清除本地 Token", "清除中…", "已清除 ✓", "清除失败");
+      }
+
+      function renderTingbai() {
+        const source = appState.tingbai || {};
+        const configured = source.credentialsConfigured === true;
+        const waitlist = source.waitlist;
+        const order = source.order;
+        const productState = source.product;
+        const balance = source.balance;
+        tingbaiStatus.textContent = source.lastError ? "异常" : waitlist?.active ? "候补中" : configured ? "已连接" : "未配置";
+        tingbaiStatus.className = "status " + (source.lastError ? "error" : configured ? "completed" : "");
+        if (configured && !tingbaiUsername.value) tingbaiUsername.value = source.username || "";
+        tingbaiMetrics.innerHTML = [
+          metric("账户余额", balance ? money(balance.balanceFen) : "—", balance && balance.balanceFen > 0 ? "ok" : ""),
+          metric("当前库存", productState ? String(number(productState.available)) + " 个" : "—", productState && productState.available > 0 ? "ok" : ""),
+          metric("当前售价", productState ? money(productState.priceFen) : "—", ""),
+          metric("预计炸车时间", productState?.estimatedExplosionAt ? formatDateTime(productState.estimatedExplosionAt) : "—", "")
+        ].join("");
+        tingbaiProduct.innerHTML = productState
+          ? '<strong>' + esc(productState.name) + '</strong><div class="hint">商品编码：' + esc(productState.code) + ' · 最近检查：' + esc(formatDateTime(source.checkedAt)) + '</div>'
+          : '<div class="empty">刷新后读取公开商品目录。</div>';
+        const lines = [];
+        if (waitlist?.active) lines.push('候补运行中：有货后购买 ' + number(waitlist.quantity) + ' 个，实时总价需满足 ' + amountRange(waitlist.minTotalFen, waitlist.maxTotalFen));
+        else if (source.attemptPending) lines.push('订单请求结果待确认，将复用同一请求继续查询。');
+        else if (order && !order.imported) lines.push('订单 ' + (order.orderId || '处理中') + ' · ' + orderState(order.state));
+        else lines.push('候补未启动。');
+        if (source.lastError) lines.push(source.lastError);
+        tingbaiMessage.textContent = lines.join('\\n');
+        tingbaiMessage.className = 'source-message' + (source.lastError ? ' error' : '');
+        tingbaiSave.disabled = busy;
+        tingbaiRefresh.disabled = busy;
+        tingbaiClear.disabled = busy || !configured;
+        const amountRangeLocked = busy || waitlist?.active || source.attemptPending || Boolean(order && !order.imported);
+        if (waitlist?.active) {
+          tingbaiMinAmount.value = amountInput(waitlist.minTotalFen);
+          tingbaiMaxAmount.value = amountInput(waitlist.maxTotalFen);
+        }
+        tingbaiMinAmount.disabled = amountRangeLocked;
+        tingbaiMaxAmount.disabled = amountRangeLocked;
+        tingbaiStart.disabled = busy || !configured || !productState || waitlist?.active || source.attemptPending || (order && !order.imported);
+        tingbaiStop.disabled = busy || !waitlist?.active || source.attemptPending;
+        tingbaiRetryImport.hidden = !order?.lastImportError;
+        tingbaiRetryImport.disabled = busy;
+        const records = Array.isArray(source.records) ? source.records : [];
+        tingbaiRecords.innerHTML = records.length ? records.map((record) => '<article class="record"><div class="record-head"><strong>订单 ' + esc(record.orderId) + '</strong><span class="status ' + (record.imported ? 'completed' : '') + '">' + esc(record.imported ? '已入池' : orderState(record.state)) + '</span></div><div class="record-grid"><div><span>预计炸车时间</span><strong>' + esc(formatDateTime(record.estimatedExplosionAt)) + '</strong></div><div><span>检测到库存</span><strong>' + esc(formatDateTime(record.detectedAt)) + '</strong></div><div><span>成交金额</span><strong>' + esc(money(record.amountFen)) + '</strong></div></div></article>').join('') : '<div class="empty">暂无自动购买记录。</div>';
+        setActionButton(tingbaiSave, 'tingbaiSetCredentials', '保存并验证', '验证中…', '验证成功 ✓', '验证失败');
+        setActionButton(tingbaiRefresh, 'tingbaiRefresh', '刷新', '同步中…', '已同步 ✓', '同步失败');
+        setActionButton(tingbaiClear, 'tingbaiClearCredentials', '清除凭据', '清除中…', '已清除 ✓', '清除失败');
+        setActionButton(tingbaiStart, 'tingbaiStartWaitlist', '开始候补', '启动中…', '已启动 ✓', '启动失败');
+        setActionButton(tingbaiStop, 'tingbaiStopWaitlist', '停止候补', '停止中…', '已停止 ✓', '停止失败');
+        setActionButton(tingbaiRetryImport, 'tingbaiRetryImport', '重试导入', '导入中…', '导入成功 ✓', '导入失败');
+      }
+
+      function renderAccountBalances() {
+        const items = [];
+        const append = (accounts) => {
+          for (const account of Array.isArray(accounts) ? accounts : []) {
+            if (account && typeof account === 'object') items.push(account);
+          }
+        };
+        append(appState.order?.importResult?.accounts);
+        for (const record of Array.isArray(appState.tingbai?.records) ? appState.tingbai.records : []) {
+          append(record?.importResult?.accounts);
+        }
+        const unique = [];
+        const seen = new Set();
+        for (const account of items) {
+          const key = String(account.accountId || account.email || '');
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          unique.push(account);
+        }
+        accountBalances.innerHTML = unique.length
+          ? unique.map((account) => '<article class="account-balance"><div class="account-balance-head"><div><strong>' + esc(account.email || account.accountId || '未知账号') + '</strong><div class="hint">' + esc(account.planType || '未知套餐') + '</div></div><span class="status ' + (account.poolEnabled ? 'completed' : 'error') + '">' + esc(account.poolEnabled ? '已入无感池' : accountResultState(account.status)) + '</span></div><div class="account-balance-grid"><div><span>5h 额度</span><strong>' + esc(percentage(account.hourlyPercentage)) + '</strong></div><div><span>周额度</span><strong>' + esc(percentage(account.weeklyPercentage)) + '</strong></div><div><span>Credits 余额</span><strong>' + esc(account.creditsBalance || '—') + '</strong></div></div></article>').join('')
+          : '<div class="empty">购买并完成额度刷新后显示每个账号的额度。</div>';
       }
 
       function renderShelves() {
@@ -271,10 +452,84 @@ function createBugTeamPanelHtml() {
         const part = (type) => parts.find((item) => item.type === type)?.value || '';
         return part('month') + '/' + part('day') + ' ' + part('hour') + ':' + part('minute');
       }
+      function formatDateTime(value) {
+        if (!value) return '—';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '—';
+        return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date);
+      }
+      function orderState(value) { return ({ completed: '已完成', delivered: '已完成', failed: '失败', refunded: '已退款', processing: '处理中', fulfilling: '发货中', waiting_inventory: '等待库存' }[String(value || '').toLowerCase()] || String(value || '处理中')); }
+      function accountResultState(value) { return ({ refresh_failed: '额度刷新失败', not_eligible: '暂无额度能力', import_failed: '导入失败' }[String(value || '').toLowerCase()] || '未入无感池'); }
+      function percentage(value) { const parsed = Number(value); return value !== null && value !== undefined && Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) + '%' : '—'; }
       function duration(seconds) { const value = Number(seconds); if (!Number.isFinite(value)) return '—'; if (value % 3600 === 0) return (value / 3600) + ' 小时'; if (value % 60 === 0) return (value / 60) + ' 分钟'; return Math.round(value) + ' 秒'; }
       function money(fen) { const value = Number(fen); return Number.isFinite(value) ? '¥' + (value / 100).toFixed(2) : '—'; }
+      function amountInput(fen) { const value = optionalFen(fen); return value === undefined ? '' : (value / 100).toFixed(2); }
+      function amountRange(minValue, maxValue) {
+        const minimum = optionalFen(minValue);
+        const maximum = optionalFen(maxValue);
+        if (minimum !== undefined && maximum !== undefined) return '>= ' + money(minimum) + ' 且 <= ' + money(maximum);
+        if (minimum !== undefined) return '>= ' + money(minimum);
+        if (maximum !== undefined) return '<= ' + money(maximum);
+        return '不限制金额';
+      }
+      function optionalFen(value) {
+        if (value === undefined || value === null || value === '') return undefined;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
+      }
+      function readAmountFen(input, label) {
+        const raw = String(input.value || '').trim();
+        if (!raw) return undefined;
+        const yuan = Number(raw);
+        const fen = Math.round(yuan * 100);
+        if (!Number.isFinite(yuan) || yuan < 0 || !Number.isSafeInteger(fen) || Math.abs(yuan * 100 - fen) > 0.000001) {
+          showNotice(label + '请输入不超过两位小数的非负金额', 'error');
+          return null;
+        }
+        return fen;
+      }
       function esc(value) { return String(value ?? '').replace(/[&<>"']/gu, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character])); }
       function send(action, payload = {}) { vscode.postMessage({ type: 'bugteam:action', action, ...payload }); }
+      function beginAction(action) {
+        window.clearTimeout(feedbackTimer);
+        busy = true;
+        activeAction = action;
+        feedbackAction = '';
+        feedbackLevel = '';
+        renderSafely();
+      }
+      function finishAction(action, level) {
+        busy = false;
+        activeAction = '';
+        feedbackAction = String(action || '');
+        feedbackLevel = level === 'error' ? 'error' : 'success';
+        renderSafely();
+        window.clearTimeout(feedbackTimer);
+        feedbackTimer = window.setTimeout(() => {
+          feedbackAction = '';
+          feedbackLevel = '';
+          renderSafely();
+        }, 1_800);
+      }
+      function setActionButton(button, action, idleLabel, busyLabel, successLabel, errorLabel) {
+        const running = busy && activeAction === action;
+        const completed = !running && feedbackAction === action;
+        button.classList.toggle('action-busy', running);
+        button.classList.toggle('action-success', completed && feedbackLevel === 'success');
+        button.classList.toggle('action-error', completed && feedbackLevel === 'error');
+        button.setAttribute('aria-busy', running ? 'true' : 'false');
+        button.textContent = running ? busyLabel : completed ? (feedbackLevel === 'error' ? errorLabel : successLabel) : idleLabel;
+      }
+      function renderSafely() {
+        try {
+          render();
+        } catch (error) {
+          busy = false;
+          activeAction = '';
+          const detail = error instanceof Error && error.message ? '：' + error.message.slice(0, 160) : '';
+          showNotice('BugTeam 面板重绘失败，请重新打开面板' + detail, 'error');
+        }
+      }
       function showNotice(message, level) { notice.textContent = message || ''; notice.className = 'notice visible ' + (level || ''); }
       function showToast(message, level) {
         window.clearTimeout(toastTimer);
@@ -283,7 +538,7 @@ function createBugTeamPanelHtml() {
         toast.className = 'toast visible ' + (level || 'info');
         if (message) toastTimer = window.setTimeout(() => { toast.hidden = true; toast.className = 'toast'; }, 4_500);
       }
-      render();
+      renderSafely();
       send('ready');
     })();
   </script>

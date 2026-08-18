@@ -72,6 +72,7 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
     case "restoreFromAuthJson":
       return 60_000;
     case "shareTokens":
+    case "copyAccountImportJson":
     case "prepareOAuthSession":
     case "cancelOAuthSession":
       return 30_000;
