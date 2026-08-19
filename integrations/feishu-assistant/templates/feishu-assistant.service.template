@@ -1,0 +1,15 @@
+[Unit]
+Description=Feishu Manager control assistant
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile={{PRIVATE_ENV_FILE}}
+ExecStart={{NODE_BIN}} {{PACKAGE_ROOT}}/src/cli.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
