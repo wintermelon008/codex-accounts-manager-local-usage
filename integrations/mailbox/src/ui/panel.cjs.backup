@@ -271,42 +271,6 @@ function createMailboxPanelHtml() {
         }
         else if (action === "refresh") send("refresh");
         else if (action === "copy-code") copyCode(target.dataset.code || "");
-        else if (action === "toggle-registration") { registrationPanelOpen = !registrationPanelOpen; render(); }
-        else if (action === "registration-create") {
-          const emailInput = document.getElementById("registrationEmailInput");
-          const email = emailInput?.value?.trim() || "";
-          if (!email) return;
-          send("registrationCreate", { email, maxRetries: registrationMaxRetries });
-        }
-        else if (action === "registration-submit-phone") {
-          const sessionId = target.dataset.sessionId;
-          const phoneInput = document.getElementById("phoneInput-" + sessionId);
-          const phoneNumber = phoneInput?.value?.trim() || "";
-          if (!sessionId || !phoneNumber) return;
-          send("registrationSubmitPhone", { sessionId, phoneNumber });
-        }
-        else if (action === "registration-submit-otp") {
-          const sessionId = target.dataset.sessionId;
-          const otpInput = document.getElementById("otpInput-" + sessionId);
-          const otp = otpInput?.value?.trim() || "";
-          if (!sessionId || !otp) return;
-          send("registrationSubmitOtp", { sessionId, otp });
-        }
-        else if (action === "registration-request-new-phone") {
-          const sessionId = target.dataset.sessionId;
-          if (!sessionId) return;
-          send("registrationRequestNewPhone", { sessionId });
-        }
-        else if (action === "registration-cancel") {
-          const sessionId = target.dataset.sessionId;
-          if (!sessionId) return;
-          send("registrationCancel", { sessionId });
-        }
-        else if (action === "registration-cleanup") {
-          const sessionId = target.dataset.sessionId;
-          if (!sessionId) return;
-          send("registrationCleanup", { sessionId });
-        }
       });
 
       document.addEventListener("change", (event) => {
@@ -321,7 +285,6 @@ function createMailboxPanelHtml() {
       });
       document.addEventListener("input", (event) => {
         if (event.target.id === "mailboxSearch") { mailboxSearch = event.target.value || ""; render(); document.getElementById("mailboxSearch")?.focus(); }
-        if (event.target.id === "registrationEmailInput") registrationEmail = event.target.value || "";
       });
       document.addEventListener("submit", (event) => {
         if (event.target.id === "editForm") {

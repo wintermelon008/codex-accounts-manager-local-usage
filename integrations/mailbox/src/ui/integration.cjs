@@ -7,6 +7,7 @@ const { MailboxProviderRegistry } = require("../core/providers/index.cjs");
 const { MailboxPool } = require("../mailbox/storage.cjs");
 const { MailboxOperationCoordinator } = require("../operations/coordinator.cjs");
 const { createMailboxPanelHtml, MAILBOX_PANEL_VIEW_TYPE } = require("./panel.cjs");
+const { RegistrationManager } = require("../operations/registration-manager.cjs");
 
 const INTEGRATION_ID = "mailbox";
 const SELECTED_MAILBOX_KEY = "codexAccounts.mailbox.selected.v1";
@@ -41,6 +42,9 @@ class MailboxIntegration {
     // from provider operations lets mailbox query/renewal continue in parallel
     // while still allowing the shared Stop action to cancel OAuth import.
     this.codexImports = new Map();
+    this.registrationManager = new RegistrationManager({ maxConcurrent: 3 });
+    this.registrationManager.on("stateChange", () => { void this.publishPanelState().catch(() => undefined); });
+    this.registrationManager.on("log", (entry) => this.postPanelMessage({ type: "registrationLog", ...entry }));
     this.loadError = undefined;
     this.disposed = false;
     this.panelDisposables = [];
@@ -194,6 +198,28 @@ class MailboxIntegration {
           });
           return;
           }
+        case "registrationCreate":
+          await this.createRegistrationSession(message);
+          return;
+        case "registrationStart":
+          await this.startRegistrationSession(message.sessionId);
+          return;
+        case "registrationSubmitPhone":
+          await this.submitRegistrationPhone(message.sessionId, message.phoneNumber);
+          return;
+        case "registrationSubmitOtp":
+          await this.submitRegistrationOtp(message.sessionId, message.otp);
+          return;
+        case "registrationRequestNewPhone":
+          await this.requestRegistrationNewPhone(message.sessionId);
+          return;
+        case "registrationCancel":
+          await this.cancelRegistrationSession(message.sessionId);
+          return;
+        case "registrationCleanup":
+          this.registrationManager.cleanupSession(message.sessionId);
+          await this.publishPanelState();
+          return;
         default:
           throw new Error("Unsupported Mailbox panel action.");
       }
@@ -366,6 +392,79 @@ class MailboxIntegration {
     }
   }
 
+  async createRegistrationSession(message) {
+    const email = typeof message.email === "string" ? message.email.trim() : "";
+    if (!email) {
+      throw new Error("请填写邮箱");
+    }
+    const sessionId = this.registrationManager.createSession({
+      email,
+      password: typeof message.password === "string" && message.password ? message.password : "Chatgpt189687",
+      name: typeof message.name === "string" && message.name ? message.name : "jdd",
+      age: Number.isFinite(message.age) ? message.age : 24
+    });
+    await this.publishPanelState();
+    return sessionId;
+  }
+
+  async startRegistrationSession(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    void this.registrationManager.startSession(id).catch((error) => {
+      this.postPanelMessage({
+        type: "toast",
+        level: "error",
+        action: "registrationStart",
+        message: safeError(error, "注册流程启动失败")
+      });
+    });
+    await this.publishPanelState();
+  }
+
+  async submitRegistrationPhone(sessionId, phone) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    if (typeof phone !== "string" || !phone.trim()) {
+      throw new Error("请粘贴从您的接码平台获取的手机号");
+    }
+    await this.registrationManager.submitPhoneNumber(id, phone.trim());
+    await this.publishPanelState();
+  }
+
+  async submitRegistrationOtp(sessionId, code) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    if (typeof code !== "string" || !code.trim()) {
+      throw new Error("请粘贴从您的接码平台获取的验证码");
+    }
+    const result = await this.registrationManager.submitVerificationCode(id, code.trim());
+    if (result?.accepted) {
+      this.postPanelMessage({
+        type: "toast",
+        level: "success",
+        action: "registrationComplete",
+        message: "注册表单已提交完成。请使用下方“Codex 导入”按钮完成登录导入。"
+      });
+    }
+    await this.publishPanelState();
+  }
+
+  async requestRegistrationNewPhone(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    this.registrationManager.requestNewPhone(id);
+    await this.publishPanelState();
+  }
+
+  async cancelRegistrationSession(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    await this.registrationManager.cancelSession(id);
+    await this.publishPanelState();
+  }
+
+  requireRegistrationSessionId(sessionId) {
+    if (typeof sessionId !== "string" || !sessionId) {
+      throw new Error("注册会话不存在");
+    }
+    return sessionId;
+  }
+
   async runOperation(id, kind, operation) {
     const ids = Array.isArray(id) ? id : [id];
     const notificationTarget = ids.length === 1 ? { mailboxId: ids[0] } : { mailboxIds: ids };
@@ -504,7 +603,10 @@ class MailboxIntegration {
       codexImportCancellable: typeof this.api?.cancelOAuthAccountImport === "function",
       providers: this.providers.list().map(sanitizeProvider),
       codexImportAvailable: codexImportState.available,
-      managedAccountEmails: codexImportState.emails
+      managedAccountEmails: codexImportState.emails,
+      registrationSessions: this.registrationManager.getAllSessions().map((session) =>
+        this.registrationManager.getSessionState(session.id)
+      )
     };
   }
 
@@ -565,6 +667,9 @@ class MailboxIntegration {
       }
     }
     this.codexImports.clear();
+    for (const session of this.registrationManager.getAllSessions()) {
+      void this.registrationManager.cancelSession(session.id).catch(() => undefined);
+    }
     for (const disposable of this.panelDisposables.splice(0)) {
       disposable?.dispose?.();
     }

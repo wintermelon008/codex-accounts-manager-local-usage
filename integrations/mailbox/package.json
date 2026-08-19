@@ -37,5 +37,8 @@
     "audit:portability": "node scripts/audit-portability.cjs",
     "package:check": "npm run check && npm run audit:portability && node scripts/check-package.cjs",
     "package": "npm test && npm run package:check && node scripts/prepare-dist.cjs && npx --no-install vsce package --no-dependencies --out dist/codex-accounts-mailbox.vsix"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
   }
 }
