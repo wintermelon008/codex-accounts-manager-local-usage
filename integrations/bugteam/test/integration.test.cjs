@@ -11,6 +11,28 @@ test("BugTeam integration errors redact the configured token", () => {
   );
 });
 
+test("BugTeam panel remains openable when a historical import error exists without a token", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  await context.globalState.update("codexAccounts.bugteam.order.v1", {
+    state: "completed",
+    imported: false,
+    lastImportError: "账号已导入，但仅 0/1 个启用无感池"
+  });
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async importSharedAccountsToBalancePool() { return {}; }
+  };
+  const integration = new BugTeamIntegration(vscode, context, api);
+
+  await integration.initialize();
+
+  assert.equal(integration.getViewModel().actions.find((action) => action.id === "open")?.enabled, true);
+  await integration.runAction("open");
+  assert.equal(vscode.panels.length, 1);
+  integration.dispose();
+});
+
 test("BugTeam normalizes dispatch shelf buckets for the panel", () => {
   assert.deepEqual(
     normalizeShelves({
@@ -228,6 +250,38 @@ test("BugTeam creates one idempotent order, downloads Sub2, and imports the acco
   integration.dispose();
 });
 
+test("BugTeam skips an existing managed account instead of importing it again", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let importAttempts = 0;
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async getManagedAccountEmails() { return ["PATRICIA_NAMDM@mail.com"]; },
+    async importSharedAccountsToBalancePool() {
+      importAttempts += 1;
+      throw new Error("existing account must not be imported again");
+    }
+  };
+  const integration = new BugTeamIntegration(vscode, context, api);
+
+  const summary = await integration.importSharedBundle({
+    accounts: [{ email: "patricia_namdm@mail.com", tokens: { id_token: "id", access_token: "access" } }]
+  });
+
+  assert.equal(importAttempts, 0);
+  assert.equal(summary.status, "completed");
+  assert.equal(summary.total, 1);
+  assert.equal(summary.imported, 1);
+  assert.equal(summary.poolEnabled, 0);
+  assert.equal(summary.skippedExisting, 1);
+  assert.deepEqual(summary.accounts, [{
+    email: "patricia_namdm@mail.com",
+    poolEnabled: false,
+    status: "already_exists"
+  }]);
+  integration.dispose();
+});
+
 test("BugTeam retries an uncertain create with the same idempotency key", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -262,7 +316,7 @@ test("BugTeam retries an uncertain create with the same idempotency key", async 
   integration.dispose();
 });
 
-test("BugTeam keeps a completed order pending when pool enrollment is partial", async () => {
+test("BugTeam stops automatic retries after import succeeds even when pool enrollment is partial", async () => {
   const vscode = createVscode();
   const context = createContext();
   let importAttempts = 0;
@@ -272,15 +326,13 @@ test("BugTeam keeps a completed order pending when pool enrollment is partial", 
     async getInventory() { return { hold_total_fen: 300 }; },
     async createPickupOrder() { return { order_id: "order-partial", state: "waiting_inventory", quantity: 1 }; },
     async getPickupOrder() { return { order_id: "order-partial", state: "completed", quantity: 1, delivered_quantity: 1 }; },
-    async downloadSub2() { return { accounts: [{ tokens: { id_token: "id", access_token: "access" } }] }; }
+    async downloadSub2() { return { accounts: [{ email: "partial@example.test", tokens: { id_token: "id", access_token: "access" } }] }; }
   };
   const api = {
     registerDashboardIntegration() { return { dispose() {} }; },
+    async getManagedAccountEmails() { return importAttempts > 0 ? ["partial@example.test"] : []; },
     async importSharedAccountsToBalancePool() {
       importAttempts += 1;
-      if (importAttempts > 1) {
-        return { status: "completed", total: 1, imported: 1, poolEnabled: 1, refreshFailed: 0, notEligible: 0, authFailed: 0, importFailed: 0 };
-      }
       return { status: "partial", total: 1, imported: 1, poolEnabled: 0, refreshFailed: 1, notEligible: 0, authFailed: 1, importFailed: 0 };
     }
   };
@@ -291,21 +343,26 @@ test("BugTeam keeps a completed order pending when pool enrollment is partial", 
   await vscode.panels[0].webview.emit({ type: "bugteam:action", action: "setToken", token: "cfk_test" });
   await vscode.panels[0].webview.emit({ type: "bugteam:action", action: "purchase" });
 
-  assert.equal(integration.getPanelState().order.imported, false);
+  assert.equal(integration.getPanelState().order.imported, true);
   assert.equal(integration.getPanelState().order.importResult.poolEnabled, 0);
   assert.match(integration.getPanelState().order.lastImportError, /仅 0\/1 个启用无感池/u);
-  assert.notEqual(integration.pollTimer, undefined);
+  assert.equal(integration.pollTimer, undefined);
 
   integration.lastImportAttemptAt = 0;
   await integration.pollOrder();
 
-  assert.equal(importAttempts, 2);
+  assert.equal(importAttempts, 1);
+  await integration.processCompletedOrder(true);
+
+  assert.equal(importAttempts, 1);
   assert.equal(integration.getPanelState().order.imported, true);
+  assert.equal(integration.getPanelState().order.importResult.skippedExisting, 1);
+  assert.equal(integration.getPanelState().order.lastImportError, undefined);
   assert.equal(integration.pollTimer, undefined);
   integration.dispose();
 });
 
-test("BugTeam resumes a persisted completed order that still needs pool enrollment", async () => {
+test("BugTeam resolves a persisted completed order by skipping its existing account", async () => {
   const vscode = createVscode();
   const context = createContext();
   await context.secrets.store("codexAccounts.bugteam.apiToken.v1", "cfk_test");
@@ -325,14 +382,15 @@ test("BugTeam resumes a persisted completed order that still needs pool enrollme
     async getBalance() { return { available_fen: 1000 }; },
     async getInventory() { return { hold_total_fen: 300 }; },
     async getPickupOrder() { return { order_id: "order-resume", state: "completed", quantity: 1, delivered_quantity: 1 }; },
-    async downloadSub2() { return { accounts: [{ tokens: { id_token: "id", access_token: "access" } }] }; }
+    async downloadSub2() { return { accounts: [{ email: "resume@example.test", tokens: { id_token: "id", access_token: "access" } }] }; }
   };
   let importAttempts = 0;
   const api = {
     registerDashboardIntegration() { return { dispose() {} }; },
+    async getManagedAccountEmails() { return ["resume@example.test"]; },
     async importSharedAccountsToBalancePool() {
       importAttempts += 1;
-      return { status: "completed", total: 1, imported: 1, poolEnabled: 1, refreshFailed: 0, notEligible: 0, authFailed: 0, importFailed: 0 };
+      throw new Error("existing account must not be imported again");
     }
   };
   const integration = new BugTeamIntegration(vscode, context, api, { clientFactory: () => client, pollIntervalMs: 60_000 });
@@ -344,8 +402,10 @@ test("BugTeam resumes a persisted completed order that still needs pool enrollme
   releaseDashboard();
   await waitFor(() => integration.getPanelState().order.imported === true);
 
-  assert.equal(importAttempts, 1);
+  assert.equal(importAttempts, 0);
   assert.equal(integration.getPanelState().order.imported, true);
+  assert.equal(integration.getPanelState().order.importResult.skippedExisting, 1);
+  assert.equal(integration.pollTimer, undefined);
   integration.dispose();
 });
 

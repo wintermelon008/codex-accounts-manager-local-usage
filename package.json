@@ -120,7 +120,20 @@
         "codexAccounts.localImportInboxEnabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Opt in to a private local inbox written by a separately configured Feishu command bot. When disabled, Codex Accounts Manager does not create, watch, or import from the inbox."
+          "markdownDescription": "Opt in to a private local inbox written by a separately configured Feishu command bot. Enabling the external Manager control API also starts this inbox for its authenticated import endpoint. When both are disabled, Codex Accounts Manager does not create, watch, or import from the inbox."
+        },
+        "codexAccounts.externalControlEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Opt in to the local Manager control API used by the separate Feishu assistant. The API only binds to 127.0.0.1 and requires CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN in the Manager process environment."
+        },
+        "codexAccounts.externalControlPort": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 65535,
+          "multipleOf": 1,
+          "default": 43117,
+          "markdownDescription": "Loopback port for the optional Manager control API. Set to 0 to let the operating system choose a port; the fixed default is easier for a same-device assistant configuration."
         },
         "codexAccounts.autoSwitchEnabled": {
           "type": "boolean",

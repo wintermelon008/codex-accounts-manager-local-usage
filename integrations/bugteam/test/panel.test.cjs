@@ -139,6 +139,25 @@ test("Tingbai allows a new waitlist after a failed historical order", () => {
   assert.equal(panel.element("tingbai-max-amount").disabled, false);
 });
 
+test("Tingbai allows a new waitlist while a completed order awaits import", () => {
+  const panel = runPanelScript(createBugTeamPanelHtml());
+  panel.message({
+    type: "state",
+    state: {
+      tingbai: {
+        credentialsConfigured: true,
+        product: { code: "team-7d", name: "Team 7D", priceFen: 300, available: 0 },
+        order: { orderId: "completed-order", state: "completed", imported: false, lastImportError: "导入暂时失败" },
+        records: []
+      }
+    }
+  });
+
+  assert.equal(panel.element("tingbai-start").disabled, false);
+  assert.equal(panel.element("tingbai-min-amount").disabled, false);
+  assert.equal(panel.element("tingbai-max-amount").disabled, false);
+});
+
 test("Tingbai refresh errors remain separate from the inactive waitlist state", () => {
   const panel = runPanelScript(createBugTeamPanelHtml());
   panel.message({

@@ -270,6 +270,26 @@ export function isLocalImportInboxEnabled(): boolean {
   return getCodexAccountsConfiguration().get<boolean>("localImportInboxEnabled", false);
 }
 
+/**
+ * The assistant control surface is opt-in and always binds to loopback. The
+ * bearer token is supplied through the Manager process environment rather than
+ * persisted in VS Code settings.
+ */
+export function isExternalControlEnabled(): boolean {
+  return getCodexAccountsConfiguration().get<boolean>("externalControlEnabled", false);
+}
+
+export function getExternalControlPort(): number {
+  return normalizeExternalControlPort(getCodexAccountsConfiguration().get<number>("externalControlPort", 43117));
+}
+
+export function normalizeExternalControlPort(value: unknown): number {
+  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 65535) {
+    return 43117;
+  }
+  return value as number;
+}
+
 export function normalizeAutoSwitchThreshold(value: number): number {
   if (!Number.isFinite(value)) {
     return 20;

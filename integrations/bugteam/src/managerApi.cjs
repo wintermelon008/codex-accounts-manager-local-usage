@@ -14,9 +14,10 @@ async function resolveManagerIntegrationApi(vscode) {
   }
   if (
     typeof api.registerDashboardIntegration !== "function" ||
+    typeof api.getManagedAccountEmails !== "function" ||
     typeof api.importSharedAccountsToBalancePool !== "function"
   ) {
-    throw new Error("This Manager version does not expose the BugTeam balance-pool import capability.");
+    throw new Error("This Manager version does not expose the BugTeam account lookup and balance-pool import capabilities.");
   }
   return api;
 }

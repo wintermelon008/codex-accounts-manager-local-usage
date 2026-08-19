@@ -16,29 +16,34 @@ function normalizeSub2Account(account) {
   if (!isRecord(account)) {
     throw new Error("BugTeam Sub2 账号条目格式无效");
   }
-  const tokenSource = isRecord(account.tokens) ? account.tokens : account;
-  const idToken = firstString(tokenSource.id_token, tokenSource.idToken, account.id_token, account.idToken);
-  const accessToken = firstString(tokenSource.access_token, tokenSource.accessToken, account.access_token, account.accessToken);
-  const refreshToken = firstString(
-    tokenSource.refresh_token,
-    tokenSource.refreshToken,
-    account.refresh_token,
-    account.refreshToken
-  );
+  const tokenSources = [account.tokens, account.credentials, account].filter(isRecord);
+  const idToken = firstValue(tokenSources, "id_token", "idToken");
+  const accessToken = firstValue(tokenSources, "access_token", "accessToken");
+  const refreshToken = firstValue(tokenSources, "refresh_token", "refreshToken");
   if (!idToken || !accessToken) {
     throw new Error("BugTeam Sub2 账号缺少必要的 OAuth Token");
   }
 
-  const accountId = firstString(tokenSource.account_id, tokenSource.accountId, account.account_id, account.accountId);
+  const accountId = firstValue(
+    tokenSources,
+    "account_id",
+    "accountId",
+    "chatgpt_account_id",
+    "chatgptAccountId"
+  );
+  const email = firstValue([account, account.credentials], "email", "account_email", "user_email", "userEmail");
+  const userId = firstValue([account, account.credentials], "user_id", "userId", "chatgpt_user_id", "chatgptUserId");
+  const planType = firstValue([account, account.credentials], "plan_type", "planType", "chatgpt_plan_type", "chatgptPlanType");
+  const organizationId = firstValue([account, account.credentials], "organization_id", "organizationId");
   return {
-    id: firstString(account.id, account.account_id, account.accountId),
-    email: firstString(account.email, account.account_email),
+    id: firstString(account.id, account.account_id, account.accountId, accountId),
+    email,
     auth_mode: "oauth",
-    user_id: firstString(account.user_id, account.userId),
-    plan_type: firstString(account.plan_type, account.planType),
+    user_id: userId,
+    plan_type: planType,
     account_id: accountId,
-    organization_id: firstString(account.organization_id, account.organizationId),
-    account_name: firstString(account.account_name, account.accountName),
+    organization_id: organizationId,
+    account_name: firstString(account.account_name, account.accountName, account.name),
     account_structure: firstString(account.account_structure, account.accountStructure),
     added_via: "bugteam",
     subscription_active_until: account.subscription_active_until ?? account.subscriptionActiveUntil ?? null,
@@ -49,6 +54,10 @@ function normalizeSub2Account(account) {
       ...(accountId ? { account_id: accountId } : {})
     }
   };
+}
+
+function firstValue(sources, ...keys) {
+  return firstString(...sources.filter(isRecord).flatMap((source) => keys.map((key) => source[key])));
 }
 
 function isRecord(value) {

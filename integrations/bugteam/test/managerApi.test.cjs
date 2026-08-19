@@ -6,10 +6,11 @@ const path = require("node:path");
 const test = require("node:test");
 const { MANAGER_EXTENSION_ID, resolveManagerIntegrationApi } = require("../src/managerApi.cjs");
 
-test("BugTeam resolves only the public Manager dashboard and pool-import surface", async () => {
+test("BugTeam resolves only the public Manager dashboard, account lookup, and pool-import surface", async () => {
   const api = {
     apiVersion: 1,
     registerDashboardIntegration() {},
+    getManagedAccountEmails() {},
     importSharedAccountsToBalancePool() {}
   };
   const vscode = {
@@ -22,8 +23,8 @@ test("BugTeam resolves only the public Manager dashboard and pool-import surface
   };
   assert.equal(await resolveManagerIntegrationApi(vscode), api);
   await assert.rejects(
-    resolveManagerIntegrationApi({ extensions: { getExtension: () => ({ activate: async () => ({ apiVersion: 1, registerDashboardIntegration() {} }) }) } }),
-    /balance-pool import/u
+    resolveManagerIntegrationApi({ extensions: { getExtension: () => ({ activate: async () => ({ apiVersion: 1, registerDashboardIntegration() {}, importSharedAccountsToBalancePool() {} }) }) } }),
+    /account lookup and balance-pool import/u
   );
 });
 

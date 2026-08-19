@@ -16,7 +16,7 @@ vi.mock("../src/application/accounts/balanceScheduler", () => ({
   getBalanceQuotaCapability: getBalanceQuotaCapabilityMock
 }));
 
-import { getLocalImportInboxPath, LocalImportInbox } from "../src/presentation/workbench/localImportInbox";
+import { getLocalImportInboxPath, LocalImportInbox, readLocalImportStatus } from "../src/presentation/workbench/localImportInbox";
 import { importSharedAccountsIntoBalancePool } from "../src/application/accounts/importIntoBalancePool";
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
@@ -93,6 +93,13 @@ describe("LocalImportInbox", () => {
     expect(result).toMatchObject({ status: "completed", imported: 1, pool_enabled: 1, refresh_failed: 0 });
     expect(resultText).not.toContain("id-token");
     expect(resultText).not.toContain("access-token");
+
+    await expect(readLocalImportStatus(JOB_ID, queuePath)).resolves.toMatchObject({
+      id: JOB_ID,
+      state: "completed",
+      imported: 1,
+      poolEnabled: 1
+    });
   });
 
   it("fails closed for a 401 refresh and removes the account from the pool", async () => {

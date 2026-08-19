@@ -116,7 +116,7 @@ class BugTeamIntegration {
       ],
       metrics: [
         { label: "订单", value: this.order.state ? orderStateLabel(this.order.state) : "无" },
-        { label: "导入", value: this.order.importResult ? `${this.order.importResult.poolEnabled}/${this.order.importResult.total} 入池` : "—" }
+        { label: "导入", value: this.order.importResult ? importResultLabel(this.order.importResult) : "—" }
       ],
       topButton: {
         actionId: "open",
@@ -125,7 +125,7 @@ class BugTeamIntegration {
         icon: "bugteam"
       },
       actions: [
-        { id: "open", label: "打开 BugTeam", enabled: !this.lastError || Boolean(this.token), tone: "primary" }
+        { id: "open", label: "打开 BugTeam", enabled: true, tone: "primary" }
       ]
     };
   }
@@ -444,7 +444,8 @@ class BugTeamIntegration {
   }
 
   async processCompletedOrder(force = false) {
-    if (!this.order.orderId || this.order.state !== "completed" || this.order.imported || this.importInFlight) return;
+    const retryingPoolFailure = force && this.order.imported && Boolean(this.order.lastImportError);
+    if (!this.order.orderId || this.order.state !== "completed" || (this.order.imported && !retryingPoolFailure) || this.importInFlight) return;
     if (!force && Date.now() - this.lastImportAttemptAt < IMPORT_RETRY_DELAY_MS) return;
     this.importInFlight = true;
     this.lastImportAttemptAt = Date.now();
@@ -452,13 +453,9 @@ class BugTeamIntegration {
       const bundle = await this.requireClient().downloadSub2(this.order.orderId);
       const summary = await this.importSharedBundle(bundle);
       this.order.importResult = summary;
-      this.order.imported = summary.imported === summary.total && summary.poolEnabled === summary.total;
-      this.order.lastImportError = this.order.imported
-        ? undefined
-        : summary.imported < summary.total
-          ? `已导入 ${summary.imported}/${summary.total} 个账号`
-          : `账号已导入，但仅 ${summary.poolEnabled}/${summary.total} 个启用无感池`;
-      this.lastError = this.order.imported ? undefined : this.order.lastImportError;
+      this.order.imported = summary.imported === summary.total;
+      this.order.lastImportError = importResultError(summary);
+      this.lastError = this.order.lastImportError;
       await this.persistOrder();
     } catch (error) {
       this.order.lastImportError = safeError(error, "BugTeam 账号导入失败", this.token);
@@ -474,8 +471,21 @@ class BugTeamIntegration {
       throw new Error("当前 Manager 未提供无感账号池导入能力");
     }
     const accounts = normalizeSub2Bundle(bundle);
-    const result = await this.api.importSharedAccountsToBalancePool(accounts);
-    return normalizeImportResult(result);
+    const existingEmails = typeof this.api.getManagedAccountEmails === "function"
+      ? new Set((await this.api.getManagedAccountEmails()).map(normalizeEmail).filter(Boolean))
+      : new Set();
+    const skippedAccounts = [];
+    const pendingAccounts = accounts.filter((account) => {
+      const email = normalizeEmail(account.email);
+      if (!email || !existingEmails.has(email)) return true;
+      skippedAccounts.push({ email, poolEnabled: false, status: "already_exists" });
+      return false;
+    });
+    if (pendingAccounts.length === 0) {
+      return skippedImportResult(skippedAccounts);
+    }
+    const result = normalizeImportResult(await this.api.importSharedAccountsToBalancePool(pendingAccounts));
+    return mergeSkippedImportResult(result, skippedAccounts);
   }
 
   applyOrder(order) {
@@ -709,6 +719,56 @@ function normalizeImportResult(result) {
   return summary;
 }
 
+function skippedImportResult(accounts) {
+  return {
+    status: "completed",
+    total: accounts.length,
+    imported: accounts.length,
+    poolEnabled: 0,
+    skippedExisting: accounts.length,
+    refreshFailed: 0,
+    notEligible: 0,
+    authFailed: 0,
+    importFailed: 0,
+    accounts
+  };
+}
+
+function mergeSkippedImportResult(result, accounts) {
+  if (accounts.length === 0) return { ...result, skippedExisting: 0 };
+  const skippedExisting = accounts.length;
+  const total = result.total + skippedExisting;
+  const imported = result.imported + skippedExisting;
+  const resolved = result.poolEnabled + skippedExisting;
+  return {
+    ...result,
+    status: resolved === total ? "completed" : imported > 0 ? "partial" : "failed",
+    total,
+    imported,
+    skippedExisting,
+    accounts: [...accounts, ...result.accounts]
+  };
+}
+
+function importResultError(summary) {
+  if (summary.imported < summary.total) {
+    return `已导入 ${summary.imported}/${summary.total} 个账号`;
+  }
+  const pendingPool = Math.max(0, summary.total - nonNegativeInteger(summary.skippedExisting));
+  if (summary.poolEnabled >= pendingPool) return undefined;
+  return nonNegativeInteger(summary.skippedExisting) > 0
+    ? `账号已导入，但仅 ${summary.poolEnabled}/${pendingPool} 个新账号启用无感池`
+    : `账号已导入，但仅 ${summary.poolEnabled}/${summary.total} 个启用无感池`;
+}
+
+function importResultLabel(summary) {
+  const total = nonNegativeInteger(summary.total);
+  const skippedExisting = nonNegativeInteger(summary.skippedExisting);
+  if (total > 0 && skippedExisting >= total) return `${skippedExisting}/${total} 已存在`;
+  if (skippedExisting > 0) return `${summary.poolEnabled}/${Math.max(0, total - skippedExisting)} 新账号入池`;
+  return `${summary.poolEnabled}/${total} 入池`;
+}
+
 function normalizeAccountBalance(value) {
   if (!value || typeof value !== "object") return undefined;
   const status = ["ready", "refresh_failed", "not_eligible", "import_failed"].includes(value.status)
@@ -732,6 +792,10 @@ function percentageOrUndefined(value) {
   if (value === null || value === undefined) return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : undefined;
+}
+
+function normalizeEmail(value) {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
 }
 
 function publicOrder(order, includeSecrets = false) {

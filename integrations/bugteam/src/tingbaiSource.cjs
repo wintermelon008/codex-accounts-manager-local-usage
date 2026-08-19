@@ -25,8 +25,8 @@ class TingbaiSource {
     this.nextPollAt = undefined;
     this.cycleInFlight = false;
     this.purchaseInFlight = false;
-    this.importInFlight = false;
-    this.lastImportAttemptAt = 0;
+    this.importInFlightOrders = new Set();
+    this.lastImportAttemptAtByOrderId = new Map();
     this.disposed = false;
   }
 
@@ -89,10 +89,12 @@ class TingbaiSource {
     await this.refreshCatalog();
     if (this.credentials) await this.refreshWallet();
     if (this.data.order && !this.data.order.imported && !isFailedOrder(this.data.order)) {
-      await this.pollOrder({ forceImport: false });
-    } else if (this.data.attempt) {
+      await this.pollOrder({ forceImport: false, awaitImport: false });
+    }
+    if (this.data.attempt) {
       await this.submitAttempt();
-    } else if (this.data.waitlist?.active) {
+    }
+    if (this.data.waitlist?.active && !isBlockingWaitlistOrder(this.data.order)) {
       await this.considerPurchase();
     }
     this.syncPolling();
@@ -101,7 +103,7 @@ class TingbaiSource {
 
   async startWaitlist(options = {}) {
     if (!this.credentials) throw new Error("请先保存并验证超级炸弹车买家账号");
-    if (this.data.attempt || (this.data.order && !this.data.order.imported && !isFailedOrder(this.data.order))) {
+    if (this.data.attempt || isBlockingWaitlistOrder(this.data.order)) {
       throw new Error("已有自动购买或导入任务正在处理");
     }
     const minTotalFen = readWaitlistBound(options.minTotalFen, "候补金额下限");
@@ -123,6 +125,9 @@ class TingbaiSource {
     await this.persist();
     this.syncPolling();
     this.notify();
+    if (this.data.order && !this.data.order.imported && isCompletedOrder(this.data.order)) {
+      void this.processCompletedOrder(false, this.data.order).catch(() => {});
+    }
     try {
       await this.refreshCatalog();
       await this.refreshWallet();
@@ -144,7 +149,8 @@ class TingbaiSource {
   }
 
   async retryImport() {
-    this.lastImportAttemptAt = 0;
+    const orderId = this.data.order?.orderId;
+    if (orderId) this.lastImportAttemptAtByOrderId.delete(orderId);
     await this.processCompletedOrder(true);
     this.syncPolling();
     this.notify();
@@ -162,11 +168,16 @@ class TingbaiSource {
     this.lastError = undefined;
     this.notify();
     try {
-      if (this.data.order && !this.data.order.imported && !isFailedOrder(this.data.order)) {
-        await this.pollOrder({ forceImport: false });
-      } else if (this.data.attempt) {
+      if (this.data.order && !this.data.order.imported && !isFailedOrder(this.data.order) && !isCompletedOrder(this.data.order)) {
+        await this.pollOrder({ forceImport: false, awaitImport: false });
+      }
+      if (this.data.attempt) {
         await this.submitAttempt();
-      } else if (this.data.waitlist?.active) {
+      }
+      if (this.data.order && !this.data.order.imported && isCompletedOrder(this.data.order)) {
+        await this.pollOrder({ forceImport: false, awaitImport: false });
+      }
+      if (this.data.waitlist?.active && !isBlockingWaitlistOrder(this.data.order)) {
         await this.refreshCatalog();
         await this.considerPurchase();
       }
@@ -203,6 +214,7 @@ class TingbaiSource {
     const waitlist = this.data.waitlist;
     const product = this.remote.product;
     if (!waitlist?.active || !product) return;
+    if (isBlockingWaitlistOrder(this.data.order)) return;
     if (!product.purchasable || this.purchaseInFlight) return;
 
     this.purchaseInFlight = true;
@@ -270,7 +282,7 @@ class TingbaiSource {
       if (this.data.waitlist) this.data.waitlist.active = false;
       this.upsertRecord(this.data.order);
       await this.persist();
-      await this.pollOrder({ forceImport: true });
+      await this.pollOrder({ forceImport: true, awaitImport: false });
     } catch (error) {
       if (isStockUnavailable(error) || isQuoteChanged(error)) {
         this.data.attempt = undefined;
@@ -289,7 +301,7 @@ class TingbaiSource {
     }
   }
 
-  async pollOrder({ forceImport = false } = {}) {
+  async pollOrder({ forceImport = false, awaitImport = false } = {}) {
     if (!this.data.order?.orderId) return;
     const response = await this.withSession(() => this.client.getOrder(this.data.order.orderId));
     const normalized = normalizeOrder(response);
@@ -297,29 +309,31 @@ class TingbaiSource {
     this.upsertRecord(this.data.order);
     await this.persist();
     if (isCompletedOrder(this.data.order) && !this.data.order.imported) {
-      await this.processCompletedOrder(forceImport);
+      const importTask = this.processCompletedOrder(forceImport, this.data.order);
+      if (awaitImport) await importTask;
+      else void importTask.catch(() => {});
     }
   }
 
-  async processCompletedOrder(force = false) {
-    const order = this.data.order;
-    if (!order?.orderId || !isCompletedOrder(order) || order.imported || this.importInFlight) return;
-    if (!force && Date.now() - this.lastImportAttemptAt < IMPORT_RETRY_DELAY_MS) return;
-    this.importInFlight = true;
-    this.lastImportAttemptAt = Date.now();
+  async processCompletedOrder(force = false, sourceOrder = this.data.order) {
+    const order = sourceOrder;
+    const orderId = order?.orderId;
+    const retryingPoolFailure = force && order?.imported && Boolean(order.lastImportError);
+    if (!orderId || !isCompletedOrder(order) || (order.imported && !retryingPoolFailure) || this.importInFlightOrders.has(orderId)) return;
+    const lastAttemptAt = this.lastImportAttemptAtByOrderId.get(orderId) ?? 0;
+    if (!force && Date.now() - lastAttemptAt < IMPORT_RETRY_DELAY_MS) return;
+    this.importInFlightOrders.add(orderId);
+    this.lastImportAttemptAtByOrderId.set(orderId, Date.now());
     try {
       const bundle = await this.withSession(() => this.client.downloadSub2(order.orderId));
       const summary = await this.importBundle(bundle);
       order.importResult = summary;
-      order.imported = summary.imported === summary.total && summary.poolEnabled === summary.total;
-      order.lastImportError = order.imported
-        ? undefined
-        : summary.imported < summary.total
-          ? `已导入 ${summary.imported}/${summary.total} 个账号`
-          : `账号已导入，但仅 ${summary.poolEnabled}/${summary.total} 个启用无感池`;
+      order.imported = summary.imported === summary.total;
+      order.lastImportError = importResultError(summary);
       this.lastError = order.lastImportError;
       this.upsertRecord(order);
       await this.persist();
+      this.lastImportAttemptAtByOrderId.delete(orderId);
     } catch (error) {
       order.lastImportError = safeError(error, "超级炸弹车账号导入失败", this.credentials?.password);
       this.lastError = order.lastImportError;
@@ -327,7 +341,9 @@ class TingbaiSource {
       await this.persist();
       throw error;
     } finally {
-      this.importInFlight = false;
+      this.importInFlightOrders.delete(orderId);
+      this.syncPolling();
+      this.notify();
     }
   }
 
@@ -547,6 +563,21 @@ function publicRecord(value) {
 
 function isCompletedOrder(order) {
   return ["completed", "complete", "fulfilled", "delivered", "success"].includes(String(order?.state ?? "").toLowerCase());
+}
+
+function importResultError(summary) {
+  if (summary.imported < summary.total) {
+    return `已导入 ${summary.imported}/${summary.total} 个账号`;
+  }
+  const pendingPool = Math.max(0, summary.total - nonNegativeInteger(summary.skippedExisting));
+  if (summary.poolEnabled >= pendingPool) return undefined;
+  return nonNegativeInteger(summary.skippedExisting) > 0
+    ? `账号已导入，但仅 ${summary.poolEnabled}/${pendingPool} 个新账号启用无感池`
+    : `账号已导入，但仅 ${summary.poolEnabled}/${summary.total} 个启用无感池`;
+}
+
+function isBlockingWaitlistOrder(order) {
+  return Boolean(order?.orderId && !order.imported && !isFailedOrder(order) && !isCompletedOrder(order));
 }
 
 function isFailedOrder(order) {
