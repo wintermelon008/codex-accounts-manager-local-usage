@@ -110,6 +110,41 @@ test("Sub2 wrapper is reduced to the Manager shared account contract", () => {
   });
 });
 
+test("Sub2API credentials are reduced to the Manager shared account contract", () => {
+  const accounts = normalizeSub2Bundle({
+    type: "sub2api-data",
+    version: 1,
+    exported_at: "2026-08-18T00:00:00.000Z",
+    proxies: [],
+    accounts: [{
+      name: "native-account",
+      platform: "openai",
+      type: "oauth",
+      credentials: {
+        email: "native@example.test",
+        chatgpt_account_id: "acct-native",
+        chatgpt_user_id: "user-native",
+        plan_type: "team",
+        id_token: "id-token",
+        access_token: "access-token",
+        refresh_token: "refresh-token"
+      }
+    }]
+  });
+
+  assert.equal(accounts[0].id, "acct-native");
+  assert.equal(accounts[0].email, "native@example.test");
+  assert.equal(accounts[0].account_id, "acct-native");
+  assert.equal(accounts[0].user_id, "user-native");
+  assert.equal(accounts[0].plan_type, "team");
+  assert.deepEqual(accounts[0].tokens, {
+    id_token: "id-token",
+    access_token: "access-token",
+    refresh_token: "refresh-token",
+    account_id: "acct-native"
+  });
+});
+
 function jsonResponse(value, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 }

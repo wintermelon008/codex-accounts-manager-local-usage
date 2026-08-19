@@ -152,6 +152,7 @@ test("Tingbai waitlist includes both amount boundaries when buying and imports t
   await source.initialize();
   await source.setCredentials("buyer-one", "password-one");
   await source.startWaitlist({ minTotalFen: 300, maxTotalFen: 300 });
+  await waitFor(() => source.getViewModel().order?.imported === true);
 
   const state = source.getViewModel();
   assert.equal(requests.filter((request) => request.type === "create").length, 1);
@@ -222,6 +223,7 @@ test("Tingbai waitlist does not restrict the quote amount when both boundaries a
   await source.initialize();
   await source.setCredentials("buyer-one", "password-one");
   await source.startWaitlist();
+  await waitFor(() => source.getViewModel().order?.imported === true);
 
   const create = requests.find((request) => request.type === "create");
   assert.equal(create.expectedTotalFen, 400);
@@ -258,6 +260,7 @@ test("Tingbai waitlist follows the stocked product when the catalog product chan
   assert.equal(requests.some((request) => request.type === "create"), false);
   assert.ok(source.getViewModel().nextPollAt > Date.now());
   await source.runCycle();
+  await waitFor(() => source.getViewModel().order?.imported === true);
 
   const create = requests.find((request) => request.type === "create");
   assert.equal(create.product, "team-live");
@@ -311,6 +314,72 @@ test("Tingbai does not treat a failed historical order as an active waitlist", a
   assert.equal(view.attemptPending, false);
   assert.equal(view.nextPollAt, undefined);
   assert.equal(source.shouldContinuePolling(), false);
+  source.dispose();
+});
+
+test("Tingbai keeps the waitlist running while a completed order import is stuck", async () => {
+  const context = createContext();
+  const storage = new BugTeamStorage(context);
+  await storage.setTingbaiCredentials("buyer-one", "password-one");
+  await context.globalState.update("codexAccounts.bugteam.tingbai.state.v1", {
+    waitlist: { active: false },
+    order: { orderId: "old-order", state: "completed", imported: false },
+    records: [{ orderId: "old-order", state: "completed", imported: false }]
+  });
+  const requests = [];
+  let importStarted;
+  const importStartedPromise = new Promise((resolve) => { importStarted = resolve; });
+  const client = createFakeClient(requests, [catalogPayload({ available: 1 })]);
+  const source = new TingbaiSource({
+    storage,
+    clientFactory: () => client,
+    pollIntervalMs: 60_000,
+    importBundle: async () => {
+      importStarted();
+      return new Promise(() => {});
+    }
+  });
+
+  await source.initialize();
+  await Promise.race([
+    importStartedPromise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("stuck import did not start")), 1_000))
+  ]);
+  await source.startWaitlist();
+
+  assert.equal(requests.filter((request) => request.type === "create").length, 1);
+  assert.equal(source.getViewModel().order.orderId, "order-one");
+  source.dispose();
+});
+
+test("Tingbai stops automatic retries once account import succeeds with a pool warning", async () => {
+  const context = createContext();
+  const storage = new BugTeamStorage(context);
+  await storage.setTingbaiCredentials("buyer-one", "password-one");
+  let importAttempts = 0;
+  const client = createFakeClient([], [catalogPayload({ available: 0 })]);
+  const source = new TingbaiSource({
+    storage,
+    clientFactory: () => client,
+    pollIntervalMs: 60_000,
+    importBundle: async () => {
+      importAttempts += 1;
+      return { status: "partial", total: 1, imported: 1, poolEnabled: 0, refreshFailed: 1, notEligible: 0, authFailed: 1, importFailed: 0 };
+    }
+  });
+
+  await source.initialize();
+  source.data.order = { orderId: "order-pool-warning", state: "completed", imported: false };
+  await source.processCompletedOrder(true);
+
+  assert.equal(importAttempts, 1);
+  assert.equal(source.getViewModel().order.imported, true);
+  assert.match(source.getViewModel().order.lastImportError, /仅 0\/1 个启用无感池/u);
+  assert.equal(source.shouldContinuePolling(), false);
+  assert.equal(source.pollTimer, undefined);
+
+  await source.processCompletedOrder(false);
+  assert.equal(importAttempts, 1);
   source.dispose();
 });
 

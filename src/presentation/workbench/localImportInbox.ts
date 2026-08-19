@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SharedCodexAccountJson } from "../../core/types";
 import type { AccountsRepository } from "../../storage";
 import { importSharedAccountsIntoBalancePool } from "../../application/accounts/importIntoBalancePool";
+import { normalizeLocalImportAccounts } from "../../integrations/localImportProtocol";
 
 export const LOCAL_IMPORT_POLL_INTERVAL_MS = 3_000;
 const LOCAL_IMPORT_LEASE_MS = 2 * 60 * 1000;
@@ -35,6 +37,18 @@ type LocalImportResult = {
   not_eligible: number;
   auth_failed: number;
   import_failed: number;
+};
+
+export type LocalImportStatus = {
+  id: string;
+  state: "queued" | "processing" | "completed" | "partial" | "failed" | "unknown";
+  total?: number;
+  imported?: number;
+  poolEnabled?: number;
+  refreshFailed?: number;
+  notEligible?: number;
+  authFailed?: number;
+  importFailed?: number;
 };
 
 export type LocalImportInboxOptions = {
@@ -224,6 +238,67 @@ export function getLocalImportInboxPath(): string {
   return path.join(stateHome, "codex-account-import", "inbox");
 }
 
+export async function readLocalImportStatus(
+  jobId: string,
+  queuePath = getLocalImportInboxPath()
+): Promise<LocalImportStatus> {
+  const normalizedId = normalizeJobId(jobId);
+  const resultsPath = path.join(path.dirname(queuePath), "results", `${normalizedId}.json`);
+  const result = await readPrivateJson(resultsPath, 64 * 1024).catch(() => undefined);
+  if (isLocalImportResult(result, normalizedId)) {
+    return {
+      id: normalizedId,
+      state: normalizeLocalImportState(result.status),
+      total: nonNegativeInteger(result.total),
+      imported: nonNegativeInteger(result.imported),
+      poolEnabled: nonNegativeInteger(result.pool_enabled),
+      refreshFailed: nonNegativeInteger(result.refresh_failed),
+      notEligible: nonNegativeInteger(result.not_eligible),
+      authFailed: nonNegativeInteger(result.auth_failed),
+      importFailed: nonNegativeInteger(result.import_failed)
+    };
+  }
+
+  if (await pathExists(path.join(queuePath, `${normalizedId}.processing`))) {
+    return { id: normalizedId, state: "processing" };
+  }
+  if (await pathExists(path.join(queuePath, `${normalizedId}.json`))) {
+    return { id: normalizedId, state: "queued" };
+  }
+  return { id: normalizedId, state: "unknown" };
+}
+
+/**
+ * Enqueue canonical OAuth entries for a separately running, already
+ * authenticated integration. The queue file contains credentials, so this
+ * helper never returns them and only writes to the private local inbox.
+ */
+export async function enqueueLocalImportJob(
+  accounts: readonly SharedCodexAccountJson[],
+  queuePath = getLocalImportInboxPath()
+): Promise<{ id: string; accountCount: number }> {
+  const normalizedAccounts = normalizeLocalImportAccounts(accounts);
+  await ensurePrivateDirectory(queuePath);
+  const id = randomUUID();
+  const target = path.join(queuePath, `${id}.json`);
+  const payload = {
+    schema: IMPORT_JOB_SCHEMA,
+    id,
+    created_at: new Date().toISOString(),
+    accounts: normalizedAccounts
+  };
+  await writePrivateJson(target, payload, MAX_JOB_BYTES);
+  return { id, accountCount: normalizedAccounts.length };
+}
+
+async function readPrivateJson(target: string, maxBytes: number): Promise<unknown> {
+  const info = await safeLstat(target);
+  if (!info || !info.isFile() || info.isSymbolicLink() || info.size > maxBytes) {
+    throw new Error("invalid private status file");
+  }
+  return JSON.parse(await fs.readFile(target, "utf8")) as unknown;
+}
+
 async function readLocalImportJob(jobPath: string, expectedId: string): Promise<LocalImportJob> {
   const info = await safeLstat(jobPath);
   if (!info || !info.isFile() || info.isSymbolicLink() || info.size > MAX_JOB_BYTES) {
@@ -269,6 +344,37 @@ function failedResult(jobId: string, total: number, importFailed: number): Local
   };
 }
 
+function isLocalImportResult(value: unknown, expectedId: string): value is LocalImportResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    record["schema"] === IMPORT_RESULT_SCHEMA &&
+    record["id"] === expectedId &&
+    typeof record["status"] === "string" &&
+    typeof record["processed_at"] === "string"
+  );
+}
+
+function normalizeLocalImportState(value: string): LocalImportStatus["state"] {
+  return ["completed", "partial", "failed"].includes(value)
+    ? (value as "completed" | "partial" | "failed")
+    : "unknown";
+}
+
+function normalizeJobId(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (!new RegExp(`^${JOB_ID_PATTERN}$`, "u").test(normalized)) {
+    throw new Error("invalid local import job id");
+  }
+  return normalized;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return Number.isInteger(value) && (value as number) >= 0 ? (value as number) : undefined;
+}
+
 async function ensurePrivateDirectory(directory: string): Promise<void> {
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   const info = await fs.lstat(directory);
@@ -283,6 +389,21 @@ async function writeResult(target: string, value: LocalImportResult): Promise<vo
   const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);
   try {
     await fs.writeFile(temporary, `${JSON.stringify(value)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await fs.rename(temporary, target);
+    await fs.chmod(target, 0o600);
+  } finally {
+    await fs.unlink(temporary).catch(() => undefined);
+  }
+}
+
+async function writePrivateJson(target: string, value: unknown, maxBytes: number): Promise<void> {
+  const encoded = `${JSON.stringify(value)}\n`;
+  if (Buffer.byteLength(encoded, "utf8") > maxBytes) {
+    throw new Error("local import job is too large");
+  }
+  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`);
+  try {
+    await fs.writeFile(temporary, encoded, { encoding: "utf8", mode: 0o600, flag: "wx" });
     await fs.rename(temporary, target);
     await fs.chmod(target, 0o600);
   } finally {

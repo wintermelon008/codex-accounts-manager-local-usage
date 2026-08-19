@@ -9,12 +9,14 @@ import { RuntimeSwitchCoordinator, RuntimeSwitchSource } from "../../application
 import { registerCommands } from "../../commands";
 import {
   getCodexAccountsConfiguration,
+  getExternalControlPort,
+  isExternalControlEnabled,
   isLocalImportInboxEnabled,
   isSeamlessSwitchEnabled
 } from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
-import { registerDebugOutput, t } from "../../utils";
+import { registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import { isSub2ApiAccount, type SharedCodexAccountJson } from "../../core/types";
 import {
@@ -23,12 +25,15 @@ import {
 } from "../../application/accounts/importIntoBalancePool";
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState, resetSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
-import { LocalImportInbox } from "./localImportInbox";
+import { enqueueLocalImportJob, LocalImportInbox, readLocalImportStatus } from "./localImportInbox";
+import { LocalUsageAnalyticsService } from "../../services/localUsageAnalytics";
 import { selectFreshGatewayFallbackCandidate } from "../../application/accounts/gatewayFallbackSelection";
 import {
+  ManagerControlServer,
   ManagerIntegrationHost,
   setActiveManagerIntegrationHost,
   type CodexAccountsIntegrationApi,
+  type ManagerControlRefreshSummary,
   type OAuthAccountImportOptions,
   type OAuthAccountImportResult
 } from "../../integrations";
@@ -52,6 +57,7 @@ export class AccountsWorkbench {
   private readonly hotSwitchRuntime: CodexHotSwitchRuntime;
   private readonly runtimeSwitchCoordinator: RuntimeSwitchCoordinator;
   private readonly localImportInbox: LocalImportInbox | undefined;
+  private readonly managerControlServer: ManagerControlServer;
   private readonly integrationHost: ManagerIntegrationHost;
   private readonly oauthImportCancellationSources = new Map<string, vscode.CancellationTokenSource>();
   private seamlessUsageLimitMonitor: SeamlessUsageLimitMonitor | undefined;
@@ -102,11 +108,21 @@ export class AccountsWorkbench {
         importSharedAccountsToBalancePool: (input) => this.importSharedAccountsToBalancePool(input)
       }
     );
-    this.localImportInbox = isLocalImportInboxEnabled()
+    this.localImportInbox = isLocalImportInboxEnabled() || isExternalControlEnabled()
       ? new LocalImportInbox(this.repo, () => {
           void this.statusBar.refresh();
         })
       : undefined;
+    this.managerControlServer = new ManagerControlServer({
+      repo: this.repo,
+      usage: new LocalUsageAnalyticsService({
+        globalStoragePath: context.globalStorageUri.fsPath,
+        backgroundRefreshEnabled: true
+      }),
+      refreshQuotas: (accountIds) => this.refreshQuotasForControl(accountIds),
+      enqueueImport: (accounts) => enqueueLocalImportJob(accounts),
+      getImportStatus: (jobId) => readLocalImportStatus(jobId)
+    });
   }
 
   async activate(): Promise<void> {
@@ -127,6 +143,8 @@ export class AccountsWorkbench {
     await measureStep("repo.init", async () => {
       await this.repo.init();
     });
+    this.context.subscriptions.push(this.managerControlServer);
+    await measureStep("managerControlServer.start", () => this.startManagerControlServer());
     await measureStep("notifyIndexHealth", async () => {
       await this.notifyIndexHealth();
     });
@@ -240,6 +258,7 @@ export class AccountsWorkbench {
     this.refreshCoordinator.dispose();
     this.hotSwitchRuntime.dispose();
     this.localImportInbox?.dispose();
+    this.managerControlServer.dispose();
     setActiveManagerIntegrationHost(undefined);
     this.integrationHost.dispose();
     this.repo.dispose();
@@ -247,6 +266,70 @@ export class AccountsWorkbench {
 
   getIntegrationApi(): CodexAccountsIntegrationApi {
     return this.integrationHost.api;
+  }
+
+  private async startManagerControlServer(): Promise<void> {
+    if (!isExternalControlEnabled()) {
+      return;
+    }
+    const token = process.env["CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN"]?.trim();
+    if (!token) {
+      console.warn(
+        "[codexAccounts] external control is enabled but CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN is not set; the local API remains disabled"
+      );
+      void vscode.window.showWarningMessage(
+        "Manager 外部控制接口未启动：请设置 CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN 后重新加载窗口。"
+      );
+      return;
+    }
+
+    try {
+      const address = await this.managerControlServer.start(getExternalControlPort(), token);
+      console.info(`[codexAccounts] manager control API listening on ${address.host}:${address.port}`);
+    } catch (error) {
+      console.warn("[codexAccounts] manager control API could not start:", error);
+      void vscode.window.showWarningMessage(`Manager 外部控制接口启动失败：${describeControlError(error)}`);
+    }
+  }
+
+  private async refreshQuotasForControl(accountIds?: readonly string[]): Promise<ManagerControlRefreshSummary> {
+    const allAccounts = await this.repo.listAccounts();
+    const requestedIds = accountIds === undefined ? undefined : new Set(accountIds);
+    const unknownAccountIds =
+      requestedIds === undefined
+        ? []
+        : [...requestedIds].filter((accountId) => !allAccounts.some((account) => account.id === accountId));
+    const requestedAccounts =
+      requestedIds === undefined ? allAccounts : allAccounts.filter((account) => requestedIds.has(account.id));
+    const refreshableAccounts = requestedAccounts.filter((account) => !isSub2ApiAccount(account));
+    const failedAccountIds = requestedAccounts
+      .filter((account) => isSub2ApiAccount(account))
+      .map((account) => account.id);
+    let succeeded = 0;
+
+    await runWithConcurrencyLimit(refreshableAccounts, 3, async (account) => {
+      try {
+        await refreshSingleQuota(this.repo, { refresh: () => undefined }, account.id, {
+          announce: false,
+          forceRefresh: true,
+          refreshView: false,
+          warnQuota: false
+        });
+        succeeded += 1;
+      } catch {
+        failedAccountIds.push(account.id);
+      }
+    });
+
+    void this.statusBar.refresh();
+    void refreshQuotaSummaryPanel();
+    return {
+      total: requestedAccounts.length + unknownAccountIds.length,
+      succeeded,
+      failed: failedAccountIds.length,
+      unknownAccountIds,
+      failedAccountIds
+    };
   }
 
   private async startOAuthAccountImport(options: OAuthAccountImportOptions = {}): Promise<OAuthAccountImportResult> {
@@ -431,4 +514,8 @@ function throwIfOAuthImportCancelled(source: vscode.CancellationTokenSource | un
 function normalizeEmail(value: string | undefined): string | undefined {
   const normalized = value?.trim().toLowerCase();
   return normalized || undefined;
+}
+
+function describeControlError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

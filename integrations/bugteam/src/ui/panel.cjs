@@ -341,7 +341,7 @@ function createBugTeamPanelHtml() {
         const configured = source.credentialsConfigured === true;
         const waitlist = source.waitlist;
         const order = source.order;
-        const orderBlocksWaitlist = Boolean(order && !order.imported && !isFailedOrderState(order.state));
+        const orderBlocksWaitlist = Boolean(order && !order.imported && !isFailedOrderState(order.state) && !isCompletedOrderState(order.state));
         const productState = source.product;
         const balance = source.balance;
         tingbaiStatus.textContent = source.lastError ? "异常" : waitlist?.active ? "候补中" : configured ? "已连接" : "未配置";
@@ -381,7 +381,7 @@ function createBugTeamPanelHtml() {
         tingbaiRetryImport.hidden = !order?.lastImportError;
         tingbaiRetryImport.disabled = busy;
         const records = Array.isArray(source.records) ? source.records : [];
-        tingbaiRecords.innerHTML = records.length ? records.map((record) => '<article class="record"><div class="record-head"><strong>订单 ' + esc(record.orderId) + '</strong><span class="status ' + (record.imported ? 'completed' : '') + '">' + esc(record.imported ? '已入池' : orderState(record.state)) + '</span></div><div class="record-grid"><div><span>预计炸车时间</span><strong>' + esc(formatDateTime(record.estimatedExplosionAt)) + '</strong></div><div><span>检测到库存</span><strong>' + esc(formatDateTime(record.detectedAt)) + '</strong></div><div><span>成交金额</span><strong>' + esc(money(record.amountFen)) + '</strong></div></div></article>').join('') : '<div class="empty">暂无自动购买记录。</div>';
+        tingbaiRecords.innerHTML = records.length ? records.map((record) => '<article class="record"><div class="record-head"><strong>订单 ' + esc(record.orderId) + '</strong><span class="status ' + (record.imported ? 'completed' : '') + '">' + esc(record.imported ? importResultLabel(record.importResult) : orderState(record.state)) + '</span></div><div class="record-grid"><div><span>预计炸车时间</span><strong>' + esc(formatDateTime(record.estimatedExplosionAt)) + '</strong></div><div><span>检测到库存</span><strong>' + esc(formatDateTime(record.detectedAt)) + '</strong></div><div><span>成交金额</span><strong>' + esc(money(record.amountFen)) + '</strong></div></div></article>').join('') : '<div class="empty">暂无自动购买记录。</div>';
         setActionButton(tingbaiOpenWebsite, 'tingbaiOpenWebsite', '打开网站', '打开中…', '已打开 ✓', '打开失败');
         setActionButton(tingbaiSave, 'tingbaiSetCredentials', '保存并验证', '验证中…', '验证成功 ✓', '验证失败');
         setActionButton(tingbaiRefresh, 'tingbaiRefresh', '刷新', '同步中…', '已同步 ✓', '同步失败');
@@ -431,7 +431,7 @@ function createBugTeamPanelHtml() {
           unique.push(account);
         }
         accountBalances.innerHTML = unique.length
-          ? unique.map((account) => '<article class="account-balance"><div class="account-balance-head"><div><strong>' + esc(account.email || account.accountId || '未知账号') + '</strong><div class="hint">' + esc(account.planType || '未知套餐') + '</div></div><span class="status ' + (account.poolEnabled ? 'completed' : 'error') + '">' + esc(account.poolEnabled ? '已入无感池' : accountResultState(account.status)) + '</span></div><div class="account-balance-grid"><div><span>5h 额度</span><strong>' + esc(percentage(account.hourlyPercentage)) + '</strong></div><div><span>周额度</span><strong>' + esc(percentage(account.weeklyPercentage)) + '</strong></div><div><span>Credits 余额</span><strong>' + esc(account.creditsBalance || '—') + '</strong></div></div></article>').join('')
+          ? unique.map((account) => '<article class="account-balance"><div class="account-balance-head"><div><strong>' + esc(account.email || account.accountId || '未知账号') + '</strong><div class="hint">' + esc(account.planType || '未知套餐') + '</div></div><span class="status ' + (account.poolEnabled || account.status === 'already_exists' ? 'completed' : 'error') + '">' + esc(account.poolEnabled ? '已入无感池' : accountResultState(account.status)) + '</span></div><div class="account-balance-grid"><div><span>5h 额度</span><strong>' + esc(percentage(account.hourlyPercentage)) + '</strong></div><div><span>周额度</span><strong>' + esc(percentage(account.weeklyPercentage)) + '</strong></div><div><span>Credits 余额</span><strong>' + esc(account.creditsBalance || '—') + '</strong></div></div></article>').join('')
           : '<div class="empty">购买并完成额度刷新后显示每个账号的额度。</div>';
       }
 
@@ -503,8 +503,14 @@ function createBugTeamPanelHtml() {
         return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date);
       }
       function orderState(value) { return ({ completed: '已完成', delivered: '已完成', failed: '失败', refunded: '已退款', processing: '处理中', fulfilling: '发货中', waiting_inventory: '等待库存' }[String(value || '').toLowerCase()] || String(value || '处理中')); }
+      function isCompletedOrderState(value) { return ['completed', 'complete', 'fulfilled', 'delivered', 'success'].includes(String(value || '').toLowerCase()); }
       function isFailedOrderState(value) { return ['cancelled', 'canceled', 'expired', 'failed', 'refunded', 'fulfillment_error'].includes(String(value || '').toLowerCase()); }
-      function accountResultState(value) { return ({ refresh_failed: '额度刷新失败', not_eligible: '暂无额度能力', import_failed: '导入失败' }[String(value || '').toLowerCase()] || '未入无感池'); }
+      function accountResultState(value) { return ({ already_exists: '已存在，已跳过导入', refresh_failed: '额度刷新失败', not_eligible: '暂无额度能力', import_failed: '导入失败' }[String(value || '').toLowerCase()] || '未入无感池'); }
+      function importResultLabel(result) {
+        const total = number(result?.total);
+        const skipped = number(result?.skippedExisting);
+        return skipped >= total && total > 0 ? '已存在，已跳过导入' : number(result?.poolEnabled) + skipped >= total ? '已入池' : '已导入';
+      }
       function percentage(value) { const parsed = Number(value); return value !== null && value !== undefined && Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) + '%' : '—'; }
       function duration(seconds) { const value = Number(seconds); if (!Number.isFinite(value)) return '—'; if (value % 3600 === 0) return (value / 3600) + ' 小时'; if (value % 60 === 0) return (value / 60) + ' 分钟'; return Math.round(value) + ' 秒'; }
       function money(fen) { const value = Number(fen); return Number.isFinite(value) ? '¥' + (value / 100).toFixed(2) : '—'; }
