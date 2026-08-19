@@ -17,6 +17,7 @@ let reorderNextTurnStartResponse = false;
 let failNextTurnStartWithUsageLimit = false;
 let failNextTurnStartWithCapacity = false;
 let loginSettleTimer;
+let delayNextModelListResponse = false;
 
 emit({
   method: "test/runtimeArgs",
@@ -84,6 +85,14 @@ function handleLine(line) {
   switch (message.method) {
     case "initialize":
       respond(message.id, { userAgent: "fake-codex/1" });
+      break;
+    case "model/list":
+      replyWithModelList(message.id, delayNextModelListResponse);
+      delayNextModelListResponse = false;
+      break;
+    case "test/delayNextModelList":
+      delayNextModelListResponse = true;
+      respond(message.id, {});
       break;
     case "initialized":
       break;
@@ -411,6 +420,31 @@ function handleLine(line) {
     default:
       respond(message.id, {});
       break;
+  }
+}
+
+function replyWithModelList(id, delayed) {
+  const reply = () => {
+    respond(id, {
+      data: [
+        {
+          id: "gpt-5.6-terra",
+          model: "gpt-5.6-terra",
+          displayName: "GPT-5.6-Terra",
+          description: "Fake Codex model.",
+          hidden: false,
+          isDefault: true,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Default" }]
+        }
+      ],
+      nextCursor: null
+    });
+  };
+  if (delayed) {
+    setTimeout(reply, 250);
+  } else {
+    reply();
   }
 }
 

@@ -54,6 +54,7 @@ const MAX_GATEWAY_API_KEY_LENGTH = 4_096;
 const GATEWAY_CREDENTIAL_WAIT_TIMEOUT_MS = 15_000;
 const MAX_GATEWAY_USAGE_LINE_BYTES = 256 * 1024;
 const MAX_GATEWAY_JSON_USAGE_BYTES = 1024 * 1024;
+const MAX_GATEWAY_MODELS = 256;
 const GATEWAY_DIAGNOSTIC_SCHEMA = "codex-accounts-gateway-diagnostic/v1";
 const GATEWAY_DIAGNOSTIC_PATH = path.join(path.dirname(CONFIG_PATH), "gateway-last-failure.json");
 const MAX_GATEWAY_DIAGNOSTIC_CONTENT_LENGTH = 512 * 1024 * 1024;
@@ -101,6 +102,8 @@ let controlServer;
 let socketPath;
 const deferredOfficialLines = [];
 const pendingInternalRequests = new Map();
+const pendingChildModelListRequests = new Map();
+const startupAccountReadRequests = new Set();
 let pendingLoginCompletion;
 const pendingControlRequests = new Map();
 const recentSwitchOperations = new Map();
@@ -120,6 +123,7 @@ let usageAttributionFlushTimer;
 let usageAttributionWriteFailureReported = false;
 let child;
 let gatewayAdapter;
+let startupModelRefreshNotificationSent = false;
 
 void startRuntime();
 
@@ -193,6 +197,15 @@ function handleOfficialLine(line) {
     return;
   }
 
+  if (isGatewayModelListRequest(message)) {
+    handleGatewayModelListRequest(message, line);
+    return;
+  }
+
+  if (message.method === "account/read" && Object.prototype.hasOwnProperty.call(message, "id")) {
+    startupAccountReadRequests.add(requestIdKey(message.id));
+  }
+
   if (rewriteThreadListProviderFilter(message)) {
     line = JSON.stringify(message);
   }
@@ -233,6 +246,76 @@ function handleOfficialLine(line) {
   writeChildLine(line);
 }
 
+function isGatewayModelListRequest(message) {
+  return Boolean(
+    gatewayConfig &&
+      gatewayAdapter &&
+      message.method === "model/list" &&
+      Object.prototype.hasOwnProperty.call(message, "id")
+  );
+}
+
+function handleGatewayModelListRequest(message, line) {
+  const adapter = gatewayAdapter;
+  if (!adapter) {
+    writeChildLine(line);
+    return;
+  }
+  const routeVersion = adapter.modelListRouteVersion;
+  if (adapter.route !== "gateway") {
+    forwardModelListRequestToChild(adapter, routeVersion, message, line);
+    return;
+  }
+  void requestGatewayModelList(adapter).then(
+    (models) => {
+      if (!isCurrentGatewayModelListRoute(adapter, routeVersion)) {
+        handleGatewayModelListRequest(message, line);
+        return;
+      }
+      if (models.length === 0) {
+        forwardModelListRequestToChild(adapter, routeVersion, message, line);
+        return;
+      }
+      writeOfficialLine(
+        JSON.stringify({
+          id: message.id,
+          result: paginateGatewayModels(models, message.params)
+        })
+      );
+    },
+    () => {
+      if (!isCurrentGatewayModelListRoute(adapter, routeVersion)) {
+        handleGatewayModelListRequest(message, line);
+        return;
+      }
+      forwardModelListRequestToChild(adapter, routeVersion, message, line);
+    }
+  );
+}
+
+function isCurrentGatewayModelListRoute(adapter, routeVersion) {
+  return gatewayAdapter === adapter && adapter.route === "gateway" && adapter.modelListRouteVersion === routeVersion;
+}
+
+function forwardModelListRequestToChild(adapter, routeVersion, message, line) {
+  pendingChildModelListRequests.set(requestIdKey(message.id), { adapter, routeVersion, message, line });
+  writeChildLine(line);
+}
+
+function retryStaleChildModelListResponse(message) {
+  const key = requestIdKey(message.id);
+  const pending = pendingChildModelListRequests.get(key);
+  if (!pending) {
+    return false;
+  }
+  pendingChildModelListRequests.delete(key);
+  if (gatewayAdapter === pending.adapter && gatewayAdapter.modelListRouteVersion !== pending.routeVersion) {
+    handleGatewayModelListRequest(pending.message, pending.line);
+    return true;
+  }
+  return false;
+}
+
 function handleCodexLine(line) {
   const message = parseJson(line);
   if (!message) {
@@ -251,6 +334,18 @@ function handleCodexLine(line) {
 
   if (Object.prototype.hasOwnProperty.call(message, "id") && !message.method) {
     const key = requestIdKey(message.id);
+    const startupAccountRead = startupAccountReadRequests.delete(key);
+    if (startupAccountRead && !startupModelRefreshNotificationSent) {
+      startupModelRefreshNotificationSent = true;
+      setImmediate(() => {
+        if (gatewayAdapter && !childExited) {
+          writeOfficialLine(JSON.stringify({ method: "account/updated", params: {} }));
+        }
+      });
+    }
+    if (retryStaleChildModelListResponse(message)) {
+      return;
+    }
     const pendingInternal = pendingInternalRequests.get(key);
     if (pendingInternal) {
       pendingInternalRequests.delete(key);
@@ -770,6 +865,13 @@ async function drainPendingSwitch() {
     // transactional switch commits, a previous exhaustion batch must not
     // prompt the scheduler to repeat the same switch.
     resetUsageLimitExhaustionObservation();
+    if (request.routeSwitch && routeChanged) {
+      // Codex clients refresh their model picker after account/updated. A
+      // provider-only route switch does not make the real app-server emit
+      // that notification, so publish the protocol notification at the same
+      // commit point as the route change.
+      writeOfficialLine(JSON.stringify({ method: "account/updated", params: {} }));
+    }
 
     const result = {
       status: "switched",
@@ -2726,6 +2828,7 @@ function startGatewayAdapter(config) {
       apiKey: undefined,
       chatgptAccessToken: undefined,
       route: config.active === false ? "chatgpt" : "gateway",
+      modelListRouteVersion: 0,
       quotaExhausted: false,
       quotaExhaustionCount: 0,
       lastQuotaExhaustionAt: undefined,
@@ -2798,7 +2901,11 @@ function configureGatewayAdapter(params) {
     throw new Error("The Gateway credential is invalid");
   }
   const becameReady = !gatewayAdapter.apiKey;
+  const modelListCredentialChanged = gatewayAdapter.apiKey !== apiKey;
   gatewayAdapter.apiKey = apiKey;
+  if (modelListCredentialChanged) {
+    gatewayAdapter.modelListRouteVersion += 1;
+  }
   releaseGatewayCredentialWaiters(gatewayAdapter);
   if (becameReady) {
     safeLog("Gateway credential configured");
@@ -2813,7 +2920,10 @@ function activateGatewayAdapter() {
   if (!gatewayAdapter.apiKey) {
     throw new Error("The Gateway credential is not ready");
   }
-  gatewayAdapter.route = "gateway";
+  if (gatewayAdapter.route !== "gateway") {
+    gatewayAdapter.route = "gateway";
+    gatewayAdapter.modelListRouteVersion += 1;
+  }
   gatewayAdapter.quotaExhausted = false;
   return getGatewayAdapterStatus();
 }
@@ -2822,20 +2932,31 @@ function activateChatGptGatewayRoute(accessToken) {
   if (!gatewayAdapter || !gatewayConfig) {
     throw new Error("The Gateway relay is unavailable");
   }
+  let modelListRouteChanged = false;
   if (accessToken !== undefined) {
     if (typeof accessToken !== "string" || !accessToken.trim() || accessToken.length > 16_384) {
       throw new Error("The ChatGPT route credential is invalid");
     }
+    modelListRouteChanged = gatewayAdapter.chatgptAccessToken !== accessToken;
     gatewayAdapter.chatgptAccessToken = accessToken;
   }
-  gatewayAdapter.route = "chatgpt";
+  if (gatewayAdapter.route !== "chatgpt") {
+    gatewayAdapter.route = "chatgpt";
+    modelListRouteChanged = true;
+  }
+  if (modelListRouteChanged) {
+    gatewayAdapter.modelListRouteVersion += 1;
+  }
 }
 
 function restoreGatewayRoute() {
   if (!gatewayAdapter || !gatewayConfig) {
     throw new Error("The Gateway relay is unavailable");
   }
-  gatewayAdapter.route = "gateway";
+  if (gatewayAdapter.route !== "gateway") {
+    gatewayAdapter.route = "gateway";
+    gatewayAdapter.modelListRouteVersion += 1;
+  }
 }
 
 function getGatewayAdapterStatus() {
@@ -2895,6 +3016,157 @@ function closeGatewayAdapter() {
   releaseGatewayCredentialWaiters(gatewayAdapter);
   gatewayAdapter.server?.close();
   gatewayAdapter = undefined;
+}
+
+function requestGatewayModelList(adapter) {
+  let target;
+  try {
+    target = new URL("models", `${adapter.baseUrl.replace(/\/+$/u, "")}/`);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  const client = target.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      callback(value);
+    };
+    const request = client.request(
+      target,
+      {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${adapter.token}`
+        }
+      },
+      (response) => {
+        const statusCode = response.statusCode ?? 502;
+        if (statusCode < 200 || statusCode >= 300) {
+          response.resume();
+          finish(reject, new Error("The Gateway model list request failed"));
+          return;
+        }
+        const chunks = [];
+        let bytes = 0;
+        response.on("data", (chunk) => {
+          if (settled) {
+            return;
+          }
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          bytes += buffer.length;
+          if (bytes > MAX_GATEWAY_JSON_USAGE_BYTES) {
+            response.destroy();
+            finish(reject, new Error("The Gateway model list is too large"));
+            return;
+          }
+          chunks.push(buffer);
+        });
+        response.once("error", (error) => finish(reject, error));
+        response.once("end", () => {
+          if (settled) {
+            return;
+          }
+          try {
+            finish(resolve, readGatewayModels(JSON.parse(Buffer.concat(chunks).toString("utf8"))));
+          } catch (error) {
+            finish(reject, error);
+          }
+        });
+      }
+    );
+    request.setTimeout(INTERNAL_REQUEST_TIMEOUT_MS, () => {
+      request.destroy(new Error("The Gateway model list request timed out"));
+    });
+    request.once("error", (error) => finish(reject, error));
+    request.end();
+  });
+}
+
+function readGatewayModels(payload) {
+  const entries = Array.isArray(payload)
+    ? payload
+    : isPlainObject(payload) && Array.isArray(payload.data)
+      ? payload.data
+      : isPlainObject(payload) && Array.isArray(payload.models)
+        ? payload.models
+        : [];
+  const seen = new Set();
+  const models = [];
+  for (const entry of entries) {
+    if (models.length >= MAX_GATEWAY_MODELS) {
+      break;
+    }
+    const id =
+      typeof entry === "string"
+        ? readBoundedString(entry, 160)
+        : isPlainObject(entry)
+          ? readBoundedString(entry.id, 160) || readBoundedString(entry.model, 160)
+          : undefined;
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const displayName =
+      isPlainObject(entry) &&
+      (readBoundedString(entry.displayName, 160) ||
+        readBoundedString(entry.display_name, 160) ||
+        readBoundedString(entry.name, 160));
+    models.push({
+      id,
+      model: id,
+      displayName: displayName || id,
+      description: "Third-party Gateway model.",
+      hidden: false,
+      isDefault: false,
+      defaultReasoningEffort: "medium",
+      supportedReasoningEfforts: [
+        {
+          reasoningEffort: "medium",
+          description: "Provider default"
+        }
+      ],
+      inputModalities: ["text"],
+      supportsPersonality: false
+    });
+  }
+  const defaultModelId = models.some((model) => model.id === gatewayConfig?.model)
+    ? gatewayConfig.model
+    : models[0]?.id;
+  for (const model of models) {
+    model.isDefault = model.id === defaultModelId;
+  }
+  return models;
+}
+
+function paginateGatewayModels(models, params) {
+  const offset = readGatewayModelListOffset(params?.cursor);
+  const limit = readGatewayModelListLimit(params?.limit);
+  if (limit === 0) {
+    return { data: [], nextCursor: null };
+  }
+  const start = Math.min(offset, models.length);
+  const end = limit === undefined ? models.length : Math.min(start + limit, models.length);
+  return {
+    data: models.slice(start, end),
+    nextCursor: end < models.length ? String(end) : null
+  };
+}
+
+function readGatewayModelListOffset(value) {
+  if (typeof value !== "string" || !/^\d+$/u.test(value)) {
+    return 0;
+  }
+  const offset = Number(value);
+  return Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
+}
+
+function readGatewayModelListLimit(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 async function handleGatewayRequest(adapter, request, response) {

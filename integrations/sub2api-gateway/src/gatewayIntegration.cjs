@@ -227,6 +227,7 @@ class Sub2ApiGatewayIntegration {
     if (!result.requiresReload) {
       void this.vscode.window.showInformationMessage("已切换回 ChatGPT Auth，无需重新加载窗口。");
     }
+    return result;
   }
 
   async refresh() {
