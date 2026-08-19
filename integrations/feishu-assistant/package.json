@@ -1,0 +1,35 @@
+{
+  "name": "@codex-accounts/feishu-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone Feishu assistant for the local Codex Accounts Manager control API.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wintermelon008/codex-accounts-manager-local-usage.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "feishu-assistant": "./src/cli.mjs"
+  },
+  "files": [
+    "src",
+    "templates",
+    "LICENSE",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "npm test",
+    "start": "node src/cli.mjs",
+    "package:check": "npm test && npm pack --dry-run",
+    "package": "npm run package:check && npm pack --pack-destination dist"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.73.0"
+  }
+}
