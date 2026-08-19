@@ -128,6 +128,23 @@ test("offers a card action to return from an active Gateway to ChatGPT Auth", as
   integration.dispose();
 });
 
+test("returns the runtime result through the registered virtual account deactivation callback", async (t) => {
+  const storage = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-integration-"));
+  t.after(() => fs.rm(storage, { recursive: true, force: true }));
+  const api = createApi();
+  const integration = new Sub2ApiGatewayIntegration(createVscode(), createContext(storage), api);
+  await integration.initialize();
+
+  integration.selection = "active";
+  assert.deepEqual(await api.virtualRegistrations[0].deactivate(), {
+    enabled: false,
+    configured: false,
+    requiresReload: false
+  });
+
+  integration.dispose();
+});
+
 test("exposes and selects external profiles from the account card without a QuickPick", async (t) => {
   const storage = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-integration-"));
   t.after(() => fs.rm(storage, { recursive: true, force: true }));

@@ -505,6 +505,152 @@ describe("CodexHotSwitchBridge", () => {
     }
   }, 15_000);
 
+  it("refreshes the model list for the active Gateway route", async () => {
+    const root = path.resolve(__dirname, "..");
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-gateway-models-"));
+    const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
+    const upstreamRequests: Array<{ authorization?: string; method?: string; url?: string }> = [];
+    const upstream = http.createServer((request, response) => {
+      upstreamRequests.push({ authorization: request.headers.authorization, method: request.method, url: request.url });
+      request.resume();
+      if (request.url !== "/v1/models") {
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "not found" } }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          data: [
+            { id: "grok-4-fast", name: "Grok 4 Fast" },
+            { id: "grok-4-latest" },
+            { id: "grok-4-fast" }
+          ]
+        })
+      );
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("Test upstream did not receive a TCP port");
+    }
+
+    try {
+      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await writeFile(
+        path.join(runtimeDirectory, "codex-app-server-shim.json"),
+        JSON.stringify({
+          realCliPath: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+          forceHttpTransport: true,
+          gateway: {
+            displayName: "Gateway",
+            baseUrl: `http://127.0.0.1:${upstreamAddress.port}/v1`,
+            model: "grok-4-latest",
+            autoFallbackToChatGpt: false
+          }
+        }),
+        "utf8"
+      );
+      shim = childProcess.spawn(shimPath, ["app-server"], {
+        cwd: root,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const messages = createMessageCollector(shim.stdout);
+      shim.stdin.write(`${JSON.stringify({ id: "model-list-initialize", method: "initialize", params: {} })}\n`);
+      await messages.next((message) => message.id === "model-list-initialize");
+
+      bridge = new CodexHotSwitchBridge(async () => ({
+        accessToken: "oauth-token",
+        chatgptAccountId: "oauth-account",
+        chatgptPlanType: "plus"
+      }));
+      await waitForSocket(getHotSwitchSocketPath(process.pid));
+      await bridge.configureGatewayCredential("gateway-key");
+
+      shim.stdin.write(`${JSON.stringify({ id: "startup-account-read", method: "account/read", params: {} })}\n`);
+      await messages.next((message) => message.id === "startup-account-read");
+      await waitFor(() => messages.all.filter((message) => message.method === "account/updated").length === 1);
+
+      shim.stdin.write(`${JSON.stringify({ id: "gateway-models", method: "model/list", params: {} })}\n`);
+      await expect(messages.next((message) => message.id === "gateway-models")).resolves.toMatchObject({
+        result: {
+          data: [
+            {
+              id: "grok-4-fast",
+              model: "grok-4-fast",
+              displayName: "Grok 4 Fast",
+              hidden: false,
+              isDefault: false,
+              defaultReasoningEffort: "medium",
+              supportedReasoningEfforts: [{ reasoningEffort: "medium" }]
+            },
+            {
+              id: "grok-4-latest",
+              model: "grok-4-latest",
+              isDefault: true
+            }
+          ],
+          nextCursor: null
+        }
+      });
+      expect(upstreamRequests).toEqual([
+        { authorization: "Bearer gateway-key", method: "GET", url: "/v1/models" }
+      ]);
+      expect(messages.all.some((message) => message.method === "test/received" && message.params?.method === "model/list")).toBe(
+        false
+      );
+
+      const accountUpdatedBeforeChatGptRoute = messages.all.filter((message) => message.method === "account/updated").length;
+      await expect(
+        bridge.switchGatewayRoute({
+          route: "chatgpt",
+          chatgptAccessToken: "oauth-token",
+          gracePeriodMs: 0,
+          longTurnPolicy: "defer"
+        })
+      ).resolves.toMatchObject({ status: "switched" });
+      await waitFor(
+        () => messages.all.filter((message) => message.method === "account/updated").length > accountUpdatedBeforeChatGptRoute
+      );
+      shim.stdin.write(`${JSON.stringify({ id: "chatgpt-models", method: "model/list", params: {} })}\n`);
+      await expect(messages.next((message) => message.id === "chatgpt-models")).resolves.toMatchObject({
+        result: { data: [{ id: "gpt-5.6-terra", model: "gpt-5.6-terra" }] }
+      });
+      expect(upstreamRequests).toHaveLength(1);
+
+      shim.stdin.write(`${JSON.stringify({ id: "delay-chatgpt-models", method: "test/delayNextModelList", params: {} })}\n`);
+      await messages.next((message) => message.id === "delay-chatgpt-models");
+      shim.stdin.write(`${JSON.stringify({ id: "stale-chatgpt-models", method: "model/list", params: {} })}\n`);
+      await messages.next(
+        (message) => message.method === "test/received" && message.params?.id === "stale-chatgpt-models"
+      );
+      const accountUpdatedBeforeGatewayRoute = messages.all.filter((message) => message.method === "account/updated").length;
+      await expect(
+        bridge.switchGatewayRoute({
+          route: "gateway",
+          accountId: "virtual:gateway",
+          gracePeriodMs: 0,
+          longTurnPolicy: "defer"
+        })
+      ).resolves.toMatchObject({ status: "switched" });
+      await waitFor(
+        () => messages.all.filter((message) => message.method === "account/updated").length > accountUpdatedBeforeGatewayRoute
+      );
+      await expect(messages.next((message) => message.id === "stale-chatgpt-models")).resolves.toMatchObject({
+        result: { data: [{ id: "grok-4-fast" }, { id: "grok-4-latest" }] }
+      });
+      expect(upstreamRequests).toHaveLength(2);
+    } finally {
+      bridge?.dispose();
+      bridge = undefined;
+      shim?.kill("SIGTERM");
+      shim = undefined;
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("switches a non-fallback Gateway route in place through the turn barrier", async () => {
     const root = path.resolve(__dirname, "..");
     const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-gateway-route-"));
