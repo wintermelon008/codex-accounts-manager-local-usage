@@ -312,92 +312,6 @@ export function SettingsOverlay(props: {
             <div class={`settings-stack ${props.settings.seamlessSwitchEnabled ? "" : "is-hidden"}`}>
               <SettingsToggleBlock
                 title={
-                  props.lang === "zh" ? "分档切号" : props.lang === "zh-hant" ? "分檔切換" : "Quota-band switching"
-                }
-                sub={
-                  props.lang === "zh"
-                    ? "按五小时额度分档在无感池内平衡账号。"
-                    : props.lang === "zh-hant"
-                      ? "依五小時額度分檔在無感池內平衡帳號。"
-                      : "Balance pool accounts by 5-hour quota bands."
-                }
-                enabled={props.settings.seamlessSwitchQuotaBandsEnabled}
-                onToggle={(enabled) => patchAndSend("seamlessSwitchQuotaBandsEnabled", enabled)}
-              >
-                <div class={`settings-stack ${props.settings.seamlessSwitchQuotaBandsEnabled ? "" : "is-hidden"}`}>
-                  <SettingsSegmentBlock
-                    title={props.lang === "zh" ? "分档方式" : props.lang === "zh-hant" ? "分檔方式" : "Band size"}
-                    sub={
-                      props.lang === "zh"
-                        ? "下降一个分档时切换；修改后重新建立基线。"
-                        : props.lang === "zh-hant"
-                          ? "下降一個分檔時切換；修改後重新建立基線。"
-                          : "Switch after a band drop; changing this resets the baseline."
-                    }
-                    options={([20, 25, 33, 50] as const).map((size) => ({
-                      key: `quota-band-${size}`,
-                      title:
-                        size === 20 ? "1/5 (20%)" : size === 25 ? "1/4 (25%)" : size === 33 ? "1/3 (33%)" : "1/2 (50%)",
-                      description:
-                        props.lang === "zh"
-                          ? size === 20
-                            ? "五档，更均衡"
-                            : size === 25
-                              ? "四档"
-                              : size === 33
-                                ? "三档"
-                                : "两档，更少切换"
-                          : props.lang === "zh-hant"
-                            ? size === 20
-                              ? "五檔，更均衡"
-                              : size === 25
-                                ? "四檔"
-                                : size === 33
-                                  ? "三檔"
-                                  : "兩檔，較少切換"
-                            : size === 20
-                              ? "Five bands; smoother balance"
-                              : size === 25
-                                ? "Four bands"
-                                : size === 33
-                                  ? "Three bands"
-                                  : "Two bands; fewer switches",
-                      active: props.settings.seamlessSwitchQuotaBandSize === size,
-                      onClick: () => patchAndSend("seamlessSwitchQuotaBandSize", size)
-                    }))}
-                  />
-                  <div class="settings-block-head">
-                    <div class="settings-block-title">
-                      {props.lang === "zh" ? "等待时间" : props.lang === "zh-hant" ? "等待時間" : "Wait time"}
-                    </div>
-                    <div class="settings-block-sub">
-                      {props.lang === "zh"
-                        ? "触发后等待会话自然结束；超时后按切换策略处理。"
-                        : props.lang === "zh-hant"
-                          ? "觸發後等待對話自然結束；逾時後依切換策略處理。"
-                          : "Wait for active turns to finish, then apply the switch policy."}
-                    </div>
-                  </div>
-                  <SettingsDiscreteSlider
-                    value={props.settings.hotSwitchGraceSeconds}
-                    values={HOT_SWITCH_GRACE_VALUES}
-                    accent="violet"
-                    scaleValues={HOT_SWITCH_GRACE_VALUES}
-                    valueLabel={(value) => `${value}s`}
-                    description={(value) =>
-                      props.lang === "zh"
-                        ? `最多 ${value} 秒`
-                        : props.lang === "zh-hant"
-                          ? `最多 ${value} 秒`
-                          : `Up to ${value} seconds`
-                    }
-                    onPreview={(value) => props.onPatchSettings({ hotSwitchGraceSeconds: value })}
-                    onCommit={(value) => patchAndSend("hotSwitchGraceSeconds", value)}
-                  />
-                </div>
-              </SettingsToggleBlock>
-              <SettingsToggleBlock
-                title={
                   props.lang === "zh" ? "低额度切号" : props.lang === "zh-hant" ? "低額度切換" : "Low-quota switching"
                 }
                 sub={
@@ -536,6 +450,36 @@ export function SettingsOverlay(props: {
                   }
                 ]}
               />
+              <div class="settings-block">
+                <div class="settings-block-head">
+                  <div class="settings-block-title">
+                    {props.lang === "zh" ? "等待时间" : props.lang === "zh-hant" ? "等待時間" : "Wait time"}
+                  </div>
+                  <div class="settings-block-sub">
+                    {props.lang === "zh"
+                      ? "触发后等待会话自然结束；超时后按切换策略处理。"
+                      : props.lang === "zh-hant"
+                        ? "觸發後等待對話自然結束；逾時後依切換策略處理。"
+                        : "Wait for active turns to finish, then apply the switch policy."}
+                  </div>
+                </div>
+                <SettingsDiscreteSlider
+                  value={props.settings.hotSwitchGraceSeconds}
+                  values={HOT_SWITCH_GRACE_VALUES}
+                  accent="violet"
+                  scaleValues={HOT_SWITCH_GRACE_VALUES}
+                  valueLabel={(value) => `${value}s`}
+                  description={(value) =>
+                    props.lang === "zh"
+                      ? `最多 ${value} 秒`
+                      : props.lang === "zh-hant"
+                        ? `最多 ${value} 秒`
+                        : `Up to ${value} seconds`
+                  }
+                  onPreview={(value) => props.onPatchSettings({ hotSwitchGraceSeconds: value })}
+                  onCommit={(value) => patchAndSend("hotSwitchGraceSeconds", value)}
+                />
+              </div>
             </div>
             <div class="settings-note">
               {props.lang === "zh"

@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { needsRefresh, refreshTokens } from "../../auth/oauth";
 import type { CodexHotSwitchRuntime, HotSwitchIdentity, HotSwitchStatus } from "../../codex";
 import { isAutomaticAccount, type CodexAccountRecord } from "../../core/types";
-import { DASHBOARD_ACCOUNTS_PAGE_SIZE } from "../../domain/dashboard/types";
+import { DASHBOARD_AUTOMATIC_REFRESH_PAGE_SIZE } from "../../domain/dashboard/types";
 import {
   getAutoRefreshMinutes,
   getCodexAccountsConfiguration,
@@ -331,7 +331,7 @@ export function registerAutoRefreshScheduler(params: {
 export function getAutomaticQuotaRefreshAccountIds(
   accounts: readonly CodexAccountRecord[],
   config: vscode.WorkspaceConfiguration,
-  pageSize = DASHBOARD_ACCOUNTS_PAGE_SIZE
+  pageSize = DASHBOARD_AUTOMATIC_REFRESH_PAGE_SIZE
 ): string[] {
   const normalizedPageSize = Math.max(1, Math.floor(pageSize));
   return accounts
