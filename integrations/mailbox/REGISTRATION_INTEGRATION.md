@@ -2,46 +2,73 @@
 
 ## 功能概述
 
-在 mailbox 扩展面板中集成了 OpenAI 账号注册助手，实现浏览器自动化注册流程的手动辅助界面。
+注册助手现在作为独立 Dashboard 入口运行，与 Mailbox、Bugteam 同级显示在主面板右上角，实现浏览器自动化注册流程的手动辅助界面。
 
 ## 集成的文件
 
 ### 后端逻辑
-- **src/operations/registration-flow.cjs**: Playwright 自动化流程，管理 OpenAI 注册表单的9个状态
+- **src/operations/registration-flow.cjs**: 注册会话状态机；Manager 可用时委托 Codex OAuth，独立运行时保留 Playwright 后备流程
+- **src/operations/virtual-display.cjs**: 无 `DISPLAY` 时按会话启动/释放隔离的 Xvfb 虚拟显示
 - **src/operations/registration-manager.cjs**: 会话管理器，支持最多3个并发注册会话
+- **src/operations/liye-phone-order.cjs**: 复用之前仓库的 LIYE 人工取号/收码状态机
+- **src/operations/registration-email-code.cjs**: 注册启动后按邮箱匹配已导入来源，查询最近30分钟内的最新邮箱验证码
+- **src/operations/registration-key-pool.cjs**: 使用 VS Code SecretStorage 保存接码 Key 池，只向面板展示脱敏值
+- **src/operations/registration-phone-sources.cjs**: 接码来源注册表（当前提供 LIYE，保留后续扩展入口）
 
 ### 前端集成
 - **src/ui/integration.cjs**: 
   - 添加了 `RegistrationManager` 实例
   - 添加了消息处理器（registrationCreate/Submit/Cancel等）
   - 修复了参数名匹配问题（phoneNumber/otp）
+  - 同时注册 `mailbox` 和 `mailbox-registration` 两个 Dashboard 入口，并让两个面板共享邮箱/注册会话状态
   
 - **src/ui/panel.cjs**:
   - 添加了注册助手面板UI（CSS + HTML渲染）
+  - 提供独立的注册助手界面，可按邮箱库筛选、选择已导入邮箱，或直接输入新邮箱
   - 添加了所有交互事件处理器（toggle/create/submit/cancel/cleanup）
   - 添加了 input 事件监听器同步 registrationEmail
+  - 增加邮箱验证码显示框、重新查询按钮、手机号/短信验证码显示框和复制按钮
+  - 增加接码来源下拉框、网页入口、订单倒计时和 SecretStorage Key 池维护
 
 ## 使用流程
 
-1. 点击面板顶部的"注册助手"按钮展开面板
-2. 输入邮箱地址，点击"创建注册会话"
-3. 系统自动打开 Playwright 浏览器并填写：
-   - 邮箱（用户输入）
-   - 密码（固定：Chatgpt189687）
-   - 姓名（固定：jdd）
-   - 年龄（固定：24）
-4. 在会话卡片中：
-   - 状态显示为"等待手机号输入"时，从接码平台复制号码并粘贴，点击"提交号码"
-   - 状态显示为"等待验证码输入"时，从接码平台复制验证码并粘贴，点击"提交验证码"
-   - 如果号码不可用，点击"换号"重新输入
-5. 注册完成后，使用现有的"Codex 导入"功能完成账号导入
+1. 在 Manager 主面板右上角点击独立的"注册助手"按钮
+2. 在邮箱库中筛选并选择已导入邮箱，或直接输入新邮箱；已经导入 Codex 的邮箱会自动从注册邮箱库中隐藏，直接输入也会被拦截。选择只会填入地址，不会自动开始注册
+3. 点击"开始注册"
+4. 如果当前 Manager 提供 Codex OAuth 导入能力，注册助手会直接复用与 Mailbox“Codex 导入”相同的 OAuth 流程：
+   - 使用 OAuth 授权入口打开外部浏览器，通常会先进入 `https://auth.openai.com/choose-an-account`；
+   - 当前邮箱会作为 `expectedEmail` 校验，避免误导入其他账号；
+   - 邮箱、密码、手机号、验证码、姓名年龄和最终授权均在 OAuth 浏览器窗口中由你完成；
+   - 面板只查询并显示最近 30 分钟邮箱验证码，接码区域只负责取号/读码和复制，不会把内容自动提交到外部浏览器；
+   - OAuth 回调完成后，Manager 自动导入账号并刷新额度，不需要再次点击“Codex 导入”。
+5. 在接码区域选择来源和 Key 后点击“开始取号”。Key 池默认收起，点击“管理接码 Key 池”即可展开维护；选中可用 Key 后“开始取号”会立即启用。拿到手机号后会自动轮询短信验证码；手机号、邮箱验证码和短信验证码出现新值时会延迟约 1 秒尝试自动复制到剪贴板，同时保留手动复制按钮。面板显示的成功率只来自接码平台返回的数据；平台未提供时显示“平台未提供”，不计算本地成功率。
+6. 如果号码不可用，面板会保留接码平台的错误原文；只有你点击“重新取号”才会换号，“取消取号”也只在你点击后执行。无需再点击“确认号码”或“读取验证码”。
+7. Key 只有在真正收到短信验证码后才会从池中移除；换号、取消、取号失败、超时或未收到验证码都会释放回可用状态。
+8. 如果换号请求与平台收到短信同时发生，平台返回“验证码已到达”的 409 时会重新查询当前订单；已有码则直接显示，未有码则恢复轮询，不会让后台读取任务悄悄停止。
+9. 收到短信验证码后会 best-effort 结束 LIYE 旧订单；即使平台拒绝对已收码订单重复取消，下一轮取号也会跳过所有已有验证码的历史订单，不会复用旧号码。
+10. 如果 Manager 不支持 OAuth 导入，注册助手保留旧的 Playwright 页面状态检测后备流程；该流程仍要求邮箱码、手机号、短信码和最终授权由你确认提交。
+
+### 无图形界面的远程环境
+
+只有在 Manager 不支持 OAuth、进入 Playwright 后备流程时，如果 VS Code 扩展宿主没有 `DISPLAY`，注册助手才会尝试启动一个独立的 `Xvfb` 虚拟显示。该虚拟显示只服务当前注册会话，使用 `-nolisten tcp`，不会修改服务器全局配置或当前扩展宿主的 `DISPLAY`；会话结束后会释放它。
+
+`Xvfb` 是不可见的虚拟桌面，所以浏览器不会弹到你的电脑上。它适合验证浏览器能否启动和记录页面状态，但如果出现 Cloudflare，用户也无法点击。此时流程会立即失败，并记录明确日志：“当前浏览器运行在 Xvfb 虚拟显示上，窗口不可见，你无法点击完成验证”；请改用 X11 转发、xpra/noVNC 或真实 `DISPLAY`。
+
+如果不希望自动启动虚拟显示，可设置 `CODEX_MAILBOX_HEADLESS=true`，流程会直接使用无头浏览器。设置 `CODEX_MAILBOX_HEADLESS=false` 会强制尝试有头模式；没有真实 `DISPLAY` 时仍会先启动 Xvfb。若服务器未安装 `Xvfb`，会记录启动失败并回退到无头模式。
+
+OAuth 主流程使用 Manager 的外部浏览器，因此 Cloudflare 由该浏览器中的用户正常完成；不会自动点击或绕过校验。只有 Playwright 后备流程才使用下面的 `DISPLAY`/Xvfb 配置，并持续记录 Cloudflare 状态。
 
 ## 技术要点
 
 - **并发控制**: 最多支持3个会话同时进行
 - **状态同步**: 通过 EventEmitter 实时更新前端状态
 - **错误处理**: 会话失败时显示错误信息，支持清除记录
-- **手动操作**: 所有接码操作由用户手动完成，避免自动化滥用风险
+- **OAuth 优先**: 与 Mailbox“Codex 导入”共用 Manager 的 PKCE、回调监听、账号邮箱校验和导入逻辑
+- **后备状态检测**: 没有 Manager OAuth 能力时，根据可见输入框、页面文本和授权按钮识别密码、邮箱码、手机号、短信码、姓名年龄和授权阶段
+- **人工确认**: OAuth 主流程中的表单和最终授权由外部浏览器中的用户完成；邮箱码、手机号和短信码仍只在面板显示/复制，不会自动提交
+- **邮箱验证码**: 仅查询已导入 provider 返回的带收到时间邮件，按时间倒序取30分钟窗口内最新验证码
+- **邮箱刷新**: 面板“重新查询”会取消当前 watcher 并重新开始一个查询窗口，不会创建重复轮询器
+- **接码 Key 安全**: Key 原文只保存在 VS Code SecretStorage，面板和诊断日志只显示脱敏值；成功收码后移除，其他结束路径释放
 
 ## 参数配置
 
@@ -55,8 +82,8 @@
 
 构建扩展并在 VS Code 中测试：
 ```bash
-npm run build
+npm run package
 code --install-extension <生成的.vsix文件> --force
 ```
 
-重新加载 VS Code 后，打开 mailbox 面板即可看到"注册助手"按钮。
+重新加载 VS Code 后，Manager 主面板右上角会同时看到 `Mailbox` 和 `注册助手` 两个入口。

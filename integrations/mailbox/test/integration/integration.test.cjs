@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { MailboxIntegration, INTEGRATION_ID } = require("../../src/ui/integration.cjs");
+const { MailboxIntegration, INTEGRATION_ID, REGISTRATION_INTEGRATION_ID } = require("../../src/ui/integration.cjs");
 
 test("activation loads local state, registers a generic Manager card, and does not query a provider", async () => {
   const vscode = createVscode();
@@ -34,6 +34,77 @@ test("activation loads local state, registers a generic Manager card, and does n
   integration.dispose();
 });
 
+test("registration assistant is a separate Dashboard entry and shares the mailbox state", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const registrations = [];
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, providerId: "mock", messages: [], codes: [] }; }
+  };
+  const api = {
+    registerDashboardIntegration(value) {
+      registrations.push(value);
+      return { dispose() {} };
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+
+  assert.deepEqual(registrations.map((value) => value.id), [REGISTRATION_INTEGRATION_ID, INTEGRATION_ID]);
+  assert.equal(registrations[0].getViewModel().title, "注册助手");
+  assert.equal(registrations[0].getViewModel().topButton.label, "注册助手");
+  await registrations[0].runAction("open");
+  assert.equal(vscode.panels.length, 1);
+  assert.equal(vscode.panels[0].viewType, "codexAccounts.mailboxRegistration");
+  assert.match(vscode.panels[0].webview.html, /registrationMailboxSearch/u);
+
+  await integration.pool.importProvider({ provider, input: "register@example.com|credential" });
+  const sessionId = integration.registrationManager.createSession({ email: "register@example.com", password: "manual-password" });
+  await integration.publishPanelState();
+  const state = vscode.panels[0].webview.messages.filter((message) => message.type === "state").at(-1).state;
+  assert.equal(state.mailboxes[0].address, "register@example.com");
+  assert.equal(state.registrationSessions[0].id, sessionId);
+  integration.dispose();
+});
+
+test("registration assistant uses the Manager Codex OAuth flow when it is available", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let oauthOptions;
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async startOAuthAccountImport(options) {
+      oauthOptions = options;
+      return { accountId: "account-1", email: options.expectedEmail, quotaRefreshed: true };
+    },
+    cancelOAuthAccountImport() {}
+  };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+
+  const sessionId = integration.registrationManager.createSession({
+    email: "oauth@example.com",
+    password: "manual-password"
+  });
+  await integration.registrationManager.startSession(sessionId);
+
+  const state = integration.registrationManager.getSessionState(sessionId);
+  assert.equal(state.mode, "oauth");
+  assert.equal(state.state, "completed");
+  assert.equal(state.result.accountId, "account-1");
+  assert.equal(oauthOptions.expectedEmail, "oauth@example.com");
+  integration.dispose();
+});
+
 test("default integration registers the built-in 8t92, boya and cdns providers", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -45,6 +116,64 @@ test("default integration registers the built-in 8t92, boya and cdns providers",
   assert.deepEqual(providers.providers.map((provider) => provider.id), ["8t92", "boya", "cdns"]);
   assert.equal(providers.providers.find((provider) => provider.id === "boya").displayName, "boya");
   assert.equal(providers.providers.find((provider) => provider.id === "cdns").displayName, "cdns");
+  integration.dispose();
+});
+
+test("registration start automatically watches the matching imported mailbox and keeps OTP manual", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let registration;
+  let queryCalls = 0;
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query(account) {
+      queryCalls += 1;
+      return {
+        ok: true,
+        providerId: "mock",
+        address: account.address,
+        messages: [{
+          id: "registration-email-message",
+          subject: "OpenAI verification code",
+          receivedAt: new Date().toISOString(),
+          body: "Use 123456 to continue",
+          codes: ["123456"]
+        }],
+        codes: ["123456"]
+      };
+    }
+  };
+  const api = { registerDashboardIntegration(value) { registration = value; return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await registration.runAction("open");
+  await integration.pool.importProvider({ provider, input: "register@example.com|credential" });
+
+  const sessionId = integration.registrationManager.createSession({
+    email: "register@example.com",
+    password: "manual-password"
+  });
+  integration.registrationManager.startSession = async (id) => {
+    integration.registrationManager.sessions.get(id).setState("starting");
+  };
+  await integration.startRegistrationSession(sessionId);
+  await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.emailCode?.phase === "received");
+
+  const state = integration.registrationManager.getSessionState(sessionId);
+  assert.equal(queryCalls, 1);
+  assert.equal(state.emailCode.code, "123456");
+  assert.equal(state.emailCode.receivedAt.length > 0, true);
+  assert.equal(integration.registrationEmailWatchers.has(sessionId), false);
+  assert.equal(state.state, "starting");
+  assert.equal(typeof integration.submitRegistrationOtp, "function");
   integration.dispose();
 });
 
@@ -84,7 +213,10 @@ test("Manager card opens a parallel editor panel and panel messages select/query
   const mailboxId = integration.pool.listMetadata()[0].id;
   await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "select", mailboxId });
   await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "query", mailboxId });
-  await waitFor(() => integration.coordinator.isActive() === false);
+  await waitFor(() => {
+    const latestState = vscode.panels[0].webview.messages.filter((message) => message.type === "state").at(-1)?.state;
+    return integration.pool.listMetadata().find((mailbox) => mailbox.id === mailboxId)?.latestCode === "123456" && latestState?.selected?.detail?.codes?.[0] === "123456";
+  });
 
   const stateMessage = vscode.panels[0].webview.messages.filter((message) => message.type === "state").at(-1);
   assert.equal(stateMessage.state.selected.mailbox.address, "one@example.com");
@@ -278,6 +410,28 @@ test("Codex import is offered only for an unlinked mailbox and uses the optional
   integration.dispose();
 });
 
+test("registration rejects an email that is already imported into Codex", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async getManagedAccountEmails() { return ["Linked@example.com"]; },
+    async startOAuthAccountImport() { throw new Error("should not start"); }
+  };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+
+  await assert.rejects(
+    () => integration.createRegistrationSession({ email: " linked@EXAMPLE.com " }),
+    /已经导入 Codex 账号/u
+  );
+  assert.equal(integration.registrationManager.getAllSessions().length, 0);
+  const state = await integration.getPanelState();
+  assert.equal(state.managedAccountEmailsAvailable, true);
+  assert.deepEqual(state.managedAccountEmails, ["Linked@example.com"]);
+  integration.dispose();
+});
+
 test("Codex OAuth import does not block mailbox query for the same mailbox", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -380,6 +534,48 @@ test("shared Stop cancels an in-flight Codex OAuth import", async () => {
   integration.dispose();
 });
 
+test("registration phone keys are claimed for取号, consumed on SMS, and released otherwise", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  await integration.openRegistrationPanel();
+  const sessionId = integration.registrationManager.createSession({ email: "phone-key@example.com", password: "password" });
+  let acquired;
+  integration.registrationManager.acquirePhoneNumber = async (_id, code, options) => {
+    acquired = { code, options };
+    return { phase: "polling", running: true };
+  };
+
+  await integration.addRegistrationPhoneKeys("POOL-KEY-1\nPOOL-KEY-2");
+  const before = await integration.getPanelState();
+  assert.equal(before.phoneSources[0].id, "liye");
+  const keyId = before.registrationKeyPool.keys[0].id;
+  await integration.acquireRegistrationPhone(sessionId, { sourceId: "liye", keyId });
+  assert.equal(acquired.code, "POOL-KEY-1");
+  assert.equal(acquired.options.cardKeyId, keyId);
+  assert.equal((await integration.getPanelState()).registrationKeyPool.inUse, 1);
+
+  await integration.syncRegistrationPhoneKey({
+    sessionId,
+    phoneOrder: { phase: "received", order: { phone: "+8613800000000", smsCode: "123456" } }
+  });
+  const afterCode = await integration.getPanelState();
+  assert.equal(afterCode.registrationKeyPool.count, 1);
+  assert.equal(afterCode.registrationKeyPool.inUse, 0);
+  assert.equal(
+    vscode.panels.flatMap((panel) => panel.webview.messages).some((message) => message.action === "registrationPhoneCodeReceived" && message.level === "success"),
+    true
+  );
+
+  const nextKeyId = afterCode.registrationKeyPool.keys[0].id;
+  await integration.acquireRegistrationPhone(sessionId, { sourceId: "liye", keyId: nextKeyId });
+  await integration.releaseRegistrationPhoneKey(sessionId);
+  assert.equal((await integration.getPanelState()).registrationKeyPool.available, 1);
+  integration.dispose();
+});
+
 function createVscode() {
   class EventEmitter {
     constructor() { this.listeners = new Set(); this.event = (listener) => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; }; }
@@ -392,8 +588,10 @@ function createVscode() {
     panels: [],
     commands: { registerCommand(_id, handler) { vscode.commandHandler = handler; return { dispose() {} }; } },
     window: {
-      createWebviewPanel(_viewType, _title, options) {
+      createWebviewPanel(viewType, title, options) {
         const panel = createPanel(vscode, options.viewColumn);
+        panel.viewType = viewType;
+        panel.title = title;
         vscode.panels.push(panel);
         return panel;
       },

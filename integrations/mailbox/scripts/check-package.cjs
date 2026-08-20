@@ -11,8 +11,10 @@ if (packageJson.main !== "./src/extension.cjs") {
 if (!packageJson.activationEvents?.includes("onStartupFinished")) {
   throw new Error("Mailbox package must activate only as an optional startup integration");
 }
-if (packageJson.dependencies && Object.keys(packageJson.dependencies).length > 0) {
-  throw new Error("Mailbox package must not ship runtime dependencies");
+const runtimeDependencies = Object.keys(packageJson.dependencies || {});
+const unsupportedDependencies = runtimeDependencies.filter((name) => name !== "playwright");
+if (unsupportedDependencies.length > 0) {
+  throw new Error(`Mailbox package has unsupported runtime dependencies: ${unsupportedDependencies.join(", ")}`);
 }
 for (const file of ["README.md", ".vscodeignore", "src/extension.cjs"]) {
   if (!fs.existsSync(path.join(root, file))) {
