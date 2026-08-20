@@ -262,6 +262,9 @@ class MailboxIntegration {
         case "delete":
           await this.deleteMailbox(message.mailboxId);
           return;
+        case "registrationDeleteMailbox":
+          await this.deleteMailbox(message.mailboxId);
+          return;
         case "query":
           await this.runQuery(message.mailboxId);
           return;
@@ -362,6 +365,9 @@ class MailboxIntegration {
           this.stopRegistrationEmailWatcher(message.sessionId);
           this.registrationManager.cleanupSession(message.sessionId);
           await this.publishPanelState();
+          return;
+        case "registrationCleanupAll":
+          await this.cleanupAllRegistrationSessions();
           return;
         default:
           throw new Error("Unsupported Mailbox panel action.");
@@ -845,6 +851,24 @@ class MailboxIntegration {
     this.stopRegistrationEmailWatcher(id);
     await this.registrationManager.cancelSession(id);
     await this.publishPanelState();
+  }
+
+  async cleanupAllRegistrationSessions() {
+    const sessions = this.registrationManager.getAllSessions();
+    for (const session of sessions) {
+      this.stopRegistrationEmailWatcher(session.id);
+      await this.registrationManager.cancelSession(session.id);
+      await this.releaseRegistrationPhoneKey(session.id);
+      this.registrationManager.cleanupSession(session.id);
+    }
+    this.postPanelMessage({
+      type: "toast",
+      level: sessions.length ? "success" : "warning",
+      action: "registrationCleanupAll",
+      message: sessions.length ? `已删除 ${sessions.length} 条注册记录` : "没有可删除的注册记录"
+    });
+    await this.publishPanelState();
+    this.publish();
   }
 
   requireRegistrationSessionId(sessionId) {

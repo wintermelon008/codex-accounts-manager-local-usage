@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-07-codex-tools-0-1-16",
-      "type": "info",
-      "priority": 580,
-      "releaseVersion": "0.1.16",
-      "title": "Codex Accounts Manager 0.1.16 — quota automation and workspace identity fixes",
-      "summary": "Adds independent 5-hour quota automation control, prevents missing quota windows from causing false alerts, and repairs workspace identity selection for saved accounts.",
-      "content": "This release improves quota automation safety and account identity recovery.\n1. Independent 5-hour control: a new setting keeps the 5-hour quota visible while allowing it to be excluded from automatic switching and low-quota warnings; it is disabled by default.\n2. Missing-window protection: quota automation now validates that an API quota window actually exists before evaluating its percentage, preventing absent windows from being treated as 0%.\n3. Weekly quota independence: weekly switching and warnings continue to work even when 5-hour automation is disabled.\n4. Workspace identity repair: profile and subscription refreshes use saved workspace name and structure hints to select the correct Personal or Team record, and can repair a historically incorrect accountId.\n5. Refresh ordering: account information sync now waits for subscription refresh before publishing Dashboard state, so updated plan and expiration data appear immediately.\n6. Regression coverage: added tests for quota-window presence, independent automation controls, workspace selection, accountId self-repair, and subscription parsing.",
+      "id": "ann-2026-08-codex-accounts-0-1-16-l2",
+      "type": "feature",
+      "priority": 600,
+      "releaseVersion": "0.1.16-l2",
+      "title": "Codex Accounts Manager 0.1.16-l2 — dashboard and runtime fixes",
+      "summary": "Adds account pagination and mailbox cleanup controls, fixes post-reset local usage attribution, and simplifies the account overview.",
+      "content": "This local release improves account management and runtime usage tracking.\n1. Dashboard pagination: choose 10, 20, or 50 accounts per page and jump directly to a page.\n2. Mailbox cleanup: delete one mailbox from its registration card or clear all registration records from the top controls.\n3. Capacity recovery: capacity errors retry after a random 5–8 second wait.\n4. Usage attribution: retry attribution activation after runtime identity, account, route, or restart changes and expose active state plus failure reason.\n5. Compact overview and export: keep the current email and four primary actions visible, and export selected accounts in the card-compatible minimal JSON array format.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-07-13T07:00:00Z",
+      "createdAt": "2026-08-20T13:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.16 — 配额自动化与 workspace 身份修复",
-          "summary": "新增独立的 5 小时配额自动化控制，避免缺失配额窗口触发误报，并修复保存账号的 workspace 身份选择与自修复。",
-          "content": "本次更新重点提升配额自动化安全性与账号身份恢复能力。\n1. 独立的 5 小时控制：新增设置项，关闭后 5 小时配额仍正常展示，但不参与自动切号和低配额提醒；该设置默认关闭。\n2. 缺失窗口保护：自动化判断会先确认接口确实返回了有效配额窗口，避免缺失窗口被按 0% 处理并触发误报。\n3. 每周配额独立生效：即使关闭 5 小时自动化，每周配额仍可独立触发自动切号和提醒。\n4. Workspace 身份修复：profile 与订阅刷新会结合已保存的 workspace 名称和结构选择正确的 Personal 或 Team 记录，并可修复历史保存错误的 accountId。\n5. 刷新时序修复：账号信息同步会等待订阅刷新完成后再发布 Dashboard 状态，新的套餐与到期时间可立即显示。\n6. 回归测试补强：新增配额窗口存在性、独立自动化开关、workspace 选择、accountId 自修复和订阅解析相关测试。"
+          "title": "Codex Accounts Manager 0.1.16-l2 — Dashboard 与运行时修复",
+          "summary": "新增账号分页和邮箱库清理操作，修复额度重置后的本机用量归因，并精简账号概览。",
+          "content": "本地版本改进账号管理与运行时用量追踪。\n1. Dashboard 分页：支持每页 10、20、50 个账号，并可直接跳转页码。\n2. 邮箱库清理：可从注册卡片删除单个邮箱，也可从顶部控制区清除全部注册记录。\n3. 容量错误恢复：容量错误会在随机 5–8 秒后重试。\n4. 用量归因：runtime 身份、账号、路由或重启变化后会重试激活归因，并暴露激活状态和失败原因。\n5. 精简概览与导出：仅保留当前邮箱和四个主要操作，并将选中账号导出为卡片兼容的最小 JSON 数组格式。"
         }
       }
     },

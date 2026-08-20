@@ -3,7 +3,9 @@ import { useEffect, useMemo, useReducer, useState } from "preact/hooks";
 import packageJson from "../../package.json";
 import type { CodexAccountGroup } from "../../src/core/types";
 import {
+  DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS,
   DASHBOARD_ACCOUNTS_PAGE_SIZE,
+  type DashboardAccountPageSize,
   type DashboardAccountViewModel,
   type DashboardAccountPlanFilter,
   type DashboardSettingKey
@@ -57,6 +59,8 @@ function App() {
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
   const [selectedPlanFilters, setSelectedPlanFilters] = useState<DashboardAccountPlanFilter[]>([]);
   const [accountsPage, setAccountsPage] = useState(1);
+  const [accountsPageSize, setAccountsPageSize] = useState<DashboardAccountPageSize>(DASHBOARD_ACCOUNTS_PAGE_SIZE);
+  const [accountPageJumpInput, setAccountPageJumpInput] = useState("");
   const { patchSettings, sendAction, sendSetting, isActionPending, hasGlobalPendingAction } = useDashboardActions(
     state,
     dispatch
@@ -113,9 +117,9 @@ function App() {
       return;
     }
 
-    const lastPage = Math.max(1, Math.ceil(displayedAccounts.length / DASHBOARD_ACCOUNTS_PAGE_SIZE));
+    const lastPage = Math.max(1, Math.ceil(displayedAccounts.length / accountsPageSize));
     setAccountsPage((page) => Math.min(page, lastPage));
-  }, [displayedAccounts, snapshot]);
+  }, [accountsPageSize, displayedAccounts.length]);
 
   useEffect(() => {
     dispatch({
@@ -137,7 +141,7 @@ function App() {
   const activeAccount = snapshot.accounts.find((account) => account.isActive);
   const overviewAccount = resolveOverviewAccount(snapshot.accounts);
   const hiddenAccountCount = snapshot.accounts.filter((account) => account.isHidden).length;
-  const displayedAccountPage = getDashboardAccountPage(displayedAccounts, accountsPage);
+  const displayedAccountPage = getDashboardAccountPage(displayedAccounts, accountsPage, accountsPageSize);
   const pageAccounts = displayedAccountPage.accounts;
   const lowWeeklyQuotaAccountIds = getLowWeeklyQuotaAccountIds(
     pageAccounts,
@@ -152,6 +156,26 @@ function App() {
     showHiddenAccounts,
     hiddenAccountCount
   );
+
+  const handleAccountPageSizeChange = (pageSize: number): void => {
+    const nextPageSize = DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS.find((option) => option === pageSize);
+    if (nextPageSize === undefined) {
+      return;
+    }
+    setAccountsPageSize(nextPageSize);
+    setAccountsPage(1);
+    setAccountPageJumpInput("");
+  };
+
+  const handleAccountPageJump = (): void => {
+    const requestedPage = Number.parseInt(accountPageJumpInput.trim(), 10);
+    if (!Number.isInteger(requestedPage)) {
+      setAccountPageJumpInput("");
+      return;
+    }
+    setAccountsPage(Math.min(displayedAccountPage.pageCount, Math.max(1, requestedPage)));
+    setAccountPageJumpInput("");
+  };
 
   const handleAutoRefreshToggle = (enabled: boolean): void => {
     const nextMinutes = enabled ? state.lastEnabledAutoRefreshMinutes || 15 : 0;
@@ -634,30 +658,82 @@ function App() {
                 />
               ))}
             </div>
-            {displayedAccounts.length > 0 && displayedAccountPage.pageCount > 1 ? (
+            {displayedAccounts.length > 0 ? (
               <nav
                 class="saved-accounts-pagination"
                 aria-label={resolveAccountPaginationLabel(snapshot.lang, displayedAccountPage)}
               >
-                <button
-                  class="account-page-btn"
-                  type="button"
-                  disabled={displayedAccountPage.page <= 1}
-                  onClick={() => setAccountsPage(displayedAccountPage.page - 1)}
+                <div class="account-page-control">
+                  <label class="account-page-label" for="account-page-size">
+                    {resolveAccountPageSizeLabel(snapshot.lang)}
+                  </label>
+                  <select
+                    id="account-page-size"
+                    class="account-page-select"
+                    aria-label={resolveAccountPageSizeLabel(snapshot.lang)}
+                    value={accountsPageSize}
+                    onChange={(event) => handleAccountPageSizeChange(Number(event.currentTarget.value))}
+                  >
+                    {DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS.map((pageSize) => (
+                      <option key={pageSize} value={pageSize}>
+                        {pageSize}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div class="account-page-navigation">
+                  <button
+                    class="account-page-btn"
+                    type="button"
+                    disabled={displayedAccountPage.page <= 1}
+                    onClick={() => {
+                      setAccountsPage(displayedAccountPage.page - 1);
+                      setAccountPageJumpInput("");
+                    }}
+                  >
+                    {resolvePreviousPageLabel(snapshot.lang)}
+                  </button>
+                  <span class="account-page-status" aria-live="polite">
+                    {resolveAccountPaginationLabel(snapshot.lang, displayedAccountPage)}
+                  </span>
+                  <button
+                    class="account-page-btn"
+                    type="button"
+                    disabled={displayedAccountPage.page >= displayedAccountPage.pageCount}
+                    onClick={() => {
+                      setAccountsPage(displayedAccountPage.page + 1);
+                      setAccountPageJumpInput("");
+                    }}
+                  >
+                    {resolveNextPageLabel(snapshot.lang)}
+                  </button>
+                </div>
+                <form
+                  class="account-page-jump"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    handleAccountPageJump();
+                  }}
                 >
-                  {resolvePreviousPageLabel(snapshot.lang)}
-                </button>
-                <span class="account-page-status">
-                  {resolveAccountPaginationLabel(snapshot.lang, displayedAccountPage)}
-                </span>
-                <button
-                  class="account-page-btn"
-                  type="button"
-                  disabled={displayedAccountPage.page >= displayedAccountPage.pageCount}
-                  onClick={() => setAccountsPage(displayedAccountPage.page + 1)}
-                >
-                  {resolveNextPageLabel(snapshot.lang)}
-                </button>
+                  <label class="account-page-label" for="account-page-jump-input">
+                    {resolveAccountPageJumpLabel(snapshot.lang)}
+                  </label>
+                  <input
+                    id="account-page-jump-input"
+                    class="account-page-input"
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    max={displayedAccountPage.pageCount}
+                    value={accountPageJumpInput}
+                    placeholder={String(displayedAccountPage.page)}
+                    aria-label={resolveAccountPageJumpLabel(snapshot.lang)}
+                    onInput={(event) => setAccountPageJumpInput(event.currentTarget.value)}
+                  />
+                  <button class="account-page-btn" type="submit">
+                    {resolveAccountPageJumpButtonLabel(snapshot.lang)}
+                  </button>
+                </form>
               </nav>
             ) : null}
             {displayedAccounts.length === 0 ? (
@@ -875,6 +951,36 @@ function resolveNextPageLabel(lang: string): string {
     return "下一頁";
   }
   return "Next";
+}
+
+function resolveAccountPageSizeLabel(lang: string): string {
+  if (lang === "zh") {
+    return "每页账号";
+  }
+  if (lang === "zh-hant") {
+    return "每頁帳號";
+  }
+  return "Per page";
+}
+
+function resolveAccountPageJumpLabel(lang: string): string {
+  if (lang === "zh") {
+    return "跳转页码";
+  }
+  if (lang === "zh-hant") {
+    return "跳轉頁碼";
+  }
+  return "Jump to";
+}
+
+function resolveAccountPageJumpButtonLabel(lang: string): string {
+  if (lang === "zh") {
+    return "跳转";
+  }
+  if (lang === "zh-hant") {
+    return "跳轉";
+  }
+  return "Go";
 }
 
 function resolveRefreshCurrentPageLabel(lang: string, count: number): string {

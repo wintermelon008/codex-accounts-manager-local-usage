@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.16-l2（2026-08-20）
+
+- Dashboard 账号列表底部新增常用分页控件，支持每页 `10`、`20`、`50` 个账号，并可输入页码快速跳转；默认保持每页 `50` 个账号。
+- Mailbox 注册助手的会话卡片支持直接删除对应邮箱，顶部“刷新本地状态”右侧新增“清除所有记录”，可一次清理全部注册会话。
+- 模型容量错误 `Selected model is at capacity. Please try a different model.` 的 thread 独立恢复等待改为每次随机 `5–8` 秒后发送 `Continue.`；重复容量错误会重新随机等待。
+- 修复额度窗口重置后本机账号用量归因停止的问题：runtime 身份就绪后会重试激活，并在 runtime 重启、账号切换和 ChatGPT 路由重新激活后重新同步；状态接口新增 `attributionActive` 和 `attributionFailureReason`，不补算历史未归因事件。
+- Dashboard 顶部概览收缩为当前账号邮箱和四个操作按钮；多选批量导出改为卡片兼容的最小数组格式，仅包含 `id`、`email`、三类 token、`created_at` 和 `last_used`。
 - 修复超级炸弹车候补锁定启动时无货商品编码、补货切换商品后无法下单的问题；候补现在会先持久化任务，即使目录为空或一次刷新失败也会继续轮询。按网站契约尊重 `purchasable`/`can_buy`，不再因库存字段短暂为 0 或缺失漏掉低价可购商品。失败、退款或取消的历史订单可重新开始候补；状态新增“正在刷新库存”和下一次刷新实时倒计时。目录瞬时网络失败会安全重试一次，连续失败显示可读错误，不会把“候补未启动”与历史订单混淆。BugTeam 面板所有按钮新增按压反馈，网站入口补齐进行中、成功、失败回执，货架档位显示明确选中结果。
 - Manager 主 Dashboard 的每个真实 Codex 账号卡片新增“一键复制 Codex 导入凭据”；扩展宿主直接将单账号 `auth_mode: "chatgpt"`、`OPENAI_API_KEY: null`、`tokens`、`last_refresh` 格式的可导入 JSON 写入剪贴板，Token 不进入 Webview，Gateway/手动虚拟账号不显示该入口。
 - Manager 受限无感池导入结果新增逐账号脱敏额度摘要，包括套餐、5h/周额度、Credits 余额和入池状态。

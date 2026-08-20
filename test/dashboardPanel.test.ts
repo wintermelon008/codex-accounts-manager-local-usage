@@ -165,6 +165,20 @@ describe("Dashboard account selection", () => {
       endIndex: 50,
       accounts: accounts.slice(0, 50)
     });
+    expect(getDashboardAccountPage(accounts, 2, 10)).toMatchObject({
+      page: 2,
+      pageCount: 11,
+      startIndex: 10,
+      endIndex: 20,
+      accounts: accounts.slice(10, 20)
+    });
+    expect(getDashboardAccountPage(accounts, 99, 20)).toMatchObject({
+      page: 6,
+      pageCount: 6,
+      startIndex: 100,
+      endIndex: 101,
+      accounts: accounts.slice(100)
+    });
   });
 
   it("only targets visible, non-hidden accounts whose weekly quota is at or below 3%", () => {

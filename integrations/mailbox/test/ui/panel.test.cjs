@@ -13,6 +13,8 @@ test("standalone registration panel provides mailbox-library selection and direc
   assert.match(html, /registrationMailboxProviderFilter/u);
   assert.match(html, /registrationMailboxSort/u);
   assert.match(html, /data-action="registration-select-mailbox"/u);
+  assert.match(html, /data-action="registration-cleanup-all"/u);
+  assert.match(html, /清除所有记录/u);
   assert.match(html, /邮箱库为空，请直接输入新邮箱/u);
   assert.match(html, /已自动隐藏/u);
   assert.match(html, /hasManagedCodexEmail/u);
@@ -269,6 +271,73 @@ test("OAuth registration sessions point to the external browser and keep panel d
   assert.match(renderedHtml, /registration-copy-email-code/u);
   assert.match(renderedHtml, /取消 OAuth 流程/u);
   assert.doesNotMatch(renderedHtml, /registration-submit-email-code/u);
+});
+
+test("registration cards delete their mailbox directly and the header clears all registration records", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const messages = [];
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [{ id: "mailbox:registration", address: "registered@example.com", displayName: "registered@example.com", providerId: "mock" }],
+      providers: [],
+      registrationSessions: [{
+        id: "session:registration",
+        email: "REGISTERED@example.com",
+        mode: "oauth",
+        state: "awaiting_oauth",
+        phoneOrder: { phase: "idle", running: false },
+        emailCode: { phase: "idle" }
+      }]
+    }
+  } });
+
+  assert.match(renderedHtml, /data-action="registration-delete-mailbox"/u);
+  assert.match(renderedHtml, /data-mailbox-id="mailbox:registration"/u);
+  const click = documentListeners.get("click");
+  click({ target: {
+    disabled: false,
+    dataset: { action: "registration-delete-mailbox", mailboxId: "mailbox:registration" },
+    closest() { return this; }
+  } });
+  click({ target: {
+    disabled: false,
+    dataset: { action: "registration-cleanup-all" },
+    closest() { return this; }
+  } });
+
+  assert.deepEqual(messages.filter((message) => message.action !== "ready").map((message) => ({ action: message.action, mailboxId: message.mailboxId })), [
+    { action: "registrationDeleteMailbox", mailboxId: "mailbox:registration" },
+    { action: "registrationCleanupAll", mailboxId: undefined }
+  ]);
 });
 
 test("Mailbox panel fills the webview and keeps one scrollable detail content area", () => {

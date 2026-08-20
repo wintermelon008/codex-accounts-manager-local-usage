@@ -111,6 +111,72 @@ describe("Codex hot-switch runtime setup", () => {
     ).toBeUndefined();
   });
 
+  it("retries usage attribution after the runtime identity becomes available", async () => {
+    vi.useFakeTimers();
+    try {
+      const account = {
+        id: "local-a",
+        email: "a@example.invalid",
+        accountId: "workspace-a",
+        isActive: true,
+        createdAt: 1,
+        updatedAt: 1
+      } as CodexAccountRecord;
+      const bridge = {
+        getIdentity: vi
+          .fn()
+          .mockResolvedValueOnce({
+            accountType: null,
+            email: null,
+            planType: null,
+            externalAuthActive: false,
+            managedAccountId: null,
+            managedLocalAccountId: null,
+            httpTransportForced: true
+          })
+          .mockResolvedValue({
+            accountType: "chatgpt",
+            email: "a@example.invalid",
+            planType: "plus",
+            externalAuthActive: true,
+            managedAccountId: "workspace-a",
+            managedLocalAccountId: "local-a",
+            httpTransportForced: true
+          }),
+        activateUsageAttribution: vi.fn().mockResolvedValue({ active: true, localAccountId: "local-a" }),
+        dispose: vi.fn()
+      };
+      const runtime = new CodexHotSwitchRuntime(
+        {} as vscode.ExtensionContext,
+        {
+          listAccounts: vi.fn(async () => [account]),
+          getTokens: vi.fn(async () => ({ idToken: "id", accessToken: "access", accountId: "workspace-a" }))
+        } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+      );
+      const internals = runtime as unknown as {
+        bridge: typeof bridge;
+        synchronizeUsageAttribution: (bridge: typeof bridge) => Promise<void>;
+        usageAttributionFailureReason: string | null;
+      };
+      internals.bridge = bridge;
+
+      await internals.synchronizeUsageAttribution(bridge);
+      expect(bridge.activateUsageAttribution).not.toHaveBeenCalled();
+      expect(internals.usageAttributionFailureReason).toContain("identity is not ready");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(bridge.activateUsageAttribution).toHaveBeenCalledWith({
+        localAccountId: "local-a",
+        accountId: "workspace-a",
+        expectedEmail: "a@example.invalid"
+      });
+      expect(internals.usageAttributionFailureReason).toBeNull();
+      runtime.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the access-token email for app-server identity when a stable user has an email alias", () => {
     const identity = resolveRuntimeAccessTokenIdentity(
       { email: "stored@example.invalid", userId: "user-same" },

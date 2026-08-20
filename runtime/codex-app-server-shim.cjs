@@ -22,7 +22,8 @@ const RECOVERY_CONTEXT_KEY = "codex-account-manager/recovery";
 const CONFIG_PATH = path.join(__dirname, "codex-app-server-shim.json");
 const MAX_TERMINAL_TURN_IDS = 2_048;
 const MAX_CAPACITY_RECOVERY_THREADS = 2_048;
-const CAPACITY_RECOVERY_DELAY_MS = readCapacityRecoveryDelayMs();
+const CAPACITY_RECOVERY_MIN_DELAY_MS = 5_000;
+const CAPACITY_RECOVERY_MAX_DELAY_MS = 8_000;
 const MAX_RECENT_USAGE_LIMITED_THREADS = 2_048;
 const USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 // A quota-exhaustion batch may wait for other active conversations to reach a
@@ -32,7 +33,7 @@ const RECENT_USAGE_LIMITED_THREAD_TTL_MS = USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS;
 const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
-const RUNTIME_PROTOCOL_VERSION = 11;
+const RUNTIME_PROTOCOL_VERSION = 12;
 const MAX_RECENT_SWITCH_OPERATIONS = 64;
 const SWITCH_OPERATION_TTL_MS = 10 * 60 * 1000;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
@@ -93,6 +94,7 @@ let externalAuthActive = false;
 let activeManagedAccount;
 let runtimeOAuthIdentity;
 let usageAttributionAccount;
+let usageAttributionFailureReason = "not_activated";
 let pendingSwitch;
 let activeSwitchRequest;
 let internalSequence = 0;
@@ -801,12 +803,22 @@ async function drainPendingSwitch() {
       } else {
         activateChatGptGatewayRoute(request.params.chatgptAccessToken);
         if (request.params.chatgptAccountId && request.params.chatgptExpectedEmail) {
+          activeManagedAccount = request.params.chatgptLocalAccountId
+            ? {
+                accountId: request.params.chatgptAccountId,
+                localAccountId: request.params.chatgptLocalAccountId,
+                expectedEmail: request.params.chatgptExpectedEmail
+              }
+            : undefined;
           runtimeOAuthIdentity = {
             accountId: request.params.chatgptAccountId,
             localAccountId: request.params.chatgptLocalAccountId,
             expectedEmail: request.params.chatgptExpectedEmail,
             planType: request.params.chatgptPlanType || null
           };
+        } else {
+          activeManagedAccount = undefined;
+          runtimeOAuthIdentity = undefined;
         }
       }
       routeChanged = request.previousGatewayRoute !== gatewayAdapter?.route;
@@ -850,6 +862,7 @@ async function drainPendingSwitch() {
         expectedEmail: request.params.expectedEmail
       };
       usageAttributionAccount = activeManagedAccount;
+      usageAttributionFailureReason = undefined;
       runtimeOAuthIdentity = {
         accountId: request.params.accountId,
         localAccountId: request.params.localAccountId,
@@ -1308,6 +1321,7 @@ async function restorePreviousAccount(request) {
         expectedEmail: request.params.previousExpectedEmail
       };
   usageAttributionAccount = activeManagedAccount;
+  usageAttributionFailureReason = activeManagedAccount ? undefined : "not_activated";
   runtimeOAuthIdentity = {
     accountId: request.params.previousAccountId,
     localAccountId: request.params.previousLocalAccountId,
@@ -1509,6 +1523,8 @@ function runtimeStatus() {
     observedUsageLimitFailures,
     recoveredUsageLimitedThreads,
     resumedUsageLimitedGoals,
+    attributionActive: Boolean(usageAttributionAccount?.localAccountId),
+    attributionFailureReason: usageAttributionFailureReason || null,
     shimPid: process.pid,
     appServerPid: child?.pid || null
   };
@@ -1602,43 +1618,52 @@ async function readRuntimeIdentity() {
 }
 
 async function activateUsageAttribution(params) {
-  if (!isValidUsageAttributionParams(params)) {
-    throw new Error("Invalid usage attribution parameters");
-  }
+  try {
+    if (!isValidUsageAttributionParams(params)) {
+      throw new Error("Invalid usage attribution parameters");
+    }
 
-  if (activeManagedAccount && activeManagedAccount.accountId !== params.accountId) {
-    throw new Error("The requested usage attribution account differs from the active managed account");
-  }
+    if (activeManagedAccount && activeManagedAccount.accountId !== params.accountId) {
+      throw new Error("The requested usage attribution account differs from the active managed account");
+    }
 
-  const accountResult = await sendInternalRequest("account/read", { refreshToken: false });
-  const account = accountResult && typeof accountResult.account === "object" ? accountResult.account : null;
-  const actualEmail = account && account.type === "chatgpt" && typeof account.email === "string" ? account.email : null;
-  if (
-    !actualEmail &&
-    accountResult?.requiresOpenaiAuth === false &&
-    activeManagedAccount &&
-    activeManagedAccount.accountId === params.accountId &&
-    normalizeEmail(activeManagedAccount.expectedEmail) === normalizeEmail(params.expectedEmail)
-  ) {
+    const accountResult = await sendInternalRequest("account/read", { refreshToken: false });
+    const account = accountResult && typeof accountResult.account === "object" ? accountResult.account : null;
+    const actualEmail =
+      account && account.type === "chatgpt" && typeof account.email === "string" ? account.email : null;
+    if (
+      !actualEmail &&
+      accountResult?.requiresOpenaiAuth === false &&
+      activeManagedAccount &&
+      activeManagedAccount.accountId === params.accountId &&
+      normalizeEmail(activeManagedAccount.expectedEmail) === normalizeEmail(params.expectedEmail)
+    ) {
+      usageAttributionAccount = {
+        accountId: params.accountId,
+        localAccountId: params.localAccountId,
+        expectedEmail: params.expectedEmail
+      };
+      usageAttributionFailureReason = undefined;
+      recordActiveUsageAttribution();
+      return { active: true, localAccountId: usageAttributionAccount.localAccountId };
+    }
+    if (!actualEmail || normalizeEmail(actualEmail) !== normalizeEmail(params.expectedEmail)) {
+      throw new Error("The app-server reported a different account for usage attribution");
+    }
+
     usageAttributionAccount = {
       accountId: params.accountId,
       localAccountId: params.localAccountId,
       expectedEmail: params.expectedEmail
     };
+    usageAttributionFailureReason = undefined;
     recordActiveUsageAttribution();
     return { active: true, localAccountId: usageAttributionAccount.localAccountId };
+  } catch (error) {
+    usageAttributionAccount = undefined;
+    usageAttributionFailureReason = safeErrorMessage(error).slice(0, 512) || "Usage attribution activation failed";
+    throw error;
   }
-  if (!actualEmail || normalizeEmail(actualEmail) !== normalizeEmail(params.expectedEmail)) {
-    throw new Error("The app-server reported a different account for usage attribution");
-  }
-
-  usageAttributionAccount = {
-    accountId: params.accountId,
-    localAccountId: params.localAccountId,
-    expectedEmail: params.expectedEmail
-  };
-  recordActiveUsageAttribution();
-  return { active: true, localAccountId: usageAttributionAccount.localAccountId };
 }
 
 function sendControlResult(socket, id, result) {
@@ -2021,9 +2046,10 @@ function flushUsageAttributionRecords() {
 
 function readCapacityRecoveryDelayMs() {
   const configured = Number(process.env.CODEX_ACCOUNTS_CAPACITY_RECOVERY_DELAY_MS);
-  return Number.isInteger(configured) && configured > 0 && configured <= 6 * 60 * 60 * 1000
-    ? configured
-    : 60_000;
+  if (Number.isInteger(configured) && configured > 0 && configured <= 6 * 60 * 60 * 1000) {
+    return configured;
+  }
+  return CAPACITY_RECOVERY_MIN_DELAY_MS + Math.floor(Math.random() * (CAPACITY_RECOVERY_MAX_DELAY_MS - CAPACITY_RECOVERY_MIN_DELAY_MS + 1));
 }
 
 function advanceWorkGeneration(threadId) {
@@ -2178,7 +2204,7 @@ function clearCapacityRecoveryThread(threadId, options = {}) {
         return;
       }
       // A terminal notification may follow the capacity error notification for
-      // the same turn. Keep the original one-minute deadline in that case.
+      // the same turn. Keep the original randomized deadline in that case.
       if (entry.state === "waiting") {
         return;
       }
@@ -2231,7 +2257,7 @@ function scheduleCapacityRecovery(threadId, options = {}) {
 
   const entry = {
     timer: undefined,
-    retryAt: Date.now() + CAPACITY_RECOVERY_DELAY_MS,
+    retryAt: Date.now() + readCapacityRecoveryDelayMs(),
     generation: `${process.pid}:${++internalSequence}`,
     workGeneration,
     sourceTurnId,
@@ -2920,6 +2946,8 @@ function activateGatewayAdapter() {
   if (!gatewayAdapter.apiKey) {
     throw new Error("The Gateway credential is not ready");
   }
+  usageAttributionAccount = undefined;
+  usageAttributionFailureReason = "gateway_route_active";
   if (gatewayAdapter.route !== "gateway") {
     gatewayAdapter.route = "gateway";
     gatewayAdapter.modelListRouteVersion += 1;
@@ -2947,12 +2975,16 @@ function activateChatGptGatewayRoute(accessToken) {
   if (modelListRouteChanged) {
     gatewayAdapter.modelListRouteVersion += 1;
   }
+  usageAttributionAccount = undefined;
+  usageAttributionFailureReason = "not_activated";
 }
 
 function restoreGatewayRoute() {
   if (!gatewayAdapter || !gatewayConfig) {
     throw new Error("The Gateway relay is unavailable");
   }
+  usageAttributionAccount = undefined;
+  usageAttributionFailureReason = "gateway_route_active";
   if (gatewayAdapter.route !== "gateway") {
     gatewayAdapter.route = "gateway";
     gatewayAdapter.modelListRouteVersion += 1;

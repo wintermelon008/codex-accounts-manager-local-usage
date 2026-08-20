@@ -31,7 +31,7 @@ import {
   syncLoginAtFromTokens
 } from "./accountProfileMaintenance";
 import { buildAccountRecordDraft, reconcileStatusBarSelections } from "./accountMetadata";
-import { previewSharedEntry, restoreSharedTokens, toSharedAccountJson } from "./sharedAccounts";
+import { previewSharedEntry, restoreSharedTokens, toBatchSharedAccountJson } from "./sharedAccounts";
 import {
   applySharedAccountEntry,
   createSharedImportIssue,
@@ -847,7 +847,7 @@ export class AccountsRepository {
         continue;
       }
 
-      sharedAccounts.push(toSharedAccountJson(account, tokens));
+      sharedAccounts.push(toBatchSharedAccountJson(account, tokens));
     }
 
     return sharedAccounts;

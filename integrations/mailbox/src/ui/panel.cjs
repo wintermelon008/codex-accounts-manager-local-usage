@@ -12,7 +12,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     ? "从邮箱库选择或输入新邮箱，手机号和验证码由你手动填写"
     : "邮箱列表与当前选中邮箱详情";
   const headerActions = registrationOnly
-    ? '<button type="button" data-action="refresh">刷新本地状态</button>'
+    ? '<button type="button" data-action="refresh">刷新本地状态</button><button type="button" class="danger" data-action="registration-cleanup-all">清除所有记录</button>'
     : '<button type="button" class="primary" data-action="open-import">添加邮箱</button><button type="button" data-action="toggle-registration">注册助手</button><button type="button" data-action="refresh">刷新本地状态</button>';
   const nonce = crypto.randomBytes(16).toString("base64").replace(/[^A-Za-z0-9]/gu, "");
   return `<!doctype html>
@@ -147,6 +147,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-sessions { margin-top: 18px; }
     .registration-session { border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-top: 12px; background: color-mix(in srgb, var(--text) 3%, transparent); }
     .registration-session-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .registration-session-header-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
     .registration-session-email { font-weight: 650; overflow-wrap: anywhere; }
     .registration-session-status { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 13px; }
     .registration-session-status.success { color: var(--success); }
@@ -349,6 +350,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const action = target.dataset.action;
         if (action === "select-mailbox") send("select", { mailboxId: target.dataset.mailboxId });
         else if (action === "registration-select-mailbox") selectRegistrationMailbox(target.dataset.mailboxId || "");
+        else if (action === "registration-delete-mailbox") {
+          const mailboxId = target.dataset.mailboxId || "";
+          if (mailboxId) send("registrationDeleteMailbox", { mailboxId });
+        }
         else if (action === "toggle-mailbox") toggleMailboxSelection(target.dataset.mailboxId || "");
         else if (action === "select-visible") selectVisibleMailboxes();
         else if (action === "clear-selection") { selectedMailboxIds.clear(); render(); }
@@ -374,6 +379,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           requestAction(action.replace("submit-", ""), state.selectedMailboxId);
         }
         else if (action === "refresh") send("refresh");
+        else if (action === "registration-cleanup-all") {
+          for (const session of state.registrationSessions || []) clearRegistrationSessionClientState(session.id);
+          send("registrationCleanupAll");
+        }
         else if (action === "copy-code") copyCode(target.dataset.code || "");
         else if (action === "registration-refresh-email-code") {
           const sessionId = target.dataset.sessionId;
@@ -481,12 +490,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "registration-cleanup") {
           const sessionId = target.dataset.sessionId;
           if (!sessionId) return;
-          delete registrationInputValues[sessionId];
-          delete registrationPhoneKeyInputs[sessionId];
-          delete registrationPhoneSourceSelections[sessionId];
-          delete registrationPhoneKeySelections[sessionId];
-          delete registrationAutoCopied[sessionId];
-          clearRegistrationAutoCopyTimers(sessionId);
+          clearRegistrationSessionClientState(sessionId);
           send("registrationCleanup", { sessionId });
         }
       });
@@ -760,6 +764,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       }
 
       function renderRegistrationSession(session) {
+        const registrationMailbox = (state.mailboxes || []).find((mailbox) => normalizeEmail(mailbox.address) === normalizeEmail(session.email));
         const label = session.mode === "oauth" && session.state === "completed"
           ? "Codex OAuth 导入完成"
           : REGISTRATION_STATE_LABELS[session.state] || session.state;
@@ -778,8 +783,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
               ? '<div class="tag success" style="margin-top:8px" role="status">' + esc(session.feedback) + '</div>'
               : '<div class="field-note" style="margin-top:8px" role="status">' + esc(session.feedback) + '</div>'
           : "";
+        const mailboxDeleteButton = registrationMailbox
+          ? '<button type="button" class="secondary small danger" data-action="registration-delete-mailbox" data-mailbox-id="' + esc(registrationMailbox.id) + '" title="直接从邮箱库删除该邮箱">删除邮箱</button>'
+          : "";
         return '<div class="registration-session">' +
-          '<div class="registration-session-header"><span class="registration-session-email">' + esc(session.email) + '</span><span class="tag">' + (session.mode === "oauth" ? "Codex OAuth" : '已尝试号码 ' + (session.phoneInputCount || 0) + ' 次') + '</span></div>' +
+          '<div class="registration-session-header"><span class="registration-session-email">' + esc(session.email) + '</span><span class="registration-session-header-actions"><span class="tag">' + (session.mode === "oauth" ? "Codex OAuth" : '已尝试号码 ' + (session.phoneInputCount || 0) + ' 次') + '</span>' + mailboxDeleteButton + '</span></div>' +
           '<div class="registration-session-status' + sessionStatusClass + '">' + esc(label) + '</div>' +
           progressHtml +
           errorHtml +
@@ -1171,6 +1179,16 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           cancelRegistrationAutoCopyTimer(sessionId, field);
         }
         delete registrationAutoCopyTimers[sessionId];
+      }
+
+      function clearRegistrationSessionClientState(sessionId) {
+        if (!sessionId) return;
+        delete registrationInputValues[sessionId];
+        delete registrationPhoneKeyInputs[sessionId];
+        delete registrationPhoneSourceSelections[sessionId];
+        delete registrationPhoneKeySelections[sessionId];
+        delete registrationAutoCopied[sessionId];
+        clearRegistrationAutoCopyTimers(sessionId);
       }
 
       function formatRemainingDuration(milliseconds) {

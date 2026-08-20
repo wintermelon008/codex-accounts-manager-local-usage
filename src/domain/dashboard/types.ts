@@ -14,6 +14,8 @@ import type {
  * used by the automatic quota refresh scheduler for its visible first page.
  */
 export const DASHBOARD_ACCOUNTS_PAGE_SIZE = 50;
+export const DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
+export type DashboardAccountPageSize = (typeof DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS)[number];
 export const DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD = 3;
 export const DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD = 90;
 
