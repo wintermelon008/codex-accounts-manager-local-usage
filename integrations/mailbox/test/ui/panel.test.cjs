@@ -20,6 +20,9 @@ test("standalone registration panel provides mailbox-library selection and direc
   assert.match(html, /hasManagedCodexEmail/u);
   assert.match(html, /选择邮箱只会填入地址，不会自动开始注册/u);
   assert.match(html, /不会自动填写或提交/u);
+  assert.match(html, /copyValue\(email, "邮箱已复制"\)/u);
+  assert.match(html, /document\.addEventListener\("keydown"/u);
+  assert.match(html, /document\.addEventListener\("keyup"/u);
 });
 
 test("new registration sessions are rendered above older sessions", () => {
@@ -451,20 +454,30 @@ test("selecting an available registration key enables phone ordering", () => {
       providers: [],
       phoneSources: [{ id: "liye", displayName: "LIYE", websiteUrl: "https://liye.5x20.cn" }],
       registrationKeyPool: {
-        count: 1,
-        available: 1,
+        count: 7,
+        available: 7,
         inUse: 0,
-        keys: [{ id: "key-1", masked: "KEY…-1", status: "available" }]
+        keys: Array.from({ length: 7 }, (_, index) => ({ id: `key-${index + 1}`, masked: `KEY…-${index + 1}`, status: "available" }))
       },
       registrationSessions: [{
         id: "session:key-select",
         email: "key@example.com",
         state: "awaiting_phone_input",
         mode: "oauth",
-        phoneOrder: { phase: "idle", running: false }
+        phoneOrder: { phase: "idle", running: false, order: { phone: "+861380000000" } }
       }]
     }
   } });
+
+  const renderedHtml = app.innerHTML;
+  const keySelectStart = renderedHtml.indexOf('<select id="registrationPhoneKey-session:key-select"');
+  const keySelectEnd = renderedHtml.indexOf("</select>", keySelectStart);
+  const keySelectHtml = renderedHtml.slice(keySelectStart, keySelectEnd);
+  assert.match(keySelectHtml, /value="key-1" selected/u);
+  assert.match(keySelectHtml, /value="key-5"/u);
+  assert.doesNotMatch(keySelectHtml, /value="key-6"/u);
+  assert.match(renderedHtml, /选择器仅显示前 5 个/u);
+  assert.match(renderedHtml, /等待完整手机号/u);
 
   const selected = {
     id: "registrationPhoneKey-session:key-select",

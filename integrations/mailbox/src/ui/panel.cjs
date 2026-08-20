@@ -344,6 +344,18 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         target?.classList.remove("is-pressed");
         clearPressedButtons();
       });
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const target = closestTarget(event, "button:not(:disabled)");
+        target?.classList.add("is-pressed");
+      });
+      document.addEventListener("keyup", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const target = closestTarget(event, "button");
+        target?.classList.remove("is-pressed");
+        clearPressedButtons();
+      });
+      window.addEventListener("blur", clearPressedButtons);
       document.addEventListener("click", (event) => {
         const target = closestTarget(event, "[data-action]");
         if (!target || target.disabled) return;
@@ -403,6 +415,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             showNotice("该邮箱已经导入 Codex 账号，请选择其他邮箱", "warning");
             return;
           }
+          void copyValue(email, "邮箱已复制");
           send("registrationCreate", { email, maxRetries: registrationMaxRetries });
         }
         else if (action === "registration-fill-email-code") {
@@ -870,7 +883,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const otpSubmitDisabled = otpReady ? "" : " disabled";
         const newPhoneDisabled = phoneReady || otpReady ? "" : " disabled";
         const recognizedEmailCode = String(session.emailCode?.code || "").trim();
-        const recognizedPhone = String(session.phoneOrder?.order?.phone || "").trim();
+        const rawRecognizedPhone = String(session.phoneOrder?.order?.phone || "").trim();
+        const recognizedPhone = isCompletePhoneNumber(rawRecognizedPhone) ? rawRecognizedPhone : "";
         const recognizedOtp = String(session.phoneOrder?.order?.smsCode || "").trim();
         const autoFillButton = (action, value, label) => value
           ? '<button type="button" data-action="' + action + '" data-session-id="' + esc(session.id) + '" data-value="' + esc(value) + '">' + label + '</button>'
@@ -911,14 +925,30 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         registrationPhoneSourceSelections[session.id] = source.id;
         const keyPool = state.registrationKeyPool || { keys: [], available: 0, inUse: 0, count: 0 };
         const keys = Array.isArray(keyPool.keys) ? keyPool.keys : [];
-        const selectedKeyId = registrationPhoneKeySelections[session.id] || orderState.card?.keyId || "";
+        const availableKeys = keys.filter((key) => key.status === "available");
+        const storedKeyId = registrationPhoneKeySelections[session.id] || orderState.card?.keyId || "";
+        const storedKey = keys.find((key) => key.id === storedKeyId);
+        const selectedKeyId = active && storedKey?.status === "in_use"
+          ? storedKey.id
+          : availableKeys.some((key) => key.id === storedKeyId)
+            ? storedKeyId
+            : availableKeys[0]?.id || "";
         if (selectedKeyId) registrationPhoneKeySelections[session.id] = selectedKeyId;
+        else delete registrationPhoneKeySelections[session.id];
+        const visibleKeys = [
+          ...(selectedKeyId ? keys.filter((key) => key.id === selectedKeyId) : []),
+          ...availableKeys.filter((key) => key.id !== selectedKeyId)
+        ].slice(0, 5);
         const sourceOptions = sources.map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === source.id ? "selected" : "") + '>' + esc(item.displayName || item.id) + '</option>').join("");
         const selectedKey = keys.find((key) => key.id === selectedKeyId);
         const selectedKeyAvailable = selectedKey?.status === "available";
-        const keyOptions = keys.length
-          ? keys.map((key) => '<option value="' + esc(key.id) + '" ' + (key.id === selectedKeyId ? "selected" : "") + (key.status === "in_use" ? " disabled" : "") + '>' + esc(key.masked || key.id) + (key.status === "in_use" ? "（使用中）" : "") + '</option>').join("")
+        const keyOptions = visibleKeys.length
+          ? visibleKeys.map((key) => '<option value="' + esc(key.id) + '" ' + (key.id === selectedKeyId ? "selected" : "") + (key.status === "in_use" ? " disabled" : "") + '>' + esc(key.masked || key.id) + (key.status === "in_use" ? "（使用中）" : "") + '</option>').join("")
           : '<option value="">暂无 Key，请先添加</option>';
+        const hiddenAvailableKeyCount = Math.max(0, availableKeys.length - visibleKeys.filter((key) => key.status === "available").length);
+        const keyVisibilityNote = hiddenAvailableKeyCount > 0
+          ? '<div class="field-note">可用 Key 共 ' + availableKeys.length + ' 个，选择器仅显示前 5 个；其余仍保留在 Key 池中。</div>'
+          : "";
         const configDisabled = active ? " disabled" : "";
         const keyInput = registrationPhoneKeyInputs[session.id] || "";
         const canAcquire = !active && !["received", "completed"].includes(phase);
@@ -928,13 +958,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '</details>';
         const acquireHtml = '<div class="registration-phone-config">' +
           '<div class="field"><label for="registrationPhoneSource-' + esc(session.id) + '">接码来源</label><select id="registrationPhoneSource-' + esc(session.id) + '"' + configDisabled + '>' + sourceOptions + '</select></div>' +
-          '<div class="field"><label for="registrationPhoneKey-' + esc(session.id) + '">选择 Key（SecretStorage）</label><select id="registrationPhoneKey-' + esc(session.id) + '"' + configDisabled + '><option value="">请选择 Key</option>' + keyOptions + '</select></div>' +
+          '<div class="field"><label for="registrationPhoneKey-' + esc(session.id) + '">选择 Key（SecretStorage）</label><select id="registrationPhoneKey-' + esc(session.id) + '"' + configDisabled + '><option value="">请选择 Key</option>' + keyOptions + '</select>' + keyVisibilityNote + '</div>' +
         '</div>' +
         keyPoolDetails +
         (!active && !selectedKeyAvailable ? '<div class="field-note">请选择一个可用 Key，再开始取号。</div>' : "");
-        const phoneButton = phone
+        const phoneButton = isCompletePhoneNumber(phone)
           ? '<button type="button" class="secondary small" data-action="registration-copy-phone" data-session-id="' + esc(session.id) + '" data-value="' + esc(phone) + '">复制手机号</button>'
-          : '<button type="button" class="secondary small" disabled>复制手机号</button>';
+          : '<button type="button" class="secondary small" disabled>等待完整手机号</button>';
         const codeButton = code
           ? '<button type="button" class="secondary small" data-action="registration-copy-code" data-session-id="' + esc(session.id) + '" data-value="' + esc(code) + '">复制验证码</button>'
           : '<button type="button" class="secondary small" disabled>复制验证码</button>';
@@ -1092,6 +1122,15 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         return String(value || "").trim().toLowerCase();
       }
 
+      function isCompletePhoneNumber(value) {
+        const compact = String(value || "").trim().replace(/[\\s()\\-]/gu, "");
+        if (!/^\\+?\\d+$/u.test(compact)) return false;
+        const digits = compact.replace(/^\\+/u, "");
+        if (digits.startsWith("86")) return /^861\\d{10}$/u.test(digits);
+        if (/^1\\d{10}$/u.test(digits)) return true;
+        return digits.length >= 10 && digits.length <= 15;
+      }
+
       function hasManagedCodexEmail(address) {
         const normalized = normalizeEmail(address);
         return Boolean(normalized) && (state.managedAccountEmails || []).some((email) => normalizeEmail(email) === normalized);
@@ -1124,9 +1163,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
 
       function autoCopyRegistrationValues(nextState) {
         for (const session of nextState?.registrationSessions || []) {
+          const rawPhone = String(session.phoneOrder?.order?.phone || "").trim();
           const values = {
             emailCode: String(session.emailCode?.code || "").trim(),
-            phone: String(session.phoneOrder?.order?.phone || "").trim(),
+            phone: isCompletePhoneNumber(rawPhone) ? rawPhone : "",
             otp: String(session.phoneOrder?.order?.smsCode || "").trim()
           };
           const copied = registrationAutoCopied[session.id] || {};

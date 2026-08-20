@@ -146,19 +146,19 @@ describe("Dashboard account selection", () => {
 
     expect(getDashboardAccountPage(accounts, 1)).toMatchObject({
       page: 1,
-      pageCount: 3,
+      pageCount: 11,
       startIndex: 0,
-      endIndex: 50,
-      accounts: accounts.slice(0, 50)
+      endIndex: 10,
+      accounts: accounts.slice(0, 10)
     });
     expect(getDashboardAccountPage(accounts, 3)).toMatchObject({
       page: 3,
-      pageCount: 3,
-      startIndex: 100,
-      endIndex: 101,
-      accounts: ["account-101"]
+      pageCount: 11,
+      startIndex: 20,
+      endIndex: 30,
+      accounts: accounts.slice(20, 30)
     });
-    expect(getDashboardAccountPage(accounts.slice(0, 50), 3)).toMatchObject({
+    expect(getDashboardAccountPage(accounts.slice(0, 50), 3, 50)).toMatchObject({
       page: 1,
       pageCount: 1,
       startIndex: 0,

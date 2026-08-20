@@ -9,11 +9,10 @@ import type {
   SeamlessSwitchThreshold
 } from "../../core/types";
 
-/**
- * Keep the Dashboard's rendered account surface bounded. This limit is also
- * used by the automatic quota refresh scheduler for its visible first page.
- */
-export const DASHBOARD_ACCOUNTS_PAGE_SIZE = 50;
+/** Default number of account cards shown on the Dashboard's first page. */
+export const DASHBOARD_ACCOUNTS_PAGE_SIZE = 10;
+/** Keep automatic quota refresh bounded independently of the UI page-size preference. */
+export const DASHBOARD_AUTOMATIC_REFRESH_PAGE_SIZE = 50;
 export const DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 export type DashboardAccountPageSize = (typeof DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS)[number];
 export const DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD = 3;

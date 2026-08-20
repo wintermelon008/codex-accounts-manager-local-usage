@@ -89,40 +89,35 @@ describe("local usage dashboard placement and responsive guards", () => {
       '<div class={`settings-stack ${props.settings.autoSwitchEnabled ? "" : "is-hidden"}`}>'
     );
     const seamlessBoundary = settings.indexOf('? "无感切号（实验性）"', autoSwitchHiddenStack);
-    const quotaBandSwitch = settings.indexOf('? "分档切号"');
-    const quotaBandMode = settings.indexOf('? "分档方式"');
     const quotaBandWait = settings.indexOf('? "等待时间"');
     const lowQuotaSwitch = settings.indexOf('? "低额度切号"');
     const lowQuotaThreshold = settings.indexOf('? "低额度阈值"');
     const policy = settings.indexOf('key: "hot-switch-defer"');
+    const waitBlock = settings.lastIndexOf('<div class="settings-block">', quotaBandWait);
 
     expect(autoSwitchHiddenStack).toBeGreaterThan(-1);
     expect(seamlessBoundary).toBeGreaterThan(autoSwitchHiddenStack);
-    expect(quotaBandSwitch).toBeGreaterThan(seamlessBoundary);
-    expect(quotaBandMode).toBeGreaterThan(quotaBandSwitch);
-    expect(quotaBandWait).toBeGreaterThan(quotaBandMode);
-    expect(lowQuotaSwitch).toBeGreaterThan(quotaBandWait);
+    expect(lowQuotaSwitch).toBeGreaterThan(seamlessBoundary);
     expect(lowQuotaThreshold).toBeGreaterThan(lowQuotaSwitch);
     expect(policy).toBeGreaterThan(lowQuotaThreshold);
+    expect(quotaBandWait).toBeGreaterThan(policy);
+    expect(waitBlock).toBeGreaterThan(policy);
     expect(settings).toContain("无感切号（实验性）");
     expect(settings).toContain("Seamless account switching (experimental)");
     expect(settings).toContain("关闭后恢复 Manager 原有的账号写入与 reload 流程");
-    expect(settings).toContain("分档切号");
-    expect(settings).toContain("分档方式");
     expect(settings).toContain("等待时间");
-    expect(settings).toContain("1/5 (20%)");
-    expect(settings).toContain("1/4 (25%)");
-    expect(settings).toContain("1/3 (33%)");
-    expect(settings).toContain("1/2 (50%)");
+    expect(settings).not.toContain("分档切号");
+    expect(settings).not.toContain("分档方式");
     expect(settings).toContain("低额度切号");
     expect(settings).toContain("低额度阈值");
     expect(settings).toContain("切换策略");
     expect(settings).toContain('patchAndSend("seamlessSwitchEnabled"');
-    expect(settings).toContain('patchAndSend("seamlessSwitchQuotaBandsEnabled"');
     expect(settings).toContain('patchAndSend("seamlessSwitchLowQuotaEnabled"');
-    expect(settings).toContain('patchAndSend("seamlessSwitchQuotaBandSize"');
     expect(settings).toContain('patchAndSend("seamlessSwitchThreshold"');
+    expect(settings).toContain('patchAndSend("hotSwitchGraceSeconds"');
     expect(settings.slice(autoSwitchHiddenStack, seamlessBoundary)).not.toContain("seamlessSwitchQuotaBandsEnabled");
+    expect(settings).not.toContain("seamlessSwitchQuotaBandsEnabled");
+    expect(settings).not.toContain("seamlessSwitchQuotaBandSize");
     expect(settings).toContain("安装或移除请使用命令面板");
     expect(settings).not.toContain('patchAndSend("hotSwitchEnabled"');
   });
@@ -260,7 +255,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(card).toContain("<CopyIcon />");
     expect(card).toContain("<SuccessIcon />");
     expect(main).toContain('isActionPending("copyAccountImportJson", account.id)');
-    expect(modalHooks).toContain('feedback.showCopyFeedback(`account-import-json:${message.accountId}`)');
+    expect(modalHooks).toContain("feedback.showCopyFeedback(`account-import-json:${message.accountId}`)");
   });
 
   it("supports hiding selected accounts and filtering them from the saved-account grid", () => {
