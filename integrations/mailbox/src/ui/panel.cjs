@@ -3,8 +3,17 @@
 const crypto = require("node:crypto");
 
 const MAILBOX_PANEL_VIEW_TYPE = "codexAccounts.mailbox";
+const REGISTRATION_PANEL_VIEW_TYPE = "codexAccounts.mailboxRegistration";
 
-function createMailboxPanelHtml() {
+function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
+  const registrationOnly = mode === "registration";
+  const panelTitle = registrationOnly ? "注册助手" : "Mailbox";
+  const panelSubtitle = registrationOnly
+    ? "从邮箱库选择或输入新邮箱，手机号和验证码由你手动填写"
+    : "邮箱列表与当前选中邮箱详情";
+  const headerActions = registrationOnly
+    ? '<button type="button" data-action="refresh">刷新本地状态</button>'
+    : '<button type="button" class="primary" data-action="open-import">添加邮箱</button><button type="button" data-action="toggle-registration">注册助手</button><button type="button" data-action="refresh">刷新本地状态</button>';
   const nonce = crypto.randomBytes(16).toString("base64").replace(/[^A-Za-z0-9]/gu, "");
   return `<!doctype html>
 <html lang="zh-CN">
@@ -12,7 +21,7 @@ function createMailboxPanelHtml() {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <title>Mailbox</title>
+  <title>${panelTitle}</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -27,6 +36,7 @@ function createMailboxPanelHtml() {
       --accent-text: var(--vscode-button-foreground);
       --danger: var(--vscode-errorForeground);
       --success: var(--vscode-testing-iconPassed);
+      --warning: var(--vscode-editorWarning-foreground);
     }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 0; min-height: 100vh; overflow: hidden; color: var(--text); background: var(--bg); font-family: var(--vscode-font-family); font-size: 13px; }
@@ -53,6 +63,9 @@ function createMailboxPanelHtml() {
     .top-actions, .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     .notice { display: none; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-soft); }
     .notice.visible { display: block; }
+    .notice.success { color: var(--success); border-color: color-mix(in srgb, var(--success) 35%, var(--border)); background: color-mix(in srgb, var(--success) 8%, transparent); }
+    .notice.warning { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 35%, var(--border)); background: color-mix(in srgb, var(--warning) 8%, transparent); }
+    .notice.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, transparent); }
     .layout { flex: 1 1 auto; display: grid; grid-template-columns: minmax(240px, 310px) minmax(0, 1fr); gap: 14px; min-height: 0; }
     #app { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
     .box { min-height: 0; height: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
@@ -136,10 +149,75 @@ function createMailboxPanelHtml() {
     .registration-session-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
     .registration-session-email { font-weight: 650; overflow-wrap: anywhere; }
     .registration-session-status { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 13px; }
+    .registration-session-status.success { color: var(--success); }
+    .registration-session-status.error { color: var(--danger); }
+    .registration-progress { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; margin: 12px 0 14px; }
+    .registration-progress-step { min-width: 0; color: var(--muted); font-size: 10px; text-align: center; }
+    .registration-progress-bar { height: 4px; margin-bottom: 5px; border-radius: 99px; background: var(--border); }
+    .registration-progress-step.done .registration-progress-bar { background: var(--success); }
+    .registration-progress-step.current .registration-progress-bar { background: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+    .registration-progress-step.current { color: var(--accent); font-weight: 650; }
+    .registration-progress-step.failed .registration-progress-bar { background: var(--danger); }
     .registration-session-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .registration-session-input { margin-top: 10px; }
     .registration-session-input input { width: 100%; }
+    .registration-input-with-action { display: flex; gap: 6px; align-items: flex-start; }
+    .registration-input-with-action input { min-width: 0; flex: 1 1 auto; }
+    .registration-input-with-action button { flex: none; white-space: nowrap; }
+    .registration-credential-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+    .registration-credential-grid .registration-session-input { margin-top: 0; }
+    .registration-phone-order { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--accent) 3%, transparent); }
+    .registration-phone-order-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px 10px; }
+    .registration-phone-order-head strong { font-size: 13px; }
+    .registration-phone-order-source { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 7px; color: var(--muted); font-size: 11px; }
+    .registration-phone-order-source a { color: var(--accent); }
+    .registration-phone-success-rate { color: var(--muted); }
+    .registration-phone-config { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(180px, 1.2fr); gap: 8px; margin-top: 10px; }
+    .registration-phone-config .field { margin-top: 0; }
+    .registration-phone-config textarea { min-height: 54px; height: 54px; resize: vertical; }
+    .registration-phone-config button { margin-top: 6px; }
+    .registration-key-pool { margin-top: 8px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--vscode-editor-background) 55%, transparent); }
+    .registration-key-pool summary { cursor: pointer; color: var(--muted); font-size: 11px; user-select: none; }
+    .registration-key-pool[open] summary { margin-bottom: 7px; color: var(--text); }
+    .registration-key-pool-count { margin-left: 6px; color: var(--muted); }
+    .registration-key-pool-list { display: grid; gap: 5px; margin-top: 8px; }
+    .registration-key-pool-row { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: 11px; }
+    .registration-key-pool-row .key-mask { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--vscode-editor-font-family); }
+    .registration-key-pool-row button { padding: 3px 7px; font-size: 11px; }
+    .registration-countdown { color: var(--muted); font-size: 11px; }
+    .registration-phone-order-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+    .registration-phone-result { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--vscode-editor-background); }
+    .registration-phone-result label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; }
+    .registration-phone-result strong { display: block; min-height: 20px; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); }
+    .registration-phone-result button { margin-top: 7px; }
+    .registration-phone-order-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .registration-phone-order .field-note { margin-top: 8px; }
+    .registration-email-code { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--success) 3%, transparent); }
+    .registration-email-code-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .registration-email-code-head strong { font-size: 13px; }
+    .registration-email-code-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, .7fr); gap: 8px; margin-top: 10px; }
+    .registration-email-code-result { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--vscode-editor-background); }
+    .registration-email-code-result label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; }
+    .registration-email-code-result strong { display: block; min-height: 20px; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); }
+    .registration-email-code-result button { margin-top: 7px; }
+    .registration-email-code .field-note { margin-top: 8px; }
     .registration-collapsed .registration-content { display: none; }
+    .registration-standalone { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 20px 22px; }
+    .registration-standalone-card { max-width: 980px; margin: 0 auto; padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--vscode-editorWidget-background); }
+    .registration-standalone-card + .registration-standalone-card { margin-top: 14px; }
+    .registration-standalone-card h2 { margin-bottom: 6px; }
+    .registration-mailbox-picker { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--accent) 3%, transparent); }
+    .registration-mailbox-picker-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .registration-mailbox-picker-tools { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    .registration-mailbox-picker-tools input { flex: 1 1 220px; min-width: 160px; }
+    .registration-mailbox-picker-tools select { width: auto; min-width: 130px; }
+    .registration-mailbox-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(235px, 1fr)); gap: 8px; max-height: 250px; margin-top: 10px; overflow: auto; }
+    .registration-mailbox-option { min-width: 0; padding: 10px; text-align: left; }
+    .registration-mailbox-option.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
+    .registration-mailbox-option-title { font-weight: 650; overflow-wrap: anywhere; }
+    .registration-mailbox-option-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; color: var(--muted); font-size: 11px; }
+    .registration-standalone-content { margin-top: 14px; }
+    .registration-standalone-content .registration-form { padding-top: 0; }
     @media (max-width: 820px) {
       body { padding: 0; }
       .topbar { display: block; }
@@ -150,6 +228,9 @@ function createMailboxPanelHtml() {
       .layout > .box { height: auto; }
       .mailbox-list { flex: none; min-height: 180px; max-height: 280px; }
       .mailbox-row-action { padding-inline: 5px; }
+      .registration-phone-config { grid-template-columns: 1fr; }
+      .registration-standalone { padding-inline: 0; }
+      .registration-mailbox-list { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -157,10 +238,10 @@ function createMailboxPanelHtml() {
   <div class="shell">
     <header class="topbar">
       <div class="brand">
-        <div class="logo">M</div>
-        <div><h1>Mailbox</h1><p class="subtitle">邮箱列表与当前选中邮箱详情</p></div>
+        <div class="logo">${registrationOnly ? "R" : "M"}</div>
+        <div><h1>${panelTitle}</h1><p class="subtitle">${panelSubtitle}</p></div>
       </div>
-      <div class="top-actions"><button type="button" class="primary" data-action="open-import">添加邮箱</button><button type="button" data-action="toggle-registration">注册助手</button><button type="button" data-action="refresh">刷新本地状态</button></div>
+      <div class="top-actions">${headerActions}</div>
     </header>
     <div id="notice" class="notice" role="status"></div>
     <main id="app"></main>
@@ -168,6 +249,7 @@ function createMailboxPanelHtml() {
   <script nonce="${nonce}">
     (() => {
       const vscode = acquireVsCodeApi();
+      const registrationOnly = ${registrationOnly};
       const app = document.getElementById("app");
       const notice = document.getElementById("notice");
       let state = { mailboxes: [], providers: [] };
@@ -187,17 +269,38 @@ function createMailboxPanelHtml() {
       let deleteConfirm = undefined;
       let registrationPanelOpen = false;
       let registrationEmail = "";
+      let selectedRegistrationMailboxId = "";
+      let registrationMailboxSearch = "";
+      let registrationMailboxSort = "nameAsc";
+      let registrationMailboxProviderFilter = "";
       let registrationMaxRetries = 25;
+      let registrationPhoneKeyInputs = {};
+      let registrationPhoneSourceSelections = {};
+      let registrationPhoneKeySelections = {};
+      let registrationInputValues = {};
+      let registrationAutoCopied = {};
+      let registrationAutoCopyTimers = {};
+      let registrationCountdownTimer;
 
       window.addEventListener("message", (event) => {
         const message = event.data || {};
         if (message.type === "state") {
           state = message.state || state;
+          autoCopyRegistrationValues(state);
           pendingCodexImports = Object.fromEntries((state.codexImports || []).map((mailboxId) => [mailboxId, true]));
           const knownMailboxIds = new Set((state.mailboxes || []).map((mailbox) => mailbox.id));
           selectedMailboxIds = new Set([...selectedMailboxIds].filter((mailboxId) => knownMailboxIds.has(mailboxId)));
           if (!state.codexImportAvailable) onlyUnlinkedCodex = false;
           if (providerFilter && !(state.providers || []).some((provider) => provider.id === providerFilter)) providerFilter = "";
+          if (registrationMailboxProviderFilter && !(state.providers || []).some((provider) => provider.id === registrationMailboxProviderFilter)) registrationMailboxProviderFilter = "";
+          if (selectedRegistrationMailboxId && !(state.mailboxes || []).some((mailbox) => mailbox.id === selectedRegistrationMailboxId)) {
+            selectedRegistrationMailboxId = "";
+          }
+          const selectedRegistrationMailbox = (state.mailboxes || []).find((mailbox) => mailbox.id === selectedRegistrationMailboxId);
+          if (selectedRegistrationMailbox && hasManagedCodexEmail(selectedRegistrationMailbox.address)) {
+            selectedRegistrationMailboxId = "";
+            if (normalizeEmail(registrationEmail) === normalizeEmail(selectedRegistrationMailbox.address)) registrationEmail = "";
+          }
           if (!importProvider && state.providers?.[0]) importProvider = state.providers[0].id;
           if (state.selected?.detail?.messages && !state.selected.detail.messages.some((item) => item.id === selectedMessageId)) {
             selectedMessageId = state.selected.detail.messages[0]?.id || "";
@@ -245,6 +348,7 @@ function createMailboxPanelHtml() {
         if (!target || target.disabled) return;
         const action = target.dataset.action;
         if (action === "select-mailbox") send("select", { mailboxId: target.dataset.mailboxId });
+        else if (action === "registration-select-mailbox") selectRegistrationMailbox(target.dataset.mailboxId || "");
         else if (action === "toggle-mailbox") toggleMailboxSelection(target.dataset.mailboxId || "");
         else if (action === "select-visible") selectVisibleMailboxes();
         else if (action === "clear-selection") { selectedMailboxIds.clear(); render(); }
@@ -271,26 +375,98 @@ function createMailboxPanelHtml() {
         }
         else if (action === "refresh") send("refresh");
         else if (action === "copy-code") copyCode(target.dataset.code || "");
+        else if (action === "registration-refresh-email-code") {
+          const sessionId = target.dataset.sessionId;
+          if (sessionId) send("registrationRefreshEmailCode", { sessionId });
+        }
+        else if (action === "registration-copy-phone" || action === "registration-copy-code" || action === "registration-copy-email-code") {
+          copyValue(
+            target.dataset.value || "",
+            action === "registration-copy-phone" ? "手机号已复制" : action === "registration-copy-email-code" ? "邮箱验证码已复制" : "验证码已复制"
+          );
+        }
         else if (action === "toggle-registration") { registrationPanelOpen = !registrationPanelOpen; render(); }
         else if (action === "registration-create") {
           const emailInput = document.getElementById("registrationEmailInput");
           const email = emailInput?.value?.trim() || "";
           if (!email) return;
+          if (hasManagedCodexEmail(email)) {
+            showNotice("该邮箱已经导入 Codex 账号，请选择其他邮箱", "warning");
+            return;
+          }
           send("registrationCreate", { email, maxRetries: registrationMaxRetries });
+        }
+        else if (action === "registration-fill-email-code") {
+          fillRegistrationInput(target.dataset.sessionId || "", "emailCode", target.dataset.value || "");
+        }
+        else if (action === "registration-fill-phone") {
+          fillRegistrationInput(target.dataset.sessionId || "", "phone", target.dataset.value || "");
+        }
+        else if (action === "registration-fill-code") {
+          fillRegistrationInput(target.dataset.sessionId || "", "otp", target.dataset.value || "");
+        }
+        else if (action === "registration-authorize") {
+          const sessionId = target.dataset.sessionId;
+          if (!sessionId) return;
+          send("registrationAuthorize", { sessionId });
+        }
+        else if (action === "registration-submit-email-code") {
+          const sessionId = target.dataset.sessionId;
+          const code = registrationInputValues[sessionId]?.emailCode?.trim() || document.getElementById("emailCodeInput-" + sessionId)?.value?.trim() || "";
+          if (!sessionId || !code) return;
+          send("registrationSubmitEmailCode", { sessionId, code });
         }
         else if (action === "registration-submit-phone") {
           const sessionId = target.dataset.sessionId;
-          const phoneInput = document.getElementById("phoneInput-" + sessionId);
-          const phoneNumber = phoneInput?.value?.trim() || "";
+          const phoneNumber = registrationInputValues[sessionId]?.phone?.trim() || document.getElementById("phoneInput-" + sessionId)?.value?.trim() || "";
           if (!sessionId || !phoneNumber) return;
           send("registrationSubmitPhone", { sessionId, phoneNumber });
         }
         else if (action === "registration-submit-otp") {
           const sessionId = target.dataset.sessionId;
-          const otpInput = document.getElementById("otpInput-" + sessionId);
-          const otp = otpInput?.value?.trim() || "";
+          const otp = registrationInputValues[sessionId]?.otp?.trim() || document.getElementById("otpInput-" + sessionId)?.value?.trim() || "";
           if (!sessionId || !otp) return;
           send("registrationSubmitOtp", { sessionId, otp });
+        }
+        else if (action === "registration-acquire-phone") {
+          const sessionId = target.dataset.sessionId;
+          const sourceId = registrationPhoneSourceSelections[sessionId] || document.getElementById("registrationPhoneSource-" + sessionId)?.value || "liye";
+          const keyId = registrationPhoneKeySelections[sessionId] || document.getElementById("registrationPhoneKey-" + sessionId)?.value || "";
+          if (!sessionId || !keyId) {
+            showNotice("请先选择接码平台 Key", "warning");
+            return;
+          }
+          send("registrationAcquirePhone", { sessionId, sourceId, keyId });
+        }
+        else if (action === "registration-confirm-phone") {
+          const sessionId = target.dataset.sessionId;
+          if (!sessionId) return;
+          send("registrationConfirmPhone", { sessionId });
+        }
+        else if (action === "registration-replace-phone") {
+          const sessionId = target.dataset.sessionId;
+          if (!sessionId) return;
+          send("registrationReplacePhone", { sessionId });
+        }
+        else if (action === "registration-cancel-phone") {
+          const sessionId = target.dataset.sessionId;
+          if (!sessionId) return;
+          send("registrationCancelPhone", { sessionId });
+        }
+        else if (action === "registration-add-phone-key") {
+          const sessionId = target.dataset.sessionId || "";
+          const input = document.getElementById("registrationPhoneKeyInput-" + sessionId)?.value?.trim() || registrationPhoneKeyInputs[sessionId] || "";
+          if (!input) {
+            showNotice("请先粘贴至少一个接码平台 Key", "warning");
+            return;
+          }
+          registrationPhoneKeyInputs[sessionId] = "";
+          send("registrationAddPhoneKeys", { input });
+          render();
+        }
+        else if (action === "registration-remove-phone-key") {
+          const keyId = target.dataset.keyId || "";
+          if (keyId) send("registrationRemovePhoneKey", { keyId });
         }
         else if (action === "registration-request-new-phone") {
           const sessionId = target.dataset.sessionId;
@@ -305,6 +481,12 @@ function createMailboxPanelHtml() {
         else if (action === "registration-cleanup") {
           const sessionId = target.dataset.sessionId;
           if (!sessionId) return;
+          delete registrationInputValues[sessionId];
+          delete registrationPhoneKeyInputs[sessionId];
+          delete registrationPhoneSourceSelections[sessionId];
+          delete registrationPhoneKeySelections[sessionId];
+          delete registrationAutoCopied[sessionId];
+          clearRegistrationAutoCopyTimers(sessionId);
           send("registrationCleanup", { sessionId });
         }
       });
@@ -317,11 +499,52 @@ function createMailboxPanelHtml() {
         if (target.id === "mailboxSort") { mailboxSort = target.value || "nameAsc"; render(); }
         if (target.id === "onlyUnlinkedCodex") { onlyUnlinkedCodex = target.checked === true; render(); }
         if (target.id === "mailboxProviderFilter") { providerFilter = target.value || ""; render(); }
+        if (target.id === "registrationMailboxSort") { registrationMailboxSort = target.value || "nameAsc"; render(); }
+        if (target.id === "registrationMailboxProviderFilter") { registrationMailboxProviderFilter = target.value || ""; render(); }
+        if (target.id.startsWith("registrationPhoneSource-")) {
+          registrationPhoneSourceSelections[target.id.slice("registrationPhoneSource-".length)] = target.value || "liye";
+        }
+        if (target.id.startsWith("registrationPhoneKey-")) {
+          const sessionId = target.id.slice("registrationPhoneKey-".length);
+          registrationPhoneKeySelections[sessionId] = target.value || "";
+          // The acquire button is initially disabled when no key is selected.
+          // Enable it immediately after a valid available key is chosen instead
+          // of waiting for a state event to re-render the whole panel.
+          updateRegistrationAcquireButton(sessionId);
+        }
         if (target.matches(".mailbox-checkbox")) toggleMailboxSelection(target.value || "", target.checked);
       });
       document.addEventListener("input", (event) => {
         if (event.target.id === "mailboxSearch") { mailboxSearch = event.target.value || ""; render(); document.getElementById("mailboxSearch")?.focus(); }
-        if (event.target.id === "registrationEmailInput") registrationEmail = event.target.value || "";
+        if (event.target.id === "registrationMailboxSearch") {
+          registrationMailboxSearch = event.target.value || "";
+          render();
+          document.getElementById("registrationMailboxSearch")?.focus();
+        }
+        if (event.target.id === "registrationEmailInput") {
+          const previousMailboxId = selectedRegistrationMailboxId;
+          registrationEmail = event.target.value || "";
+          const selectedMailbox = (state.mailboxes || []).find((mailbox) => mailbox.id === selectedRegistrationMailboxId);
+          if (!selectedMailbox || selectedMailbox.address.trim().toLowerCase() !== registrationEmail.trim().toLowerCase()) {
+            selectedRegistrationMailboxId = "";
+          }
+          if (previousMailboxId && !selectedRegistrationMailboxId) render();
+        }
+        if (event.target.id.startsWith("registrationPhoneKeyInput-")) {
+          registrationPhoneKeyInputs[event.target.id.slice("registrationPhoneKeyInput-".length)] = event.target.value || "";
+        }
+        if (event.target.id.startsWith("phoneInput-")) {
+          const sessionId = event.target.id.slice("phoneInput-".length);
+          registrationInputValues[sessionId] = { ...(registrationInputValues[sessionId] || {}), phone: event.target.value || "" };
+        }
+        if (event.target.id.startsWith("emailCodeInput-")) {
+          const sessionId = event.target.id.slice("emailCodeInput-".length);
+          registrationInputValues[sessionId] = { ...(registrationInputValues[sessionId] || {}), emailCode: event.target.value || "" };
+        }
+        if (event.target.id.startsWith("otpInput-")) {
+          const sessionId = event.target.id.slice("otpInput-".length);
+          registrationInputValues[sessionId] = { ...(registrationInputValues[sessionId] || {}), otp: event.target.value || "" };
+        }
       });
       document.addEventListener("submit", (event) => {
         if (event.target.id === "editForm") {
@@ -346,22 +569,38 @@ function createMailboxPanelHtml() {
         const mailboxList = document.querySelector(".mailbox-list");
         const content = document.querySelector(".content");
         const searchInput = document.getElementById("mailboxSearch");
+        const registrationSearchInput = document.getElementById("registrationMailboxSearch");
+        const registrationEmailInput = document.getElementById("registrationEmailInput");
         const keepSearchFocus = document.activeElement === searchInput;
         const searchSelectionStart = searchInput?.selectionStart;
         const searchSelectionEnd = searchInput?.selectionEnd;
+        const keepRegistrationSearchFocus = document.activeElement === registrationSearchInput;
+        const registrationSearchSelectionStart = registrationSearchInput?.selectionStart;
+        const registrationSearchSelectionEnd = registrationSearchInput?.selectionEnd;
+        const keepRegistrationEmailFocus = document.activeElement === registrationEmailInput;
+        const registrationEmailSelectionStart = registrationEmailInput?.selectionStart;
+        const registrationEmailSelectionEnd = registrationEmailInput?.selectionEnd;
         const mailboxScrollTop = mailboxList?.scrollTop || 0;
         const contentScrollTop = content?.scrollTop || 0;
+        const registrationStandalone = document.querySelector(".registration-standalone");
+        const registrationStandaloneScrollTop = registrationStandalone?.scrollTop || 0;
         document.querySelector(".modal-backdrop")?.remove();
         document.getElementById("registrationPanel")?.remove();
-        app.insertAdjacentHTML("beforebegin", renderRegistrationPanel());
-        app.innerHTML = renderLayout();
+        if (registrationOnly) {
+          app.innerHTML = renderStandaloneRegistration();
+        } else {
+          app.insertAdjacentHTML("beforebegin", renderRegistrationPanel());
+          app.innerHTML = renderLayout();
+        }
         if (importOpen) document.body.insertAdjacentHTML("beforeend", renderImportModal());
         if (editOpenMailboxId) document.body.insertAdjacentHTML("beforeend", renderEditModal());
         if (deleteConfirm) document.body.insertAdjacentHTML("beforeend", renderDeleteConfirmModal());
         const nextMailboxList = document.querySelector(".mailbox-list");
         const nextContent = document.querySelector(".content");
+        const nextRegistrationStandalone = document.querySelector(".registration-standalone");
         if (nextMailboxList) nextMailboxList.scrollTop = mailboxScrollTop;
         if (nextContent) nextContent.scrollTop = contentScrollTop;
+        if (nextRegistrationStandalone) nextRegistrationStandalone.scrollTop = registrationStandaloneScrollTop;
         if (keepSearchFocus) {
           const nextSearchInput = document.getElementById("mailboxSearch");
           nextSearchInput?.focus();
@@ -369,60 +608,358 @@ function createMailboxPanelHtml() {
             nextSearchInput?.setSelectionRange(searchSelectionStart, searchSelectionEnd);
           }
         }
+        if (keepRegistrationSearchFocus) {
+          const nextSearchInput = document.getElementById("registrationMailboxSearch");
+          nextSearchInput?.focus();
+          if (registrationSearchSelectionStart != null && registrationSearchSelectionEnd != null) {
+            nextSearchInput?.setSelectionRange(registrationSearchSelectionStart, registrationSearchSelectionEnd);
+          }
+        }
+        if (keepRegistrationEmailFocus) {
+          const nextEmailInput = document.getElementById("registrationEmailInput");
+          nextEmailInput?.focus();
+          if (registrationEmailSelectionStart != null && registrationEmailSelectionEnd != null) {
+            nextEmailInput?.setSelectionRange(registrationEmailSelectionStart, registrationEmailSelectionEnd);
+          }
+        }
+        updateRegistrationCountdowns();
+        ensureRegistrationCountdownTimer();
       }
 
       const REGISTRATION_STATE_LABELS = {
         idle: "空闲",
         starting: "正在启动浏览器",
         awaiting_account_details: "填写账号信息",
+        awaiting_oauth: "等待 Codex OAuth 浏览器完成",
+        awaiting_email_code: "等待输入邮箱验证码",
+        submitting_email_code: "正在提交邮箱验证码",
         awaiting_phone_input: "等待输入手机号",
         submitting_phone: "正在提交手机号",
         awaiting_otp_input: "等待输入验证码",
         submitting_otp: "正在提交验证码",
-        completed: "已完成，请使用 Codex 导入登录",
+        awaiting_profile: "正在填写姓名年龄",
+        submitting_profile: "正在提交姓名年龄",
+        awaiting_authorization: "等待最后继续",
+        submitting_authorization: "正在提交最后继续",
+        completed: "已完成",
         failed: "失败",
         cancelled: "已取消"
       };
 
+      const PHONE_ORDER_PHASE_LABELS = {
+        idle: "未取号",
+        logging_in: "连接接码平台",
+        purchasing: "正在取号",
+        waiting: "已取号，准备读取验证码",
+        polling: "正在读取验证码",
+        replacing: "正在重新取号",
+        cancelling: "正在取消取号",
+        received: "已收到验证码",
+        completed: "已完成",
+        cancelled: "已取消",
+        timed_out: "读取超时",
+        error: "取号失败"
+      };
+
+      const EMAIL_CODE_PHASE_LABELS = {
+        idle: "未开始查询",
+        searching: "正在查询邮箱",
+        received: "已收到邮箱验证码",
+        expired: "查询窗口已结束",
+        cancelled: "已停止查询",
+        error: "邮箱查询失败"
+      };
+
       function renderRegistrationPanel() {
-        const sessions = state.registrationSessions || [];
+        const sessions = [...(state.registrationSessions || [])].reverse();
         const collapsedClass = registrationPanelOpen ? "" : " registration-collapsed";
         const sessionsHtml = sessions.length
           ? sessions.map(renderRegistrationSession).join("")
-          : '<p class="muted">还没有注册会话。填写邮箱后点击“开始注册”，程序会打开浏览器并自动填好邮箱、密码（默认 Chatgpt189687）、姓名（jdd）与年龄（24）。手机号与验证码请从您自己的接码平台手动复制粘贴。</p>';
+          : '<p class="muted">还没有注册会话。填写邮箱后创建会话；接码平台拿到号码后会自动读取验证码，换号和取消取号仍需你点击，手机号和验证码不会自动填写或提交。</p>';
         return '<div id="registrationPanel" class="registration-panel' + collapsedClass + '">' +
           '<div class="registration-header" data-action="toggle-registration"><h2>注册助手</h2><span class="registration-toggle">' + (registrationPanelOpen ? "收起 ▲" : "展开 ▼") + '</span></div>' +
           '<div class="registration-content">' +
-            '<div class="registration-form">' +
-              '<div class="field"><label for="registrationEmailInput">邮箱</label><input id="registrationEmailInput" type="email" value="' + esc(registrationEmail) + '" placeholder="your-email@example.com"></div>' +
-              '<div><button type="button" data-action="registration-create" class="primary">开始注册</button></div>' +
-              '<p class="field-note">程序只负责打开浏览器自动填表和提交；手机号下单、查看短信验证码等操作请您在自己的接码平台完成，再粘贴到下方输入框。换号也由您自行决定，没有自动重试。</p>' +
-            '</div>' +
+            renderRegistrationCreateForm() +
             '<div class="registration-sessions">' + sessionsHtml + '</div>' +
           '</div>' +
         '</div>';
       }
 
+      function renderRegistrationCreateForm() {
+        return '<div class="registration-form">' +
+          '<div class="field"><label for="registrationEmailInput">邮箱</label><input id="registrationEmailInput" type="email" value="' + esc(registrationEmail) + '" placeholder="your-email@example.com"></div>' +
+          '<div><button type="button" data-action="registration-create" class="primary">开始注册</button></div>' +
+          '<p class="field-note">开始注册后优先使用 Codex OAuth 浏览器流程；邮箱、密码、手机号、验证码和最终授权在浏览器中完成。面板只显示/复制邮箱码和接码内容，不会自动填写或提交。重新取号与取消取号均不会自动发生。</p>' +
+        '</div>';
+      }
+
+      function renderStandaloneRegistration() {
+        const allMailboxes = state.mailboxes || [];
+        const mailboxes = [...filterRegistrationMailboxes()].sort(compareRegistrationMailboxes);
+        const managedCount = allMailboxes.filter((mailbox) => hasManagedCodexEmail(mailbox.address)).length;
+        const providerOptions = (state.providers || []).map((provider) =>
+          '<option value="' + esc(provider.id) + '" ' + (registrationMailboxProviderFilter === provider.id ? "selected" : "") + '>' +
+          esc(provider.displayName || provider.id) + '（' + esc(provider.id) + '）</option>'
+        ).join("");
+        const mailboxRows = mailboxes.length
+          ? mailboxes.map(renderRegistrationMailboxOption).join("")
+          : '<div class="empty-list" style="min-height:120px;grid-column:1/-1">' +
+            (allMailboxes.length && managedCount === allMailboxes.length ? "邮箱库中的邮箱均已导入 Codex，请直接输入其他邮箱。" : allMailboxes.length ? "没有匹配的已导入邮箱。" : "邮箱库为空，请直接输入新邮箱。") +
+            '</div>';
+        const managedNote = managedCount
+          ? '<div class="field-note">已自动隐藏 ' + managedCount + ' 个已经导入 Codex 的邮箱。</div>'
+          : '';
+        const sessions = [...(state.registrationSessions || [])].reverse();
+        const sessionsHtml = sessions.length
+          ? sessions.map(renderRegistrationSession).join("")
+          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱。</p>';
+        return '<div class="registration-standalone">' +
+          '<section class="registration-standalone-card">' +
+            '<h2>选择注册邮箱</h2>' +
+            '<p class="muted">可按邮箱库筛选并点击选择，也可以在下方直接输入一个新邮箱。选择邮箱只会填入地址，不会自动开始注册。</p>' +
+            '<div class="registration-mailbox-picker">' +
+              '<div class="registration-mailbox-picker-head"><strong>已导入邮箱库</strong><span class="tag">' + mailboxes.length + '/' + allMailboxes.length + '</span></div>' +
+              '<div class="registration-mailbox-picker-tools"><input id="registrationMailboxSearch" type="search" value="' + esc(registrationMailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索注册邮箱"><select id="registrationMailboxProviderFilter" aria-label="按邮箱来源筛选注册邮箱"><option value="">全部来源</option>' + providerOptions + '</select><select id="registrationMailboxSort" aria-label="注册邮箱排序"><option value="nameAsc" ' + (registrationMailboxSort === "nameAsc" ? "selected" : "") + '>名称升序</option><option value="nameDesc" ' + (registrationMailboxSort === "nameDesc" ? "selected" : "") + '>名称降序</option><option value="queryDesc" ' + (registrationMailboxSort === "queryDesc" ? "selected" : "") + '>最近查询</option><option value="codeFirst" ' + (registrationMailboxSort === "codeFirst" ? "selected" : "") + '>已出码优先</option></select></div>' +
+              '<div class="registration-mailbox-list">' + mailboxRows + '</div>' + managedNote +
+            '</div>' +
+            '<div class="registration-standalone-content">' + renderRegistrationCreateForm() + '</div>' +
+          '</section>' +
+          '<section class="registration-standalone-card"><div class="registration-sessions">' + sessionsHtml + '</div></section>' +
+        '</div>';
+      }
+
+      function renderRegistrationMailboxOption(mailbox) {
+        const selected = mailbox.id === selectedRegistrationMailboxId;
+        const provider = (state.providers || []).find((item) => item.id === mailbox.providerId);
+        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span>' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span>' + (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + '</div></button>';
+      }
+
+      function filterRegistrationMailboxes() {
+        const query = registrationMailboxSearch.trim().toLowerCase();
+        return (state.mailboxes || []).filter((mailbox) => {
+          if (hasManagedCodexEmail(mailbox.address)) return false;
+          if (query && !matchesMailboxSearch(mailbox, query)) return false;
+          if (registrationMailboxProviderFilter && mailbox.providerId !== registrationMailboxProviderFilter) return false;
+          return true;
+        });
+      }
+
+      function compareRegistrationMailboxes(left, right) {
+        if (registrationMailboxSort === "queryDesc") return (right.lastQueryAt || 0) - (left.lastQueryAt || 0) || compareText(left, right);
+        if (registrationMailboxSort === "codeFirst") return Number(Boolean(right.latestCode)) - Number(Boolean(left.latestCode)) || compareText(left, right);
+        const result = compareText(left, right);
+        return registrationMailboxSort === "nameDesc" ? -result : result;
+      }
+
+      function selectRegistrationMailbox(mailboxId) {
+        const mailbox = (state.mailboxes || []).find((item) => item.id === mailboxId);
+        if (!mailbox) return;
+        selectedRegistrationMailboxId = mailbox.id;
+        registrationEmail = mailbox.address || "";
+        render();
+      }
+
       function renderRegistrationSession(session) {
-        const label = REGISTRATION_STATE_LABELS[session.state] || session.state;
-        let inputHtml = "";
-        if (session.state === "awaiting_phone_input") {
-          inputHtml = '<div class="registration-session-input"><label>手机号（从您的接码平台复制）</label><input type="text" id="phoneInput-' + esc(session.id) + '" placeholder="+86 138..."></div>' +
-            '<div class="registration-session-actions"><button type="button" data-action="registration-submit-phone" data-session-id="' + esc(session.id) + '">提交号码</button><button type="button" data-action="registration-cancel" data-session-id="' + esc(session.id) + '">取消</button></div>';
-        } else if (session.state === "awaiting_otp_input") {
-          inputHtml = '<div class="registration-session-input"><label>短信验证码（从您的接码平台复制）</label><input type="text" id="otpInput-' + esc(session.id) + '" placeholder="6 位数字"></div>' +
-            '<div class="registration-session-actions"><button type="button" data-action="registration-submit-otp" data-session-id="' + esc(session.id) + '">提交验证码</button><button type="button" data-action="registration-request-new-phone" data-session-id="' + esc(session.id) + '">换号</button><button type="button" data-action="registration-cancel" data-session-id="' + esc(session.id) + '">取消</button></div>';
-        } else if (session.state === "completed" || session.state === "failed" || session.state === "cancelled") {
-          inputHtml = '<div class="registration-session-actions"><button type="button" data-action="registration-cleanup" data-session-id="' + esc(session.id) + '">清除记录</button></div>';
-        } else {
-          inputHtml = '<div class="registration-session-actions"><button type="button" data-action="registration-cancel" data-session-id="' + esc(session.id) + '">取消</button></div>';
-        }
+        const label = session.mode === "oauth" && session.state === "completed"
+          ? "Codex OAuth 导入完成"
+          : REGISTRATION_STATE_LABELS[session.state] || session.state;
+        const sessionStatusClass = session.state === "completed" ? " success" : session.state === "failed" ? " error" : "";
+        const progressHtml = session.mode === "oauth"
+          ? '<div class="field-note" role="status">当前路线：Codex OAuth。注册页面由外部浏览器承载，完成后结果会自动回传并导入 Manager。</div>'
+          : renderRegistrationProgress(session.state);
+        const inputHtml = renderRegistrationInputs(session);
+        const phoneOrderHtml = renderPhoneOrder(session);
+        const emailCodeHtml = renderRegistrationEmailCode(session);
         const errorHtml = session.error ? '<div class="tag" style="margin-top:8px;color:var(--danger)">' + esc(session.error) + '</div>' : "";
+        const feedbackHtml = session.feedback && session.feedback !== session.error
+          ? session.feedbackLevel === "error"
+            ? '<div class="tag error" style="margin-top:8px" role="status">' + esc(session.feedback) + '</div>'
+            : session.feedbackLevel === "success"
+              ? '<div class="tag success" style="margin-top:8px" role="status">' + esc(session.feedback) + '</div>'
+              : '<div class="field-note" style="margin-top:8px" role="status">' + esc(session.feedback) + '</div>'
+          : "";
         return '<div class="registration-session">' +
-          '<div class="registration-session-header"><span class="registration-session-email">' + esc(session.email) + '</span><span class="tag">已尝试号码 ' + (session.phoneInputCount || 0) + ' 次</span></div>' +
-          '<div class="registration-session-status">' + esc(label) + '</div>' +
+          '<div class="registration-session-header"><span class="registration-session-email">' + esc(session.email) + '</span><span class="tag">' + (session.mode === "oauth" ? "Codex OAuth" : '已尝试号码 ' + (session.phoneInputCount || 0) + ' 次') + '</span></div>' +
+          '<div class="registration-session-status' + sessionStatusClass + '">' + esc(label) + '</div>' +
+          progressHtml +
           errorHtml +
+          feedbackHtml +
+          emailCodeHtml +
+          phoneOrderHtml +
           inputHtml +
+        '</div>';
+      }
+
+      function renderRegistrationProgress(stateName) {
+        const steps = [
+          { key: "account", label: "密码" },
+          { key: "email", label: "邮箱码" },
+          { key: "phone", label: "手机号" },
+          { key: "sms", label: "短信码" },
+          { key: "profile", label: "姓名年龄" },
+          { key: "authorization", label: "最后继续" }
+        ];
+        const currentIndex = registrationProgressIndex(stateName);
+        return '<div class="registration-progress" aria-label="注册进度">' + steps.map((step, index) => {
+          const status = stateName === "failed" && index === Math.max(0, currentIndex) ? "failed" : index < currentIndex ? "done" : index === currentIndex ? "current" : "";
+          return '<div class="registration-progress-step ' + status + '"><div class="registration-progress-bar"></div><span>' + step.label + '</span></div>';
+        }).join("") + '</div>';
+      }
+
+      function registrationProgressIndex(stateName) {
+        if (["idle", "starting", "awaiting_account_details"].includes(stateName)) return 0;
+        if (["awaiting_email_code", "submitting_email_code"].includes(stateName)) return 1;
+        if (["awaiting_phone_input", "submitting_phone"].includes(stateName)) return 2;
+        if (["awaiting_otp_input", "submitting_otp"].includes(stateName)) return 3;
+        if (["awaiting_profile", "submitting_profile"].includes(stateName)) return 4;
+        if (["awaiting_authorization", "submitting_authorization"].includes(stateName)) return 5;
+        if (stateName === "completed") return 6;
+        return 0;
+      }
+
+      function renderRegistrationEmailCode(session) {
+        const emailCode = session.emailCode || {};
+        const phase = String(emailCode.phase || "idle");
+        const code = String(emailCode.code || "").trim();
+        const receivedAt = String(emailCode.receivedAt || "").trim();
+        const phaseLabel = EMAIL_CODE_PHASE_LABELS[phase] || phase;
+        const statusClass = phase === "received" ? " success" : phase === "error" ? " error" : "";
+        const copyButton = code
+          ? '<button type="button" class="secondary small" data-action="registration-copy-email-code" data-session-id="' + esc(session.id) + '" data-value="' + esc(code) + '">复制邮箱验证码</button>'
+          : '<button type="button" class="secondary small" disabled>复制邮箱验证码</button>';
+        const terminal = ["completed", "failed", "cancelled"].includes(session.state);
+        const refreshButton = terminal
+          ? '<button type="button" class="secondary small" disabled>重新查询</button>'
+          : '<button type="button" class="secondary small" data-action="registration-refresh-email-code" data-session-id="' + esc(session.id) + '">重新查询</button>';
+        const detail = emailCode.subject ? ' · ' + esc(emailCode.subject) : "";
+        return '<div class="registration-email-code">' +
+          '<div class="registration-email-code-head"><strong>邮箱验证码（自动查询，仅显示）</strong><span class="registration-phone-order-source">' + refreshButton + '<span class="tag' + statusClass + '">' + esc(phaseLabel) + '</span></span></div>' +
+          '<div class="registration-email-code-grid">' +
+            '<div class="registration-email-code-result"><label>最新邮箱验证码</label><strong>' + esc(code || "— — —") + '</strong>' + copyButton + '</div>' +
+            '<div class="registration-email-code-result"><label>邮件收到时间</label><strong>' + esc(receivedAt ? formatDate(receivedAt) : "— — —") + '</strong></div>' +
+          '</div>' +
+          '<div class="field-note" aria-live="polite">' + esc(emailCode.message || "注册开始后自动查询最近 30 分钟的邮件") + detail + '</div>' +
+          (emailCode.error ? '<div class="tag error" style="margin-top:8px">' + esc(emailCode.error) + '</div>' : "") +
+        '</div>';
+      }
+
+      function renderRegistrationInputs(session) {
+        const values = registrationInputValues[session.id] || {};
+        const terminal = ["completed", "failed", "cancelled"].includes(session.state);
+        if (session.mode === "oauth") {
+          const actionHtml = terminal
+            ? '<div class="registration-session-actions"><button type="button" data-action="registration-cleanup" data-session-id="' + esc(session.id) + '">清除记录</button></div>'
+            : '<div class="registration-session-actions"><button type="button" data-action="registration-cancel" data-session-id="' + esc(session.id) + '">取消 OAuth 流程</button></div>';
+          return '<div class="field-note">请在已打开的 Codex OAuth 浏览器窗口中完成当前页面。邮箱验证码和接码平台内容仍可在本面板查看并复制，但不会提交到外部浏览器。</div>' + actionHtml;
+        }
+        const emailCodeReady = session.state === "awaiting_email_code";
+        const phoneReady = session.state === "awaiting_phone_input";
+        const otpReady = session.state === "awaiting_otp_input";
+        const authorizationReady = session.state === "awaiting_authorization";
+        const inputDisabled = terminal ? " disabled" : "";
+        const emailCodeSubmitDisabled = emailCodeReady ? "" : " disabled";
+        const phoneSubmitDisabled = phoneReady ? "" : " disabled";
+        const otpSubmitDisabled = otpReady ? "" : " disabled";
+        const newPhoneDisabled = phoneReady || otpReady ? "" : " disabled";
+        const recognizedEmailCode = String(session.emailCode?.code || "").trim();
+        const recognizedPhone = String(session.phoneOrder?.order?.phone || "").trim();
+        const recognizedOtp = String(session.phoneOrder?.order?.smsCode || "").trim();
+        const autoFillButton = (action, value, label) => value
+          ? '<button type="button" data-action="' + action + '" data-session-id="' + esc(session.id) + '" data-value="' + esc(value) + '">' + label + '</button>'
+          : '<button type="button" disabled>无可用内容</button>';
+        const actionHtml = terminal
+          ? '<div class="registration-session-actions"><button type="button" data-action="registration-cleanup" data-session-id="' + esc(session.id) + '">清除记录</button></div>'
+          : '<div class="registration-session-actions">' +
+            '<button type="button" data-action="registration-submit-email-code" data-session-id="' + esc(session.id) + '"' + emailCodeSubmitDisabled + '>提交邮箱验证码</button>' +
+            '<button type="button" data-action="registration-submit-phone" data-session-id="' + esc(session.id) + '"' + phoneSubmitDisabled + '>提交号码</button>' +
+            '<button type="button" data-action="registration-submit-otp" data-session-id="' + esc(session.id) + '"' + otpSubmitDisabled + '>提交验证码</button>' +
+            (authorizationReady ? '<button type="button" class="primary" data-action="registration-authorize" data-session-id="' + esc(session.id) + '">确认授权并完成</button>' : '') +
+            '<button type="button" data-action="registration-request-new-phone" data-session-id="' + esc(session.id) + '"' + newPhoneDisabled + '>手动重新填写号码</button>' +
+            '<button type="button" data-action="registration-cancel" data-session-id="' + esc(session.id) + '">取消</button>' +
+          '</div>';
+        return '<div class="registration-session-input"><label for="emailCodeInput-' + esc(session.id) + '">邮箱验证码（请确认后提交）</label><div class="registration-input-with-action"><input type="text" id="emailCodeInput-' + esc(session.id) + '" value="' + esc(values.emailCode || "") + '" placeholder="从上方识别结果复制或手动填写" autocomplete="one-time-code"' + inputDisabled + '>' + autoFillButton("registration-fill-email-code", recognizedEmailCode, "自动填入邮箱码") + '</div></div>' +
+        '<div class="registration-credential-grid">' +
+          '<div class="registration-session-input"><label for="phoneInput-' + esc(session.id) + '">手机号（请确认后提交）</label><div class="registration-input-with-action"><input type="text" id="phoneInput-' + esc(session.id) + '" value="' + esc(values.phone || "") + '" placeholder="+86 138..." autocomplete="off"' + inputDisabled + '>' + autoFillButton("registration-fill-phone", recognizedPhone, "自动填入手机号") + '</div></div>' +
+          '<div class="registration-session-input"><label for="otpInput-' + esc(session.id) + '">短信验证码（请确认后提交）</label><div class="registration-input-with-action"><input type="text" id="otpInput-' + esc(session.id) + '" value="' + esc(values.otp || "") + '" placeholder="6 位数字" autocomplete="off"' + inputDisabled + '>' + autoFillButton("registration-fill-code", recognizedOtp, "自动填入短信码") + '</div></div>' +
+        '</div>' +
+        '<div class="field-note">进度会根据注册页面实时状态更新。自动填入按钮只把识别内容填入面板输入框；邮箱码、手机号、短信码和最后继续/授权仍需你点击对应确认按钮。</div>' +
+        actionHtml;
+      }
+
+      function renderPhoneOrder(session) {
+        const orderState = session.phoneOrder || { phase: "idle", running: false, replacements: 0, maxReplacements: 10 };
+        const order = orderState.order || {};
+        const phone = String(order.phone || "").trim();
+        const code = String(order.smsCode || "").trim();
+        const phase = String(orderState.phase || "idle");
+        const active = orderState.running === true;
+        const canReplace = active && ["waiting", "polling"].includes(phase) && !code && Number(orderState.replacements || 0) < Number(orderState.maxReplacements || 0);
+        const canCancel = active && !["received", "completed", "cancelled", "error", "timed_out"].includes(phase);
+        const sources = Array.isArray(state.phoneSources) && state.phoneSources.length
+          ? state.phoneSources
+          : [{ id: "liye", displayName: "LIYE", websiteUrl: "https://liye.5x20.cn" }];
+        const storedSourceId = registrationPhoneSourceSelections[session.id] || orderState.card?.source || sources[0].id;
+        const source = sources.find((item) => item.id === storedSourceId) || sources[0];
+        registrationPhoneSourceSelections[session.id] = source.id;
+        const keyPool = state.registrationKeyPool || { keys: [], available: 0, inUse: 0, count: 0 };
+        const keys = Array.isArray(keyPool.keys) ? keyPool.keys : [];
+        const selectedKeyId = registrationPhoneKeySelections[session.id] || orderState.card?.keyId || "";
+        if (selectedKeyId) registrationPhoneKeySelections[session.id] = selectedKeyId;
+        const sourceOptions = sources.map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === source.id ? "selected" : "") + '>' + esc(item.displayName || item.id) + '</option>').join("");
+        const selectedKey = keys.find((key) => key.id === selectedKeyId);
+        const selectedKeyAvailable = selectedKey?.status === "available";
+        const keyOptions = keys.length
+          ? keys.map((key) => '<option value="' + esc(key.id) + '" ' + (key.id === selectedKeyId ? "selected" : "") + (key.status === "in_use" ? " disabled" : "") + '>' + esc(key.masked || key.id) + (key.status === "in_use" ? "（使用中）" : "") + '</option>').join("")
+          : '<option value="">暂无 Key，请先添加</option>';
+        const configDisabled = active ? " disabled" : "";
+        const keyInput = registrationPhoneKeyInputs[session.id] || "";
+        const canAcquire = !active && !["received", "completed"].includes(phase);
+        const keyPoolDetails = '<details class="registration-key-pool"><summary>管理接码 Key 池 <span class="registration-key-pool-count">' + Number(keyPool.available || 0) + ' 个可用 · ' + Number(keyPool.inUse || 0) + ' 个使用中</span></summary>' +
+          (!active ? '<div class="registration-session-input"><label for="registrationPhoneKeyInput-' + esc(session.id) + '">加入 Key 池（可多行粘贴）</label><textarea id="registrationPhoneKeyInput-' + esc(session.id) + '" rows="2" autocomplete="off" spellcheck="false" placeholder="每行一个接码平台 Key">' + esc(keyInput) + '</textarea><button type="button" class="secondary small" data-action="registration-add-phone-key" data-session-id="' + esc(session.id) + '">加入 Key 池</button></div>' : '') +
+          (keys.length ? '<div class="registration-key-pool-list" aria-label="接码平台 Key 池">' + keys.map((key) => '<div class="registration-key-pool-row"><span class="key-mask" title="仅显示脱敏值">' + esc(key.masked || key.id) + '</span><span>' + esc(key.status === "in_use" ? "使用中" : "可用") + '</span><button type="button" class="secondary small" data-action="registration-remove-phone-key" data-key-id="' + esc(key.id) + '"' + (key.status === "in_use" ? " disabled" : "") + '>删除</button></div>').join("") + '</div>' : '<div class="field-note">暂未保存 Key。展开后可粘贴添加。</div>') +
+          '</details>';
+        const acquireHtml = '<div class="registration-phone-config">' +
+          '<div class="field"><label for="registrationPhoneSource-' + esc(session.id) + '">接码来源</label><select id="registrationPhoneSource-' + esc(session.id) + '"' + configDisabled + '>' + sourceOptions + '</select></div>' +
+          '<div class="field"><label for="registrationPhoneKey-' + esc(session.id) + '">选择 Key（SecretStorage）</label><select id="registrationPhoneKey-' + esc(session.id) + '"' + configDisabled + '><option value="">请选择 Key</option>' + keyOptions + '</select></div>' +
+        '</div>' +
+        keyPoolDetails +
+        (!active && !selectedKeyAvailable ? '<div class="field-note">请选择一个可用 Key，再开始取号。</div>' : "");
+        const phoneButton = phone
+          ? '<button type="button" class="secondary small" data-action="registration-copy-phone" data-session-id="' + esc(session.id) + '" data-value="' + esc(phone) + '">复制手机号</button>'
+          : '<button type="button" class="secondary small" disabled>复制手机号</button>';
+        const codeButton = code
+          ? '<button type="button" class="secondary small" data-action="registration-copy-code" data-session-id="' + esc(session.id) + '" data-value="' + esc(code) + '">复制验证码</button>'
+          : '<button type="button" class="secondary small" disabled>复制验证码</button>';
+        const statusClass = ["received", "completed"].includes(phase) ? " success" : ["error", "timed_out"].includes(phase) ? " error" : "";
+        const countdownStartedAt = Number(orderState.startedAt || 0);
+        const countdownTimeout = Number(orderState.orderTimeoutMs || 0);
+        const countdown = countdownStartedAt && countdownTimeout ? formatRemainingDuration(Math.max(0, countdownStartedAt + countdownTimeout - Date.now())) : "—";
+        const replaceCountdown = formatUntil(order.replaceAvailableAt);
+        const cancelCountdown = formatUntil(order.cancelAvailableAt);
+        const orderWindow = countdownStartedAt && countdownTimeout
+          ? '<span class="registration-countdown">本轮剩余 <strong data-registration-countdown data-started-at="' + countdownStartedAt + '" data-timeout-ms="' + countdownTimeout + '">' + countdown + '</strong></span>'
+          : '<span class="registration-countdown">本轮剩余 —</span>';
+        const availability = [replaceCountdown ? "换号 " + replaceCountdown : "", cancelCountdown ? "取消 " + cancelCountdown : ""].filter(Boolean).join(" · ");
+        const sourceLink = source.websiteUrl
+          ? '<a href="' + esc(source.websiteUrl) + '" target="_blank" rel="noreferrer">打开接码网页</a>'
+          : "";
+        const successRate = formatPhoneSuccessRate(orderState.card?.successRate);
+        const actionHtml = '<div class="registration-phone-order-actions">' +
+          '<button type="button" class="secondary" data-action="registration-replace-phone" data-session-id="' + esc(session.id) + '"' + (canReplace ? "" : " disabled") + '>重新取号</button>' +
+          '<button type="button" class="secondary danger" data-action="registration-cancel-phone" data-session-id="' + esc(session.id) + '"' + (canCancel ? "" : " disabled") + '>取消取号</button>' +
+          (canAcquire ? '<button type="button" class="primary" data-action="registration-acquire-phone" data-session-id="' + esc(session.id) + '"' + (selectedKeyAvailable ? "" : " disabled") + '>开始取号</button>' : '') +
+          '</div>';
+        return '<div class="registration-phone-order">' +
+          '<div class="registration-phone-order-head"><strong>接码平台（自动读取短信）</strong><span class="registration-phone-order-source">' + sourceLink + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' 成功率：' + esc(successRate) + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
+          acquireHtml +
+          '<div class="registration-phone-order-grid">' +
+            '<div class="registration-phone-result"><label>当前手机号</label><strong>' + esc(phone || "— — —") + '</strong>' + phoneButton + '</div>' +
+            '<div class="registration-phone-result"><label>验证码</label><strong>' + esc(code || "— — —") + '</strong>' + codeButton + '</div>' +
+          '</div>' +
+          '<div class="field-note">手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。' + (availability ? " · " + availability : "") + '</div>' +
+          actionHtml +
+          (orderState.message ? '<div class="field-note" aria-live="polite">' + esc(orderState.message) + '</div>' : "") +
+          (orderState.error ? '<div class="tag" style="margin-top:8px;color:var(--danger)">' + esc(orderState.error) + '</div>' : "") +
         '</div>';
       }
 
@@ -543,10 +1080,17 @@ function createMailboxPanelHtml() {
         return '<h3>' + esc(message.subject) + '</h3><div class="from">发件人：' + esc(sender || '未知') + '</div><div class="from">时间：' + esc(formatDate(message.receivedAt)) + '</div>' + (message.codes?.length ? '<div class="detail-meta">' + message.codes.map((code) => '<span class="tag success">验证码 ' + esc(code) + '</span>').join('') + '</div>' : '') + '<div class="body">' + esc(message.body || message.preview || '无正文') + '</div>';
       }
 
+      function normalizeEmail(value) {
+        return String(value || "").trim().toLowerCase();
+      }
+
+      function hasManagedCodexEmail(address) {
+        const normalized = normalizeEmail(address);
+        return Boolean(normalized) && (state.managedAccountEmails || []).some((email) => normalizeEmail(email) === normalized);
+      }
+
       function isCodexLinked(mailbox) {
-        if (!state.codexImportAvailable) return false;
-        const address = String(mailbox.address || "").trim().toLowerCase();
-        return (state.managedAccountEmails || []).some((email) => String(email || "").trim().toLowerCase() === address);
+        return hasManagedCodexEmail(mailbox.address);
       }
 
       function renderImportModal() {
@@ -570,10 +1114,157 @@ function createMailboxPanelHtml() {
         return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>编辑邮箱</h2><p class="muted">' + esc(mailbox.address) + '</p><form id="editForm"><div class="field"><label for="editProviderId">邮箱来源 / 格式</label><select id="editProviderId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider?.id ? 'selected' : '') + '>' + esc(item.displayName) + '（' + esc(item.id) + '）</option>').join('') + '</select></div><div class="field"><label for="displayName">显示名称</label><input id="displayName" name="displayName" value="' + esc(mailbox.displayName || mailbox.address) + '" required></div><div class="field"><label for="input">替换来源凭据（可选）</label><textarea id="input" name="input" placeholder="留空只修改显示名称；填写时请输入：' + esc(placeholder) + '"></textarea><div class="field-note">当前凭据不会回显。切换邮箱来源 / 格式时必须填写凭据；邮箱地址保持不变。</div></div><div class="modal-actions"><button type="button" data-action="close-edit">取消</button><button class="primary" type="submit">保存修改</button></div></form></section></div>';
       }
 
+      function autoCopyRegistrationValues(nextState) {
+        for (const session of nextState?.registrationSessions || []) {
+          const values = {
+            emailCode: String(session.emailCode?.code || "").trim(),
+            phone: String(session.phoneOrder?.order?.phone || "").trim(),
+            otp: String(session.phoneOrder?.order?.smsCode || "").trim()
+          };
+          const copied = registrationAutoCopied[session.id] || {};
+          for (const [field, value] of Object.entries(values)) {
+            if (!value) {
+              cancelRegistrationAutoCopyTimer(session.id, field);
+              continue;
+            }
+            const pending = registrationAutoCopyTimers[session.id]?.[field];
+            if (copied[field] === value || pending?.value === value) continue;
+            const message = field === "emailCode" ? "邮箱验证码已自动复制" : field === "phone" ? "手机号已自动复制" : "短信验证码已自动复制";
+            scheduleRegistrationAutoCopy(session.id, field, value, message, copied);
+          }
+          registrationAutoCopied[session.id] = copied;
+        }
+      }
+
+      function scheduleRegistrationAutoCopy(sessionId, field, value, message, copied) {
+        cancelRegistrationAutoCopyTimer(sessionId, field);
+        const timers = registrationAutoCopyTimers[sessionId] || {};
+        if (typeof setTimeout !== "function") {
+          void copyValue(value, message).then((success) => {
+            if (success) copied[field] = value;
+          });
+          return;
+        }
+        const timer = setTimeout(async () => {
+          const pending = registrationAutoCopyTimers[sessionId]?.[field];
+          if (!pending || pending.value !== value) return;
+          delete registrationAutoCopyTimers[sessionId][field];
+          const success = await copyValue(value, message);
+          if (success) copied[field] = value;
+        }, 1000);
+        timers[field] = { value, timer };
+        registrationAutoCopyTimers[sessionId] = timers;
+      }
+
+      function cancelRegistrationAutoCopyTimer(sessionId, field) {
+        const timers = registrationAutoCopyTimers[sessionId];
+        const pending = timers?.[field];
+        if (pending && typeof clearTimeout === "function") clearTimeout(pending.timer);
+        if (timers) {
+          delete timers[field];
+          if (!Object.keys(timers).length) delete registrationAutoCopyTimers[sessionId];
+        }
+      }
+
+      function clearRegistrationAutoCopyTimers(sessionId) {
+        for (const field of Object.keys(registrationAutoCopyTimers[sessionId] || {})) {
+          cancelRegistrationAutoCopyTimer(sessionId, field);
+        }
+        delete registrationAutoCopyTimers[sessionId];
+      }
+
+      function formatRemainingDuration(milliseconds) {
+        const totalSeconds = Math.max(0, Math.ceil(Number(milliseconds || 0) / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
+      }
+
+      function formatPhoneSuccessRate(value) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return "平台未提供";
+        return (parsed % 1 ? parsed.toFixed(1) : parsed.toFixed(0)) + "%";
+      }
+
+      function timestampValue(value) {
+        if (typeof value === "number" || (/^\d+(?:\.\d+)?$/u.test(String(value || "").trim()) && String(value || "").trim())) {
+          const number = Number(value);
+          return number > 0 && number < 1e12 ? number * 1000 : number;
+        }
+        const parsed = Date.parse(String(value || ""));
+        return Number.isFinite(parsed) ? parsed : 0;
+      }
+
+      function formatUntil(value) {
+        const timestamp = timestampValue(value);
+        if (!timestamp) return "";
+        const remaining = timestamp - Date.now();
+        return remaining <= 0 ? "可用" : formatRemainingDuration(remaining);
+      }
+
+      function updateRegistrationCountdowns() {
+        const elements = document.querySelectorAll("[data-registration-countdown]");
+        for (const element of elements) {
+          const startedAt = Number(element.dataset.startedAt || 0);
+          const timeoutMs = Number(element.dataset.timeoutMs || 0);
+          element.textContent = startedAt && timeoutMs
+            ? formatRemainingDuration(Math.max(0, startedAt + timeoutMs - Date.now()))
+            : "—";
+        }
+      }
+
+      function ensureRegistrationCountdownTimer() {
+        if (registrationCountdownTimer || typeof setInterval !== "function") return;
+        registrationCountdownTimer = setInterval(() => {
+          const elements = document.querySelectorAll("[data-registration-countdown]");
+          if (!elements.length) {
+            clearInterval(registrationCountdownTimer);
+            registrationCountdownTimer = undefined;
+            return;
+          }
+          updateRegistrationCountdowns();
+        }, 1000);
+      }
+
       async function copyCode(code) {
-        if (!code) return;
-        try { await navigator.clipboard.writeText(code); showNotice('验证码已复制', 'success'); }
-        catch { showNotice('复制失败，请手动选择验证码', 'warning'); }
+        await copyValue(code, "验证码已复制");
+      }
+      async function copyValue(value, successMessage) {
+        if (!value) return false;
+        try {
+          const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : undefined;
+          if (!clipboard || typeof clipboard.writeText !== "function") throw new Error("clipboard unavailable");
+          await clipboard.writeText(value);
+          showNotice(successMessage || '已复制', 'success');
+          return true;
+        } catch {
+          showNotice('复制失败，请手动选择内容', 'warning');
+          return false;
+        }
+      }
+
+      function updateRegistrationAcquireButton(sessionId) {
+        const keys = Array.isArray(state.registrationKeyPool?.keys) ? state.registrationKeyPool.keys : [];
+        const selectedKeyId = registrationPhoneKeySelections[sessionId] || "";
+        const selectedKey = keys.find((key) => key.id === selectedKeyId);
+        const enabled = selectedKey?.status === "available";
+        document.querySelectorAll('[data-action="registration-acquire-phone"]').forEach((button) => {
+          if (button.dataset.sessionId === sessionId) button.disabled = !enabled;
+        });
+      }
+
+      function fillRegistrationInput(sessionId, field, value) {
+        if (!sessionId || !value) return;
+        const inputId = field === "emailCode" ? "emailCodeInput-" + sessionId : field === "phone" ? "phoneInput-" + sessionId : "otpInput-" + sessionId;
+        const input = document.getElementById(inputId);
+        if (!input || input.disabled) return;
+        input.value = value;
+        registrationInputValues[sessionId] = { ...(registrationInputValues[sessionId] || {}), [field]: value };
+        if (typeof Event === "function" && typeof input.dispatchEvent === "function") {
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        input.focus();
+        showNotice("已填入识别内容，请检查后点击提交", "success");
       }
 
       function openEditModal(mailboxId) {
@@ -671,7 +1362,11 @@ function createMailboxPanelHtml() {
         document.querySelectorAll("button.is-pressed").forEach((button) => button.classList.remove("is-pressed"));
       }
       function send(action, payload = {}) { vscode.postMessage({ type: "mailbox:action", action, ...payload }); }
-      function showNotice(message, level) { notice.textContent = message || ""; notice.className = "notice visible"; if (level === "error") notice.style.color = "var(--danger)"; else notice.style.color = ""; }
+      function showNotice(message, level) {
+        notice.textContent = message || "";
+        notice.className = "notice visible" + (level ? " " + level : "");
+        if (notice.style) notice.style.color = "";
+      }
       function formatDate(value) { if (!value) return "未知时间"; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString(); }
       function esc(value) { return String(value ?? "").replace(/[&<>"']/gu, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character])); }
       render();
@@ -682,4 +1377,13 @@ function createMailboxPanelHtml() {
 </html>`;
 }
 
-module.exports = { MAILBOX_PANEL_VIEW_TYPE, createMailboxPanelHtml };
+function createRegistrationPanelHtml() {
+  return createMailboxPanelHtml({ mode: "registration" });
+}
+
+module.exports = {
+  MAILBOX_PANEL_VIEW_TYPE,
+  REGISTRATION_PANEL_VIEW_TYPE,
+  createMailboxPanelHtml,
+  createRegistrationPanelHtml
+};
