@@ -28,7 +28,7 @@ export type HotSwitchStatus = {
   usageLimitObservationEnabled: boolean;
   /** Number of conversations waiting for model-capacity recovery. */
   capacityRecoveryThreads: number;
-  /** Subset of capacity recovery conversations whose one-minute timer is armed. */
+  /** Subset of capacity recovery conversations whose 5–8 second timer is armed. */
   capacityRecoveryWaitingThreads: number;
   recentUsageLimitedThreads: number;
   /** A bounded batch of active conversations has reached actual quota exhaustion. */
@@ -38,6 +38,10 @@ export type HotSwitchStatus = {
   observedUsageLimitFailures: number;
   recoveredUsageLimitedThreads: number;
   resumedUsageLimitedGoals: number;
+  /** Whether the shim currently attributes new turns to a managed account. */
+  attributionActive: boolean;
+  /** Why usage attribution is inactive, when it is not active. */
+  attributionFailureReason: string | null;
   shimPid: number;
   appServerPid: number | null;
 };

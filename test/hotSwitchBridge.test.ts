@@ -78,7 +78,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 11,
+      runtimeProtocolVersion: 12,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -111,6 +111,21 @@ describe("CodexHotSwitchBridge", () => {
         expectedEmail: "a@example.invalid"
       })
     ).resolves.toEqual({ active: true, localAccountId: "local-a" });
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      attributionActive: true,
+      attributionFailureReason: null
+    });
+    await expect(
+      bridge.activateUsageAttribution({
+        localAccountId: "local-b",
+        accountId: "account-b",
+        expectedEmail: "b@example.invalid"
+      })
+    ).rejects.toThrow("different account");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      attributionActive: false,
+      attributionFailureReason: "The app-server reported a different account for usage attribution"
+    });
   });
 
   it("waits for the app-server identity to settle after login before committing a switch", async () => {

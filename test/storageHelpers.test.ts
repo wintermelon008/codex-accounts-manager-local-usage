@@ -22,6 +22,7 @@ import {
   normalizeAccountTags,
   previewSharedEntry,
   restoreSharedTokens,
+  toBatchSharedAccountJson,
   toSharedAccountJson
 } from "../src/storage/sharedAccounts";
 import {
@@ -91,6 +92,35 @@ describe("accountsIndex helpers", () => {
     expect(index.currentProviderAccountId).toBe("virtual:sub2api-gateway");
     expect(index.accounts.find((account) => account.id === "oauth")?.isActive).toBe(true);
     expect(index.accounts.find((account) => account.id === "virtual:sub2api-gateway")?.providerActive).toBe(true);
+  });
+});
+
+describe("batch shared account export", () => {
+  it("keeps the selected-account export in the minimal card-compatible shape", () => {
+    const account: CodexAccountRecord = {
+      id: "codex_demo_1",
+      email: "user@example.com",
+      createdAt: 1_730_000_000_000,
+      updatedAt: 1_730_000_000_000
+    };
+    const tokens = {
+      idToken: "id-token",
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      accountId: "workspace-id"
+    };
+
+    expect(toBatchSharedAccountJson(account, tokens)).toEqual({
+      id: "codex_demo_1",
+      email: "user@example.com",
+      tokens: {
+        id_token: "id-token",
+        access_token: "access-token",
+        refresh_token: "refresh-token"
+      },
+      created_at: 1_730_000_000,
+      last_used: 1_730_000_000
+    });
   });
 });
 

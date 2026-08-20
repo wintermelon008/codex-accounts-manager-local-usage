@@ -41,9 +41,10 @@ const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
 const SHIM_FILE = "codex-app-server-shim.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 11;
+const RUNTIME_PROTOCOL_VERSION = 12;
 const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
 const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
+const USAGE_ATTRIBUTION_RETRY_DELAY_MS = 5_000;
 
 /**
  * Provider-neutral runtime configuration. A registered integration supplies
@@ -100,6 +101,10 @@ type RetainedUnmanagedRollbackSnapshot = {
 export class CodexHotSwitchRuntime implements vscode.Disposable {
   private bridge: CodexHotSwitchBridge | undefined;
   private readonly unmanagedRollbackSnapshots = new Map<string, RetainedUnmanagedRollbackSnapshot>();
+  private usageAttributionRetryTimer: NodeJS.Timeout | undefined;
+  private usageAttributionSyncInFlight: Promise<void> | undefined;
+  private usageAttributionSyncGeneration = 0;
+  private usageAttributionFailureReason: string | null = "not_activated";
   private disposed = false;
 
   constructor(
@@ -270,7 +275,13 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     if (!this.bridge) {
       throw new Error("Codex hot switch is not configured");
     }
-    return this.bridge.getStatus();
+    const status = await this.bridge.getStatus();
+    return {
+      ...status,
+      attributionFailureReason: status.attributionActive
+        ? null
+        : (this.usageAttributionFailureReason ?? status.attributionFailureReason)
+    };
   }
 
   async getOperationStatus(operationId: string): Promise<HotSwitchOperationStatus> {
@@ -363,15 +374,19 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     const previousRemoteAccountId = previousAccount?.accountId ?? previousTokens?.accountId;
     if (previousLocalAccountId && previousRemoteAccountId && previousAccount && previousTokens?.accessToken) {
       const previousRuntimeIdentity = resolveRuntimeAccessTokenIdentity(previousAccount, previousTokens.accessToken);
-      return bridge.switchAccount({
+      const result = await bridge.switchAccount({
         ...baseParams,
         previousAccountId: previousRemoteAccountId,
         previousLocalAccountId,
         previousExpectedEmail: previousRuntimeIdentity.email
       });
+      if (result.status === "switched") {
+        void this.synchronizeUsageAttribution(bridge);
+      }
+      return result;
     }
 
-    return this.withUnmanagedRollbackSnapshot((snapshot, rollbackContextId) =>
+    const result = await this.withUnmanagedRollbackSnapshot((snapshot, rollbackContextId) =>
       bridge.switchAccount({
         ...baseParams,
         previousAccountId: snapshot.accountId,
@@ -381,6 +396,10 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         rollbackContextId
       })
     );
+    if (result.status === "switched") {
+      void this.synchronizeUsageAttribution(bridge);
+    }
+    return result;
   }
 
   /**
@@ -466,6 +485,8 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     }
     if (result.status === "switched") {
       await this.setGatewayRuntimeState({ config: gateway.config, active: false });
+      this.usageAttributionFailureReason = "not_activated";
+      void this.synchronizeUsageAttribution(bridge);
     }
     return result;
   }
@@ -480,7 +501,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("Codex hot switch is not enabled");
     }
     if (!this.bridge) {
-      throw new Error("Codex hot switch is enabled, but its runtime is not ready; reload once before switching providers");
+      throw new Error(
+        "Codex hot switch is enabled, but its runtime is not ready; reload once before switching providers"
+      );
     }
     let chatgptAccessToken: string | undefined;
     let chatgptAccountId: string | undefined;
@@ -532,6 +555,13 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       longTurnPolicy: options.longTurnPolicy ?? getHotSwitchLongTurnPolicy()
     });
     if (result.status === "switched") {
+      if (route === "gateway") {
+        this.cancelUsageAttributionRetry();
+        this.usageAttributionFailureReason = "gateway_route_active";
+      } else {
+        this.usageAttributionFailureReason = "not_activated";
+        void this.synchronizeUsageAttribution(this.bridge);
+      }
       const state = this.getGatewayRuntimeState();
       if (state) {
         await this.setGatewayRuntimeState({ config: state.config, active: route === "gateway" });
@@ -548,6 +578,8 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       return;
     }
     this.disposed = true;
+    this.invalidateUsageAttributionSynchronization();
+    this.cancelUsageAttributionRetry();
     this.bridge?.dispose();
     this.bridge = undefined;
     for (const rollbackContextId of this.unmanagedRollbackSnapshots.keys()) {
@@ -569,9 +601,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const shimConfigDestination = path.join(runtimeDirectory, SHIM_CONFIG_FILE);
       const usageAttributionDirectory = path.join(runtimeDirectory, USAGE_ATTRIBUTION_DIRECTORY);
       const gatewayState = this.getGatewayRuntimeState();
-      const gateway = gatewayState
-        ? { ...gatewayState.config, active: gatewayState.active }
-        : undefined;
+      const gateway = gatewayState ? { ...gatewayState.config, active: gatewayState.active } : undefined;
 
       await fs.mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
       await fs.mkdir(usageAttributionDirectory, { recursive: true, mode: 0o700 });
@@ -612,6 +642,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         }
       }
 
+      this.invalidateUsageAttributionSynchronization();
+      this.cancelUsageAttributionRetry();
+      this.usageAttributionFailureReason = "not_activated";
       this.bridge?.dispose();
       this.bridge = undefined;
       if (!requiresReload) {
@@ -681,49 +714,96 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         longTurnPolicy: "defer"
       });
       if (result.status !== "switched") {
-        console.warn(
-          `[codexAccounts] ChatGPT route initialization deferred with ${result.activeTurns} active turn(s)`
-        );
+        console.warn(`[codexAccounts] ChatGPT route initialization deferred with ${result.activeTurns} active turn(s)`);
       }
     } catch (error) {
       console.warn("[codexAccounts] ChatGPT route initialization skipped", error);
     }
   }
 
-  /**
-   * This is intentionally a one-shot startup handshake. The shim records only
-   * a local account ID when it sees a managed turn; it never receives token
-   * counters, prompts, or account credentials through this path.
-   */
   private async synchronizeUsageAttribution(bridge: CodexHotSwitchBridge): Promise<void> {
-    try {
-      const identity = await bridge.getIdentity();
-      if (identity.accountType !== "chatgpt" || !identity.email) {
-        return;
-      }
-
-      const accounts = await this.repo.listAccounts();
-      const account = selectManagedAccountForUsageAttribution(accounts, identity);
-      if (!account) {
-        return;
-      }
-
-      const tokens = await this.repo.getTokens(account.id, { syncExternal: false });
-      const remoteAccountId = account.accountId ?? tokens?.accountId;
-      if (!remoteAccountId || (identity.managedAccountId && identity.managedAccountId !== remoteAccountId)) {
-        return;
-      }
-
-      await bridge.activateUsageAttribution({
-        localAccountId: account.id,
-        accountId: remoteAccountId,
-        expectedEmail: account.email
-      });
-    } catch (error) {
-      // Attribution is observational. A transient handshake failure must never
-      // make seamless account switching unavailable.
-      console.warn("[codexAccounts] token usage attribution initialization skipped", error);
+    if (this.disposed || this.bridge !== bridge) {
+      return;
     }
+    if (this.usageAttributionSyncInFlight) {
+      return this.usageAttributionSyncInFlight;
+    }
+    const generation = this.usageAttributionSyncGeneration;
+
+    const attempt = (async () => {
+      try {
+        const identity = await bridge.getIdentity();
+        if (identity.accountType !== "chatgpt" || !identity.email) {
+          throw new Error("The runtime ChatGPT identity is not ready for usage attribution");
+        }
+
+        const accounts = await this.repo.listAccounts();
+        const account = selectManagedAccountForUsageAttribution(accounts, identity);
+        if (!account) {
+          throw new Error("No managed account matches the runtime identity for usage attribution");
+        }
+
+        const tokens = await this.repo.getTokens(account.id, { syncExternal: false });
+        const remoteAccountId = account.accountId ?? tokens?.accountId;
+        if (!remoteAccountId) {
+          throw new Error("The managed account has no workspace identifier for usage attribution");
+        }
+        if (identity.managedAccountId && identity.managedAccountId !== remoteAccountId) {
+          throw new Error("The runtime identity does not match the managed account for usage attribution");
+        }
+
+        await bridge.activateUsageAttribution({
+          localAccountId: account.id,
+          accountId: remoteAccountId,
+          expectedEmail: account.email
+        });
+        this.usageAttributionFailureReason = null;
+        this.cancelUsageAttributionRetry();
+      } catch (error) {
+        if (this.disposed || this.bridge !== bridge) {
+          return;
+        }
+        const reason = error instanceof Error ? error.message : String(error);
+        this.usageAttributionFailureReason = reason.slice(0, 512) || "Usage attribution activation failed";
+        // Attribution is observational. Keep retrying after the runtime has
+        // settled, without reconstructing historical un-attributed events.
+        console.warn(`[codexAccounts] token usage attribution inactive: ${this.usageAttributionFailureReason}`);
+        this.scheduleUsageAttributionRetry(bridge);
+      } finally {
+        if (this.usageAttributionSyncGeneration === generation) {
+          this.usageAttributionSyncInFlight = undefined;
+        }
+      }
+    })();
+    this.usageAttributionSyncInFlight = attempt;
+    return attempt;
+  }
+
+  private scheduleUsageAttributionRetry(bridge: CodexHotSwitchBridge): void {
+    if (this.disposed || this.bridge !== bridge || this.usageAttributionRetryTimer) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (this.usageAttributionRetryTimer === timer) {
+        this.usageAttributionRetryTimer = undefined;
+      }
+      void this.synchronizeUsageAttribution(bridge);
+    }, USAGE_ATTRIBUTION_RETRY_DELAY_MS);
+    timer.unref?.();
+    this.usageAttributionRetryTimer = timer;
+  }
+
+  private cancelUsageAttributionRetry(): void {
+    if (!this.usageAttributionRetryTimer) {
+      return;
+    }
+    clearTimeout(this.usageAttributionRetryTimer);
+    this.usageAttributionRetryTimer = undefined;
+  }
+
+  private invalidateUsageAttributionSynchronization(): void {
+    this.usageAttributionSyncGeneration += 1;
+    this.usageAttributionSyncInFlight = undefined;
   }
 
   private async refreshRuntimeAuth(request: HotSwitchRefreshRequest): Promise<HotSwitchRefreshResult> {
@@ -1090,10 +1170,7 @@ function normalizeGatewayRuntimeState(value: unknown): GatewayRuntimeState {
   };
 }
 
-function sameGatewayRuntimeConfig(
-  left: GatewayRuntimeConfig,
-  right: GatewayRuntimeConfig
-): boolean {
+function sameGatewayRuntimeConfig(left: GatewayRuntimeConfig, right: GatewayRuntimeConfig): boolean {
   return (
     left.displayName === right.displayName &&
     left.baseUrl === right.baseUrl &&

@@ -36,6 +36,21 @@ export function toSharedAccountJson(account: CodexAccountRecord, tokens: CodexTo
   };
 }
 
+/** Minimal array entry used by the dashboard's batch export action. */
+export function toBatchSharedAccountJson(account: CodexAccountRecord, tokens: CodexTokens): SharedCodexAccountJson {
+  return {
+    id: account.id,
+    email: account.email,
+    tokens: {
+      id_token: tokens.idToken,
+      access_token: tokens.accessToken,
+      refresh_token: tokens.refreshToken
+    },
+    created_at: Math.floor(account.createdAt / 1000),
+    last_used: Math.floor(account.updatedAt / 1000)
+  };
+}
+
 export function previewSharedEntry(entry: SharedCodexAccountJson): { storageId?: string; email?: string } {
   const restoredTokens = restoreSharedTokens(entry);
   const claims = extractClaims(restoredTokens.idToken, restoredTokens.accessToken);

@@ -4,9 +4,8 @@ import type {
   DashboardSettings,
   DashboardState
 } from "../../src/domain/dashboard/types";
-import { formatTimestamp, getSensitiveDisplayValue, renderTagList } from "./helpers";
+import { getSensitiveDisplayValue } from "./helpers";
 import { ActionButton } from "./primitives";
-import { MetricGauge, renderHealthPill } from "./accountMetricPrimitives";
 
 export function OverviewSection(props: {
   account?: DashboardAccountViewModel;
@@ -26,127 +25,59 @@ export function OverviewSection(props: {
   onImportCurrent: () => void;
   onRefreshAll: () => void;
 }) {
-  const { account, copy, settings, now, hasAccounts, privacyMode } = props;
+  const { account, copy, hasAccounts, privacyMode } = props;
   const emptyTitle = hasAccounts ? copy.noActiveAccountTitle : copy.empty;
   const emptySub = hasAccounts ? copy.noActiveAccountSub : copy.savedAccountsSub;
-  const teamNameDisplay =
-    account?.isTeamWorkspace && account.accountName?.trim()
-      ? getSensitiveDisplayValue(account.accountName, privacyMode, "name", account.accountName)
-      : undefined;
-  const hasOverviewNotes = Boolean(account?.autoSwitchLockedUntil);
 
   return (
-    <div class="overview-shell">
-      {account ? (
-        <div class="overview-account">
+    <div class="overview-shell overview-shell-compact">
+      <div class={`overview-account ${account ? "" : "overview-empty-panel"}`.trim()}>
+        {account ? (
           <div class="overview-account-main">
-            <div class="overview-account-header">
-              <div class="overview-account-email">{getSensitiveDisplayValue(account.email, privacyMode, "email")}</div>
-              {teamNameDisplay ? <div class="overview-account-workspace">{teamNameDisplay}</div> : null}
-              {account.tags.length ? <div class="account-tag-row">{renderTagList(account.tags)}</div> : null}
-              <div class="overview-account-tags">
-                {account.isActive ? <span class="pill active">{copy.primaryAccount}</span> : null}
-                {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
-                <span class="pill plan">{account.planTypeLabel}</span>
-                {renderHealthPill(account)}
-              </div>
-            </div>
-            <div class="overview-meta">
-              <div class="overview-meta-item overview-meta-item-subscription">
-                <span class="grid-label">{resolveOverviewLabel("subscription", props.lang)}</span>
-                <span class="meta-value" style={account.subscriptionColor ? { color: account.subscriptionColor } : undefined}>
-                  {account.subscriptionText}
-                </span>
-              </div>
-              <div class="overview-meta-item">
-                <span class="grid-label">{resolveOverviewLabel("workspace", props.lang)}</span>
-                <span class="meta-value">{account.workspaceLabel}</span>
-              </div>
-              <div class="overview-meta-item">
-                <span class="grid-label">{copy.lastRefresh}</span>
-                <span class="meta-value">{formatTimestamp(account.lastQuotaAt, copy.never)}</span>
-              </div>
-              <div class="overview-meta-item overview-meta-item-wide">
-                <span class="grid-label">{copy.accountId}</span>
-                <span class="meta-value">
-                  {getSensitiveDisplayValue(account.accountId, privacyMode, "id", copy.unknown)}
-                </span>
-              </div>
-            </div>
-            {hasOverviewNotes ? (
-              <div class="overview-note-stack">
-                {account.autoSwitchLockedUntil ? (
-                  <div class="overview-inline-note overview-inline-card overview-lock-note">
-                    <strong>{copy.autoSwitchLockedUntil}:</strong> {formatTimestamp(account.autoSwitchLockedUntil, copy.never)}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
+            <div class="overview-account-email">{getSensitiveDisplayValue(account.email, privacyMode, "email")}</div>
           </div>
-        </div>
-      ) : (
-        <div class="overview-account overview-empty-panel">
-          <div class="overview-empty-badge">{copy.dashboardTitle}</div>
-          <div class="overview-empty-title">{emptyTitle}</div>
-          <div class="overview-empty-sub">{emptySub}</div>
-        </div>
-      )}
-      <div class="overview-main">
-        <div class="overview-metrics">
-          {account ? (
-            <div class="metrics">
-              {account.metrics
-                .filter((metric) => metric.visible)
-                .map((metric) => (
-                  <MetricGauge key={metric.key} metric={metric} lang={props.lang} settings={settings} copy={copy} now={now} />
-                ))}
-            </div>
-          ) : (
-            <div class="overview-empty-copy">
-              <div class="overview-empty-copy-title">{emptyTitle}</div>
-              <div class="overview-empty-copy-sub">{emptySub}</div>
-            </div>
-          )}
-        </div>
+        ) : (
+          <>
+            <div class="overview-empty-title">{emptyTitle}</div>
+            <div class="overview-empty-sub">{emptySub}</div>
+          </>
+        )}
       </div>
       <div class="overview-actions">
         <div class="toolbar">
-          <ActionButton class="toolbar-btn primary-btn" pending={props.addPending} disabled={props.disabled} onClick={props.onAddAccount}>
+          <ActionButton
+            class="toolbar-btn primary-btn"
+            pending={props.addPending}
+            disabled={props.disabled}
+            onClick={props.onAddAccount}
+          >
             {copy.addAccount}
           </ActionButton>
-          <ActionButton class="toolbar-btn" pending={props.importPending} disabled={props.disabled} onClick={props.onImportCurrent}>
+          <ActionButton
+            class="toolbar-btn"
+            pending={props.importPending}
+            disabled={props.disabled}
+            onClick={props.onImportCurrent}
+          >
             {copy.importCurrent}
           </ActionButton>
-          <ActionButton class="toolbar-btn" pending={props.refreshAllPending} disabled={props.disabled} onClick={props.onRefreshAll}>
+          <ActionButton
+            class="toolbar-btn"
+            pending={props.refreshAllPending}
+            disabled={props.disabled}
+            onClick={props.onRefreshAll}
+          >
             {props.refreshPageLabel}
           </ActionButton>
-          {account?.isActive ? (
-            <ActionButton class="toolbar-btn" onClick={props.onToggleAutoSwitchLock}>
-              {account.autoSwitchLockedUntil ? copy.unlockAutoSwitchBtn : copy.lockAutoSwitchBtn}
-            </ActionButton>
-          ) : null}
+          <ActionButton
+            class="toolbar-btn"
+            disabled={props.disabled || !account?.isActive}
+            onClick={props.onToggleAutoSwitchLock}
+          >
+            {account?.autoSwitchLockedUntil ? copy.unlockAutoSwitchBtn : copy.lockAutoSwitchBtn}
+          </ActionButton>
         </div>
       </div>
     </div>
   );
-}
-
-function resolveOverviewLabel(key: "subscription" | "workspace", lang: DashboardState["lang"]): string {
-  if (key === "subscription") {
-    if (lang === "zh") {
-      return "订阅到期";
-    }
-    if (lang === "zh-hant") {
-      return "訂閱到期";
-    }
-    return "Subscription";
-  }
-
-  if (lang === "zh") {
-    return "工作空间";
-  }
-  if (lang === "zh-hant") {
-    return "工作空間";
-  }
-  return "Workspace";
 }

@@ -11,7 +11,7 @@
 - Saved Accounts 右上角的“隐藏周额度 <3%”按钮只处理当前显示范围中周额度严格低于 `3%` 的未隐藏账号；无周额度窗口或已隐藏账号不会被处理。
 - 同一区域的“解除隐藏周额度 >90%”按钮会检查所有隐藏账号，不受当前分组显示状态影响；只有周额度严格高于 `90%` 且存在周窗口的账号会被恢复。恢复在同一次写入中自动加入无感切号池并移出 `A/B/C` 分组，普通批量解除隐藏继续保留原分组。
 - 同一批量选择可将账号放入 `A`、`B`、`C` 分组或移出分组。面板右上角的 `A/B/C` 按钮同时控制该分组卡片是否显示、该分组是否进入无感候选；未分组且未隐藏账号固定显示并始终进入无感候选。分组筛选不改池成员、不影响手动切号或官方自动切号；已激活的关闭分组账号仅在原有切换条件满足时才会转出，且目标只能来自当前显示范围。
-- 已保存账号按每页最多 `50` 张卡片分页；隐藏、解除隐藏及分组显示变化会立即重新分页，页码越界时自动回到有效页。
+- 已保存账号支持每页 `10`、`20`、`50` 张卡片分页，默认 `50`；隐藏、解除隐藏及分组显示变化会立即重新分页，页码越界时自动回到有效页。
 - Dashboard 的“刷新当前页配额”只刷新当前显示页；单卡、明确选中的批量刷新和命令面板的显式全量刷新不受此页范围限制。
 - 定时配额刷新只处理未隐藏且分组已启用的第 `1` 页（最多 `50` 个账号）；其余账号仅按需手动刷新。需要持续参与分钟级无感调度的账号应放在这一范围内。
 - 全局任意时刻只启用一个账号，不把账号分配到单独的 conversation。
@@ -33,15 +33,15 @@
 
 ## 模型负载过大时的自动恢复
 
-当某个 thread 收到精确错误 `Selected model is at capacity. Please try a different model.`，或结构化错误标识为 `server_overloaded`（兼容 `codex_error_info` 与 `codexErrorInfo`）时，runtime 只为这个 thread 建立独立的内存计时器，等待固定 `60` 秒后发送一次带恢复上下文的 `Continue.`。它不改变模型、不主动切号，也不把其他 thread 放入同一队列；Continue 再次容量失败时重新等待 `60` 秒。正常完成、非容量错误、手动中断或同一 thread 开始新的 `turn/start` 会清除这条等待记录；runtime 退出时队列不持久化。
+当某个 thread 收到精确错误 `Selected model is at capacity. Please try a different model.`，或结构化错误标识为 `server_overloaded`（兼容 `codex_error_info` 与 `codexErrorInfo`）时，runtime 只为这个 thread 建立独立的内存计时器，每次随机等待 `5–8` 秒后发送一次带恢复上下文的 `Continue.`。它不改变模型、不主动切号，也不把其他 thread 放入同一队列；Continue 再次容量失败时重新随机等待 `5–8` 秒。正常完成、非容量错误、手动中断或同一 thread 开始新的 `turn/start` 会清除这条等待记录；runtime 退出时队列不持久化。
 
-这条恢复优先级低于无感切号：无感 ChatGPT 账号切换事务开始时会领取仍处于等待状态的容量条目，取消其计时器，并由切号后的现有恢复事务发送一次 Continue。切号被延后、取消或失败时，条目恢复为原来的等待状态；切号后的 Continue 若再次容量失败，则重新建立新的 `60` 秒计时器。Gateway 路由切换不会领取 ChatGPT 容量队列。额度耗尽 `usageLimitExceeded` 仍走独立的额度恢复/切号流程，且优先于容量错误判断。
+这条恢复优先级低于无感切号：无感 ChatGPT 账号切换事务开始时会领取仍处于等待状态的容量条目，取消其计时器，并由切号后的现有恢复事务发送一次 Continue。切号被延后、取消或失败时，条目恢复为原来的等待状态；切号后的 Continue 若再次容量失败，则重新建立新的随机 `5–8` 秒计时器。Gateway 路由切换不会领取 ChatGPT 容量队列。额度耗尽 `usageLimitExceeded` 仍走独立的额度恢复/切号流程，且优先于容量错误判断。
 
 ## 为什么 runtime 强制使用 HTTP
 
 仅调用 `account/login/start` 不足以保证已有 thread 的下一轮请求改用新账号。已验证的 Codex `0.144.2` 会为每个已加载 thread 缓存 Responses WebSocket；登录接口会更新共享认证状态，`account/read` 也会显示新账号，但旧 thread 仍可能复用由旧账号建立的 WebSocket。这会造成 Manager 显示切换成功、实际却继续扣旧账号额度。
 
-runtime protocol v11 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v11 保留无旧 Manager 账号的内存回滚快照、只读账号用量归因和有界耗尽批次，并新增每笔热切换的临时 `operationId` 终态查询；控制 socket 超时或断开时，Manager 会在仍持有共享事务租约的情况下回查 shim，而不会立即启动第二笔切换。未托管旧账号的回滚快照只在结果不确定时保留最多十分钟，成功、确定失败或完成回滚后立即清除。关闭低额度切号不会让旧批次在重新开启后重放。可选 Gateway 的双路由仅在安装集成后、显式启用且语义确认额度耗尽时，才会原地回退到 ChatGPT Auth。
+runtime protocol v12 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v12 保留无旧 Manager 账号的内存回滚快照、只读账号用量归因和有界耗尽批次，并新增每笔热切换的临时 `operationId` 终态查询；控制 socket 超时或断开时，Manager 会在仍持有共享事务租约的情况下回查 shim，而不会立即启动第二笔切换。未托管旧账号的回滚快照只在结果不确定时保留最多十分钟，成功、确定失败或完成回滚后立即清除。关闭低额度切号不会让旧批次在重新开启后重放。可选 Gateway 的双路由仅在安装集成后、显式启用且语义确认额度耗尽时，才会原地回退到 ChatGPT Auth。
 
 Codex 会把创建会话时的 provider ID 写入本地 thread 元数据，官方界面的 `thread/list` 默认又只查询当前 provider。无感 runtime 若不处理这层过滤，安装前的 `openai` 会话和安装后的 HTTP provider 会话就会像两套独立历史。shim 只把 `thread/list` 中显式的 `modelProviders: null` 改成协议定义的空数组（所有 provider），保留显式 provider 列表不变；它不修改 rollout、`session_index.jsonl` 或 SQLite。官方界面恢复旧 thread 时会传入当前无感 provider，因此后续 turn 仍使用 HTTP transport。
 
@@ -156,7 +156,7 @@ Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储
 
 本地会话用量聚合也采用共享缓存，但不会把某个窗口启动时的旧副本永久留在内存。统计按 rollout 的累计 token 高水位取增量，忽略同一累计值的重复/过期上报；spawned subagent 中复制的父会话历史只建立基线，从子代理自己的 trigger-turn 边界后才计入新增。每次读取会采用 `calculatedAt` 严格更新的共享结果；到达 `nextRefreshAt` 时 Dashboard 主动更新，而不是必须关闭重开面板。扫描操作由独立可过期租约去重，避免多个设备重复遍历同一批本地会话。
 
-账号卡片下方的当前额度窗口 Token 统计不另起扫描：同一轮既有会话扫描只读取原有 token 元数据，并把最多 2 MiB 的归因 journal 尾部索引到本地账号。journal 只记录不透明本地账号 ID、thread ID 与时间；账号窗口缓存仅保留该本地 ID、额度 reset 时间及汇总 token 数，文件权限为 `0600`。Manager 启动时若归因握手晚于当前 `turn/start`，shim 会在身份确认后立即为仍活动的 thread 补记归因，避免当前启用账号的本轮窗口 Token 一直等待归属。它不回填安装前或未受管的历史；账号窗口独立保留最长 31 天的受管元数据，即使本机用量面板仅展示 14 天。卡片把同一额度周期中相差不超过一分钟的 `reset_at` 观测合并到当前五小时/周额度 reset 边界，因此切号后只累计对应账号；实际额度重置后旧统计立即归零并等待新受管 turn。runtime 若只返回一个 `primary` 窗口，会按实际 `window_minutes` 判定短期或长期，因此不把 Plus 等长周期额度错误归为五小时。没有逐 token IPC、额外网络请求或会话正文的第二次加载。
+账号卡片下方的当前额度窗口 Token 统计不另起扫描：同一轮既有会话扫描只读取原有 token 元数据，并把最多 2 MiB 的归因 journal 尾部索引到本地账号。journal 只记录不透明本地账号 ID、thread ID 与时间；账号窗口缓存仅保留该本地 ID、额度 reset 时间及汇总 token 数，文件权限为 `0600`。Manager 启动或 runtime 重启时若归因握手晚于当前 `turn/start`，会在身份确认后激活归因并为仍活动的 thread 补记；账号切换和 ChatGPT 路由重新激活后也会重新同步，失败会保留可读原因并每 5 秒重试。它不回填安装前、激活失败期间或未受管的历史；账号窗口独立保留最长 31 天的受管元数据，即使本机用量面板仅展示 14 天。卡片把同一额度周期中相差不超过一分钟的 `reset_at` 观测合并到当前五小时/周额度 reset 边界，因此切号后只累计对应账号；实际额度重置后旧统计立即归零并等待新受管 turn。runtime 若只返回一个 `primary` 窗口，会按实际 `window_minutes` 判定短期或长期，因此不把 Plus 等长周期额度错误归为五小时。没有逐 token IPC、额外网络请求或会话正文的第二次加载。
 
 这些机制提供最终收敛，不把多个 app-server 伪装成单一原子事务：已经开始的 turn 仍按其原身份运行到安全边界，各宿主随后热切换到共享活动账号。现场核验应同时检查 Manager 当前账号、runtime 身份以及额度刷新时间，不能只根据某一台设备缓存的卡片顺序判断是否切换成功。
 
@@ -164,7 +164,7 @@ Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储
 
 - shim 与 manager 使用当前 extension-host PID 对应的本地 Unix socket；目录权限为 `0700`，socket 为 `0600`。
 - shim 在收到成功的 `initialize` 响应或客户端 `initialized` 通知后即可进入 ready；状态接口同时报告两个握手信号，便于区分官方扩展版本差异。热切换已启用但 bridge 未 ready 时，Manager 必须失败关闭，不能回退为磁盘切号。
-- runtime protocol v11 的状态接口必须同时报告 `httpTransportForced=true`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。`operationId` 仅是短期不透明标识，shim 最多保留 64 条、十分钟内的无凭据终态；诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
+- runtime protocol v12 的状态接口必须同时报告 `httpTransportForced=true`、`attributionActive` 和 `attributionFailureReason`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。`operationId` 仅是短期不透明标识，shim 最多保留 64 条、十分钟内的无凭据终态；诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
 - access token 只通过进程内存和本地 IPC 传递，不写入 shim 配置，也不输出到日志。runtime 配置文件只保存官方 Codex CLI 的绝对路径及受保护的归因 journal 目录；两者均不含账号身份或凭据。
 - token 临近过期时由 manager 使用原有 OAuth 刷新逻辑更新；app-server 的 refresh 回调必须匹配原 ChatGPT account ID，否则拒绝返回凭据。
 - 同一 workspace ID 可能对应多个已导入用户。manager 在切换前校验 access token 的 user ID 与本地账号记录一致，再把 access token 的 runtime email 交给 app-server 身份校验；稳定账号记录邮箱与 runtime email 允许是同一 user ID 的不同别名。refresh 与失败回滚以 manager 本地账号 ID 和 workspace ID 为主；缺少本地身份且 workspace ID 不唯一时安全失败，不按数组顺序猜测账号。

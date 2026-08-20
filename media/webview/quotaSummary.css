@@ -252,6 +252,23 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   padding: 14px;
   overflow: hidden;
 }
+.overview-shell.overview-shell-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.overview-shell-compact .overview-account {
+  min-height: 0;
+}
+.overview-shell-compact .overview-account-main {
+  display: block;
+}
+.overview-shell-compact .overview-actions {
+  padding: 12px;
+}
+.overview-shell-compact .toolbar {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .overview-account {
   display: flex;
   flex-direction: column;
@@ -865,9 +882,51 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
 .saved-accounts-pagination {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   margin-top: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-surface);
+}
+.account-page-control,
+.account-page-navigation,
+.account-page-jump {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.account-page-label {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.account-page-select,
+.account-page-input {
+  min-height: 30px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12px;
+}
+.account-page-select {
+  min-width: 60px;
+  padding: 0 8px;
+}
+.account-page-input {
+  width: 58px;
+  padding: 0 7px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.account-page-select:focus,
+.account-page-input:focus {
+  outline: none;
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 1px rgba(56, 139, 253, 0.16) inset;
 }
 .account-page-btn {
   min-height: 30px;
@@ -895,6 +954,14 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   text-align: center;
+}
+@media (max-width: 620px) {
+  .saved-accounts-pagination {
+    justify-content: center;
+  }
+  .account-page-jump {
+    margin-left: 0;
+  }
 }
 .saved-card-container {
   --saved-card-min-height: 238px;
@@ -4505,6 +4572,9 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
     text-align: left;
   }
   .toolbar {
+    grid-template-columns: 1fr;
+  }
+  .overview-shell-compact .toolbar {
     grid-template-columns: 1fr;
   }
   .toolbar-btn.primary-btn {

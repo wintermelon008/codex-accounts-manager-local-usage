@@ -572,6 +572,8 @@ function runtimeStatus(overrides: Partial<HotSwitchStatus> = {}): HotSwitchStatu
     observedUsageLimitFailures: 0,
     recoveredUsageLimitedThreads: 0,
     resumedUsageLimitedGoals: 0,
+    attributionActive: false,
+    attributionFailureReason: "not_activated",
     shimPid: 123,
     appServerPid: 456,
     ...overrides

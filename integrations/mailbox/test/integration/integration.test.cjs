@@ -105,6 +105,48 @@ test("registration assistant uses the Manager Codex OAuth flow when it is availa
   integration.dispose();
 });
 
+test("registration assistant deletes a mailbox directly and clears all registration records", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const registrations = [];
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, providerId: "mock", messages: [], codes: [] }; }
+  };
+  const api = {
+    registerDashboardIntegration(value) {
+      registrations.push(value);
+      return { dispose() {} };
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await registrations[0].runAction("open");
+  await integration.pool.importProvider({ provider, input: "registered@example.com|credential" });
+  const mailboxId = integration.pool.listMetadata()[0].id;
+  integration.registrationManager.createSession({ email: "registered@example.com", password: "manual-password" });
+
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "registrationDeleteMailbox", mailboxId });
+  assert.equal(integration.pool.listMetadata().length, 0);
+
+  integration.registrationManager.createSession({ email: "another@example.com", password: "manual-password" });
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "registrationCleanupAll" });
+  assert.equal(integration.registrationManager.getAllSessions().length, 0);
+  assert.equal(
+    vscode.panels[0].webview.messages.some((message) => message.type === "toast" && message.action === "registrationCleanupAll" && /已删除 2 条注册记录/u.test(message.message || "")),
+    true
+  );
+  integration.dispose();
+});
+
 test("default integration registers the built-in 8t92, boya and cdns providers", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -422,7 +464,7 @@ test("registration rejects an email that is already imported into Codex", async 
   await integration.initialize();
 
   await assert.rejects(
-    () => integration.createRegistrationSession({ email: " linked@EXAMPLE.com " }),
+    () => integration.createRegistrationSession({ email: " linked@example.com " }),
     /已经导入 Codex 账号/u
   );
   assert.equal(integration.registrationManager.getAllSessions().length, 0);

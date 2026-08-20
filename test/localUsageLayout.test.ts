@@ -5,6 +5,20 @@ import { describe, expect, it } from "vitest";
 const projectRoot = path.resolve(__dirname, "..");
 
 describe("local usage dashboard placement and responsive guards", () => {
+  it("keeps the dashboard overview compact around the current email and four actions", () => {
+    const overview = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/overviewSection.tsx"), "utf8");
+
+    expect(overview).toContain("overview-shell-compact");
+    expect(overview).toContain("overview-account-email");
+    expect(overview).toContain("copy.addAccount");
+    expect(overview).toContain("copy.importCurrent");
+    expect(overview).toContain("props.refreshPageLabel");
+    expect(overview).toContain("copy.lockAutoSwitchBtn");
+    expect(overview).not.toContain("MetricGauge");
+    expect(overview).not.toContain("overview-meta");
+    expect(overview).not.toContain("overview-metrics");
+  });
+
   it("keeps the local usage section after the saved-account grid in normal document flow", () => {
     const source = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
     const savedAccountsGridIndex = source.indexOf('<div class="accounts-grid">');
@@ -137,6 +151,9 @@ describe("local usage dashboard placement and responsive guards", () => {
     );
     expect(main).toContain("getDashboardAccountPage");
     expect(main).toContain("saved-accounts-pagination");
+    expect(main).toContain("DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS");
+    expect(main).toContain("account-page-size");
+    expect(main).toContain("account-page-jump-input");
   });
 
   it("exposes a per-account seamless-switch pool toggle at the left of the card action row", () => {
