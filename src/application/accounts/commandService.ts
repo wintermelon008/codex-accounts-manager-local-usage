@@ -348,7 +348,7 @@ export class AccountsCommandService {
             success += 1;
           } catch (error) {
             failed += 1;
-            console.warn(`[codexAccounts] refresh all failed for ${account.email}:`, error);
+            console.warn(`[codexAccounts] refresh all failed for ${account.email}: ${getErrorMessage(error)}`);
           }
         },
         { delayMs: options?.silent ? REFRESH_ALL_SILENT_DELAY_MS : REFRESH_ALL_MANUAL_DELAY_MS }

@@ -4,6 +4,7 @@ import type {
   CodexImportResultSummary,
   SharedCodexAccountJson
 } from "../../core/types";
+import { getErrorMessage } from "../../core/errors";
 
 export function parseSharedJsonInput(
   jsonText: string,
@@ -49,5 +50,5 @@ export function toImportActionPayload(
 }
 
 export function toFailureMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return getErrorMessage(error);
 }

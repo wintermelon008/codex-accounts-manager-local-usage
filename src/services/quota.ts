@@ -23,7 +23,7 @@ import {
   UsageWindowInfo,
   isSub2ApiAccount
 } from "../core/types";
-import { APIError } from "../core/errors";
+import { APIError, formatApiErrorMessage } from "../core/errors";
 import { needsRefresh, refreshTokens } from "../auth/oauth";
 import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { QUOTA_USAGE_URL, RESET_CREDITS_CONSUME_URL, RESET_CREDITS_URL } from "../infrastructure/config/apiEndpoints";
@@ -117,7 +117,13 @@ export async function refreshQuota(
         : primary;
 
     if (!usageResult.ok) {
-      return { error: buildError(extractErrorMessage(usageResult.status, usageResult.raw)), updatedTokens: effectiveTokens };
+      return {
+        error: buildError(
+          formatApiErrorMessage("API returned", usageResult.status, usageResult.raw),
+          extractErrorDetailCode(usageResult.raw)
+        ),
+        updatedTokens: effectiveTokens
+      };
     }
 
     const usage = usageResult.payload;
@@ -565,29 +571,11 @@ function normalizeWindow(window?: UsageWindowInfo): number | undefined {
 }
 
 /**
- * 提取错误消息
- */
-function extractErrorMessage(status: number, raw: string): string {
-  try {
-    const payload = JSON.parse(raw) as Record<string, unknown>;
-    const detailValue = payload["detail"];
-    const detail = detailValue as Record<string, unknown> | undefined;
-    const codeValue = detail?.["code"];
-    const code = typeof codeValue === "string" ? codeValue : undefined;
-    const shortRaw = raw.slice(0, 200);
-    return code ? `API returned ${status} [error_code:${code}] - ${shortRaw}` : `API returned ${status} - ${shortRaw}`;
-  } catch {
-    return `API returned ${status} - ${raw.slice(0, 200)}`;
-  }
-}
-
-/**
  * 构建错误信息对象
  */
-function buildError(message: string): CodexQuotaErrorInfo {
-  const codeMatch = message.match(/\[error_code:([^\]]+)\]/);
+function buildError(message: string, code?: string): CodexQuotaErrorInfo {
   return {
-    code: codeMatch?.[1],
+    code,
     message,
     timestamp: Math.floor(Date.now() / 1000)
   };
@@ -656,7 +644,7 @@ export async function fetchResetCredits(
 
   if (!response.ok) {
     const detailCode = extractErrorDetailCode(raw);
-    throw new APIError(`Reset credits API returned ${response.status}: ${raw.slice(0, 200)}`, {
+    throw new APIError(formatApiErrorMessage("Reset credits API returned", response.status, raw), {
       statusCode: response.status,
       responseBody: raw.slice(0, 200),
       context: detailCode ? { errorCode: detailCode } : undefined
@@ -711,7 +699,7 @@ export async function consumeResetCredit(
 
   if (!response.ok) {
     const detailCode = extractErrorDetailCode(raw);
-    throw new APIError(`Consume reset credit returned ${response.status}: ${raw.slice(0, 200)}`, {
+    throw new APIError(formatApiErrorMessage("Consume reset credit returned", response.status, raw), {
       statusCode: response.status,
       responseBody: raw.slice(0, 200),
       context: detailCode ? { errorCode: detailCode } : undefined

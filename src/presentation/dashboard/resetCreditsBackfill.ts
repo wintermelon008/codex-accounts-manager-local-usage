@@ -2,6 +2,7 @@ import type { DashboardAccountViewModel } from "../../domain/dashboard/types";
 import { isSub2ApiAccount } from "../../core/types";
 import { AccountsRepository } from "../../storage";
 import { fetchResetCredits } from "../../services/quota";
+import { getErrorMessage } from "../../core/errors";
 import { logNetworkEvent } from "../../utils/debug";
 
 const RESET_CREDITS_BACKFILL_COOLDOWN_MS = 60_000;
@@ -77,14 +78,13 @@ export async function backfillMissingResetCreditExpiries(
         updated = true;
       } catch (error) {
         console.warn(
-          `[codexAccounts] reset credits backfill failed for ${account.email ?? account.id}:`,
-          error
+          `[codexAccounts] reset credits backfill failed for ${account.email ?? account.id}: ${getErrorMessage(error)}`
         );
         logNetworkEvent("resetCredits.backfill", {
           accountId: account.id,
           remoteAccountId: account.accountId,
           step: "failed",
-          error: error instanceof Error ? error.message : String(error)
+          error: getErrorMessage(error)
         });
         return;
       } finally {

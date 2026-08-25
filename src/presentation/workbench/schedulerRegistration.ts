@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { needsRefresh, refreshTokens } from "../../auth/oauth";
 import type { CodexHotSwitchRuntime, HotSwitchIdentity, HotSwitchStatus } from "../../codex";
 import { isAutomaticAccount, type CodexAccountRecord } from "../../core/types";
+import { getErrorMessage } from "../../core/errors";
 import { DASHBOARD_AUTOMATIC_REFRESH_PAGE_SIZE } from "../../domain/dashboard/types";
 import {
   getAutoRefreshMinutes,
@@ -24,10 +25,54 @@ import {
 } from "./tokenAutomationState";
 
 const SCHEDULER_LEASE_MS = 2 * 60 * 1000;
+export const SCHEDULER_LEASE_RENEW_INTERVAL_MS = Math.floor(SCHEDULER_LEASE_MS / 2);
 const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
 const SEAMLESS_SWITCH_GROUP_A_VISIBLE = "seamlessSwitchGroupAVisible";
 const SEAMLESS_SWITCH_GROUP_B_VISIBLE = "seamlessSwitchGroupBVisible";
 const SEAMLESS_SWITCH_GROUP_C_VISIBLE = "seamlessSwitchGroupCVisible";
+
+async function withSchedulerLease<T>(
+  repo: AccountsRepository,
+  name: string,
+  task: (leaseIsActive: () => boolean) => Promise<T>
+): Promise<T | undefined> {
+  const lease = await repo.tryAcquireSchedulerLease(name, SCHEDULER_LEASE_MS);
+  if (!lease) {
+    return undefined;
+  }
+
+  let leaseLost = false;
+  let renewalInFlight = false;
+  const renewalTimer = setInterval(() => {
+    if (renewalInFlight || leaseLost) {
+      return;
+    }
+
+    renewalInFlight = true;
+    void lease
+      .renew(SCHEDULER_LEASE_MS)
+      .then((renewed) => {
+        leaseLost = !renewed;
+        if (!renewed) {
+          console.warn(`[codexAccounts] ${name} scheduler lease renewal was rejected`);
+        }
+      })
+      .catch((error: unknown) => {
+        leaseLost = true;
+        console.warn(`[codexAccounts] ${name} scheduler lease renewal failed: ${getErrorMessage(error)}`);
+      })
+      .finally(() => {
+        renewalInFlight = false;
+      });
+  }, SCHEDULER_LEASE_RENEW_INTERVAL_MS);
+
+  try {
+    return await task(() => !leaseLost);
+  } finally {
+    clearInterval(renewalTimer);
+    await lease.release();
+  }
+}
 
 // This monitor deliberately only consumes the runtime's bounded scalar status
 // response. It never asks the runtime for thread IDs, conversation text, or
@@ -265,19 +310,19 @@ export function registerAutoRefreshScheduler(params: {
           return;
         }
 
-        const lease = await params.repo.tryAcquireSchedulerLease("quota-refresh", SCHEDULER_LEASE_MS);
-        if (!lease) {
-          return;
-        }
-        try {
+        await withSchedulerLease(params.repo, "quota-refresh", async (leaseIsActive) => {
+          if (!leaseIsActive()) {
+            return;
+          }
           await vscode.commands.executeCommand("codexAccounts.refreshAllQuotas", {
             silent: true,
             forceRefresh: true,
             accountIds
           });
-        } finally {
-          await lease.release();
-        }
+          if (!leaseIsActive()) {
+            console.warn("[codexAccounts] quota refresh completed after losing its shared lease");
+          }
+        });
       } finally {
         inFlight = false;
       }
@@ -387,52 +432,62 @@ export function registerTokenRefreshScheduler(params: {
     let checked = 0;
     let refreshedCount = 0;
     let sweepStarted = false;
-    let lease: Awaited<ReturnType<AccountsRepository["tryAcquireSchedulerLease"]>>;
     try {
       const accounts = await params.repo.listAccounts();
       if (!shouldRunAccountScheduler(accounts.length)) {
         return;
       }
-      lease = await params.repo.tryAcquireSchedulerLease("token-refresh", SCHEDULER_LEASE_MS);
-      if (!lease) {
-        return;
-      }
-      markTokenAutomationSweepStarted();
-      sweepStarted = true;
+      await withSchedulerLease(params.repo, "token-refresh", async (leaseIsActive) => {
+        markTokenAutomationSweepStarted();
+        sweepStarted = true;
 
-      for (const account of accounts) {
-        if (!isAutomaticAccount(account) || account.quotaMode === "none") {
-          continue;
-        }
-        try {
-          const tokens = await params.repo.getTokens(account.id);
-          markTokenAutomationCheck(account.id);
-          checked += 1;
-          if (!tokens?.accessToken || !needsRefresh(tokens.accessToken, params.skewSeconds)) {
-            clearTokenAutomationError(account.id);
+        for (const account of accounts) {
+          if (!isAutomaticAccount(account) || account.quotaMode === "none") {
             continue;
           }
 
-          if (!tokens.refreshToken) {
-            throw new Error("Token expired and no refresh token is available");
+          if (!leaseIsActive()) {
+            console.warn("[codexAccounts] token refresh stopped after losing its shared lease");
+            break;
           }
 
-          const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
-          await params.repo.updateTokens(account.id, {
-            ...refreshed,
-            accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
-          });
-          markTokenAutomationRefreshSuccess(account.id);
-          refreshedCount += 1;
-        } catch (error) {
-          lastFailureMessage = error instanceof Error ? error.message : String(error);
-          markTokenAutomationRefreshFailure(account.id, lastFailureMessage);
-          console.warn(`[codexAccounts] background token refresh failed for ${account.email}:`, error);
+          try {
+            const tokens = await params.repo.getTokens(account.id);
+            markTokenAutomationCheck(account.id);
+            checked += 1;
+            if (!leaseIsActive()) {
+              console.warn("[codexAccounts] token refresh stopped after losing its shared lease");
+              break;
+            }
+            if (!tokens?.accessToken || !needsRefresh(tokens.accessToken, params.skewSeconds)) {
+              clearTokenAutomationError(account.id);
+              continue;
+            }
+
+            if (!tokens.refreshToken) {
+              throw new Error("Token expired and no refresh token is available");
+            }
+
+            const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
+            if (!leaseIsActive()) {
+              console.warn("[codexAccounts] token refresh skipped its write after losing the shared lease");
+              break;
+            }
+            await params.repo.updateTokens(account.id, {
+              ...refreshed,
+              accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
+            });
+            markTokenAutomationRefreshSuccess(account.id);
+            refreshedCount += 1;
+          } catch (error) {
+            lastFailureMessage = getErrorMessage(error);
+            markTokenAutomationRefreshFailure(account.id, lastFailureMessage);
+            console.warn(`[codexAccounts] background token refresh failed for ${account.email}: ${lastFailureMessage}`);
+          }
         }
-      }
+      });
     } finally {
       inFlight = false;
-      await lease?.release();
       if (sweepStarted) {
         markTokenAutomationSweepFinished(lastFailureMessage);
         console.info(

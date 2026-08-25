@@ -101,8 +101,7 @@ describe("resetCreditsBackfill", () => {
     );
 
     expect(warnSpy).toHaveBeenCalledWith(
-      "[codexAccounts] reset credits backfill failed for dev@example.com:",
-      expect.any(Error)
+      "[codexAccounts] reset credits backfill failed for dev@example.com: network down"
     );
     expect(logNetworkEventMock).toHaveBeenCalledWith(
       "resetCredits.backfill",

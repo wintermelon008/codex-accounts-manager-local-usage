@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { CodexTokens } from "../core/types";
+import { formatApiErrorMessage, sanitizeApiErrorText } from "../core/errors";
 import { getCodexHome } from "../codex/authFile";
 import { CODEX_API_BASE } from "../infrastructure/config/apiEndpoints";
 import { logNetworkEvent } from "../utils/debug";
@@ -62,7 +63,7 @@ export async function sendQuotaCountdownStartMessage(
     ok: response.ok
   });
   if (!response.ok) {
-    throw new Error(`Codex rejected the countdown starter (${response.status}): ${extractResponseError(raw)}`);
+    throw new Error(formatApiErrorMessage("Codex rejected the countdown starter", response.status, raw));
   }
 
   assertQuotaCountdownResponseCompleted(raw);
@@ -187,18 +188,10 @@ function extractStreamingError(payload: Record<string, unknown> | undefined, fal
   const error = asRecord(payload?.["error"]) ?? asRecord(response?.["error"]);
   const incomplete = asRecord(response?.["incomplete_details"]);
   const message = payload?.["message"] ?? error?.["message"] ?? incomplete?.["reason"];
-  return typeof message === "string" && message.trim() ? message.slice(0, 240) : fallback;
-}
-
-function extractResponseError(raw: string): string {
-  try {
-    const root = asRecord(JSON.parse(raw) as unknown);
-    const error = asRecord(root?.["error"]);
-    const message = error?.["message"] ?? root?.["detail"];
-    return typeof message === "string" && message.trim() ? message.slice(0, 240) : `HTTP response ${raw.slice(0, 120)}`;
-  } catch {
-    return raw.trim().slice(0, 240) || "empty response";
+  if (typeof message !== "string" || !message.trim()) {
+    return fallback;
   }
+  return sanitizeApiErrorText(message) || fallback;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

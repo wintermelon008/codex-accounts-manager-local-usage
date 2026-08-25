@@ -29,6 +29,10 @@ export function logNetworkEvent(scope: string, detail: Record<string, unknown>):
 }
 
 function formatDebugValue(key: string, value: unknown): string {
+  if (shouldRedactDebugField(key)) {
+    return String(redactDebugScalar(value));
+  }
+
   if (key === "bodyPreview" && typeof value === "string") {
     return sanitizeBodyPreview(value);
   }
@@ -82,7 +86,10 @@ function shouldRedactDebugField(key: string): boolean {
     normalized === "email" ||
     normalized.endsWith("email") ||
     normalized === "userid" ||
-    normalized === "accountuserid"
+    normalized === "accountuserid" ||
+    normalized === "accountid" ||
+    normalized === "organizationid" ||
+    normalized === "workspaceid"
   );
 }
 

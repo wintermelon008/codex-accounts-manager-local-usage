@@ -255,7 +255,7 @@ export async function refreshSingleQuotaSafely(
   } catch (error) {
     const account = await repo.getAccount(accountId);
     const label = account ? formatAccountToastLabel(account) : accountId;
-    console.warn(`[codexAccounts] auto refresh failed for ${label}:`, error);
+    console.warn(`[codexAccounts] auto refresh failed for ${label}: ${getErrorMessage(error)}`);
   }
 }
 
