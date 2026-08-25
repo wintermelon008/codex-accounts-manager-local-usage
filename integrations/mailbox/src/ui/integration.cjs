@@ -34,6 +34,12 @@ const OPERATION_LABELS = {
   wait: "接收验证码",
   renewal: "人工续期"
 };
+const CLIPBOARD_RETRY_DELAYS_MS = [0, 250, 750];
+const REGISTRATION_CLIPBOARD_MESSAGES = {
+  emailCode: "邮箱验证码已自动复制",
+  phone: "手机号已自动复制",
+  otp: "短信验证码已自动复制"
+};
 
 class MailboxIntegration {
   constructor(vscode, context, api, { providers } = {}) {
@@ -86,6 +92,8 @@ class MailboxIntegration {
     });
     this.registrationDiagnostics = createRegistrationDiagnostics(vscode, context);
     this.registrationEmailWatchers = new Map();
+    this.registrationClipboardCopied = new Map();
+    this.registrationClipboardQueues = new Map();
     const serverRegistrationKeyStore = createLocalRegistrationKeyStore(context.globalStorageUri);
     this.registrationKeyPool = new RegistrationKeyPool({
       secretStore: serverRegistrationKeyStore || context.secrets,
@@ -107,13 +115,23 @@ class MailboxIntegration {
           message: safeError(error, "接码平台 Key 状态更新失败")
         });
       });
+      void this.syncRegistrationClipboard(event).catch((error) => {
+        this.postPanelMessage({
+          type: "toast",
+          level: "warning",
+          action: "registrationAutoCopy",
+          sessionId: event?.sessionId,
+          message: safeError(error, "注册信息自动复制失败，请手动复制")
+        });
+      });
       void this.persistRegistrationSessions().catch(() => undefined);
       void this.publishPanelState().catch(() => undefined);
     });
     this.registrationManager.on("sessionCreated", () => {
       void this.persistRegistrationSessions().catch(() => undefined);
     });
-    this.registrationManager.on("sessionCleaned", () => {
+    this.registrationManager.on("sessionCleaned", ({ sessionId } = {}) => {
+      this.clearRegistrationClipboardState(sessionId);
       void this.persistRegistrationSessions().catch(() => undefined);
     });
     this.registrationManager.on("log", (entry) => {
@@ -279,6 +297,9 @@ class MailboxIntegration {
         case "ready":
         case "refresh":
           await this.publishPanelState();
+          return;
+        case "copyText":
+          await this.copyText(message.text, message.successMessage);
           return;
         case "select":
           await this.selectMailbox(message.mailboxId);
@@ -842,6 +863,115 @@ class MailboxIntegration {
     return this.registrationKeyPool.release(claim.keyId, claim.owner);
   }
 
+  async copyText(value, successMessage = "已复制", { automatic = false, sessionId } = {}) {
+    const text = normalizeClipboardText(value);
+    if (!text) return false;
+    const message = normalizeClipboardMessage(successMessage, "已复制");
+    const action = automatic ? "registrationAutoCopy" : "clipboardCopy";
+    try {
+      await this.writeClipboardWithRetry(text);
+      this.postPanelMessage({
+        type: "toast",
+        level: "success",
+        action,
+        sessionId: typeof sessionId === "string" ? sessionId : undefined,
+        message
+      });
+      return true;
+    } catch {
+      this.postPanelMessage({
+        type: "toast",
+        level: "warning",
+        action,
+        sessionId: typeof sessionId === "string" ? sessionId : undefined,
+        message: automatic ? "自动复制失败，请手动复制" : "复制失败，请手动复制"
+      });
+      return false;
+    }
+  }
+
+  async writeClipboardWithRetry(value) {
+    const clipboard = this.vscode.env?.clipboard;
+    if (!clipboard || typeof clipboard.writeText !== "function") {
+      throw new Error("VS Code 剪贴板不可用");
+    }
+
+    let lastError;
+    for (const delay of CLIPBOARD_RETRY_DELAYS_MS) {
+      if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      try {
+        await clipboard.writeText(value);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error("VS Code 剪贴板写入失败");
+  }
+
+  syncRegistrationClipboard(event) {
+    const sessionId = typeof event?.sessionId === "string" ? event.sessionId : "";
+    if (!sessionId) return Promise.resolve();
+
+    const previous = this.registrationClipboardQueues.get(sessionId) || Promise.resolve();
+    const task = previous
+      .catch(() => undefined)
+      .then(() => this.copyRegistrationClipboardValues(sessionId));
+    this.registrationClipboardQueues.set(sessionId, task);
+    void task.then(
+      () => this.releaseRegistrationClipboardQueue(sessionId, task),
+      () => this.releaseRegistrationClipboardQueue(sessionId, task)
+    );
+    return task;
+  }
+
+  async copyRegistrationClipboardValues(sessionId) {
+    const session = this.registrationManager.getSessionState(sessionId);
+    if (!session) {
+      this.clearRegistrationClipboardState(sessionId);
+      return;
+    }
+
+    const rawPhone = normalizeClipboardText(session.phoneOrder?.order?.phone);
+    const values = {
+      emailCode: normalizeClipboardText(session.emailCode?.code),
+      phone: isCompletePhoneNumber(rawPhone) ? rawPhone : "",
+      otp: normalizeClipboardText(session.phoneOrder?.order?.smsCode)
+    };
+    const copied = { ...(this.registrationClipboardCopied.get(sessionId) || {}) };
+    for (const [field, value] of Object.entries(values)) {
+      if (!value) {
+        delete copied[field];
+        continue;
+      }
+      if (copied[field] === value) continue;
+      const success = await this.copyText(value, REGISTRATION_CLIPBOARD_MESSAGES[field], {
+        automatic: true,
+        sessionId
+      });
+      if (success) copied[field] = value;
+    }
+    if (Object.keys(copied).length) {
+      this.registrationClipboardCopied.set(sessionId, copied);
+    } else {
+      this.registrationClipboardCopied.delete(sessionId);
+    }
+  }
+
+  releaseRegistrationClipboardQueue(sessionId, task) {
+    if (this.registrationClipboardQueues.get(sessionId) === task) {
+      this.registrationClipboardQueues.delete(sessionId);
+    }
+  }
+
+  clearRegistrationClipboardState(sessionId) {
+    if (!sessionId) return;
+    this.registrationClipboardCopied.delete(sessionId);
+    this.registrationClipboardQueues.delete(sessionId);
+  }
+
   async syncRegistrationPhoneKey(event) {
     const sessionId = typeof event?.sessionId === "string" ? event.sessionId : "";
     if (!sessionId) return;
@@ -1226,6 +1356,24 @@ function toPanelMailbox(mailbox) {
 
 function normalizeEmail(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeClipboardText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeClipboardMessage(value, fallback) {
+  const message = normalizeClipboardText(value);
+  return (message || fallback).slice(0, 80);
+}
+
+function isCompletePhoneNumber(value) {
+  const compact = normalizeClipboardText(value).replace(/[\s()\-]/gu, "");
+  if (!/^\+?\d+$/u.test(compact)) return false;
+  const digits = compact.replace(/^\+/u, "");
+  if (digits.startsWith("86")) return /^861\d{10}$/u.test(digits);
+  if (/^1\d{10}$/u.test(digits)) return true;
+  return digits.length >= 10 && digits.length <= 15;
 }
 
 function safeError(error, fallback) {

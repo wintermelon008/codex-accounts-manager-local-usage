@@ -20,7 +20,9 @@ test("standalone registration panel provides mailbox-library selection and direc
   assert.match(html, /hasManagedCodexEmail/u);
   assert.match(html, /选择邮箱只会填入地址，不会自动开始注册/u);
   assert.match(html, /不会自动填写或提交/u);
-  assert.match(html, /copyValue\(email, "邮箱已复制"\)/u);
+  assert.match(html, /copyText\(email, "邮箱已复制"\)/u);
+  assert.match(html, /send\("copyText"/u);
+  assert.doesNotMatch(html, /navigator\.clipboard/u);
   assert.match(html, /document\.addEventListener\("keydown"/u);
   assert.match(html, /document\.addEventListener\("keyup"/u);
 });
