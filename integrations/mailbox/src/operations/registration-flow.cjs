@@ -176,6 +176,8 @@ class RegistrationSession {
     this.phoneInputCount = 0;
     this.phoneOrder = null;
     this.emailCode = createEmailCodeState();
+    this.createdAt = Date.now();
+    this.updatedAt = this.createdAt;
   }
 
   log(level, msg) {
@@ -190,6 +192,7 @@ class RegistrationSession {
 
   setState(state, extra = {}) {
     this.state = state;
+    this.updatedAt = Date.now();
     if (Object.prototype.hasOwnProperty.call(extra, "feedback")) {
       this.feedback = typeof extra.feedback === "string" ? extra.feedback : "";
     }

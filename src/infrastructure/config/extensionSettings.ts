@@ -261,6 +261,10 @@ export function isBackgroundTokenRefreshEnabled(): boolean {
   return getCodexAccountsConfiguration().get<boolean>("backgroundTokenRefreshEnabled", true);
 }
 
+export function isHourlyQuotaControlEnabled(): boolean {
+  return getCodexAccountsConfiguration().get<boolean>("hourlyQuotaControlEnabled", false);
+}
+
 /**
  * The local Feishu-import inbox is intentionally opt-in.  A stock extension
  * installation must not create a watched directory or start importing files

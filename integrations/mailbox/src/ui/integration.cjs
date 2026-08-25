@@ -1,5 +1,6 @@
 "use strict";
 
+const { createServerMailboxStores, createServerRegistrationSessionStore } = require("../mailbox/server-storage.cjs");
 const { Eight92Provider } = require("../core/providers/eight92.cjs");
 const { BoyaProvider } = require("../core/providers/boya.cjs");
 const { CdnsProvider } = require("../core/providers/cdns.cjs");
@@ -16,7 +17,10 @@ const { RegistrationManager } = require("../operations/registration-manager.cjs"
 const { STATES } = require("../operations/registration-flow.cjs");
 const { RegistrationEmailCodeWatcher } = require("../operations/registration-email-code.cjs");
 const { createRegistrationDiagnostics } = require("../operations/registration-diagnostics.cjs");
-const { RegistrationKeyPool } = require("../operations/registration-key-pool.cjs");
+const {
+  createLocalRegistrationKeyStore,
+  RegistrationKeyPool
+} = require("../operations/registration-key-pool.cjs");
 const {
   getRegistrationPhoneSource,
   listRegistrationPhoneSources
@@ -43,7 +47,20 @@ class MailboxIntegration {
       new CdnsProvider().asProvider()
     ];
     this.providers = new MailboxProviderRegistry(this.providerInstances);
-    this.pool = new MailboxPool({ metadataStore: context.globalState, secretStore: context.secrets });
+    this.sharedMailboxStores = createServerMailboxStores({
+      storageUri: context.globalStorageUri,
+      legacyMetadataStore: context.globalState,
+      legacySecretStore: context.secrets,
+      sourceId: typeof vscode.env?.machineId === "string" ? vscode.env.machineId : undefined
+    });
+    this.pool = new MailboxPool({
+      metadataStore: this.sharedMailboxStores.metadataStore,
+      secretStore: this.sharedMailboxStores.secretStore
+    });
+    this.registrationSessionStore = createServerRegistrationSessionStore({
+      storageUri: context.globalStorageUri,
+      legacyStore: context.globalState
+    });
     this.coordinator = new MailboxOperationCoordinator({
       pool: this.pool,
       providers: this.providers,
@@ -69,7 +86,11 @@ class MailboxIntegration {
     });
     this.registrationDiagnostics = createRegistrationDiagnostics(vscode, context);
     this.registrationEmailWatchers = new Map();
-    this.registrationKeyPool = new RegistrationKeyPool({ secretStore: context.secrets });
+    const serverRegistrationKeyStore = createLocalRegistrationKeyStore(context.globalStorageUri);
+    this.registrationKeyPool = new RegistrationKeyPool({
+      secretStore: serverRegistrationKeyStore || context.secrets,
+      backupStore: serverRegistrationKeyStore ? context.secrets : undefined
+    });
     this.registrationPhoneKeyClaims = new Map();
     this.registrationManager.on("stateChange", (event) => {
       if (event?.state === STATES.STARTING) {
@@ -86,7 +107,14 @@ class MailboxIntegration {
           message: safeError(error, "接码平台 Key 状态更新失败")
         });
       });
+      void this.persistRegistrationSessions().catch(() => undefined);
       void this.publishPanelState().catch(() => undefined);
+    });
+    this.registrationManager.on("sessionCreated", () => {
+      void this.persistRegistrationSessions().catch(() => undefined);
+    });
+    this.registrationManager.on("sessionCleaned", () => {
+      void this.persistRegistrationSessions().catch(() => undefined);
     });
     this.registrationManager.on("log", (entry) => {
       const diagnostic = this.registrationDiagnostics.record(entry);
@@ -99,15 +127,20 @@ class MailboxIntegration {
   }
 
   async initialize() {
-    this.selectedMailboxId = await this.context.globalState.get(SELECTED_MAILBOX_KEY);
     try {
-      // Activation is local-only: no provider is queried and no timer starts.
+      await this.sharedMailboxStores.migrateLegacy();
       await this.pool.load();
+      this.selectedMailboxId = await this.sharedMailboxStores.metadataStore.get(SELECTED_MAILBOX_KEY);
       if (!this.selectedMailboxId || !this.pool.listMetadata().some((mailbox) => mailbox.id === this.selectedMailboxId)) {
         this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
+        await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+      }
+      const restored = this.registrationManager.restoreSessions(await this.registrationSessionStore.load());
+      if (restored.interrupted > 0) {
+        await this.persistRegistrationSessions();
       }
     } catch (error) {
-      this.loadError = safeError(error, "邮箱池本地状态不可用");
+      this.loadError = safeError(error, "服务器邮箱池状态不可用");
     }
 
     this.context.subscriptions.push(
@@ -389,7 +422,7 @@ class MailboxIntegration {
       return;
     }
     this.selectedMailboxId = id;
-    await this.context.globalState.update(SELECTED_MAILBOX_KEY, id);
+    await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, id);
     await this.publishPanelState();
   }
 
@@ -405,7 +438,7 @@ class MailboxIntegration {
     });
     if (result.imported.length > 0) {
       this.selectedMailboxId = result.imported[0].id;
-      await this.context.globalState.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+      await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
     this.postPanelMessage({ type: "toast", level: "success", mailboxId: this.selectedMailboxId, message: `已导入 ${result.imported.length} 个邮箱` });
     }
     if (result.failed.length > 0) {
@@ -426,7 +459,7 @@ class MailboxIntegration {
       providerId: requestedProviderId
     });
     this.selectedMailboxId = mailbox.id;
-    await this.context.globalState.update(SELECTED_MAILBOX_KEY, mailbox.id);
+    await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, mailbox.id);
     this.postPanelMessage({ type: "toast", level: "success", action: "edit", mailboxId: id, message: "邮箱信息已更新" });
     await this.publishPanelState();
     this.publish();
@@ -440,10 +473,11 @@ class MailboxIntegration {
         throw new Error("请先停止邮箱当前操作");
       }
     }
+    await this.cancelRegistrationOAuthForMailbox(mailboxId);
     await this.pool.deleteAccount(mailboxId);
     if (this.selectedMailboxId === mailboxId) {
       this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
-      await this.context.globalState.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+      await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
     }
     this.postPanelMessage({ type: "toast", level: "success", action: "delete", mailboxId, message: "邮箱已删除" });
     await this.publishPanelState();
@@ -950,6 +984,30 @@ class MailboxIntegration {
     return stopped;
   }
 
+  async cancelRegistrationOAuthForMailbox(mailboxId) {
+    const mailbox = this.pool.listMetadata().find((item) => item.id === mailboxId);
+    if (!mailbox) {
+      return false;
+    }
+
+    const terminalStates = [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED];
+    const sessions = this.registrationManager
+      .getAllSessions()
+      .filter(
+        (session) =>
+          session.mode === "oauth" &&
+          normalizeEmail(session.email) === normalizeEmail(mailbox.address) &&
+          !terminalStates.includes(session.state)
+      );
+
+    for (const session of sessions) {
+      this.stopRegistrationEmailWatcher(session.id);
+      await this.registrationManager.cancelSession(session.id);
+      await this.releaseRegistrationPhoneKey(session.id);
+    }
+    return sessions.length > 0;
+  }
+
   async deleteMailboxes(ids, { action = "batchDelete" } = {}) {
     const mailboxIds = this.requireMailboxIds(ids, "请先选择要删除的邮箱");
     for (const mailboxId of mailboxIds) {
@@ -959,13 +1017,14 @@ class MailboxIntegration {
           throw new Error("请先停止邮箱当前操作");
         }
       }
+      await this.cancelRegistrationOAuthForMailbox(mailboxId);
     }
     for (const mailboxId of mailboxIds) {
       await this.pool.deleteAccount(mailboxId);
     }
     if (mailboxIds.includes(this.selectedMailboxId)) {
       this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
-      await this.context.globalState.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+      await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
     }
     const target = mailboxIds.length === 1 ? { mailboxId: mailboxIds[0] } : { mailboxIds };
     this.postPanelMessage({
@@ -1003,7 +1062,23 @@ class MailboxIntegration {
   }
 
   async getPanelState() {
+    if (this.pool.isLoaded()) {
+      await this.pool.reload();
+    }
     const mailboxes = this.pool.isLoaded() ? this.pool.listMetadata() : [];
+    const persistedSelectedMailboxId = await this.sharedMailboxStores.metadataStore.get(SELECTED_MAILBOX_KEY);
+    if (typeof persistedSelectedMailboxId === "string" && mailboxes.some((mailbox) => mailbox.id === persistedSelectedMailboxId)) {
+      this.selectedMailboxId = persistedSelectedMailboxId;
+    } else if (this.selectedMailboxId && mailboxes.some((mailbox) => mailbox.id === this.selectedMailboxId)) {
+      await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+    } else {
+      this.selectedMailboxId = mailboxes[0]?.id;
+      await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+    }
+    const restored = this.registrationManager.restoreSessions(await this.registrationSessionStore.load());
+    if (restored.interrupted > 0) {
+      await this.persistRegistrationSessions();
+    }
     const selectedMailbox = mailboxes.find((mailbox) => mailbox.id === this.selectedMailboxId);
     const detail = selectedMailbox ? await this.pool.getDetail(selectedMailbox.id) : undefined;
     const codexImportState = await this.getCodexImportState();
@@ -1025,6 +1100,10 @@ class MailboxIntegration {
         this.registrationManager.getSessionState(session.id)
       )
     };
+  }
+
+  async persistRegistrationSessions() {
+    await this.registrationSessionStore.save(this.registrationManager.getSessionRecords());
   }
 
   async getRegistrationKeyPoolState() {

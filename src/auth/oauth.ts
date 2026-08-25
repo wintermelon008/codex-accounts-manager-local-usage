@@ -143,17 +143,9 @@ export function needsTokenRefresh(
 
 export function prepareOAuthLoginSession(port = CALLBACK_PORT): PreparedOAuthLoginSession {
   const verifier = randomBase64Url();
-  const challenge = sha256Base64Url(verifier);
   const state = randomBase64Url();
   const redirectUri = `http://localhost:${port}/auth/callback`;
-  const authUrl =
-    `${AUTH_ENDPOINT}?response_type=code&client_id=${encodeURIComponent(CLIENT_ID)}` +
-    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&scope=${encodeURIComponent(SCOPES)}` +
-    `&code_challenge=${encodeURIComponent(challenge)}` +
-    `&code_challenge_method=S256&id_token_add_organizations=true` +
-    `&codex_cli_simplified_flow=true&state=${encodeURIComponent(state)}` +
-    `&originator=${encodeURIComponent(ORIGINATOR)}`;
+  const authUrl = buildOAuthAuthorizationUrl(state, verifier, redirectUri);
 
   return {
     state,
@@ -194,6 +186,8 @@ export async function runPreparedOAuthLoginSession(
         code: ErrorCode.AUTH_OAUTH_FAILED
       });
     }
+
+    await ensureOAuthCallbackTunnel(session.redirectUri);
 
     const opened = await vscode.env.openExternal(vscode.Uri.parse(session.authUrl));
     if (!opened) {
@@ -284,90 +278,99 @@ function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.Canc
     new AuthError(message, { code: ErrorCode.AUTH_OAUTH_FAILED });
 
   const promise = new Promise<string>((resolve, reject) => {
-      timeout = setTimeout(() => {
-        const error = createAuthError("OAuth login was not completed in the browser.");
-        finishReady(error);
-        finish(() => {
-          reject(error);
-        });
-      }, 300_000);
-
-      cancelDisposable = cancellationToken?.onCancellationRequested(() => {
-        const error = createAuthError("OAuth login cancelled by user.");
-        finishReady(error);
-        finish(() => {
-          reject(error);
-        });
+    timeout = setTimeout(() => {
+      const error = createAuthError("OAuth login was not completed in the browser.");
+      finishReady(error);
+      finish(() => {
+        reject(error);
       });
+    }, 300_000);
 
-      session.server.on("request", (req, res) => {
-        if (!req.url) {
-          return;
-        }
-
-        const url = new URL(req.url, session.redirectUri);
-        if (url.pathname !== "/auth/callback") {
-          res.writeHead(404);
-          res.end("Not found");
-          return;
-        }
-
-        const code = url.searchParams.get("code");
-        const state = url.searchParams.get("state");
-        if (state !== session.state) {
-          res.writeHead(400);
-          res.end("State mismatch");
-          return;
-        }
-
-        if (!code) {
-          res.writeHead(400);
-          res.end("Missing code");
-          return;
-        }
-
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(successHtml());
-        logNetworkEvent("oauth.callback", {
-          ok: true,
-          path: url.pathname,
-          hasCode: true
-        });
-        finish(() => {
-          resolve(code);
-        });
+    cancelDisposable = cancellationToken?.onCancellationRequested(() => {
+      const error = createAuthError("OAuth login cancelled by user.");
+      finishReady(error);
+      finish(() => {
+        reject(error);
       });
+    });
 
-      session.server.once("error", (error) => {
-        const isAddrInUse =
-          error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
-        const authError = createAuthError(
-          isAddrInUse
-            ? `Automatic OAuth callback listener is unavailable on ${session.redirectUri}. Use the Add Account dialog to complete the callback manually.`
-            : `Unable to bind OAuth callback port: ${String(error)}`
-        );
+    session.server.on("request", (req, res) => {
+      if (!req.url) {
+        return;
+      }
+
+      const url = new URL(req.url, session.redirectUri);
+      if (url.pathname !== "/auth/callback") {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+
+      const code = url.searchParams.get("code");
+      const state = url.searchParams.get("state");
+      if (state !== session.state) {
+        res.writeHead(400);
+        res.end("State mismatch");
+        return;
+      }
+
+      if (!code) {
+        res.writeHead(400);
+        res.end("Missing code");
+        return;
+      }
+
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(successHtml());
+      logNetworkEvent("oauth.callback", {
+        ok: true,
+        path: url.pathname,
+        hasCode: true
+      });
+      finish(() => {
+        resolve(code);
+      });
+    });
+
+    const handleListenError = (error: unknown): void => {
+      const isAddrInUse =
+        error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
+      const authError = createAuthError(
+        isAddrInUse
+          ? `Automatic OAuth callback listener is unavailable on ${session.redirectUri}. Use the Add Account dialog to complete the callback manually.`
+          : `Unable to bind OAuth callback port: ${String(error)}`
+      );
+      finishReady(authError);
+      finish(() => {
+        reject(authError);
+      });
+    };
+
+    session.server.once("error", handleListenError);
+
+    session.server.once("listening", () => {
+      const address = session.server.address();
+      if (!address || typeof address === "string") {
+        const authError = createAuthError("Unable to determine OAuth callback port after binding.");
         finishReady(authError);
         finish(() => {
           reject(authError);
         });
-      });
+        return;
+      }
 
-      session.server.once("listening", () => {
-        finishReady();
-        if (closeWhenListening || settled) {
-          session.server.close();
-        }
-      });
-      try {
-        session.server.listen(Number(new URL(session.redirectUri).port), "127.0.0.1");
-      } catch (error) {
-        const authError = createAuthError(`Unable to bind OAuth callback port: ${String(error)}`);
-        finishReady(authError);
-        finish(() => {
-          reject(authError);
-        });
+      finishReady();
+      if (closeWhenListening || settled) {
+        session.server.close();
       }
     });
+
+    try {
+      session.server.listen(Number(new URL(session.redirectUri).port), "127.0.0.1");
+    } catch (error) {
+      handleListenError(error);
+    }
+  });
 
   // A bind failure rejects `ready` before the caller can await the callback
   // promise. Mark that secondary rejection as handled while still returning
@@ -381,6 +384,50 @@ function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.Canc
       finish();
     }
   };
+}
+
+function buildOAuthAuthorizationUrl(state: string, verifier: string, redirectUri: string): string {
+  const challenge = sha256Base64Url(verifier);
+  return (
+    `${AUTH_ENDPOINT}?response_type=code&client_id=${encodeURIComponent(CLIENT_ID)}` +
+    // Keep the loopback URI visible in the query. VS Code's Remote-SSH
+    // external opener detects this form and forwards the embedded callback
+    // port before opening the browser. The decoded value remains the exact
+    // registered OAuth redirect URI.
+    `&redirect_uri=${redirectUri}` +
+    `&scope=${encodeURIComponent(SCOPES)}` +
+    `&code_challenge=${encodeURIComponent(challenge)}` +
+    `&code_challenge_method=S256&id_token_add_organizations=true` +
+    `&codex_cli_simplified_flow=true&state=${encodeURIComponent(state)}` +
+    `&originator=${encodeURIComponent(ORIGINATOR)}`
+  );
+}
+
+async function ensureOAuthCallbackTunnel(redirectUri: string): Promise<void> {
+  let externalUri: vscode.Uri;
+  try {
+    externalUri = await vscode.env.asExternalUri(vscode.Uri.parse(redirectUri));
+  } catch (error) {
+    throw new AuthError(`VS Code cannot forward the OAuth callback port on ${redirectUri}: ${String(error)}`, {
+      code: ErrorCode.AUTH_OAUTH_FAILED
+    });
+  }
+
+  const external = new URL(externalUri.toString(true));
+  const target = new URL(redirectUri);
+  const targetPort = Number(target.port);
+  const externalPort = Number(external.port || (external.protocol === "https:" ? 443 : 80));
+  logNetworkEvent("oauth.callback.tunnel", {
+    remotePort: targetPort,
+    localPort: externalPort,
+    localHost: external.hostname,
+    samePort: externalPort === targetPort
+  });
+
+  // OpenAI validates the registered redirect_uri in the authorization request,
+  // while VS Code may expose the remote listener on another local port (for
+  // example localhost:1457). Calling asExternalUri establishes that tunnel;
+  // the callback server and token exchange must continue using redirectUri.
 }
 
 async function exchangeCodeForTokens(code: string, verifier: string, redirectUri: string): Promise<CodexTokens> {
@@ -440,8 +487,8 @@ function validateManualCallback(value: string, redirectUri: string, expectedStat
   try {
     const url = new URL(trimmed);
     const expected = new URL(redirectUri);
-    if (url.origin !== expected.origin || url.pathname !== expected.pathname) {
-      return `Expected callback URL starting with ${redirectUri}`;
+    if (url.protocol !== expected.protocol || url.pathname !== expected.pathname || !isLoopbackHost(url.hostname)) {
+      return `Expected a loopback callback URL for ${expected.pathname}`;
     }
     if (url.searchParams.get("state") !== expectedState) {
       return "State mismatch in callback URL";
@@ -453,6 +500,11 @@ function validateManualCallback(value: string, redirectUri: string, expectedStat
   } catch {
     return "Paste the full callback URL from the browser address bar";
   }
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 
 function sha256Base64Url(value: string): string {

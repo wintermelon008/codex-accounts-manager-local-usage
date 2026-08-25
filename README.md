@@ -4,11 +4,13 @@
 
 面向 VS Code 的多 Codex 账号管理扩展：导入或 OAuth 添加账号、查看配额、切换当前 `auth.json`，并提供本机用量、实验性无感切号和可选的本地集成。
 
-> 这是基于上游 `v0.1.16` 的本地 fork。本文说明的是带 `-local` 版本号的本仓库构建；VS Code Marketplace 上的上游扩展不承诺包含下列本地功能。
+> 这是基于上游 `v0.1.18` 的本地 fork。本文说明的是带 `-dev` 或 `-lN` 版本号的本仓库构建；VS Code Marketplace 上的上游扩展不承诺包含下列本地功能。
+
+本地版本已同步上游 `v0.1.17`/`v0.1.18` 的代理环境、状态栏 5 小时配额控制、ChatGPT 桌面应用联动、Free 月度配额展示和订阅一致性修复。
 
 ## 三分钟开始
 
-1. 安装本仓库提供或自行构建的 `-local` `.vsix`。
+1. 安装本仓库提供或自行构建的 `-dev`/`-lN` `.vsix`。
 2. 从命令面板运行 `Codex Accounts: Add Account via OAuth`，或 `Codex Accounts: Import Current auth.json`。
 3. 运行 `Codex Accounts: Show Quota Summary`，在 Dashboard 中刷新配额、切换账号和管理备份。
 
@@ -22,7 +24,7 @@
 | ---------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 直接可用   | 多账号 OAuth/导入、配额卡片、单账号导入凭据复制、手动启动额度倒计时、切换、详情、备份/恢复、状态栏、跨窗口同步 | 安装后导入账号即可使用；真实 Codex 账号可从卡片直接复制 Manager 可识别的导入 JSON；倒计时启动按钮仅在服务端报告的额度窗口尚未启动时显示。                 |
 | 直接可用   | 本机 Codex token 用量、六类时间范围、Free/Plus/Pro 多选筛选                                                    | 读取已缓存的本机元数据；首次使用或需要最新值时点击“刷新用量”，不读取会话正文。                                                                            |
-| 设置后启用 | 官方自动切号、低额度提醒、配额定时刷新、Codex App 重启                                                         | 在 Dashboard 设置中显式打开相应开关；默认不会自动切号。                                                                                                   |
+| 设置后启用 | 官方自动切号、低额度提醒、配额定时刷新、ChatGPT/Codex 桌面应用重启                                                  | 在 Dashboard 设置中显式打开相应开关；默认不会自动切号。                                                                                                   |
 | 一次性安装 | 实验性无感切号与额度分档                                                                                       | Linux/macOS 运行安装命令、按提示 reload 一次、准备至少两个新鲜账号并在 Dashboard 配置账号池；分档调度默认关闭，仅可在 config 层开启。Windows 目前不支持。 |
 | 可选包     | 飞书私聊 M+/S+ 导入                                                                                            | 单独安装受限的飞书私聊机器人；M+ 仍需显式打开 Manager 本地收件箱，S+ 仅在另行启动导入器后消费。                                                           |
 | 可选包     | Sub2API Gateway                                                                                                | 单独安装 Gateway VSIX；它会把下游注册为已保存账号中的虚拟账号，配置、保存密钥和刷新动作都在账号卡片内。核心 Manager 没有该供应商的 SecretStorage 访问。   |
@@ -51,7 +53,7 @@
 
 ### 使用本地版本
 
-从本仓库获得 `codex-accounts-manager-<version>.vsix`（开发版使用 `0.1.16-dev`，发布版使用 `0.1.16-l1`、`0.1.16-l2` 等），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
+从本仓库获得 `codex-accounts-manager-<version>.vsix`（开发版使用 `0.1.18-dev`，发布版使用 `0.1.18-l1`、`0.1.18-l2` 等），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
 
 ```bash
 code --install-extension codex-accounts-manager-<version>.vsix --force

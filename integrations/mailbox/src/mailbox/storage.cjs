@@ -38,6 +38,10 @@ class MailboxPool {
     return this.getMetadata();
   }
 
+  async reload() {
+    return this.load();
+  }
+
   isLoaded() {
     return this.loaded;
   }
@@ -58,6 +62,7 @@ class MailboxPool {
   }
 
   async listAccounts({ includeDisabled = true } = {}) {
+    await this.load();
     this.assertLoaded();
     const accounts = includeDisabled
       ? this.metadata.accounts
@@ -73,11 +78,13 @@ class MailboxPool {
   }
 
   async getAccount(id) {
+    await this.load();
     this.assertLoaded();
     return this.metadata.accounts.some((account) => account.id === id) ? this.readAccount(id) : undefined;
   }
 
   async getDetail(id) {
+    await this.load();
     this.assertLoaded();
     if (!this.metadata.accounts.some((account) => account.id === id)) {
       return undefined;
@@ -87,6 +94,7 @@ class MailboxPool {
   }
 
   async importProvider({ provider, input, displayName } = {}) {
+    await this.load();
     this.assertLoaded();
     if (!provider || typeof provider.parseImport !== "function") {
       throw new TypeError("A mailbox provider is required for import");
@@ -138,6 +146,7 @@ class MailboxPool {
   }
 
   async recordQueryResult(id, result, { historyMode } = {}) {
+    await this.load();
     this.assertLoaded();
     const metadata = this.requireMetadata(id);
     const timestamp = this.now();
@@ -166,6 +175,7 @@ class MailboxPool {
   }
 
   async recordRenewalResult(id, result) {
+    await this.load();
     this.assertLoaded();
     const metadata = this.requireMetadata(id);
     const timestamp = this.now();
@@ -200,6 +210,7 @@ class MailboxPool {
   }
 
   async setDisplayName(id, displayName) {
+    await this.load();
     this.assertLoaded();
     const metadata = this.requireMetadata(id);
     metadata.displayName = normalizeDisplayName(displayName, metadata.address);
@@ -209,6 +220,7 @@ class MailboxPool {
   }
 
   async updateAccount(id, { provider, providerId, input, displayName } = {}) {
+    await this.load();
     this.assertLoaded();
     const metadata = this.requireMetadata(id);
     const replacement = typeof input === "string" && input.trim() ? input.trim() : undefined;
@@ -257,6 +269,7 @@ class MailboxPool {
   }
 
   async deleteAccount(id) {
+    await this.load();
     this.assertLoaded();
     const index = this.metadata.accounts.findIndex((account) => account.id === id);
     if (index === -1) {
@@ -272,6 +285,7 @@ class MailboxPool {
   }
 
   async setEnabled(id, enabled) {
+    await this.load();
     this.assertLoaded();
     const metadata = this.requireMetadata(id);
     metadata.enabled = enabled === true;

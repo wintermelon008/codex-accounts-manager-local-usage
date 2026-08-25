@@ -1,23 +1,32 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const fs = require("node:fs/promises");
+const path = require("node:path");
 
 const DEFAULT_STORE_KEY = "codexAccounts.mailbox.registrationKeys.v1";
 const DEFAULT_LEASE_TTL_MS = 6 * 60 * 60 * 1000;
 
 /**
- * Stores registration SMS keys in VS Code SecretStorage.
+ * Stores registration SMS keys in the configured private extension-host store.
  *
  * The webview only receives masked values and stable ids. A key is marked as
  * in_use while an order is running, released on failure/cancel, and removed
  * only after a real SMS code has been received.
  */
 class RegistrationKeyPool {
-  constructor({ secretStore, storeKey = DEFAULT_STORE_KEY, now = () => Date.now(), leaseTtlMs = DEFAULT_LEASE_TTL_MS } = {}) {
+  constructor({
+    secretStore,
+    backupStore,
+    storeKey = DEFAULT_STORE_KEY,
+    now = () => Date.now(),
+    leaseTtlMs = DEFAULT_LEASE_TTL_MS
+  } = {}) {
     if (!secretStore || typeof secretStore.get !== "function" || typeof secretStore.store !== "function") {
       throw new TypeError("Registration key pool requires VS Code SecretStorage");
     }
     this.secretStore = secretStore;
+    this.backupStore = isStore(backupStore) ? backupStore : undefined;
     this.storeKey = storeKey;
     this.now = typeof now === "function" ? now : () => Date.now();
     this.leaseTtlMs = normalizePositive(leaseTtlMs, DEFAULT_LEASE_TTL_MS);
@@ -133,26 +142,36 @@ class RegistrationKeyPool {
   }
 
   async _load() {
-    const raw = await this.secretStore.get(this.storeKey);
-    if (!raw) return [];
-    let parsed;
+    const primaryKeys = parseStoredKeys(await readStore(this.secretStore, this.storeKey));
+    if (primaryKeys) return primaryKeys;
+
+    const backupKeys = parseStoredKeys(await readStore(this.backupStore, this.storeKey));
+    if (!backupKeys) return [];
+
+    // Rehydrate the primary store after a temporary backend failure or an
+    // extension-host restart. The backup remains the recovery source.
     try {
-      parsed = JSON.parse(raw);
+      await this.secretStore.store(this.storeKey, JSON.stringify({ version: 1, keys: backupKeys }));
     } catch {
-      return [];
+      // The backup already made the key pool available; retry on a later save.
     }
-    const rawKeys = Array.isArray(parsed) ? parsed : parsed?.keys;
-    if (!Array.isArray(rawKeys)) return [];
-    const seen = new Set();
-    return rawKeys.map((rawKey) => normalizeKey(rawKey)).filter((key) => {
-      if (!key || seen.has(key.code)) return false;
-      seen.add(key.code);
-      return true;
-    });
+    return backupKeys;
   }
 
   async _save(keys) {
-    await this.secretStore.store(this.storeKey, JSON.stringify({ version: 1, keys }));
+    const value = JSON.stringify({ version: 1, keys });
+    let saved = false;
+    let firstError;
+    for (const store of [this.secretStore, this.backupStore]) {
+      if (!store) continue;
+      try {
+        await store.store(this.storeKey, value);
+        saved = true;
+      } catch (error) {
+        firstError ||= error;
+      }
+    }
+    if (!saved && firstError) throw firstError;
   }
 
   _recoverStale(keys) {
@@ -179,6 +198,62 @@ class RegistrationKeyPool {
       release();
     }
   }
+}
+
+function createLocalRegistrationKeyStore(storageUri) {
+  const root = typeof storageUri?.fsPath === "string" ? storageUri.fsPath : "";
+  if (!root) return undefined;
+  const filePath = path.join(root, "registration-keys.v1.json");
+  return {
+    async get() {
+      try {
+        return await fs.readFile(filePath, "utf8");
+      } catch (error) {
+        if (error?.code === "ENOENT") return undefined;
+        throw error;
+      }
+    },
+    async store(_key, value) {
+      await fs.mkdir(root, { recursive: true, mode: 0o700 });
+      await fs.writeFile(filePath, value, { encoding: "utf8", mode: 0o600 });
+      try {
+        await fs.chmod(filePath, 0o600);
+      } catch {
+        // SecretStorage remains the primary store on platforms without chmod.
+      }
+    }
+  };
+}
+
+function isStore(store) {
+  return Boolean(store && typeof store.get === "function" && typeof store.store === "function");
+}
+
+async function readStore(store, key) {
+  if (!store) return undefined;
+  try {
+    return await store.get(key);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseStoredKeys(raw) {
+  if (typeof raw !== "string" || !raw) return undefined;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const rawKeys = Array.isArray(parsed) ? parsed : parsed?.keys;
+  if (!Array.isArray(rawKeys)) return undefined;
+  const seen = new Set();
+  return rawKeys.map((rawKey) => normalizeKey(rawKey)).filter((key) => {
+    if (!key || seen.has(key.code)) return false;
+    seen.add(key.code);
+    return true;
+  });
 }
 
 function parseKeyInput(input) {
@@ -260,6 +335,7 @@ function text(value) {
 module.exports = {
   DEFAULT_LEASE_TTL_MS,
   DEFAULT_STORE_KEY,
+  createLocalRegistrationKeyStore,
   RegistrationKeyPool,
   maskKey,
   parseKeyInput

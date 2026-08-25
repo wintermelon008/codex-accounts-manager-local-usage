@@ -1,8 +1,14 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
-const { RegistrationKeyPool } = require("../../src/operations/registration-key-pool.cjs");
+const {
+  createLocalRegistrationKeyStore,
+  RegistrationKeyPool
+} = require("../../src/operations/registration-key-pool.cjs");
 
 test("registration key pool keeps secrets private and removes a key only after SMS receipt", async () => {
   const store = createSecretStore();
@@ -26,6 +32,48 @@ test("registration key pool keeps secrets private and removes a key only after S
   const remaining = await pool.snapshot();
   assert.equal(remaining.count, 1);
   assert.equal(remaining.keys[0].masked, "GPT…BBB");
+});
+
+test("registration key pool reloads the saved keys in a new pool instance", async () => {
+  const store = createSecretStore();
+  const firstPool = new RegistrationKeyPool({ secretStore: store });
+  await firstPool.add("PERSISTED-KEY");
+
+  const secondPool = new RegistrationKeyPool({ secretStore: store });
+  const snapshot = await secondPool.snapshot();
+  assert.equal(snapshot.count, 1);
+  assert.equal(snapshot.available, 1);
+  assert.equal(snapshot.keys[0].masked, "PER…KEY");
+});
+
+test("registration key pool recovers from its backup when the primary store is unavailable", async () => {
+  const backup = createSecretStore();
+  const unavailableSecrets = {
+    async get() { throw new Error("SecretStorage unavailable"); },
+    async store() { throw new Error("SecretStorage unavailable"); }
+  };
+  const pool = new RegistrationKeyPool({ secretStore: unavailableSecrets, backupStore: backup });
+
+  await pool.add("BACKUP-KEY");
+  const snapshot = await pool.snapshot();
+  assert.equal(snapshot.count, 1);
+  assert.equal(snapshot.keys[0].masked, "BAC…KEY");
+  assert.match(backup.values.get("codexAccounts.mailbox.registrationKeys.v1"), /BACKUP-KEY/u);
+});
+
+test("local registration key backup persists with owner-only permissions", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-mailbox-key-store-"));
+  try {
+    const store = createLocalRegistrationKeyStore({ fsPath: root });
+    assert.ok(store);
+    await store.store("codexAccounts.mailbox.registrationKeys.v1", '{"version":1,"keys":[]}');
+
+    assert.equal(await store.get("codexAccounts.mailbox.registrationKeys.v1"), '{"version":1,"keys":[]}');
+    const file = await fs.stat(path.join(root, "registration-keys.v1.json"));
+    assert.equal(file.mode & 0o777, 0o600);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("registration key pool does not release or consume another session's claim", async () => {

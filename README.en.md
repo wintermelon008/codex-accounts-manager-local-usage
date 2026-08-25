@@ -4,11 +4,13 @@
 
 A VS Code extension for managing multiple Codex accounts: add or import accounts, inspect quota, switch the active `auth.json`, and optionally use local usage analytics, experimental seamless switching, and local integrations.
 
-> This is a local fork based on upstream `v0.1.16`. This guide describes builds with a `-local` version. The upstream Marketplace extension does not promise the local capabilities listed below.
+> This is a local fork based on upstream `v0.1.18`. This guide describes builds with `-dev` or `-lN` versions. The upstream Marketplace extension does not promise the local capabilities listed below.
+
+The local build includes the upstream `v0.1.17`/`v0.1.18` proxy environment, 5-hour status-bar control, ChatGPT desktop integration, Free monthly quota labels, and subscription-consistency fixes.
 
 ## Start in three minutes
 
-1. Install a `-local` `.vsix` supplied by, or built from, this repository.
+1. Install a `-dev`/`-lN` `.vsix` supplied by, or built from, this repository.
 2. Run `Codex Accounts: Add Account via OAuth`, or `Codex Accounts: Import Current auth.json`.
 3. Run `Codex Accounts: Show Quota Summary` to refresh quota, switch accounts, and manage backups from the Dashboard.
 
@@ -22,7 +24,7 @@ This table applies only to local builds from this repository.
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Ready after install    | Multi-account OAuth/import, quota cards, per-account import JSON copy, manual quota-countdown start, switching, details, backup/restore, status bar, and cross-window sync | Import an account. Each real Codex account card can copy Manager-compatible import JSON; the starter appears only while a server-reported quota window has not started.                                                                             |
 | Ready after install    | Local Codex token usage, six time categories, and multi-select Free/Plus/Pro filters                                                                                       | Local sessions and imported accounts make the relevant views available. The usage view reads metadata only, never conversation bodies.                                                                                                              |
-| Opt-in settings        | Upstream Auto Switch, quota warnings, timed quota refresh, and Codex App restart                                                                                           | Enable the relevant Dashboard setting. No automatic switch is enabled by default.                                                                                                                                                                   |
+| Opt-in settings        | Upstream Auto Switch, quota warnings, timed quota refresh, and ChatGPT/Codex desktop restart                                                                                | Enable the relevant Dashboard setting. No automatic switch is enabled by default.                                                                                                                                                                   |
 | One-time bundled setup | Experimental seamless switching and quota bands                                                                                                                            | On Linux/macOS, run the install command, reload once, then prepare at least two fresh accounts and configure their pool; quota-band scheduling is off by default and can only be enabled in config. Windows is not supported yet.                   |
 | Optional package       | Feishu private-chat M+/S+ import                                                                                                                                           | Install the restricted private-chat bot separately. M+ still requires the explicit Manager inbox setting; S+ is consumed only by a separately started importer.                                                                                     |
 | Optional package       | Sub2API Gateway                                                                                                                                                            | Install the standalone Gateway VSIX; it registers the downstream as a saved manual-only virtual account whose card owns configuration, key storage, refresh, usage, and estimated price. Core Manager never imports provider-side accounts or keys. |
@@ -51,7 +53,7 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 ### Use the local build
 
-Obtain `codex-accounts-manager-<version>.vsix` from this repository (`0.1.16-dev` for development, then `0.1.16-l1`, `0.1.16-l2`, and so on for distributed local releases), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
+Obtain `codex-accounts-manager-<version>.vsix` from this repository (`0.1.18-dev` for development, then `0.1.18-l1`, `0.1.18-l2`, and so on for distributed local releases), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
 
 ```bash
 code --install-extension codex-accounts-manager-<version>.vsix --force
