@@ -535,8 +535,7 @@ function createMailboxPanelHtml() {
 
       async function copyCode(code) {
         if (!code) return;
-        try { await navigator.clipboard.writeText(code); showNotice('验证码已复制', 'success'); }
-        catch { showNotice('复制失败，请手动选择验证码', 'warning'); }
+        send("copyText", { text: code, successMessage: "验证码已复制" });
       }
 
       function openEditModal(mailboxId) {

@@ -630,6 +630,72 @@ test("shared Stop cancels an in-flight Codex OAuth import", async () => {
   integration.dispose();
 });
 
+test("Mailbox copy requests use the VS Code clipboard and retry transient failures", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  await integration.openRegistrationPanel();
+
+  let attempts = 0;
+  vscode.env.clipboard.writeText = async (value) => {
+    attempts += 1;
+    if (attempts < 3) throw new Error("transient clipboard error");
+    vscode.clipboardWrites.push(value);
+  };
+
+  await vscode.panels[0].webview.emit({
+    type: "mailbox:action",
+    action: "copyText",
+    text: "retry-code",
+    successMessage: "验证码已复制"
+  });
+
+  assert.equal(attempts, 3);
+  assert.deepEqual(vscode.clipboardWrites, ["retry-code"]);
+  assert.equal(
+    vscode.panels[0].webview.messages.some(
+      (message) => message.type === "toast" && message.action === "clipboardCopy" && message.level === "success"
+    ),
+    true
+  );
+  integration.dispose();
+});
+
+test("registration email, phone, and SMS codes are auto-copied by the host clipboard", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  await integration.openRegistrationPanel();
+
+  const sessionId = integration.registrationManager.createSession({
+    email: "clipboard@example.com",
+    password: "manual-password"
+  });
+  const session = integration.registrationManager._get(sessionId);
+  session.phoneOrder = {
+    snapshot() {
+      return {
+        phase: "received",
+        order: { phone: "+8613800000000", smsCode: "123456" }
+      };
+    }
+  };
+  integration.registrationManager.setEmailCodeState(sessionId, {
+    phase: "received",
+    code: "email-123"
+  });
+  await waitFor(() => vscode.clipboardWrites.length === 3);
+
+  assert.deepEqual(vscode.clipboardWrites, ["email-123", "+8613800000000", "123456"]);
+  await integration.syncRegistrationClipboard({ sessionId });
+  assert.deepEqual(vscode.clipboardWrites, ["email-123", "+8613800000000", "123456"]);
+  integration.dispose();
+});
+
 test("registration phone keys are claimed for取号, consumed on SMS, and released otherwise", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -682,6 +748,14 @@ function createVscode() {
     EventEmitter,
     ViewColumn: { Beside: 2 },
     panels: [],
+    clipboardWrites: [],
+    env: {
+      clipboard: {
+        async writeText(value) {
+          vscode.clipboardWrites.push(value);
+        }
+      }
+    },
     commands: { registerCommand(_id, handler) { vscode.commandHandler = handler; return { dispose() {} }; } },
     window: {
       createWebviewPanel(viewType, title, options) {

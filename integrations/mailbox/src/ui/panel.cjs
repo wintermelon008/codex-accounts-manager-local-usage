@@ -279,15 +279,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationPhoneSourceSelections = {};
       let registrationPhoneKeySelections = {};
       let registrationInputValues = {};
-      let registrationAutoCopied = {};
-      let registrationAutoCopyTimers = {};
       let registrationCountdownTimer;
 
       window.addEventListener("message", (event) => {
         const message = event.data || {};
         if (message.type === "state") {
           state = message.state || state;
-          autoCopyRegistrationValues(state);
           pendingCodexImports = Object.fromEntries((state.codexImports || []).map((mailboxId) => [mailboxId, true]));
           const knownMailboxIds = new Set((state.mailboxes || []).map((mailbox) => mailbox.id));
           selectedMailboxIds = new Set([...selectedMailboxIds].filter((mailboxId) => knownMailboxIds.has(mailboxId)));
@@ -401,7 +398,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           if (sessionId) send("registrationRefreshEmailCode", { sessionId });
         }
         else if (action === "registration-copy-phone" || action === "registration-copy-code" || action === "registration-copy-email-code") {
-          copyValue(
+          copyText(
             target.dataset.value || "",
             action === "registration-copy-phone" ? "手机号已复制" : action === "registration-copy-email-code" ? "邮箱验证码已复制" : "验证码已复制"
           );
@@ -415,7 +412,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             showNotice("该邮箱已经导入 Codex 账号，请选择其他邮箱", "warning");
             return;
           }
-          void copyValue(email, "邮箱已复制");
+          void copyText(email, "邮箱已复制");
           send("registrationCreate", { email, maxRetries: registrationMaxRetries });
         }
         else if (action === "registration-fill-email-code") {
@@ -1161,74 +1158,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>编辑邮箱</h2><p class="muted">' + esc(mailbox.address) + '</p><form id="editForm"><div class="field"><label for="editProviderId">邮箱来源 / 格式</label><select id="editProviderId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider?.id ? 'selected' : '') + '>' + esc(item.displayName) + '（' + esc(item.id) + '）</option>').join('') + '</select></div><div class="field"><label for="displayName">显示名称</label><input id="displayName" name="displayName" value="' + esc(mailbox.displayName || mailbox.address) + '" required></div><div class="field"><label for="input">替换来源凭据（可选）</label><textarea id="input" name="input" placeholder="留空只修改显示名称；填写时请输入：' + esc(placeholder) + '"></textarea><div class="field-note">当前凭据不会回显。切换邮箱来源 / 格式时必须填写凭据；邮箱地址保持不变。</div></div><div class="modal-actions"><button type="button" data-action="close-edit">取消</button><button class="primary" type="submit">保存修改</button></div></form></section></div>';
       }
 
-      function autoCopyRegistrationValues(nextState) {
-        for (const session of nextState?.registrationSessions || []) {
-          const rawPhone = String(session.phoneOrder?.order?.phone || "").trim();
-          const values = {
-            emailCode: String(session.emailCode?.code || "").trim(),
-            phone: isCompletePhoneNumber(rawPhone) ? rawPhone : "",
-            otp: String(session.phoneOrder?.order?.smsCode || "").trim()
-          };
-          const copied = registrationAutoCopied[session.id] || {};
-          for (const [field, value] of Object.entries(values)) {
-            if (!value) {
-              cancelRegistrationAutoCopyTimer(session.id, field);
-              continue;
-            }
-            const pending = registrationAutoCopyTimers[session.id]?.[field];
-            if (copied[field] === value || pending?.value === value) continue;
-            const message = field === "emailCode" ? "邮箱验证码已自动复制" : field === "phone" ? "手机号已自动复制" : "短信验证码已自动复制";
-            scheduleRegistrationAutoCopy(session.id, field, value, message, copied);
-          }
-          registrationAutoCopied[session.id] = copied;
-        }
-      }
-
-      function scheduleRegistrationAutoCopy(sessionId, field, value, message, copied) {
-        cancelRegistrationAutoCopyTimer(sessionId, field);
-        const timers = registrationAutoCopyTimers[sessionId] || {};
-        if (typeof setTimeout !== "function") {
-          void copyValue(value, message).then((success) => {
-            if (success) copied[field] = value;
-          });
-          return;
-        }
-        const timer = setTimeout(async () => {
-          const pending = registrationAutoCopyTimers[sessionId]?.[field];
-          if (!pending || pending.value !== value) return;
-          delete registrationAutoCopyTimers[sessionId][field];
-          const success = await copyValue(value, message);
-          if (success) copied[field] = value;
-        }, 1000);
-        timers[field] = { value, timer };
-        registrationAutoCopyTimers[sessionId] = timers;
-      }
-
-      function cancelRegistrationAutoCopyTimer(sessionId, field) {
-        const timers = registrationAutoCopyTimers[sessionId];
-        const pending = timers?.[field];
-        if (pending && typeof clearTimeout === "function") clearTimeout(pending.timer);
-        if (timers) {
-          delete timers[field];
-          if (!Object.keys(timers).length) delete registrationAutoCopyTimers[sessionId];
-        }
-      }
-
-      function clearRegistrationAutoCopyTimers(sessionId) {
-        for (const field of Object.keys(registrationAutoCopyTimers[sessionId] || {})) {
-          cancelRegistrationAutoCopyTimer(sessionId, field);
-        }
-        delete registrationAutoCopyTimers[sessionId];
-      }
-
       function clearRegistrationSessionClientState(sessionId) {
         if (!sessionId) return;
         delete registrationInputValues[sessionId];
         delete registrationPhoneKeyInputs[sessionId];
         delete registrationPhoneSourceSelections[sessionId];
         delete registrationPhoneKeySelections[sessionId];
-        delete registrationAutoCopied[sessionId];
-        clearRegistrationAutoCopyTimers(sessionId);
       }
 
       function formatRemainingDuration(milliseconds) {
@@ -1285,20 +1220,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       }
 
       async function copyCode(code) {
-        await copyValue(code, "验证码已复制");
+        await copyText(code, "验证码已复制");
       }
-      async function copyValue(value, successMessage) {
-        if (!value) return false;
-        try {
-          const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : undefined;
-          if (!clipboard || typeof clipboard.writeText !== "function") throw new Error("clipboard unavailable");
-          await clipboard.writeText(value);
-          showNotice(successMessage || '已复制', 'success');
-          return true;
-        } catch {
-          showNotice('复制失败，请手动选择内容', 'warning');
-          return false;
-        }
+      function copyText(value, successMessage) {
+        if (!value) return;
+        send("copyText", { text: value, successMessage: successMessage || "已复制" });
       }
 
       function updateRegistrationAcquireButton(sessionId) {
