@@ -2,15 +2,18 @@
 
 这是一个可选的 VS Code 扩展，为 Codex Accounts Manager 提供通用 Mailbox 查询、验证码人工监听和人工凭据续期入口。当前内置 `8t92`、`boya` 与 `cdns` 三个 provider，provider 名称同时作为来源标识。
 
-它是独立组件：邮箱池元数据和凭据只由本扩展管理，凭据进入本扩展自己的 VS Code `SecretStorage`；Manager 核心账号库、Sub2API 配置和其他 provider 不会被读取。Manager 只通过已有的 Dashboard integration API 显示一个轻量入口卡片，邮箱列表和当前选中邮箱详情由本扩展自己的 Webview 面板渲染。
+它是独立组件：邮箱池元数据、详情和凭据只由本扩展管理，并以扩展宿主服务器的 `globalStorageUri` 为共享权威，分别写入 `0600` 的邮箱状态文件和秘密文件；旧版 VS Code `globalState/SecretStorage` 数据会按设备标识一次性合并迁移。Manager 核心账号库、Sub2API 配置和其他 provider 不会被读取。Manager 只通过已有的 Dashboard integration API 显示一个轻量入口卡片，邮箱列表和当前选中邮箱详情由本扩展自己的 Webview 面板渲染。
+
+这里的“共享”指多个设备连接到同一个远程 VS Code 扩展宿主服务器。连接到不同服务器时不会自动同步；活动浏览器注册流程也不会跨服务器迁移。
 
 ## 生命周期
 
-- 扩展激活和 Manager 启动只读取本地邮箱池元数据，不访问任何 provider，也不启动 timer。
+- 扩展激活和 Manager 启动只读取服务器侧邮箱池元数据，不访问任何 provider，也不启动 timer；注册助手的非敏感会话记录也保存在服务器侧，密码、手机号和验证码不会写入持久记录。
 - 点击“打开 Mailbox”后，用户在导入表单中选择 provider，再粘贴该 provider 的输入格式。凭据不进入 Dashboard、日志或 Manager 公共 API。
 - “查询邮件”是一次人工查询；“接收验证码”才启动最小轮询会话，默认 120 秒超时、每 5 秒查询一次，可手动停止。
 - 已安装新版 Manager 时，未匹配账号池邮箱的条目会显示“Codex 导入”；点击后直接打开 OAuth 浏览器流程，不弹出 Manager 添加账号窗口，并在授权邮箱不一致时拒绝写入。
 - OAuth 导入与邮箱查询共用“停止”按钮；停止会取消 Manager 侧的本地 OAuth 回调等待，并清理 Mailbox 的导入状态，不会遮挡邮箱验证码面板。
+- 删除邮箱时，如果注册助手存在同邮箱的活动 OAuth 注册会话，会先自动取消该 OAuth 流程；普通 Playwright 注册流程不受影响。
 - 每个邮箱拥有独立的操作会话和取消控制，多个邮箱可以并行；某个邮箱失败不会阻塞其他邮箱。
 - 邮箱池默认按显示名称升序排列，支持名称升/降序、最近查询、已出码优先、按来源筛选，以及“仅未接入 Codex”筛选；后者依据当前 Manager 已接入账号目录判断。
 - 邮箱列表支持勾选、全选当前筛选结果、批量查询、批量验证码监听、批量停止和批量删除；批量操作仍按邮箱独立记录成功/失败。

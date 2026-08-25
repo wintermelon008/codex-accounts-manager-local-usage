@@ -17,6 +17,7 @@ import { getAutoSwitchRuntimeSnapshot } from "../../presentation/workbench/autoS
 import { getAccountAutomationState, isHealthDismissed, resolveAccountHealth } from "../accounts/health";
 import { getActiveManagerIntegrationHost } from "../../integrations";
 import { isQuotaCountdownStartAvailable } from "../accounts/quotaCountdown";
+import { isFreePlanType, resolveLongQuotaLabel } from "../../utils/quotaLabels";
 
 export async function buildDashboardState(
   repo: AccountsRepository,
@@ -227,7 +228,7 @@ function mapAccount(
     autoSwitchLockedUntil:
       autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
     providerCard: virtual ? providerCard : undefined,
-    metrics: virtual ? [] : buildMetrics(account, copy)
+    metrics: virtual ? [] : buildMetrics(account, copy, lang)
   };
 }
 
@@ -273,10 +274,17 @@ function resolveAccountTokenUsage(
   };
 }
 
-function buildMetrics(account: CodexAccountRecord, copy: DashboardState["copy"]): DashboardMetricViewModel[] {
+export function buildMetrics(
+  account: CodexAccountRecord,
+  copy: DashboardState["copy"],
+  lang: DashboardState["lang"]
+): DashboardMetricViewModel[] {
   const quota = account.quotaSummary;
-  const metrics: DashboardMetricViewModel[] = [
-    {
+  const isFree = isFreePlanType(account.planType);
+  const metrics: DashboardMetricViewModel[] = [];
+
+  if (!isFree) {
+    metrics.push({
       key: "hourly",
       label: copy.hourlyLabel,
       percentage: quota?.hourlyPercentage,
@@ -285,12 +293,12 @@ function buildMetrics(account: CodexAccountRecord, copy: DashboardState["copy"])
       requestsLeft: quota?.hourlyRequestsLeft,
       requestsLimit: quota?.hourlyRequestsLimit,
       visible: quota ? Boolean(quota.hourlyWindowPresent) : true
-    }
-  ];
+    });
+  }
 
   metrics.push({
     key: "weekly",
-    label: copy.weeklyLabel,
+    label: resolveLongQuotaLabel(account.planType, quota?.weeklyWindowMinutes, lang, copy.weeklyLabel),
     percentage: quota?.weeklyPercentage,
     resetAt: quota?.weeklyResetTime,
     windowMinutes: quota?.weeklyWindowMinutes,
@@ -315,7 +323,7 @@ function buildMetrics(account: CodexAccountRecord, copy: DashboardState["copy"])
     if (limit.weeklyWindowPresent) {
       metrics.push({
         key: `additional-${index}-weekly`,
-        label: `${limit.limitName} ${copy.weeklyLabel}`,
+        label: `${limit.limitName} ${resolveLongQuotaLabel(undefined, limit.weeklyWindowMinutes, lang, copy.weeklyLabel)}`,
         percentage: limit.weeklyPercentage,
         resetAt: limit.weeklyResetTime,
         windowMinutes: limit.weeklyWindowMinutes,

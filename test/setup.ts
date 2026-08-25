@@ -6,7 +6,8 @@ vi.mock("vscode", () => ({
     clipboard: {
       writeText: vi.fn()
     },
-    openExternal: vi.fn(async () => true)
+    openExternal: vi.fn(async () => true),
+    asExternalUri: vi.fn(async (uri: unknown) => uri)
   },
   Uri: {
     parse: vi.fn((value: string) => ({ toString: () => value }))

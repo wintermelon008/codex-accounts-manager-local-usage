@@ -1,10 +1,11 @@
 import * as vscode from "vscode";
 import { AccountsRepository } from "../storage";
 import { CodexAccountRecord, isSub2ApiAccount } from "../core/types";
+import { formatPlanType } from "../application/dashboard/copy";
+import { isHourlyQuotaControlEnabled } from "../infrastructure/config/extensionSettings";
 import { getCurrentWindowRuntimeAccountId } from "../presentation/workbench/windowRuntimeAccount";
 import { formatRelativeReset } from "../utils/time";
-import { t } from "../utils";
-import { escapeMarkdown, quotaMarkerForPercentage } from "../utils";
+import { escapeMarkdown, getLanguage, quotaMarkerForPercentage, resolveLongQuotaLabel, t } from "../utils";
 
 const STATUS_BAR_ICON = "$(dashboard)";
 
@@ -25,7 +26,8 @@ export class AccountsStatusBarProvider {
           event.affectsConfiguration("codexAccounts.displayLanguage") ||
           event.affectsConfiguration("codexAccounts.dashboardTheme") ||
           event.affectsConfiguration("codexAccounts.quotaGreenThreshold") ||
-          event.affectsConfiguration("codexAccounts.quotaYellowThreshold")
+          event.affectsConfiguration("codexAccounts.quotaYellowThreshold") ||
+          event.affectsConfiguration("codexAccounts.hourlyQuotaControlEnabled")
         ) {
           void this.refresh();
         }
@@ -39,6 +41,7 @@ export class AccountsStatusBarProvider {
     const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
     const providerActive = accounts.find((item) => item.providerActive);
     const primary = providerActive ?? accounts.find((item) => item.id === currentWindowAccountId) ?? active ?? accounts[0];
+    const showHourlyQuota = isHourlyQuotaControlEnabled();
     const _t = t();
 
     if (!primary) {
@@ -52,18 +55,21 @@ export class AccountsStatusBarProvider {
       return;
     }
 
-    this.item.text = buildStatusText(primary);
-    this.item.tooltip = buildTooltip(primary, active, accounts);
+    this.item.text = buildStatusText(primary, showHourlyQuota);
+    this.item.tooltip = buildTooltip(primary, active, accounts, showHourlyQuota);
     this.item.show();
   }
 }
 
-function buildStatusText(account: CodexAccountRecord): string {
+export function buildStatusText(account: CodexAccountRecord, showHourlyQuota: boolean): string {
   if (isSub2ApiAccount(account)) {
     return `${STATUS_BAR_ICON} Sub2API Gateway`;
   }
   const hourly = account.quotaSummary?.hourlyPercentage;
   const weekly = account.quotaSummary?.weeklyPercentage;
+  if (!showHourlyQuota && typeof weekly === "number") {
+    return `${STATUS_BAR_ICON} codex ${weekly}%`;
+  }
   if (typeof hourly === "number" && typeof weekly === "number") {
     return `${STATUS_BAR_ICON} codex ${hourly}%/${weekly}%`;
   }
@@ -73,7 +79,8 @@ function buildStatusText(account: CodexAccountRecord): string {
 function buildTooltip(
   primary: CodexAccountRecord,
   active: CodexAccountRecord | undefined,
-  accounts: CodexAccountRecord[]
+  accounts: CodexAccountRecord[],
+  showHourlyQuota: boolean
 ): vscode.MarkdownString {
   const _t = t();
   const md = new vscode.MarkdownString(undefined, true);
@@ -85,25 +92,27 @@ function buildTooltip(
     .slice(0, 2);
 
   md.appendMarkdown(`**${_t("panel.dashboard.title")}**\n\n`);
-  md.appendMarkdown(renderAccountPanel(primary, true, primary.id === active?.id));
+  md.appendMarkdown(renderAccountPanel(primary, true, primary.id === active?.id, showHourlyQuota));
   for (const account of [...fallbackActive, ...selectedExtras]) {
     md.appendMarkdown(`\n---\n\n`);
-    md.appendMarkdown(renderAccountPanel(account, false, account.id === active?.id));
+    md.appendMarkdown(renderAccountPanel(account, false, account.id === active?.id, showHourlyQuota));
   }
 
   md.appendMarkdown(`\n\n---\n${_t("status.tooltip")}`);
   return md;
 }
 
-function renderAccountPanel(
+export function renderAccountPanel(
   account: CodexAccountRecord,
   current: boolean,
-  primary: boolean
+  primary: boolean,
+  showHourlyQuota: boolean
 ): string {
   const _t = t();
+  const language = getLanguage();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
   const virtual = isSub2ApiAccount(account);
-  const plan = virtual ? "GATEWAY" : (account.planType ?? "team").toUpperCase();
+  const plan = virtual ? "GATEWAY" : formatPlanType(account.planType ?? "team", language);
   const markers = [
     current ? _t("account.current") : undefined,
     primary ? _t("account.primary") : undefined,
@@ -113,20 +122,45 @@ function renderAccountPanel(
 
   const lines = [
     header,
-    ...(!virtual && account.quotaSummary?.hourlyWindowPresent
-      ? [renderMetricRow(_t("quota.hourly"), account.quotaSummary?.hourlyPercentage, account.quotaSummary?.hourlyResetTime)]
+    ...(!virtual && showHourlyQuota && account.quotaSummary?.hourlyWindowPresent
+      ? [
+          renderMetricRow(
+            _t("quota.hourly"),
+            account.quotaSummary?.hourlyPercentage,
+            account.quotaSummary?.hourlyResetTime
+          )
+        ]
       : []),
     ...(!virtual && account.quotaSummary?.weeklyWindowPresent
-      ? [renderMetricRow(_t("quota.weekly"), account.quotaSummary?.weeklyPercentage, account.quotaSummary?.weeklyResetTime)]
+      ? [
+          renderMetricRow(
+            resolveLongQuotaLabel(
+              account.planType,
+              account.quotaSummary?.weeklyWindowMinutes,
+              language,
+              _t("quota.weekly")
+            ),
+            account.quotaSummary?.weeklyPercentage,
+            account.quotaSummary?.weeklyResetTime
+          )
+        ]
       : [])
   ];
 
   for (const limit of virtual ? [] : account.quotaSummary?.additionalRateLimits ?? []) {
-    if (limit.hourlyWindowPresent) {
-      lines.push(renderMetricRow(`${limit.limitName} ${_t("quota.hourly")}`, limit.hourlyPercentage, limit.hourlyResetTime));
+    if (showHourlyQuota && limit.hourlyWindowPresent) {
+      lines.push(
+        renderMetricRow(`${limit.limitName} ${_t("quota.hourly")}`, limit.hourlyPercentage, limit.hourlyResetTime)
+      );
     }
     if (limit.weeklyWindowPresent) {
-      lines.push(renderMetricRow(`${limit.limitName} ${_t("quota.weekly")}`, limit.weeklyPercentage, limit.weeklyResetTime));
+      lines.push(
+        renderMetricRow(
+          `${limit.limitName} ${resolveLongQuotaLabel(undefined, limit.weeklyWindowMinutes, language, _t("quota.weekly"))}`,
+          limit.weeklyPercentage,
+          limit.weeklyResetTime
+        )
+      );
     }
   }
 

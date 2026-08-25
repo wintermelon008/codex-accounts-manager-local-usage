@@ -12,7 +12,7 @@ import {
   clearCurrentWindowRuntimeAccountIfMatches,
   needsWindowReloadForAccount
 } from "../../presentation/workbench/windowRuntimeAccount";
-import { getCommandCopy, logNetworkEvent, t } from "../../utils";
+import { getCommandCopy, getLanguage, logNetworkEvent, resolveLongQuotaLabel, t } from "../../utils";
 import { openDetailsPanel } from "../../ui";
 import { openQuotaSummaryPanel } from "../../ui/quotaSummary";
 import {
@@ -558,7 +558,16 @@ export class AccountsCommandService {
       visibleAccounts.map((account) => ({
         label: account.email,
         description: buildSwitchPickerDescription(account, _t("account.current")),
-        detail: buildSwitchPickerDetail(account, _t("quota.hourly"), _t("quota.weekly")),
+        detail: buildSwitchPickerDetail(
+          account,
+          _t("quota.hourly"),
+          resolveLongQuotaLabel(
+            account.planType,
+            account.quotaSummary?.weeklyWindowMinutes,
+            getLanguage(),
+            _t("quota.weekly")
+          )
+        ),
         account
       })),
       {

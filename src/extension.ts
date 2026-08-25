@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
 import type { CodexAccountsIntegrationApi } from "./integrations";
+import {
+  disposeCodexProxyEnvironment,
+  getCodexProxyConfigurationError,
+  initializeCodexProxyEnvironment
+} from "./infrastructure/config/proxyEnvironment";
 import { AccountsWorkbench } from "./presentation/workbench/accountsWorkbench";
 
 let workbench: AccountsWorkbench | undefined;
@@ -10,6 +15,11 @@ let workbench: AccountsWorkbench | undefined;
  * @param context - 扩展上下文
  */
 export async function activate(context: vscode.ExtensionContext): Promise<CodexAccountsIntegrationApi> {
+  await initializeCodexProxyEnvironment();
+  const proxyError = getCodexProxyConfigurationError();
+  if (proxyError) {
+    void vscode.window.showErrorMessage(`[Codex Accounts Manager] ${proxyError.message}`);
+  }
   workbench = new AccountsWorkbench(context);
   await workbench.activate();
   return workbench.getIntegrationApi();
@@ -21,4 +31,5 @@ export async function activate(context: vscode.ExtensionContext): Promise<CodexA
 export function deactivate(): void {
   workbench?.dispose();
   workbench = undefined;
+  disposeCodexProxyEnvironment();
 }

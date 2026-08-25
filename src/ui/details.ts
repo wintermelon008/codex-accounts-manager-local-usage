@@ -15,7 +15,14 @@ import { getAutoSwitchRuntimeSnapshot } from "../presentation/workbench/autoSwit
 import { getTokenAutomationSnapshot } from "../presentation/workbench/tokenAutomationState";
 import { fetchDailyUsageBreakdown } from "../services";
 import { AccountsRepository } from "../storage";
-import { colorForPercentage, escapeHtml, escapeHtmlAttr, getLanguage, prettyAuthProvider } from "../utils";
+import {
+  colorForPercentage,
+  escapeHtml,
+  escapeHtmlAttr,
+  getLanguage,
+  prettyAuthProvider,
+  resolveLongQuotaLabel
+} from "../utils";
 import { formatRelativeReset, formatTimestamp } from "../utils/time";
 
 let detailsPanel: vscode.WebviewPanel | undefined;
@@ -270,6 +277,13 @@ function renderHtml(
   const dashboardCopy = getDashboardCopy(copy.lang);
   const subscription = resolveSubscriptionDisplay(account, tokens, dashboardCopy, copy.lang);
   const subscriptionStyle = subscription.color ? ` style="color:${escapeHtmlAttr(subscription.color)};"` : "";
+  const longQuotaLabel = resolveLongQuotaLabel(
+    account.planType,
+    quota?.weeklyWindowMinutes,
+    copy.lang,
+    copy.weeklyQuota,
+    "quota"
+  );
   const health = resolveAccountHealth(account, tokens, getTokenAutomationSnapshot());
   const dismissedHealth = isHealthDismissed(account, health);
   const autoSwitchRuntime = getAutoSwitchRuntimeSnapshot();
@@ -290,7 +304,7 @@ function renderHtml(
     ...(quota?.weeklyWindowPresent
       ? [
           `<div class="quota-card">
-        <h2>${escapeHtml(copy.weeklyQuota)}</h2>
+        <h2>${escapeHtml(longQuotaLabel)}</h2>
         <div class="quota-value" style="--metric-color:${colorForPercentage(quota?.weeklyPercentage)};">${renderQuotaValue(quota?.weeklyPercentage)}</div>
         <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota?.weeklyResetTime, copy)}</div>
       </div>`
@@ -307,7 +321,7 @@ function renderHtml(
       }
       if (limit.weeklyWindowPresent) {
         cards.push(`<div class="quota-card">
-        <h2>${escapeHtml(`${limit.limitName} ${copy.weeklyQuota}`)}</h2>
+        <h2>${escapeHtml(`${limit.limitName} ${resolveLongQuotaLabel(undefined, limit.weeklyWindowMinutes, copy.lang, copy.weeklyQuota, "quota")}`)}</h2>
         <div class="quota-value" style="--metric-color:${colorForPercentage(limit.weeklyPercentage)};">${renderQuotaValue(limit.weeklyPercentage)}</div>
         <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(limit.weeklyResetTime, copy)}</div>
       </div>`);

@@ -149,6 +149,71 @@ class RegistrationManager extends EventEmitter {
     }));
   }
 
+  getSessionRecords() {
+    return Array.from(this.sessions.values()).map((session) => ({
+      id: session.id,
+      email: session.email,
+      mode: session.mode,
+      state: session.state,
+      phoneInputCount: session.phoneInputCount,
+      name: session.name,
+      age: session.age,
+      result: persistableResult(session.result),
+      error: session.error?.message,
+      feedback: session.feedback,
+      feedbackLevel: session.feedbackLevel,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt
+    }));
+  }
+
+  restoreSessions(records) {
+    let added = 0;
+    let interrupted = 0;
+    for (const record of Array.isArray(records) ? records : []) {
+      if (!record || typeof record !== "object" || typeof record.id !== "string" || !record.id || !record.email) {
+        continue;
+      }
+      if (this.sessions.has(record.id)) {
+        continue;
+      }
+
+      const session = new RegistrationSession({
+        email: record.email,
+        password: "",
+        name: record.name || "jdd",
+        age: record.age || 24,
+        startOAuthImport: record.mode === "oauth" ? this.startOAuthImport : null,
+        cancelOAuthImport: record.mode === "oauth" ? this.cancelOAuthImport : null
+      });
+      session.id = record.id;
+      session.oauthOperationId = `registration-oauth:${session.id}`;
+      session.mode = record.mode === "oauth" ? "oauth" : "playwright";
+      session.phoneInputCount = Number.isFinite(record.phoneInputCount) ? Math.max(0, Math.floor(record.phoneInputCount)) : 0;
+      session.result = persistableResult(record.result);
+      session.error = typeof record.error === "string" && record.error ? new Error(record.error) : null;
+      session.feedback = typeof record.feedback === "string" ? record.feedback : "";
+      session.feedbackLevel = typeof record.feedbackLevel === "string" ? record.feedbackLevel : "info";
+      session.createdAt = Number.isFinite(record.createdAt) ? record.createdAt : session.createdAt;
+      session.updatedAt = Number.isFinite(record.updatedAt) ? record.updatedAt : session.updatedAt;
+
+      const terminal = [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(record.state);
+      if (!terminal && record.state !== STATES.IDLE) {
+        session.state = STATES.CANCELLED;
+        session.feedback = "该注册流程来自其他扩展会话，活动浏览器流程未跨设备恢复；请重新开始";
+        session.feedbackLevel = "warning";
+        session.updatedAt = Date.now();
+        interrupted += 1;
+      } else {
+        session.state = Object.values(STATES).includes(record.state) ? record.state : STATES.IDLE;
+      }
+
+      this.sessions.set(session.id, session);
+      added += 1;
+    }
+    return { added, interrupted };
+  }
+
   cleanupSession(sessionId) {
     const session = this.sessions.get(sessionId);
     if (session && [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(session.state)) {
@@ -164,6 +229,18 @@ class RegistrationManager extends EventEmitter {
     }
     return session;
   }
+}
+
+function persistableResult(result) {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  return {
+    email: typeof result.email === "string" ? result.email : undefined,
+    accountId: typeof result.accountId === "string" ? result.accountId : undefined,
+    quotaRefreshed: typeof result.quotaRefreshed === "boolean" ? result.quotaRefreshed : undefined,
+    quotaError: typeof result.quotaError === "string" ? result.quotaError.slice(0, 160) : undefined
+  };
 }
 
 module.exports = { RegistrationManager };

@@ -105,6 +105,60 @@ test("registration assistant uses the Manager Codex OAuth flow when it is availa
   integration.dispose();
 });
 
+test("deleting a mailbox cancels its active registration OAuth flow", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const registrations = [];
+  let rejectOAuth;
+  let cancelledOperationId;
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, providerId: "mock", messages: [], codes: [] }; }
+  };
+  const api = {
+    registerDashboardIntegration(value) {
+      registrations.push(value);
+      return { dispose() {} };
+    },
+    startOAuthAccountImport() {
+      return new Promise((resolve, reject) => {
+        rejectOAuth = reject;
+      });
+    },
+    cancelOAuthAccountImport(operationId) {
+      cancelledOperationId = operationId;
+      rejectOAuth?.(new Error("OAuth login cancelled by user."));
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await registrations[0].runAction("open");
+  await integration.pool.importProvider({ provider, input: "oauth-delete@example.com|credential" });
+  const mailboxId = integration.pool.listMetadata()[0].id;
+  const sessionId = integration.registrationManager.createSession({
+    email: "oauth-delete@example.com",
+    password: "manual-password"
+  });
+  const started = integration.registrationManager.startSession(sessionId);
+
+  await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.state === "awaiting_oauth");
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "registrationDeleteMailbox", mailboxId });
+  await started;
+
+  assert.match(cancelledOperationId, /^registration-oauth:/u);
+  assert.equal(integration.registrationManager.getSessionState(sessionId).state, "cancelled");
+  assert.equal(integration.pool.listMetadata().length, 0);
+  integration.dispose();
+});
+
 test("registration assistant deletes a mailbox directly and clears all registration records", async () => {
   const vscode = createVscode();
   const context = createContext();
