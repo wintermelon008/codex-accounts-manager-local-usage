@@ -8,6 +8,7 @@ import type {
   SharedCodexAccountJson
 } from "../core/types";
 import { isSub2ApiAccount } from "../core/types";
+import { getErrorMessage } from "../core/errors";
 import { getBalanceQuotaCapability, type BalanceQuotaCapability } from "../application/accounts/balanceScheduler";
 import { getQuotaIssueKind } from "../utils/quotaIssue";
 import type { AccountsRepository } from "../storage";
@@ -618,5 +619,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return getErrorMessage(error);
 }

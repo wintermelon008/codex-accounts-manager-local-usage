@@ -9,6 +9,7 @@ import {
   getAutomaticQuotaRefreshAccountIds,
   registerAutoRefreshScheduler,
   registerSeamlessUsageLimitMonitor,
+  SCHEDULER_LEASE_RENEW_INTERVAL_MS,
   SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS,
   SEAMLESS_USAGE_LIMIT_RETRY_MS
 } from "../src/presentation/workbench/schedulerRegistration";
@@ -252,6 +253,49 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
         forceRefresh: true,
         accountIds: ["a"]
       });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renews a long-running quota refresh lease before it expires", async () => {
+    vi.useFakeTimers();
+    const configurationDisposable = { dispose: vi.fn() };
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: (key: string, defaultValue?: unknown) => (key === "autoRefreshMinutes" ? 1 : defaultValue),
+      update: vi.fn(),
+      inspect: vi.fn()
+    } as never);
+    vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
+
+    let resolveCommand: (() => void) | undefined;
+    const command = new Promise<void>((resolve) => {
+      resolveCommand = resolve;
+    });
+    vi.mocked(vscode.commands.executeCommand).mockReturnValue(command as never);
+    const renew = vi.fn().mockResolvedValue(true);
+    const release = vi.fn().mockResolvedValue(undefined);
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([{ id: "a", email: "a@example.invalid", createdAt: 1, updatedAt: 1 }]),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ renew, release })
+    };
+    const registration = registerAutoRefreshScheduler({
+      context: { subscriptions: [] } as never,
+      repo: repo as never,
+      onRefresh: vi.fn()
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vscode.commands.executeCommand).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(SCHEDULER_LEASE_RENEW_INTERVAL_MS);
+      expect(renew).toHaveBeenCalledWith(120_000);
+
+      resolveCommand?.();
+      await vi.advanceTimersByTimeAsync(0);
       expect(release).toHaveBeenCalledOnce();
     } finally {
       registration.dispose();

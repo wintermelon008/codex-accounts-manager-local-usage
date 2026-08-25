@@ -10,7 +10,7 @@
 import type { CodexAccountRecord } from "../core/types";
 import { fetchWithTimeout } from "../utils/network";
 import { logNetworkEvent } from "../utils/debug";
-import { APIError } from "../core/errors";
+import { APIError, formatApiErrorMessage } from "../core/errors";
 import { isFreePlanType } from "../utils/quotaLabels";
 import {
   SUBSCRIPTION_ACCOUNTS_CHECK_URL,
@@ -174,7 +174,7 @@ async function fetchAccountCheck(
   });
 
   if (!response.ok) {
-    throw new APIError(`Account check API returned ${response.status}: ${raw.slice(0, 200)}`, {
+    throw new APIError(formatApiErrorMessage("Account check API returned", response.status, raw), {
       statusCode: response.status,
       responseBody: raw.slice(0, 200)
     });
@@ -203,7 +203,7 @@ async function fetchSubscriptions(
   });
 
   if (!response.ok) {
-    throw new APIError(`Subscriptions API returned ${response.status}: ${raw.slice(0, 200)}`, {
+    throw new APIError(formatApiErrorMessage("Subscriptions API returned", response.status, raw), {
       statusCode: response.status,
       responseBody: raw.slice(0, 200)
     });

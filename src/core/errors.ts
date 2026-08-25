@@ -340,6 +340,96 @@ export const createError = {
   ): APIError => new APIError(message, options)
 };
 
+const API_ERROR_DETAIL_MAX_LENGTH = 160;
+
+/**
+ * Build a user-facing API error without copying the server response into the
+ * message. The complete response can remain available to the opt-in,
+ * redacted network debug log.
+ */
+export function formatApiErrorMessage(operation: string, statusCode?: number, responseBody?: string): string {
+  const label = operation.trim() || "API request";
+  const status = typeof statusCode === "number" ? ` (${statusCode})` : "";
+  const detail = extractApiErrorDetail(responseBody);
+  return detail ? `${label}${status}: ${detail}` : `${label}${status}`;
+}
+
+/**
+ * Keep server-provided diagnostic text bounded and free of common account and
+ * credential fields before it is stored in a user-visible error.
+ */
+export function sanitizeApiErrorText(value: string): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, "[redacted-email]")
+    .replace(/\bBearer\s+\S+/giu, "Bearer [redacted-token]")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[redacted-token]")
+    .replace(
+      /((?:["']?(?:access|refresh|id|session|auth)[-_ ]?token["']?\s*[:=]\s*["']?))[^,"'\s}]+/giu,
+      "$1[redacted-token]"
+    )
+    .replace(
+      /((?:["']?(?:account|organization|workspace|user)[-_ ]?id["']?\s*[:=]\s*["']?))[^,"'\s}]+/giu,
+      "$1[redacted-id]"
+    )
+    .slice(0, API_ERROR_DETAIL_MAX_LENGTH);
+}
+
+function extractApiErrorDetail(responseBody: string | undefined): string | undefined {
+  const raw = responseBody?.trim();
+  if (!raw) {
+    return undefined;
+  }
+
+  let root: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    root = parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+
+  const error = asErrorRecord(root["error"]);
+  const detail = asErrorRecord(root["detail"]);
+  const message = firstString(
+    error?.["message"],
+    error?.["detail"],
+    root["message"],
+    typeof root["detail"] === "string" ? root["detail"] : undefined,
+    root["error_description"],
+    root["reason"]
+  );
+  const code = firstSafeApiCode(
+    error?.["code"],
+    detail?.["code"],
+    root["code"],
+    typeof root["error"] === "string" ? root["error"] : undefined
+  );
+  const safeMessage = message ? sanitizeApiErrorText(message) : "";
+
+  return [safeMessage || undefined, code ? `[error_code:${code}]` : undefined].filter(Boolean).join(" ") || undefined;
+}
+
+function asErrorRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim();
+}
+
+function firstSafeApiCode(...values: unknown[]): string | undefined {
+  const code = firstString(...values);
+  return code && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/u.test(code) ? code : undefined;
+}
+
 /**
  * 安全地提取错误消息
  */

@@ -20,12 +20,15 @@ describe("network debug logs", () => {
         email: "dev@example.com",
         longField: "x".repeat(1500),
         tail: "visible-after-long-body"
-      })
+      }),
+      accountId: "acct-private"
     });
 
     const output = appendLine.mock.calls[0]?.[0] as string;
     expect(output).toContain("visible-after-long-body");
     expect(output).toContain("[redacted-email]");
     expect(output).not.toContain("dev@example.com");
+    expect(output).toContain("[redacted]");
+    expect(output).not.toContain("acct-private");
   });
 });

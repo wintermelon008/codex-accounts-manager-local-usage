@@ -120,6 +120,38 @@ describe("Sub2API virtual account boundaries", () => {
     expect(rendered.statusColor).toBe("var(--accent-blue)");
   });
 
+  it("bounds Dashboard token reads and skips desktop detection while restart is disabled", async () => {
+    const accounts = Array.from({ length: 9 }, (_, index) => chatgpt(`account-${index + 1}`));
+    let activeReads = 0;
+    let maximumActiveReads = 0;
+    const getTokens = vi.fn(async () => {
+      activeReads += 1;
+      maximumActiveReads = Math.max(maximumActiveReads, activeReads);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      activeReads -= 1;
+      return undefined;
+    });
+
+    const state = await buildDashboardState(
+      {
+        listAccounts: vi.fn(async () => accounts),
+        getTokens,
+        getIndexHealthSummary: vi.fn(async () => ({ status: "healthy", availableBackups: 0 }))
+      } as never,
+      {
+        resolveLanguage: () => "zh",
+        getDashboardSettings: () => ({ codexAppPath: "", codexAppRestartEnabled: false })
+      } as never,
+      "",
+      { announcements: [], unreadIds: [] }
+    );
+
+    expect(state.accounts).toHaveLength(accounts.length);
+    expect(getTokens).toHaveBeenCalledTimes(accounts.length);
+    expect(maximumActiveReads).toBeLessThanOrEqual(4);
+    expect(state.settings.resolvedCodexAppPath).toBe("");
+  });
+
   it("hides saved virtual accounts when no provider integration is registered", async () => {
     const previousHost = getActiveManagerIntegrationHost();
     const host = new ManagerIntegrationHost({} as never);

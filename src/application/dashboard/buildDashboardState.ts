@@ -18,6 +18,17 @@ import { getAccountAutomationState, isHealthDismissed, resolveAccountHealth } fr
 import { getActiveManagerIntegrationHost } from "../../integrations";
 import { isQuotaCountdownStartAvailable } from "../accounts/quotaCountdown";
 import { isFreePlanType, resolveLongQuotaLabel } from "../../utils/quotaLabels";
+import { runWithConcurrencyLimit } from "../../utils/concurrency";
+
+const DASHBOARD_TOKEN_READ_CONCURRENCY = 4;
+
+type DashboardAccountViewState = {
+  tokens: Awaited<ReturnType<AccountsRepository["getTokens"]>>;
+  health: ReturnType<typeof resolveAccountHealth>;
+  dismissedHealth: boolean;
+  automationState: ReturnType<typeof getAccountAutomationState>;
+  healthPriority: number;
+};
 
 export async function buildDashboardState(
   repo: AccountsRepository,
@@ -31,7 +42,9 @@ export async function buildDashboardState(
   const baseSettings = settingsStore.getDashboardSettings();
   const settings = {
     ...baseSettings,
-    resolvedCodexAppPath: (await resolveCodexAppLaunchPath(baseSettings.codexAppPath)) ?? ""
+    resolvedCodexAppPath: baseSettings.codexAppRestartEnabled
+      ? ((await resolveCodexAppLaunchPath(baseSettings.codexAppPath)) ?? "")
+      : ""
   };
   const copy = getDashboardCopy(lang);
   const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
@@ -51,30 +64,20 @@ export async function buildDashboardState(
       visibleVirtualAccountIds === undefined ||
       visibleVirtualAccountIds.has(account.id)
   );
-  const tokenEntries = await Promise.all(
-    accounts.map(async (account) =>
-      [account.id, isSub2ApiAccount(account) ? undefined : await repo.getTokens(account.id, { syncExternal: false })] as const
-    )
-  );
-  const tokensByAccountId = new Map(tokenEntries);
-  const accountViewStateById = new Map(
-    accounts.map((account) => {
-      const tokens = tokensByAccountId.get(account.id);
-      const health: ReturnType<typeof resolveAccountHealth> = isSub2ApiAccount(account)
-        ? { kind: "healthy", issueKey: "virtual" }
-        : resolveAccountHealth(account, tokens, tokenAutomation);
-      return [
-        account.id,
-        {
-          tokens,
-          health,
-          dismissedHealth: isHealthDismissed(account, health),
-          automationState: getAccountAutomationState(tokenAutomation, account.id),
-          healthPriority: getHealthPriority(health)
-        }
-      ] as const;
-    })
-  );
+  const accountViewStateById = new Map<string, DashboardAccountViewState>();
+  await runWithConcurrencyLimit(accounts, DASHBOARD_TOKEN_READ_CONCURRENCY, async (account) => {
+    const tokens = isSub2ApiAccount(account) ? undefined : await repo.getTokens(account.id, { syncExternal: false });
+    const health: ReturnType<typeof resolveAccountHealth> = isSub2ApiAccount(account)
+      ? { kind: "healthy", issueKey: "virtual" }
+      : resolveAccountHealth(account, tokens, tokenAutomation);
+    accountViewStateById.set(account.id, {
+      tokens,
+      health,
+      dismissedHealth: isHealthDismissed(account, health),
+      automationState: getAccountAutomationState(tokenAutomation, account.id),
+      healthPriority: getHealthPriority(health)
+    });
+  });
   const sortedAccounts = sortDashboardAccounts(accounts, currentWindowAccountId, accountViewStateById);
   const extraSelectedCount = sortedAccounts.filter((account) => !account.isActive && account.showInStatusBar).length;
 
@@ -133,14 +136,7 @@ export function sortDashboardAccounts<
 
 function mapAccount(
   account: CodexAccountRecord,
-  viewState:
-    | {
-        tokens: Awaited<ReturnType<AccountsRepository["getTokens"]>>;
-        health: ReturnType<typeof resolveAccountHealth>;
-        dismissedHealth: boolean;
-        automationState: ReturnType<typeof getAccountAutomationState>;
-      }
-    | undefined,
+  viewState: DashboardAccountViewState | undefined,
   extraSelectedCount: number,
   lang: DashboardState["lang"],
   copy: DashboardState["copy"],

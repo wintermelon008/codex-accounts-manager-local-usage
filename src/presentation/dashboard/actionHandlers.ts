@@ -58,7 +58,7 @@ export async function executeDashboardActionMessage(
   } catch (error) {
     status = "failed";
     errorMessage = toFailureMessage(error);
-    console.error(`[codexAccounts] dashboard action failed: ${message.action}`, error);
+    console.error(`[codexAccounts] dashboard action failed: ${message.action}: ${errorMessage}`);
   }
 
   return {
@@ -783,7 +783,7 @@ async function handleBatchRefresh(
           email: accountsById.get(id)?.email,
           message: toFailureMessage(error)
         });
-        console.warn(`[codexAccounts] batch quota refresh failed for ${id}:`, error);
+        console.warn(`[codexAccounts] batch quota refresh failed for ${id}: ${toFailureMessage(error)}`);
       }
     },
     { delayMs: CODEX_BATCH_REFRESH_DELAY_MS }
@@ -838,7 +838,7 @@ async function handleBatchResync(
           email: accountsById.get(id)?.email,
           message: toFailureMessage(error)
         });
-        console.warn(`[codexAccounts] batch profile resync failed for ${id}:`, error);
+        console.warn(`[codexAccounts] batch profile resync failed for ${id}: ${toFailureMessage(error)}`);
       }
     },
     { delayMs: CODEX_BATCH_REFRESH_DELAY_MS }
@@ -913,7 +913,7 @@ async function handleBatchRemove(
         email: accountsById.get(id)?.email,
         message: toFailureMessage(error)
       });
-      console.warn(`[codexAccounts] batch remove failed for ${id}:`, error);
+      console.warn(`[codexAccounts] batch remove failed for ${id}: ${toFailureMessage(error)}`);
     }
   }
   schedulePublishState();
@@ -1019,7 +1019,7 @@ async function handleConsumeResetCredit(
     try {
       await vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
     } catch (error) {
-      console.warn("[codexAccounts] refresh quota after consuming reset credit failed:", error);
+      console.warn(`[codexAccounts] refresh quota after consuming reset credit failed: ${toFailureMessage(error)}`);
       schedulePublishState?.();
     }
   }

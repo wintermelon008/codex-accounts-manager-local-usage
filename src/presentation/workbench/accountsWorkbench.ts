@@ -19,6 +19,7 @@ import { AccountsStatusBarProvider } from "../../ui";
 import { registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import { isSub2ApiAccount, type SharedCodexAccountJson } from "../../core/types";
+import { getErrorMessage } from "../../core/errors";
 import {
   importSharedAccountsIntoBalancePool,
   type BalancePoolImportSummary
@@ -287,7 +288,7 @@ export class AccountsWorkbench {
       const address = await this.managerControlServer.start(getExternalControlPort(), token);
       console.info(`[codexAccounts] manager control API listening on ${address.host}:${address.port}`);
     } catch (error) {
-      console.warn("[codexAccounts] manager control API could not start:", error);
+      console.warn(`[codexAccounts] manager control API could not start: ${getErrorMessage(error)}`);
       void vscode.window.showWarningMessage(`Manager 外部控制接口启动失败：${describeControlError(error)}`);
     }
   }
@@ -517,5 +518,5 @@ function normalizeEmail(value: string | undefined): string | undefined {
 }
 
 function describeControlError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return getErrorMessage(error);
 }

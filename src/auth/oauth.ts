@@ -5,7 +5,7 @@ import { CodexTokens } from "../core/types";
 import { isTokenExpired } from "../utils/jwt";
 import { fetchWithTimeout } from "../utils/network";
 import { logNetworkEvent } from "../utils/debug";
-import { AuthError, ErrorCode, APIError } from "../core/errors";
+import { AuthError, ErrorCode, APIError, formatApiErrorMessage } from "../core/errors";
 import {
   AUTH_ENDPOINT,
   TOKEN_ENDPOINT,
@@ -83,7 +83,7 @@ export async function refreshTokens(
   });
   if (!response.ok) {
     const errorCode = extractTokenErrorCode(raw);
-    throw new APIError(`Token refresh failed: ${raw}`, {
+    throw new APIError(formatApiErrorMessage("Token refresh failed", response.status, raw), {
       statusCode: response.status,
       responseBody: raw,
       context: errorCode ? { errorCode } : undefined
@@ -459,7 +459,7 @@ async function exchangeCodeForTokens(code: string, verifier: string, redirectUri
   });
   if (!response.ok) {
     const errorCode = extractTokenErrorCode(raw);
-    throw new APIError(`Token exchange failed: ${raw}`, {
+    throw new APIError(formatApiErrorMessage("Token exchange failed", response.status, raw), {
       statusCode: response.status,
       responseBody: raw,
       context: errorCode ? { errorCode } : undefined

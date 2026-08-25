@@ -1,5 +1,5 @@
 import { CodexDailyUsageBreakdown, CodexDailyUsagePoint, CodexTokens } from "../core/types";
-import { APIError } from "../core/errors";
+import { APIError, formatApiErrorMessage } from "../core/errors";
 import { DAILY_USAGE_BREAKDOWN_URL } from "../infrastructure/config/apiEndpoints";
 import { extractClaims } from "../utils/jwt";
 import { logNetworkEvent } from "../utils/debug";
@@ -45,7 +45,7 @@ export async function fetchDailyUsageBreakdown(
     bodyPreview: raw
   });
   if (!response.ok) {
-    throw new APIError(`Daily usage breakdown API returned ${response.status}: ${raw.slice(0, 200)}`, {
+    throw new APIError(formatApiErrorMessage("Daily usage breakdown API returned", response.status, raw), {
       statusCode: response.status,
       responseBody: raw.slice(0, 200)
     });

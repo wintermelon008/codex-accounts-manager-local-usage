@@ -13,7 +13,7 @@ import { CodexTokens } from "../core/types";
 import { extractClaims } from "../utils/jwt";
 import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { fetchWithTimeout, isRetriableHttpStatus, isRetriableNetworkError, retryWithBackoff } from "../utils/network";
-import { APIError } from "../core/errors";
+import { APIError, formatApiErrorMessage } from "../core/errors";
 import { logNetworkEvent } from "../utils/debug";
 import { ACCOUNT_CHECK_URL } from "../infrastructure/config/apiEndpoints";
 
@@ -119,7 +119,7 @@ export async function fetchRemoteAccountProfile(
   }
 
   if (!primary.ok) {
-    throw new APIError(`Account profile API returned ${primary.status}: ${primary.raw.slice(0, 200)}`, {
+    throw new APIError(formatApiErrorMessage("Account profile API returned", primary.status, primary.raw), {
       statusCode: primary.status,
       responseBody: primary.raw.slice(0, 200)
     });
