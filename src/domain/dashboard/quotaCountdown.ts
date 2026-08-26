@@ -14,9 +14,9 @@ type QuotaCountdownWindow = {
 };
 
 /**
- * Offer the manual starter only while every primary quota window still looks
- * unused. The service-reported window length is authoritative; when an older
- * payload omits it, retain the five-hour/seven-day legacy defaults.
+ * Offer the manual starter while at least one primary quota window still looks
+ * unused and fresh. The service-reported window length is authoritative; when
+ * an older payload omits it, retain the five-hour/seven-day legacy defaults.
  */
 export function isQuotaCountdownStartEligible(
   quota: CodexQuotaSummary | undefined,
@@ -51,7 +51,7 @@ export function isQuotaCountdownStartEligible(
     return false;
   }
 
-  return windows.every((window) => {
+  return windows.some((window) => {
     const windowMinutes = resolveQuotaCountdownWindowMinutes(window);
     if (
       windowMinutes == null ||

@@ -47,4 +47,35 @@ describe("buildMetrics", () => {
     expect(metrics).toHaveLength(1);
     expect(metrics[0]?.label).toBe("每月");
   });
+
+  it.each(["chatgptfreeplan", "ChatGPT K-12 Plan", "plus", "pro"])(
+    "keeps a restored 5-hour metric visible for %s accounts",
+    (planType) => {
+      const metrics = buildMetrics(
+        {
+          id: "free-windowed-account",
+          email: "free-windowed@example.com",
+          isActive: true,
+          planType,
+          createdAt: 1,
+          updatedAt: 1,
+          quotaSummary: {
+            hourlyPercentage: 100,
+            hourlyResetTime: 1_800_018_000,
+            hourlyWindowMinutes: 300,
+            hourlyWindowPresent: true,
+            weeklyPercentage: 100,
+            weeklyWindowMinutes: 43_200,
+            weeklyWindowPresent: true
+          }
+        },
+        getDashboardCopy("zh"),
+        "zh"
+      );
+
+      expect(metrics.map((metric) => metric.key)).toEqual(["hourly", "weekly"]);
+      expect(metrics[0]?.label).toBe("5小时");
+      expect(metrics[1]?.label).toBe("每月");
+    }
+  );
 });

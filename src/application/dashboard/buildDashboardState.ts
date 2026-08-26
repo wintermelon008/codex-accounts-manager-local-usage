@@ -279,7 +279,7 @@ export function buildMetrics(
   const isFree = isFreePlanType(account.planType);
   const metrics: DashboardMetricViewModel[] = [];
 
-  if (!isFree) {
+  if (!isFree || quota?.hourlyWindowPresent === true) {
     metrics.push({
       key: "hourly",
       label: copy.hourlyLabel,

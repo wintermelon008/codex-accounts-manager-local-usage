@@ -146,12 +146,6 @@ export function SavedAccountCard(props: {
         metric.visible &&
         (metric.key === "hourly" || metric.key === "weekly") &&
         isQuotaCountdownWindowFresh(metric.key, metric.resetAt, now, metric.windowMinutes)
-    ) &&
-    account.metrics.every(
-      (metric) =>
-        !metric.visible ||
-        (metric.key !== "hourly" && metric.key !== "weekly") ||
-        isQuotaCountdownWindowFresh(metric.key, metric.resetAt, now, metric.windowMinutes)
     );
   const stopFlip = (event: Event): void => {
     event.stopPropagation();
