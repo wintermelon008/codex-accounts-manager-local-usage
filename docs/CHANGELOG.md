@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- “启动额度倒计时”现在对所有套餐只要任一有效的 5h 或长期主额度窗口尚未消耗即可启用；Free/K12 账号恢复 5h 窗口时也会在卡片中显示该窗口，另一个窗口已消耗或已过 freshness margin 不再阻止按钮显示。
 - OAuth 始终使用已登记的 `http://localhost:1455/auth/callback`，Remote-SSH 环境在打开浏览器前显式通过 VS Code `asExternalUri()` 建立回调转发；VS Code 映射到 `localhost:1457` 等本机端口时不再因端口不同而提前失败，授权请求和 token exchange 仍使用已登记的回调地址。
 - 删除 Mailbox 邮箱时，如果注册助手存在同邮箱的活动 OAuth 会话，会先自动取消该流程，避免已删除邮箱继续占用 OAuth 回调等待。
 - Mailbox 注册助手的接码 Key 池改为保存到扩展宿主服务器上的 `0600` 文件；旧版 VS Code SecretStorage 仅作为一次性迁移/恢复来源，重新进入面板或更换客户端后仍可读取同一服务器上的 Key。

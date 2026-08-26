@@ -235,6 +235,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(card).toContain("account.quotaCountdownStartAvailable");
     expect(card).toContain("isQuotaCountdownWindowFresh");
     expect(card).toContain("showQuotaCountdownStart");
+    expect(card).not.toContain("account.metrics.every");
     expect(card).toContain("quotaCountdownStartPending");
     expect(refreshIndex).toBeGreaterThan(-1);
     expect(starterIndex).toBeGreaterThan(refreshIndex);

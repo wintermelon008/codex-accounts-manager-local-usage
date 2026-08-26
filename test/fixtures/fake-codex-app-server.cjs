@@ -247,6 +247,27 @@ function handleLine(line) {
       respond(message.id, {});
       break;
     }
+    case "test/failUsageLimitMessageNotification": {
+      const activeTurn = activeTurns.shift();
+      if (activeTurn) {
+        const error = {
+          message: "You've hit your usage limit. Try again later."
+        };
+        emit({
+          method: "error",
+          params: {
+            threadId: activeTurn.threadId,
+            turnId: activeTurn.id,
+            willRetry: false,
+            error
+          }
+        });
+        const turn = { id: activeTurn.id, items: [], itemsView: { type: "all" }, status: "failed", error };
+        emit({ method: "turn/completed", params: { threadId: activeTurn.threadId, turn } });
+      }
+      respond(message.id, {});
+      break;
+    }
     case "test/failCapacity": {
       const activeTurn = activeTurns.shift();
       if (activeTurn) {

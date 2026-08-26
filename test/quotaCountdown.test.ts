@@ -22,20 +22,30 @@ describe("isQuotaCountdownStartEligible", () => {
     ).toBe(true);
   });
 
-  it("hides when either recognized countdown has advanced past the margin", () => {
-    expect(
-      isQuotaCountdownStartEligible(quota({ hourlyResetTime: NOW_SECONDS + 4 * 60 * 60 + 55 * 60 - 1 }), NOW_MS)
-    ).toBe(false);
+  it("keeps the starter when one unused window remains fresh", () => {
+    expect(isQuotaCountdownStartEligible(quota({ weeklyPercentage: 99 }), NOW_MS)).toBe(true);
+    expect(isQuotaCountdownStartEligible(quota({ hourlyPercentage: 99 }), NOW_MS)).toBe(true);
     expect(
       isQuotaCountdownStartEligible(
-        quota({ weeklyResetTime: NOW_SECONDS + 6 * 24 * 60 * 60 + 23 * 60 * 60 + 55 * 60 - 1 }),
+        quota({
+          hourlyResetTime: NOW_SECONDS + 4 * 60 * 60 + 55 * 60 - 1
+        }),
+        NOW_MS
+      )
+    ).toBe(true);
+  });
+
+  it("hides when every recognized countdown window is consumed or stale", () => {
+    expect(isQuotaCountdownStartEligible(quota({ hourlyPercentage: 99, weeklyPercentage: 99 }), NOW_MS)).toBe(false);
+    expect(
+      isQuotaCountdownStartEligible(
+        quota({
+          hourlyResetTime: NOW_SECONDS + 4 * 60 * 60 + 55 * 60 - 1,
+          weeklyResetTime: NOW_SECONDS + 6 * 24 * 60 * 60 + 23 * 60 * 60 + 55 * 60 - 1
+        }),
         NOW_MS
       )
     ).toBe(false);
-  });
-
-  it("uses consumed quota as immediate evidence that a window already started", () => {
-    expect(isQuotaCountdownStartEligible(quota({ hourlyPercentage: 99 }), NOW_MS)).toBe(false);
   });
 
   it("uses the service-reported long-window duration", () => {
@@ -63,7 +73,12 @@ describe("isQuotaCountdownStartEligible", () => {
 
   it("fails closed for missing or invalid quota windows", () => {
     expect(isQuotaCountdownStartEligible(undefined, NOW_MS)).toBe(false);
-    expect(isQuotaCountdownStartEligible(quota({ hourlyWindowMinutes: 0 }), NOW_MS)).toBe(false);
+    expect(
+      isQuotaCountdownStartEligible(
+        quota({ hourlyWindowMinutes: 0, weeklyWindowPresent: false }),
+        NOW_MS
+      )
+    ).toBe(false);
   });
 });
 

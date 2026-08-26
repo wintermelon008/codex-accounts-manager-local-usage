@@ -2229,6 +2229,49 @@ describe("CodexHotSwitchBridge", () => {
     await messages.next((message) => message.id === "quota-response-complete");
   }, 15_000);
 
+  it("captures a terminal usage-limit popup when the structured error code is absent", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "quota-popup-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "quota-popup-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "quota-popup-turn",
+        method: "turn/start",
+        params: { threadId: "quota-popup-thread", input: [] }
+      })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "quota-popup-thread");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "quota-popup-fail", method: "test/failUsageLimitMessageNotification", params: {} })}\n`
+    );
+    await messages.next((message) => message.id === "quota-popup-fail");
+
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      activeTurns: 0,
+      recentUsageLimitedThreads: 1,
+      usageLimitExhaustionReady: true,
+      usageLimitExhaustionBatchId: 1,
+      observedUsageLimitFailures: 1
+    });
+  }, 15_000);
+
   it("waits before retrying a model-capacity RPC rejection", async () => {
     const root = path.resolve(__dirname, "..");
     shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {

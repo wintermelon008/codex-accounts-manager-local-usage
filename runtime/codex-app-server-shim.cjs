@@ -2657,11 +2657,16 @@ function isUsageLimitExceededError(value) {
   if (!value || typeof value !== "object") {
     return false;
   }
+  const message = typeof value.message === "string" ? value.message.trim().toLowerCase().replace(/[’‘]/gu, "'") : "";
   return (
     value.codexErrorInfo === "usageLimitExceeded" ||
     value.codex_error_info === "usageLimitExceeded" ||
     value.errorInfo === "usageLimitExceeded" ||
     value.error_info === "usageLimitExceeded" ||
+    message.includes("you've hit your usage limit") ||
+    message.includes("you have hit your usage limit") ||
+    message.includes("usage limit exceeded") ||
+    message.includes("usage limit reached") ||
     isUsageLimitExceededError(value.data) ||
     isUsageLimitExceededError(value.error)
   );
