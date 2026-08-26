@@ -755,6 +755,12 @@ function compareAutoSwitchCandidate(
   activeWeeklyTriggered: boolean
 ) {
   return (left: CodexAccountRecord, right: CodexAccountRecord): number => {
+    const leftHasFiveHourWindow = hasComparableHourlyWindow(left);
+    const rightHasFiveHourWindow = hasComparableHourlyWindow(right);
+    if (leftHasFiveHourWindow !== rightHasFiveHourWindow) {
+      return Number(rightHasFiveHourWindow) - Number(leftHasFiveHourWindow);
+    }
+
     const leftScore = getAutoSwitchScore(
       left,
       hourlyThreshold,

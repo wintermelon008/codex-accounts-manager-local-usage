@@ -550,6 +550,47 @@ describe("scanLocalUsageSessions", () => {
     ).toMatchObject({ totalTokens: 100 });
   });
 
+  it("uses an explicit five-hour duration before the provider window slot name", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const attributionDirectory = path.join(root, "usage-attribution");
+    await writeSession(sessionsPath, "2026/07/14/restored-five-hour.jsonl", [
+      { type: "session_meta", payload: { id: "thread-restored-five-hour" } },
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:00:00.000Z",
+        {
+          inputTokens: 70,
+          cachedInputTokens: 20,
+          outputTokens: 30,
+          reasoningOutputTokens: 4,
+          totalTokens: 100
+        },
+        undefined,
+        {
+          secondary: {
+            resets_at: 1_800_000_000,
+            window_minutes: 300
+          }
+        }
+      )
+    ]);
+    await writeUsageAttribution(attributionDirectory, [
+      { v: 1, t: Date.parse("2026-07-14T00:59:00.000Z"), th: "thread-restored-five-hour", a: "local-account" }
+    ]);
+
+    const result = await scanLocalUsageAndAccountTokenUsage({
+      sessionsPath,
+      usageAttributionDirectory: attributionDirectory,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.accountTokenUsage.windowsByAccount["local-account"]).toEqual([
+      expect.objectContaining({ window: "hourly", resetAt: 1_800_000_000, totalTokens: 100 })
+    ]);
+  });
+
   it("keeps per-model totals when one account uses multiple models in one quota window", async () => {
     const root = await createTempDirectory();
     const sessionsPath = path.join(root, "sessions");

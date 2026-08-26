@@ -1118,25 +1118,49 @@ function classifyTokenUsageQuotaWindows(
     }
     return [
       {
-        window: isLongTermQuotaWindow(candidate.windowMinutes) ? "weekly" : candidate.fallbackWindow,
+        window: classifyQuotaWindowByDuration(candidate.windowMinutes) ?? candidate.fallbackWindow,
         resetAt: candidate.resetAt
       }
     ];
   }
 
-  if (candidates.every((candidate) => candidate.windowMinutes != null)) {
-    return [...candidates]
-      .sort((left, right) => (left.windowMinutes ?? 0) - (right.windowMinutes ?? 0))
-      .map((candidate, index) => ({
-        window: index === 0 ? "hourly" : "weekly",
-        resetAt: candidate.resetAt
-      }));
+  const assigned = new Map<TokenUsageQuotaWindowCandidate, AccountTokenUsageWindow["window"]>();
+  const usedWindows = new Set<AccountTokenUsageWindow["window"]>();
+  for (const candidate of candidates) {
+    const classified = classifyQuotaWindowByDuration(candidate.windowMinutes);
+    if (classified && !usedWindows.has(classified)) {
+      assigned.set(candidate, classified);
+      usedWindows.add(classified);
+    }
   }
 
-  return candidates.map((candidate) => ({
-    window: candidate.fallbackWindow,
-    resetAt: candidate.resetAt
-  }));
+  return candidates.map((candidate) => {
+    const classified = assigned.get(candidate);
+    if (classified) {
+      return { window: classified, resetAt: candidate.resetAt };
+    }
+
+    const fallback = !usedWindows.has(candidate.fallbackWindow)
+      ? candidate.fallbackWindow
+      : usedWindows.has("hourly")
+        ? "weekly"
+        : "hourly";
+    usedWindows.add(fallback);
+    return { window: fallback, resetAt: candidate.resetAt };
+  });
+}
+
+function classifyQuotaWindowByDuration(windowMinutes: number | undefined): AccountTokenUsageWindow["window"] | undefined {
+  if (windowMinutes == null) {
+    return undefined;
+  }
+  if (windowMinutes > 0 && windowMinutes <= 6 * 60) {
+    return "hourly";
+  }
+  if (isLongTermQuotaWindow(windowMinutes)) {
+    return "weekly";
+  }
+  return undefined;
 }
 
 function isLongTermQuotaWindow(windowMinutes: number | undefined): boolean {
