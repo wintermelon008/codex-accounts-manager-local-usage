@@ -401,8 +401,9 @@ describe("seamless 5-hour quota-band switching", () => {
       hotSwitchEnabled: true
     });
     const active = account("active", true, 74);
-    const candidate = account("candidate", false, 90);
-    const repo = repository(active, candidate);
+    const reserve = reserveAccount("reserve", false, 100);
+    const candidate = account("candidate", false, 40, 90);
+    const repo = repository(active, reserve, candidate);
     const switchRuntimeAccount = vi.fn(async () => switched(candidate));
 
     await expect(
