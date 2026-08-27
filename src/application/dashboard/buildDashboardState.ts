@@ -74,7 +74,7 @@ export async function buildDashboardState(
       tokens,
       health,
       dismissedHealth: isHealthDismissed(account, health),
-      automationState: getAccountAutomationState(tokenAutomation, account.id),
+      automationState: getAccountAutomationState(tokenAutomation, account),
       healthPriority: getHealthPriority(health)
     });
   });

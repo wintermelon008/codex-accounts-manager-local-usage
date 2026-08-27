@@ -197,6 +197,12 @@ export function buildAccountRecordDraft(params: {
     lastQuotaAt: params.existing?.lastQuotaAt,
     quotaSummary: params.existing?.quotaSummary,
     quotaError: params.existing?.quotaError,
+    tokenRefreshLastAttemptAt: params.existing?.tokenRefreshLastAttemptAt,
+    tokenRefreshLastSuccessAt: params.existing?.tokenRefreshLastSuccessAt,
+    tokenRefreshLastError: params.existing?.tokenRefreshLastError,
+    tokenRefreshLastErrorAt: params.existing?.tokenRefreshLastErrorAt,
+    tokenRefreshLastErrorKind: params.existing?.tokenRefreshLastErrorKind,
+    tokenRefreshNextRetryAt: params.existing?.tokenRefreshNextRetryAt,
     createdAt: params.existing?.createdAt ?? params.now,
     updatedAt: params.now
   };

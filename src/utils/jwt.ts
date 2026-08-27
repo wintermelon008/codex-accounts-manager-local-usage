@@ -115,7 +115,8 @@ export function extractClaims(idToken: string, accessToken?: string): DecodedAut
     (accessPayload ? readString(accessPayload, "preferred_username") : undefined) ??
     (accessPayload ? readString(accessPayload, "upn") : undefined) ??
     readString(accessProfile, "email");
-  const authProviderValue = readString(idPayload, "auth_provider") ?? (accessPayload ? readString(accessPayload, "auth_provider") : undefined);
+  const authProviderValue =
+    readString(idPayload, "auth_provider") ?? (accessPayload ? readString(accessPayload, "auth_provider") : undefined);
 
   const claims = {
     email: emailValue,
@@ -161,7 +162,7 @@ export function extractClaims(idToken: string, accessToken?: string): DecodedAut
  * @param token - JWT 令牌
  * @returns 过期时间戳，如果不存在则返回 undefined
  */
-function getTokenExpiryEpochSeconds(token: string): number | undefined {
+export function getTokenExpiryEpochSeconds(token: string): number | undefined {
   const payload = decodeJwtPayload(token);
   const expValue = payload["exp"];
   return typeof expValue === "number" ? expValue : undefined;

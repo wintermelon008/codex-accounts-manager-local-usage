@@ -23,7 +23,7 @@ const CALLBACK_PORT = OAUTH_CALLBACK_PORT;
 
 /**
  * Token 刷新提前量（秒）。对齐 cockpit-tools 的 TOKEN_REFRESH_SKEW_SECONDS，
- * 在 access_token 剩余有效期不足 5 分钟时即触发刷新，避免边界过期。
+ * 在 access_token 或 id_token 剩余有效期不足 5 分钟时即触发刷新，避免边界过期。
  */
 export const TOKEN_REFRESH_SKEW_SECONDS = 300;
 
@@ -53,10 +53,7 @@ export async function loginWithOAuth(cancellationToken?: vscode.CancellationToke
   return runPreparedOAuthLoginSession(prepared, cancellationToken);
 }
 
-export async function refreshTokens(
-  refreshToken: string,
-  currentIdToken?: string
-): Promise<CodexTokens> {
+export async function refreshTokens(refreshToken: string, currentIdToken?: string): Promise<CodexTokens> {
   const response = await fetchWithTimeout(
     TOKEN_ENDPOINT,
     {
@@ -92,7 +89,7 @@ export async function refreshTokens(
 
   const payload = JSON.parse(raw) as Record<string, unknown>;
   // OpenAI refresh 端点偶尔不返回新的 id_token，此时复用本地旧值（对齐 cockpit refresh_access_token_with_fallback）。
-  const idToken = readOptionalString(payload, "id_token") ?? (currentIdToken && currentIdToken.trim() ? currentIdToken : undefined);
+  const idToken = readOptionalString(payload, "id_token") ?? (currentIdToken?.trim() ? currentIdToken : undefined);
   if (!idToken) {
     throw new AuthError("Missing id_token in OAuth refresh response and no local fallback available", {
       code: ErrorCode.AUTH_TOKEN_MISSING,
@@ -192,9 +189,12 @@ export async function runPreparedOAuthLoginSession(
     const opened = await vscode.env.openExternal(vscode.Uri.parse(session.authUrl));
     if (!opened) {
       void vscode.env.clipboard.writeText(session.authUrl);
-      throw new AuthError("Unable to open the browser automatically. The authorization URL was copied to your clipboard.", {
-        code: ErrorCode.AUTH_OAUTH_FAILED
-      });
+      throw new AuthError(
+        "Unable to open the browser automatically. The authorization URL was copied to your clipboard.",
+        {
+          code: ErrorCode.AUTH_OAUTH_FAILED
+        }
+      );
     }
 
     if (cancellationToken?.isCancellationRequested) {
@@ -274,8 +274,7 @@ function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.Canc
     callback?.();
   };
 
-  const createAuthError = (message: string): AuthError =>
-    new AuthError(message, { code: ErrorCode.AUTH_OAUTH_FAILED });
+  const createAuthError = (message: string): AuthError => new AuthError(message, { code: ErrorCode.AUTH_OAUTH_FAILED });
 
   const promise = new Promise<string>((resolve, reject) => {
     timeout = setTimeout(() => {

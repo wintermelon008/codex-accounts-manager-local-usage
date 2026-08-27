@@ -334,7 +334,10 @@ export class AccountsCommandService {
           progress?.report({ message: copy.refreshingStep(started, accounts.length, account.email) });
           if (options?.silent) {
             await refreshSingleQuotaSafely(this.repo, batchRefreshView, account.id, {
-              forceRefresh: options.forceRefresh
+              forceRefresh: options.forceRefresh,
+              // A minute-level quota sweep must respect subscription retry
+              // backoff; explicit/manual refreshes still force the query.
+              forceSubscriptionRefresh: false
             });
             return;
           }

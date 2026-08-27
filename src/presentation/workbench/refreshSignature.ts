@@ -71,7 +71,7 @@ export function buildWorkbenchRefreshSignature(params: {
             ([accountId, state]) =>
               `${accountId}:${state.lastCheckAt ?? ""}:${state.lastRefreshAt ?? ""}:${state.lastError ?? ""}:${
                 state.lastErrorAt ?? ""
-              }`
+              }:${state.errorKind ?? ""}:${state.nextRetryAt ?? ""}`
           )
           .join("|")
       ].join(":")
