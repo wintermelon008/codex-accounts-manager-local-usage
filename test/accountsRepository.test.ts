@@ -5,10 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import type { CodexTokens } from "../src/core/types";
 
-const { writeAuthFileMock, readAuthFileMock, fetchRemoteAccountProfileMock } = vi.hoisted(() => ({
+const {
+  writeAuthFileMock,
+  readAuthFileMock,
+  fetchRemoteAccountProfileMock,
+  fetchSubscriptionStatusMock
+} = vi.hoisted(() => ({
   writeAuthFileMock: vi.fn(),
   readAuthFileMock: vi.fn(),
-  fetchRemoteAccountProfileMock: vi.fn()
+  fetchRemoteAccountProfileMock: vi.fn(),
+  fetchSubscriptionStatusMock: vi.fn()
 }));
 
 vi.mock("../src/codex", async (importOriginal) => {
@@ -23,6 +29,14 @@ vi.mock("../src/codex", async (importOriginal) => {
 vi.mock("../src/services/profile", () => ({
   fetchRemoteAccountProfile: fetchRemoteAccountProfileMock
 }));
+
+vi.mock("../src/services/subscription", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/services/subscription")>();
+  return {
+    ...actual,
+    fetchSubscriptionStatus: fetchSubscriptionStatusMock
+  };
+});
 
 import { AccountsRepository } from "../src/storage";
 import { mirrorAideckCodexAccount } from "../src/storage/aideckCodexStorage";
@@ -97,6 +111,7 @@ describe("AccountsRepository token persistence", () => {
     writeAuthFileMock.mockReset();
     readAuthFileMock.mockReset().mockResolvedValue(undefined);
     fetchRemoteAccountProfileMock.mockReset().mockResolvedValue(undefined);
+    fetchSubscriptionStatusMock.mockReset();
   });
 
   afterEach(async () => {
@@ -106,6 +121,124 @@ describe("AccountsRepository token persistence", () => {
       process.env.AIDECK_DATA_DIR = originalAideckDataDir;
     }
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("does not retain a missing-expiry subscription error for a Free account", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: { fsPath: tempDir },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const tokens = createTokens("acct_free", "free@example.com");
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [
+          {
+            id: "account-free",
+            email: "free@example.com",
+            planType: "chatgptfreeplan",
+            subscriptionQueryLastError: "订阅接口未返回有效订阅时间",
+            subscriptionQueryNextRetryAt: Date.now() + 60_000,
+            isActive: false,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+    await context.secrets.store("codex.account.account-free", JSON.stringify(tokens));
+    fetchSubscriptionStatusMock.mockResolvedValue({
+      accountId: "acct_free",
+      planType: "chatgptfreeplan"
+    });
+
+    const repo = new AccountsRepository(context);
+    try {
+      await repo.refreshSubscriptionState("account-free", false);
+
+      expect(await repo.getAccount("account-free")).toMatchObject({
+        planType: "chatgptfreeplan",
+        subscriptionQueryLastError: undefined,
+        subscriptionQueryNextRetryAt: undefined
+      });
+      expect(fetchSubscriptionStatusMock).not.toHaveBeenCalled();
+
+      fetchSubscriptionStatusMock.mockResolvedValue({
+        accountId: "acct_free",
+        planType: "chatgptfreeplan"
+      });
+      await repo.refreshSubscriptionState("account-free", true);
+      expect(fetchSubscriptionStatusMock).toHaveBeenCalledOnce();
+    } finally {
+      repo.dispose();
+    }
+  });
+
+  it("persists token refresh diagnostics without writing credentials", async () => {
+    const context = {
+      globalStorageUri: { fsPath: tempDir },
+      secrets: {
+        get: vi.fn(),
+        store: vi.fn(),
+        delete: vi.fn()
+      }
+    } as unknown as vscode.ExtensionContext;
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [
+          {
+            id: "account-1",
+            email: "dev@example.com",
+            isActive: false,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+
+    const repo = new AccountsRepository(context);
+    const attemptAt = Date.now();
+    try {
+      await repo.updateTokenRefreshStatus("account-1", {
+        tokenRefreshLastAttemptAt: attemptAt,
+        tokenRefreshLastError: "Token refresh failed (503)",
+        tokenRefreshLastErrorAt: attemptAt,
+        tokenRefreshLastErrorKind: "network",
+        tokenRefreshNextRetryAt: attemptAt + 300_000
+      });
+
+      expect(await repo.getAccount("account-1")).toMatchObject({
+        tokenRefreshLastAttemptAt: attemptAt,
+        tokenRefreshLastError: "Token refresh failed (503)",
+        tokenRefreshLastErrorKind: "network",
+        tokenRefreshNextRetryAt: attemptAt + 300_000
+      });
+      expect(context.secrets.store).not.toHaveBeenCalled();
+    } finally {
+      repo.dispose();
+    }
+
+    expect(JSON.parse(await fs.readFile(path.join(tempDir, "accounts-index.json"), "utf8"))).toMatchObject({
+      accounts: [
+        expect.objectContaining({
+          tokenRefreshLastError: "Token refresh failed (503)",
+          tokenRefreshLastErrorKind: "network"
+        })
+      ]
+    });
   });
 
   it("persists a virtual Gateway route without OAuth secrets or auth.json writes", async () => {

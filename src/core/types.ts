@@ -40,6 +40,8 @@ export interface CodexVirtualRouteDescriptor {
 
 export type SeamlessQuotaBandSize = 20 | 25 | 33 | 50;
 export type SeamlessSwitchThreshold = 0 | 1 | 3 | 5;
+/** Background OAuth refresh failure categories persisted for account diagnostics. */
+export type TokenRefreshErrorKind = "network" | "reauthorize" | "provider_response" | "storage" | "unknown";
 /** 账号面板与无感切号使用的可见分组。 */
 export type CodexAccountGroup = "A" | "B" | "C";
 
@@ -217,6 +219,18 @@ export interface CodexAccountRecord {
   quotaSummary?: CodexQuotaSummary;
   /** 配额错误信息 */
   quotaError?: CodexQuotaErrorInfo;
+  /** 后台 OAuth 续期最后一次实际尝试时间戳 (毫秒) */
+  tokenRefreshLastAttemptAt?: number;
+  /** 后台 OAuth 续期最后一次成功时间戳 (毫秒) */
+  tokenRefreshLastSuccessAt?: number;
+  /** 后台 OAuth 续期最后一次脱敏错误 */
+  tokenRefreshLastError?: string;
+  /** 后台 OAuth 续期最后一次错误时间戳 (毫秒) */
+  tokenRefreshLastErrorAt?: number;
+  /** 后台 OAuth 续期最后一次错误分类 */
+  tokenRefreshLastErrorKind?: TokenRefreshErrorKind;
+  /** 后台 OAuth 续期下一次允许重试时间戳 (毫秒) */
+  tokenRefreshNextRetryAt?: number;
   /** 创建时间戳 (毫秒) */
   createdAt: number;
   /** 更新时间戳 (毫秒) */

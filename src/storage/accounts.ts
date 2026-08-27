@@ -74,6 +74,7 @@ import {
   CodexIndexHealthSummary,
   CodexQuotaSummary,
   CodexTokens,
+  TokenRefreshErrorKind,
   SharedCodexAccountJson,
   isSub2ApiAccount,
   CodexVirtualRouteDescriptor
@@ -90,6 +91,7 @@ import {
 import { buildAccountStorageId } from "../utils/accountIdentity";
 import { extractClaims, isTokenExpired } from "../utils/jwt";
 import { getQuotaIssueKind } from "../utils/quotaIssue";
+import { isFreePlanType } from "../utils/quotaLabels";
 import { AccountError, StorageError, createError, ErrorCode } from "../core/errors";
 import {
   AideckMirrorTokenSnapshot,
@@ -129,6 +131,17 @@ type TokenCacheEntry = {
   mirrorRevision?: string;
 };
 
+export type TokenChangeListener = (accountIds?: readonly string[]) => void;
+
+export type TokenRefreshStatusUpdate = {
+  tokenRefreshLastAttemptAt?: number;
+  tokenRefreshLastSuccessAt?: number;
+  tokenRefreshLastError?: string;
+  tokenRefreshLastErrorAt?: number;
+  tokenRefreshLastErrorKind?: TokenRefreshErrorKind;
+  tokenRefreshNextRetryAt?: number;
+};
+
 export class AccountsRepository {
   private readonly secretStore: SecretStore;
   private readonly indexPath: string;
@@ -137,6 +150,7 @@ export class AccountsRepository {
   private readonly accountMutex = createKeyedMutex();
   /** getTokens 内存缓存，减少 SecretStore/Keychain 重复读取 */
   private readonly tokenCache = new Map<string, TokenCacheEntry>();
+  private readonly tokenChangeListeners = new Set<TokenChangeListener>();
 
   /** 防止重复释放 */
   private disposed = false;
@@ -151,6 +165,35 @@ export class AccountsRepository {
   constructor(private readonly context: vscode.ExtensionContext) {
     this.secretStore = new SecretStore(context.secrets);
     this.indexPath = path.join(context.globalStorageUri.fsPath, INDEX_FILE);
+  }
+
+  /**
+   * 订阅凭据变化。监听器只收到账号 ID，不接触 token 内容；未传入 ID
+   * 表示需要重新读取全部账号（例如索引恢复）。
+   */
+  onDidChangeTokens(listener: TokenChangeListener): vscode.Disposable {
+    this.tokenChangeListeners.add(listener);
+    return {
+      dispose: (): void => {
+        this.tokenChangeListeners.delete(listener);
+      }
+    };
+  }
+
+  private notifyTokensChanged(accountIds?: readonly string[]): void {
+    const normalizedIds =
+      accountIds === undefined ? undefined : [...new Set(accountIds.filter((accountId) => accountId?.trim()))];
+    if (normalizedIds?.length === 0) {
+      return;
+    }
+
+    for (const listener of [...this.tokenChangeListeners]) {
+      try {
+        listener(normalizedIds);
+      } catch (error) {
+        console.warn("[codexAccounts] token change listener failed:", error);
+      }
+    }
   }
 
   /**
@@ -309,6 +352,8 @@ export class AccountsRepository {
       throw createError.storageIndexRecoveryFailed(this.indexPath, this.state.indexHealth.lastErrorMessage);
     }
 
+    this.notifyTokensChanged();
+
     return {
       source: "backup",
       restoredCount: restored.accounts.length,
@@ -422,6 +467,7 @@ export class AccountsRepository {
       if (!storedTokens || shouldSyncTokensFromAuthFile(storedTokens, mergedTokens)) {
         await this.secretStore.setTokens(accountId, mergedTokens);
         clearQuotaCacheForAccount(accountId);
+        this.notifyTokensChanged([accountId]);
       }
 
       this.tokenCache.set(accountId, {
@@ -439,7 +485,11 @@ export class AccountsRepository {
     }
   }
 
-  async updateTokens(accountId: string, tokens: CodexTokens): Promise<CodexAccountRecord> {
+  async updateTokens(
+    accountId: string,
+    tokens: CodexTokens,
+    options: { notifyTokenChange?: boolean } = {}
+  ): Promise<CodexAccountRecord> {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
 
@@ -460,6 +510,9 @@ export class AccountsRepository {
     await this.secretStore.setTokens(accountId, effectiveTokens);
     this.invalidateTokenCache();
     await mirrorAideckCodexAccount(account, effectiveTokens);
+    if (options.notifyTokenChange !== false) {
+      this.notifyTokensChanged([accountId]);
+    }
 
     let shouldWriteIndex = false;
     if (effectiveTokens.accountId && effectiveTokens.accountId !== account.accountId) {
@@ -796,6 +849,8 @@ export class AccountsRepository {
       this.writeIndex(index);
     }
 
+    this.notifyTokensChanged([id]);
+
     return account;
   }
 
@@ -955,6 +1010,7 @@ export class AccountsRepository {
           await this.flushPendingSave();
         }
       }
+      this.notifyTokensChanged([account.id]);
       imported.push({ ...account });
     }
 
@@ -1061,6 +1117,7 @@ export class AccountsRepository {
       await removeAideckCodexAccount(accountId);
     }
     this.writeIndex(index);
+    this.notifyTokensChanged([accountId]);
   }
 
   /**
@@ -1340,6 +1397,7 @@ export class AccountsRepository {
       await this.secretStore.setTokens(accountId, effectiveNextTokens);
       this.invalidateTokenCache();
       await mirrorAideckCodexAccount(account, effectiveNextTokens);
+      this.notifyTokensChanged([accountId]);
       if (account.isActive) {
         await writeAuthFile(effectiveNextTokens);
         await mirrorAideckCurrentAccount(accountId);
@@ -1355,6 +1413,49 @@ export class AccountsRepository {
     this.writeIndex(index);
 
     return account;
+  }
+
+  /** Persist redacted background OAuth refresh diagnostics without touching secrets. */
+  async updateTokenRefreshStatus(accountId: string, update: TokenRefreshStatusUpdate): Promise<void> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account || isSub2ApiAccount(account)) {
+      return;
+    }
+
+    let changed = false;
+    if ("tokenRefreshLastAttemptAt" in update && account.tokenRefreshLastAttemptAt !== update.tokenRefreshLastAttemptAt) {
+      account.tokenRefreshLastAttemptAt = update.tokenRefreshLastAttemptAt;
+      changed = true;
+    }
+    if ("tokenRefreshLastSuccessAt" in update && account.tokenRefreshLastSuccessAt !== update.tokenRefreshLastSuccessAt) {
+      account.tokenRefreshLastSuccessAt = update.tokenRefreshLastSuccessAt;
+      changed = true;
+    }
+    if ("tokenRefreshLastError" in update && account.tokenRefreshLastError !== update.tokenRefreshLastError) {
+      account.tokenRefreshLastError = update.tokenRefreshLastError;
+      changed = true;
+    }
+    if ("tokenRefreshLastErrorAt" in update && account.tokenRefreshLastErrorAt !== update.tokenRefreshLastErrorAt) {
+      account.tokenRefreshLastErrorAt = update.tokenRefreshLastErrorAt;
+      changed = true;
+    }
+    if (
+      "tokenRefreshLastErrorKind" in update &&
+      account.tokenRefreshLastErrorKind !== update.tokenRefreshLastErrorKind
+    ) {
+      account.tokenRefreshLastErrorKind = update.tokenRefreshLastErrorKind;
+      changed = true;
+    }
+    if ("tokenRefreshNextRetryAt" in update && account.tokenRefreshNextRetryAt !== update.tokenRefreshNextRetryAt) {
+      account.tokenRefreshNextRetryAt = update.tokenRefreshNextRetryAt;
+      changed = true;
+    }
+
+    if (changed) {
+      account.updatedAt = Date.now();
+      this.writeIndex(index);
+    }
   }
 
   /**
@@ -1395,6 +1496,7 @@ export class AccountsRepository {
           await mirrorAideckCodexAccount(account, nextTokens);
           await mirrorAideckCurrentAccount(derivedId);
           clearQuotaCacheForAccount(derivedId);
+          this.notifyTokensChanged([derivedId]);
 
           if (nextTokens.accountId && nextTokens.accountId !== account.accountId) {
             account.accountId = nextTokens.accountId;
@@ -1435,6 +1537,15 @@ export class AccountsRepository {
     if (!subscriptionMissingOrExpired(account.subscriptionActiveUntil)) {
       clearSubscriptionRetryPending(account);
       this.writeIndex(index);
+    }
+
+    if (isFreePlanType(account.planType) && subscriptionMissingOrExpired(account.subscriptionActiveUntil) && !force) {
+      const missingExpiryError = account.subscriptionQueryLastError === "订阅接口未返回有效订阅时间";
+      if (missingExpiryError || (account.subscriptionQueryLastError === undefined && account.subscriptionQueryNextRetryAt !== undefined)) {
+        clearSubscriptionRetryPending(account);
+        this.writeIndex(index);
+      }
+      return;
     }
 
     if (!shouldAttemptSubscriptionRefresh(account, force)) {
@@ -1492,7 +1603,7 @@ export class AccountsRepository {
 
       freshAccount.subscriptionQueryLastAttemptAt = Date.now();
 
-      if (subscriptionMissingOrExpired(freshAccount.subscriptionActiveUntil)) {
+      if (subscriptionMissingOrExpired(freshAccount.subscriptionActiveUntil) && !isFreePlanType(freshAccount.planType)) {
         markSubscriptionRetryPending(freshAccount, "订阅接口未返回有效订阅时间");
       } else {
         clearSubscriptionRetryPending(freshAccount);

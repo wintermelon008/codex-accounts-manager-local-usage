@@ -85,6 +85,7 @@ type RefreshSingleQuotaOptions = {
   announce?: boolean;
   awaitSubscriptionRefresh?: boolean;
   forceRefresh?: boolean;
+  forceSubscriptionRefresh?: boolean;
   refreshView?: boolean;
   warnQuota?: boolean;
 };
@@ -97,6 +98,7 @@ export async function refreshSingleQuota(
 ): Promise<void> {
   const announce = options.announce ?? true;
   const forceRefresh = options.forceRefresh ?? announce;
+  const forceSubscriptionRefresh = options.forceSubscriptionRefresh ?? forceRefresh;
   const awaitSubscriptionRefresh = options.awaitSubscriptionRefresh ?? false;
   const shouldRefreshView = options.refreshView ?? true;
   const warnQuota = options.warnQuota ?? true;
@@ -137,7 +139,7 @@ export async function refreshSingleQuota(
     result.updatedPlanType,
     result.updatedSubscriptionActiveUntil
   );
-  const subscriptionRefresh = repo.refreshSubscriptionState(accountId, forceRefresh).catch(() => undefined);
+  const subscriptionRefresh = repo.refreshSubscriptionState(accountId, forceSubscriptionRefresh).catch(() => undefined);
   if (awaitSubscriptionRefresh) {
     // 账号信息同步需要等订阅写入完成后再发布页面状态，避免继续展示旧套餐和旧到期时间。
     await subscriptionRefresh;
@@ -243,12 +245,13 @@ export async function refreshSingleQuotaSafely(
   repo: AccountsRepository,
   view: RefreshView,
   accountId: string,
-  options: { forceRefresh?: boolean } = {}
+  options: { forceRefresh?: boolean; forceSubscriptionRefresh?: boolean } = {}
 ): Promise<void> {
   try {
     await refreshSingleQuota(repo, view, accountId, {
       announce: false,
       forceRefresh: options.forceRefresh ?? false,
+      forceSubscriptionRefresh: options.forceSubscriptionRefresh,
       refreshView: false,
       warnQuota: false
     });

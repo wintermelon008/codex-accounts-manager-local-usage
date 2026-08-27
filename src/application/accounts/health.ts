@@ -19,7 +19,7 @@ export function resolveAccountHealth(
   if (isSub2ApiAccount(account)) {
     return { kind: "healthy", issueKey: "virtual" };
   }
-  const automationState = automation.accounts[account.id];
+  const automationState = getAccountAutomationState(automation, account);
   const quotaIssueKind = getQuotaIssueKind(account.quotaError);
   if (quotaIssueKind === "disabled") {
     return {
@@ -30,7 +30,7 @@ export function resolveAccountHealth(
   }
 
   const automationError = automationState?.lastError;
-  if (quotaIssueKind === "auth" || isAuthLikeMessage(automationError)) {
+  if (quotaIssueKind === "auth" || automationState?.errorKind === "reauthorize" || isAuthLikeMessage(automationError)) {
     return {
       kind: "reauthorize",
       issueKey: buildIssueKey("reauthorize", account.quotaError?.code, account.quotaError?.message, automationError),
@@ -79,9 +79,46 @@ export function isHealthDismissed(account: CodexAccountRecord, health: AccountHe
 
 export function getAccountAutomationState(
   automation: TokenAutomationSnapshot,
-  accountId: string
+  account: Pick<
+    CodexAccountRecord,
+    | "id"
+    | "tokenRefreshLastAttemptAt"
+    | "tokenRefreshLastSuccessAt"
+    | "tokenRefreshLastError"
+    | "tokenRefreshLastErrorAt"
+    | "tokenRefreshLastErrorKind"
+    | "tokenRefreshNextRetryAt"
+  >
 ): AccountAutomationState | undefined {
-  return automation.accounts[accountId];
+  const runtime = automation.accounts[account.id];
+  const persisted = {
+    lastCheckAt: account.tokenRefreshLastAttemptAt,
+    lastRefreshAt: account.tokenRefreshLastSuccessAt,
+    lastError: account.tokenRefreshLastError,
+    lastErrorAt: account.tokenRefreshLastErrorAt,
+    errorKind: account.tokenRefreshLastErrorKind,
+    nextRetryAt: account.tokenRefreshNextRetryAt
+  } satisfies AccountAutomationState;
+
+  if (!runtime && Object.values(persisted).every((value) => value === undefined)) {
+    return undefined;
+  }
+
+  return {
+    lastCheckAt: runtime?.lastCheckAt ?? persisted.lastCheckAt,
+    lastRefreshAt: runtime?.lastRefreshAt ?? persisted.lastRefreshAt,
+    lastError: hasRuntimeField(runtime, "lastError") ? runtime?.lastError : persisted.lastError,
+    lastErrorAt: hasRuntimeField(runtime, "lastErrorAt") ? runtime?.lastErrorAt : persisted.lastErrorAt,
+    errorKind: hasRuntimeField(runtime, "errorKind") ? runtime?.errorKind : persisted.errorKind,
+    nextRetryAt: hasRuntimeField(runtime, "nextRetryAt") ? runtime?.nextRetryAt : persisted.nextRetryAt
+  };
+}
+
+function hasRuntimeField(
+  state: AccountAutomationState | undefined,
+  field: keyof AccountAutomationState
+): boolean {
+  return state !== undefined && Object.prototype.hasOwnProperty.call(state, field);
 }
 
 function isAuthLikeMessage(message?: string): boolean {
