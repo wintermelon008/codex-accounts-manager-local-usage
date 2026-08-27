@@ -1,6 +1,7 @@
 "use strict";
 
-// OpenAI 注册表单人工辅助助手（Playwright 只负责打开页面和账号信息表单）。
+// OpenAI 注册表单辅助助手：Manager 可用时由外部浏览器承载；仅在
+// “注册并导入 Codex”缺少 Manager OAuth 能力时使用 Playwright 后备流程。
 //
 // 设计边界（明确且不允许扩大）：
 // - 接码平台只由用户点击“开始取号/重新取号/取消取号”触发；拿到号码后自动读取短信验证码。
@@ -14,12 +15,14 @@ const { LIYEPhoneOrderSession } = require("./liye-phone-order.cjs");
 const { createEmailCodeState } = require("./registration-email-code.cjs");
 
 const REGISTER_URL = "https://chatgpt.com/auth/login";
+const MANUAL_BROWSER_MODE = "manual-browser";
 const REGISTRATION_SESSION_ENDED_ERROR = "OpenAI 返回“会话已结束”页面，当前注册入口没有有效会话；请重新点击“开始注册”后重试";
 
 const STATES = {
   IDLE: "idle",
   STARTING: "starting",
   AWAITING_ACCOUNT_DETAILS: "awaiting_account_details",
+  AWAITING_MANUAL_REGISTRATION: "awaiting_manual_registration",
   AWAITING_OAUTH: "awaiting_oauth",
   AWAITING_EMAIL_CODE: "awaiting_email_code",
   SUBMITTING_EMAIL_CODE: "submitting_email_code",
@@ -155,14 +158,18 @@ class RegistrationSession {
     this.password = options.password;
     this.name = options.name || "jdd";
     this.age = options.age || 24;
+    this.importCodex = options.importCodex !== false;
     this.onStateChange = options.onStateChange || (() => {});
     this.onLog = options.onLog || (() => {});
     this.prepareBrowserEnvironment = options.prepareBrowserEnvironment || prepareBrowserEnvironment;
     this.startOAuthImport = typeof options.startOAuthImport === "function" ? options.startOAuthImport : null;
     this.cancelOAuthImport = typeof options.cancelOAuthImport === "function" ? options.cancelOAuthImport : null;
+    this.openRegistrationBrowser = typeof options.openRegistrationBrowser === "function" ? options.openRegistrationBrowser : null;
 
     this.state = STATES.IDLE;
-    this.mode = this.startOAuthImport ? "oauth" : "playwright";
+    this.mode = this.importCodex
+      ? this.startOAuthImport ? "oauth" : "playwright"
+      : MANUAL_BROWSER_MODE;
     this.oauthOperationId = `registration-oauth:${this.id}`;
     this.cancelRequested = false;
     this.browser = null;
@@ -199,18 +206,27 @@ class RegistrationSession {
     if (Object.prototype.hasOwnProperty.call(extra, "feedbackLevel")) {
       this.feedbackLevel = typeof extra.feedbackLevel === "string" ? extra.feedbackLevel : "info";
     }
-    this.onStateChange({ sessionId: this.id, state, mode: this.mode, ...extra });
+    this.onStateChange({ sessionId: this.id, state, mode: this.mode, importCodex: this.importCodex, ...extra });
   }
 
-  // 使用 Manager OAuth 或打开独立 Playwright 浏览器，推进注册会话。
+  // 注册并导入 Codex 沿用 Manager OAuth；GPT-only 只打开外部注册页，页面操作由用户完成。
   async start() {
     this.cancelRequested = false;
     this.setState(STATES.STARTING);
-    this.log("info", this.mode === "oauth" ? "启动 Codex OAuth 注册/导入流程" : "启动浏览器，打开 OpenAI 注册页");
+    this.log("info", this.mode === "oauth"
+      ? "启动注册并导入 Codex 流程"
+      : this.importCodex
+        ? "启动浏览器，打开 OpenAI 注册页（完成后需手动导入 Codex）"
+        : "启动浏览器，打开 OpenAI 注册页（仅注册 GPT）");
 
     try {
       if (this.mode === "oauth") {
         await this._startOAuthImport();
+        return;
+      }
+
+      if (this.mode === MANUAL_BROWSER_MODE) {
+        await this._startManualBrowser();
         return;
       }
 
@@ -250,6 +266,30 @@ class RegistrationSession {
     }
   }
 
+  async _startManualBrowser() {
+    if (!this.openRegistrationBrowser) {
+      throw new Error("当前 Manager 不支持独立 GPT 注册浏览器，请先更新 Manager 扩展");
+    }
+
+    this.setState(STATES.AWAITING_MANUAL_REGISTRATION, {
+      feedback: "正在打开 GPT 注册网页；邮箱、密码、手机号、验证码和最终确认均由你在网页中手动完成。",
+      feedbackLevel: "info",
+    });
+    const result = await this.openRegistrationBrowser({ clipboardText: this.email });
+    if (this.cancelRequested || [STATES.CANCELLED, STATES.COMPLETED].includes(this.state)) {
+      return;
+    }
+    if (!result || result.opened !== true) {
+      throw new Error("GPT 注册网页未能打开");
+    }
+    this.setState(STATES.AWAITING_MANUAL_REGISTRATION, {
+      browserOpened: true,
+      feedback: "GPT 注册网页已打开。已自动查询一次邮箱验证码；取号和接码仍由下方按钮手动控制，网页注册完成后点击“完成 GPT 注册”。",
+      feedbackLevel: "success",
+    });
+    this.log("ok", "已打开 GPT 注册网页，等待用户手动完成");
+  }
+
   async _startOAuthImport() {
     this.setState(STATES.AWAITING_OAUTH, {
       feedback: "已切换到 Codex OAuth 流程，请在打开的浏览器中完成邮箱、密码、手机号、验证码和最终授权；面板仅提供邮箱码/接码内容显示与复制。",
@@ -281,7 +321,7 @@ class RegistrationSession {
       : result.quotaError
         ? `，额度刷新未完成：${result.quotaError}`
         : "";
-    const message = `Codex OAuth 注册/导入已完成${quotaMessage}`;
+    const message = `注册并导入 Codex 已完成${quotaMessage}`;
     this.setState(STATES.COMPLETED, {
       result: this.result,
       feedback: message,
@@ -847,9 +887,17 @@ class RegistrationSession {
       }
       this.result = { email: this.email, password: this.password };
       const oauthPending = nextStep.kind !== PAGE_STEPS.SUCCESS;
-      const completionMessage = oauthPending
-        ? "注册信息、邮箱验证、手机号验证和姓名年龄均已完成；最后的 Codex OAuth/工作区验证可能仍在进行，已按注册成功记录。"
-        : "注册和授权流程完成";
+      const completionMessage = this.importCodex
+        ? this.mode === "oauth"
+          ? oauthPending
+            ? "GPT 注册信息、邮箱验证、手机号验证和姓名年龄均已完成；Codex 导入可能仍在进行，已按注册成功记录。"
+            : "注册并导入 Codex 流程完成"
+          : oauthPending
+            ? "GPT 注册信息、邮箱验证、手机号验证和姓名年龄均已完成；之后仍需手动导入 Codex，已按 GPT 注册成功记录。"
+            : "GPT 注册完成（Codex 导入需在邮箱库中手动完成）"
+        : oauthPending
+          ? "GPT 注册信息、邮箱验证、手机号验证和姓名年龄均已完成；已按 GPT 注册成功记录。"
+          : "GPT 注册完成（未导入 Codex）";
       this.setState(STATES.COMPLETED, {
         result: this.result,
         feedback: completionMessage,
@@ -867,6 +915,32 @@ class RegistrationSession {
       await this._fail(error);
       throw error;
     }
+  }
+
+  async completeManualRegistration() {
+    if (this.mode !== MANUAL_BROWSER_MODE) {
+      throw new Error("当前注册会话不是 GPT 手动注册模式");
+    }
+    if ([STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(this.state)) {
+      throw new Error("当前注册会话已经结束");
+    }
+    if (this.state !== STATES.AWAITING_MANUAL_REGISTRATION) {
+      throw new Error("GPT 注册网页尚未打开");
+    }
+
+    this.result = { email: this.email };
+    const message = "GPT 注册已完成（未导入 Codex）";
+    this.setState(STATES.COMPLETED, {
+      result: this.result,
+      feedback: message,
+      feedbackLevel: "success",
+    });
+    this.log("ok", message);
+    return {
+      accepted: true,
+      result: this.result,
+      message,
+    };
   }
 
   // 使用者决定换号：仅重置到“等待输入手机号”，不触发任何自动重试。
@@ -897,7 +971,7 @@ class RegistrationSession {
     }
     await this._closeBrowser();
     this.setState(STATES.CANCELLED, {
-      feedback: this.mode === "oauth" ? "Codex OAuth 流程已取消" : "注册流程已取消",
+      feedback: this.mode === "oauth" ? "注册并导入 Codex 流程已取消" : "注册流程已取消",
       feedbackLevel: "info",
     });
   }

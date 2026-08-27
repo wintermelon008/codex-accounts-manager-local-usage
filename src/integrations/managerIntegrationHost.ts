@@ -95,6 +95,15 @@ export type OAuthAccountImportResult = {
   quotaError?: string;
 };
 
+export type RegistrationBrowserOptions = {
+  /** Text copied before opening the standalone registration page. */
+  clipboardText?: string;
+};
+
+export type RegistrationBrowserResult = {
+  opened: boolean;
+};
+
 export type BalancePoolImportResult = {
   status: "completed" | "partial" | "failed";
   total: number;
@@ -122,6 +131,10 @@ export type AccountImportOperations = {
   getManagedAccountEmails: () => Promise<readonly string[]>;
   startOAuthAccountImport: (options?: OAuthAccountImportOptions) => Promise<OAuthAccountImportResult>;
   cancelOAuthAccountImport?: (operationId: string) => void;
+  /** Opens the standalone GPT registration page without starting an OAuth callback waiter. */
+  openRegistrationBrowser?: (
+    options?: RegistrationBrowserOptions
+  ) => Promise<RegistrationBrowserResult>;
   /** Controlled credential-bearing handoff for trusted local integrations. */
   importSharedAccountsToBalancePool?: (
     input: SharedCodexAccountJson | SharedCodexAccountJson[]
@@ -139,6 +152,10 @@ export type CodexAccountsIntegrationApi = {
   startOAuthAccountImport?: (options?: OAuthAccountImportOptions) => Promise<OAuthAccountImportResult>;
   /** Optional cancellation for an in-flight direct OAuth handoff. */
   cancelOAuthAccountImport?: (operationId: string) => void;
+  /** Optional browser-only GPT registration handoff; it never waits for OAuth or imports an account. */
+  openRegistrationBrowser?: (
+    options?: RegistrationBrowserOptions
+  ) => Promise<RegistrationBrowserResult>;
   /** Optional controlled handoff that quarantines, validates, and enables pool accounts. */
   importSharedAccountsToBalancePool?: (
     input: SharedCodexAccountJson | SharedCodexAccountJson[]
@@ -208,6 +225,12 @@ export class ManagerIntegrationHost implements vscode.Disposable {
             ...(this.accountImportOperations.cancelOAuthAccountImport
               ? { cancelOAuthAccountImport: (operationId: string) => this.cancelOAuthAccountImport(operationId) }
               : {}),
+            ...(this.accountImportOperations.openRegistrationBrowser
+              ? {
+                  openRegistrationBrowser: (options?: RegistrationBrowserOptions) =>
+                    this.openRegistrationBrowser(options)
+                }
+              : {}),
             ...(this.accountImportOperations.importSharedAccountsToBalancePool
               ? {
                   importSharedAccountsToBalancePool: (input: SharedCodexAccountJson | SharedCodexAccountJson[]) =>
@@ -238,6 +261,17 @@ export class ManagerIntegrationHost implements vscode.Disposable {
   cancelOAuthAccountImport(operationId: string): void {
     this.throwIfDisposed();
     this.accountImportOperations?.cancelOAuthAccountImport?.(operationId);
+  }
+
+  async openRegistrationBrowser(
+    options?: RegistrationBrowserOptions
+  ): Promise<RegistrationBrowserResult> {
+    this.throwIfDisposed();
+    const opener = this.accountImportOperations?.openRegistrationBrowser;
+    if (!opener) {
+      throw new Error("Standalone GPT registration browser is unavailable in this Manager build");
+    }
+    return opener(options);
   }
 
   async importSharedAccountsToBalancePool(

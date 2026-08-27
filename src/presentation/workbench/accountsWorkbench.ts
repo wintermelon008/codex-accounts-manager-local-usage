@@ -36,7 +36,9 @@ import {
   type CodexAccountsIntegrationApi,
   type ManagerControlRefreshSummary,
   type OAuthAccountImportOptions,
-  type OAuthAccountImportResult
+  type OAuthAccountImportResult,
+  type RegistrationBrowserOptions,
+  type RegistrationBrowserResult
 } from "../../integrations";
 import { extractClaims } from "../../utils/jwt";
 import { refreshQuotaSummaryPanel } from "../dashboard/panel";
@@ -50,6 +52,7 @@ import {
 
 const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
+const OPENAI_REGISTRATION_URL = "https://auth.openai.com/create-account";
 
 export class AccountsWorkbench {
   private readonly repo: AccountsRepository;
@@ -106,6 +109,7 @@ export class AccountsWorkbench {
         },
         startOAuthAccountImport: (options) => this.startOAuthAccountImport(options),
         cancelOAuthAccountImport: (operationId) => this.cancelOAuthAccountImport(operationId),
+        openRegistrationBrowser: (options) => this.openRegistrationBrowser(options),
         importSharedAccountsToBalancePool: (input) => this.importSharedAccountsToBalancePool(input)
       }
     );
@@ -378,6 +382,27 @@ export class AccountsWorkbench {
         cancellationSource?.dispose();
       }
     }
+  }
+
+  private async openRegistrationBrowser(
+    options: RegistrationBrowserOptions = {}
+  ): Promise<RegistrationBrowserResult> {
+    const clipboardText = options.clipboardText?.trim();
+    if (clipboardText) {
+      try {
+        await vscode.env.clipboard.writeText(clipboardText);
+      } catch {
+        // Copying the mailbox is a convenience and must not block opening the page.
+      }
+    }
+
+    const opened = await vscode.env.openExternal(vscode.Uri.parse(OPENAI_REGISTRATION_URL));
+    if (!opened) {
+      throw new Error(
+        "Unable to open the GPT registration page automatically. The registration page was not opened."
+      );
+    }
+    return { opened: true };
   }
 
   private cancelOAuthAccountImport(operationId: string): void {

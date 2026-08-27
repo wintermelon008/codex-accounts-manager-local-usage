@@ -60,6 +60,31 @@ describe("ManagerIntegrationHost", () => {
     host.dispose();
   });
 
+  it("exposes a browser-only GPT registration handoff without changing OAuth ownership", async () => {
+    const gateway = createGateway();
+    const openRegistrationBrowser = vi.fn(async (options: { clipboardText?: string } = {}) => {
+      expect(options.clipboardText).toBe("manual@example.com");
+      return { opened: true as const };
+    });
+    const startOAuthAccountImport = vi.fn(async () => ({
+      accountId: "account-1",
+      email: "manual@example.com",
+      quotaRefreshed: true
+    }));
+    const host = new ManagerIntegrationHost(gateway.operations, undefined, {
+      getManagedAccountEmails: async () => [],
+      startOAuthAccountImport,
+      openRegistrationBrowser
+    });
+
+    await expect(host.api.openRegistrationBrowser?.({ clipboardText: "manual@example.com" })).resolves.toEqual({
+      opened: true
+    });
+    expect(openRegistrationBrowser).toHaveBeenCalledWith({ clipboardText: "manual@example.com" });
+    expect(startOAuthAccountImport).not.toHaveBeenCalled();
+    host.dispose();
+  });
+
   it("exposes only registered Dashboard cards and declared actions", async () => {
     const gateway = createGateway();
     const host = new ManagerIntegrationHost(gateway.operations);

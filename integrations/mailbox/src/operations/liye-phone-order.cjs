@@ -6,7 +6,16 @@
 // 点击时换号或取消。它不会填写注册页面、提交手机号/验证码，也不会自动换号。
 
 const DEFAULT_BASE_URL = "https://liye.5x20.cn";
-const ACTIVE_STATUSES = new Set(["purchasing", "replacing", "cancelling", "waiting"]);
+const ACTIVE_STATUSES = new Set([
+  "queued",
+  "purchasing",
+  "replacing",
+  "cancelling",
+  "admin_cancelling",
+  "auto_cancelling",
+  "waiting",
+  "received",
+]);
 const CANCELLED_STATUSES = new Set(["cancelled", "refunded"]);
 
 function text(value) {
@@ -85,6 +94,37 @@ function orderHasCode(order) {
   // “received” without an actual code is not enough to consume a Key; keep
   // polling until the SMS content is available to copy.
   return Boolean(orderCode(order));
+}
+
+function orderErrorMessage(order) {
+  if (!order || typeof order !== "object") return "";
+  for (const key of ["error", "message", "failureReason", "failure_reason", "reason"]) {
+    if (typeof order[key] === "string" && order[key].trim()) return order[key].trim();
+  }
+  return "";
+}
+
+function terminalOrderPhase(order) {
+  const status = orderStatus(order);
+  if (orderHasCode(order)) return "received";
+  if (status === "failed") return "error";
+  if (CANCELLED_STATUSES.has(status)) return "cancelled";
+  // A completed order without an SMS code cannot be used by the registration
+  // assistant, so expose it as an error and release the claimed Key.
+  if (status === "completed") return "error";
+  return "";
+}
+
+function terminalOrderMessage(order, phase) {
+  const reported = orderErrorMessage(order);
+  if (reported) return safeError(reported);
+  if (phase === "cancelled") return "接码订单已取消";
+  return "接码订单已结束，但平台未返回验证码";
+}
+
+function isUpstreamMissingError(error) {
+  const marker = `${text(error?.code)} ${text(error?.message)}`;
+  return /(?:ORDER[_\s-]*UPSTREAM[_\s-]*MISSING|订单.{0,12}上游.{0,12}(?:缺失|不存在|不可用))/iu.test(marker);
 }
 
 function cardStatus(profile) {
@@ -223,14 +263,17 @@ class LIYEClient {
       if (!response.ok) {
         const message = text(payload?.error || payload?.message) || `HTTP ${response.status}`;
         this.onLog("error", `接码响应 ${method} ${requestUrl} HTTP ${response.status}：${safeError(message, redact)}`);
-        throw new LIYEOrderError(message, { status: response.status, code: text(payload?.code) });
+        throw new LIYEOrderError(message, {
+          status: response.status,
+          code: text(payload?.code || payload?.reasonCode || payload?.reason_code)
+        });
       }
       if (payload && payload.success === false) {
         const message = text(payload.error || payload.message) || "接码平台请求失败";
         this.onLog("error", `接码响应 ${method} ${requestUrl}：${safeError(message, redact)}`);
         throw new LIYEOrderError(message, {
           status: response.status,
-          code: text(payload.code),
+          code: text(payload.code || payload.reasonCode || payload.reason_code),
         });
       }
       return payload && typeof payload === "object" ? payload : {};
@@ -407,6 +450,9 @@ class LIYEPhoneOrderSession {
         this.onLog("ok", "已读取验证码");
         await this.finalizeReceivedOrder();
         await this.cleanupClient();
+      } else if (!this.state.running) {
+        if (this.state.phase === "error") this.onLog("error", this.state.message);
+        await this.cleanupClient();
       } else {
         this.beginPolling();
         this.onLog("ok", "已获取号码，自动读取验证码");
@@ -564,11 +610,21 @@ class LIYEPhoneOrderSession {
           await this.cleanupClient();
           return;
         }
+        if (!this.state.running) {
+          if (this.state.phase === "error") this.onLog("error", this.state.message);
+          await this.cleanupClient();
+          return;
+        }
         this.state.phase = "polling";
         this.state.message = "正在等待验证码…";
         this.touch();
       } catch (error) {
         if (generation !== this.pollGeneration || !this.state.running) return;
+        if (isUpstreamMissingError(error)) {
+          this.setError(safeError(error));
+          await this.cleanupClient();
+          return;
+        }
         this.state.error = safeError(error);
         this.state.message = "读取验证码失败，稍后重试…";
         this.touch();
@@ -583,9 +639,18 @@ class LIYEPhoneOrderSession {
     this.state.order = publicOrder(order);
     if (resetTimer || !this.state.startedAt) this.state.startedAt = Date.now();
     this.state.error = "";
-    if (orderHasCode(order)) this.state.phase = "received";
-    else if (CANCELLED_STATUSES.has(orderStatus(order))) this.state.phase = "cancelled";
-    else this.state.phase = "waiting";
+    const phase = terminalOrderPhase(order);
+    if (phase === "received") {
+      this.state.phase = "received";
+    } else if (phase) {
+      this.state.phase = phase;
+      this.state.running = false;
+      this.state.humanConfirmed = false;
+      this.state.message = terminalOrderMessage(order, phase);
+      this.state.error = phase === "error" ? this.state.message : "";
+    } else {
+      this.state.phase = orderStatus(order) === "queued" ? "queued" : "waiting";
+    }
     this.touch();
   }
 
@@ -674,12 +739,10 @@ function selectActiveOrder(orders) {
 }
 
 function selectOrderForCard(profile, orders) {
-  const active = selectActiveOrder(orders);
-  if (active) return active;
-  if (!["exhausted", "used", "processing"].includes(cardStatus(profile))) return null;
-  return [...(Array.isArray(orders) ? orders : [])]
-    .sort((a, b) => Number(b?.updatedAt || b?.createdAt || 0) - Number(a?.updatedAt || a?.createdAt || 0))
-    .find((order) => !CANCELLED_STATUSES.has(orderStatus(order)) && !orderHasCode(order)) || null;
+  // Only recover orders that the platform still marks as active. In
+  // particular, do not revive a failed order merely because a used card has
+  // no newer order; LIYE reports “订单上游缺失” through that failed order.
+  return selectActiveOrder(orders);
 }
 
 function clampNumber(value, fallback, low, high) {
@@ -706,4 +769,5 @@ module.exports = {
   normalizeSuccessRate,
   extractSuccessRate,
   isCodeReceivedConflict,
+  isUpstreamMissingError,
 };

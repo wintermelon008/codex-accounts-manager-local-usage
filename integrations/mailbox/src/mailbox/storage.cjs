@@ -130,6 +130,8 @@ class MailboxPool {
           latestCode: previous?.latestCode,
           latestMessage: previous?.latestMessage,
           messageCount: previous?.messageCount ?? 0,
+          gptRegistered: previous?.gptRegistered === true,
+          gptRegisteredAt: numberOrUndefined(previous?.gptRegisteredAt),
           historyMode: provider.capabilities?.history === "latest" ? "latest" : "recent"
         };
         replaceMetadataAccount(this.metadata.accounts, next);
@@ -216,6 +218,19 @@ class MailboxPool {
     metadata.displayName = normalizeDisplayName(displayName, metadata.address);
     metadata.updatedAt = this.now();
     await this.persistMetadata();
+    return sanitizeMetadata(metadata);
+  }
+
+  async markGptRegistered(id) {
+    await this.load();
+    this.assertLoaded();
+    const metadata = this.requireMetadata(id);
+    if (metadata.gptRegistered !== true) {
+      metadata.gptRegistered = true;
+      metadata.gptRegisteredAt = numberOrUndefined(metadata.gptRegisteredAt) ?? this.now();
+      metadata.updatedAt = this.now();
+      await this.persistMetadata();
+    }
     return sanitizeMetadata(metadata);
   }
 
@@ -389,6 +404,8 @@ function sanitizeMetadata(entry) {
     latestCode: typeof entry.latestCode === "string" ? entry.latestCode : undefined,
     latestMessage: entry.latestMessage ? summarizeMessage(entry.latestMessage) : undefined,
     messageCount: Number.isFinite(entry.messageCount) ? Math.max(0, Math.floor(entry.messageCount)) : 0,
+    gptRegistered: entry.gptRegistered === true,
+    gptRegisteredAt: numberOrUndefined(entry.gptRegisteredAt),
     historyMode: entry.historyMode === "latest" ? "latest" : "recent"
   };
 }

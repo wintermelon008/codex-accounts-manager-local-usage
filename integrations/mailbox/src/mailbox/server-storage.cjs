@@ -251,21 +251,29 @@ function normalizeRegistrationSessions(value) {
   }
   return records
     .filter((record) => record && typeof record === "object" && typeof record.id === "string" && record.id)
-    .map((record) => ({
-      id: record.id,
-      email: typeof record.email === "string" ? record.email : "",
-      mode: record.mode === "oauth" ? "oauth" : "playwright",
-      state: typeof record.state === "string" ? record.state : "idle",
-      phoneInputCount: Number.isFinite(record.phoneInputCount) ? Math.max(0, Math.floor(record.phoneInputCount)) : 0,
-      name: typeof record.name === "string" ? record.name : "jdd",
-      age: Number.isFinite(record.age) ? record.age : 24,
-      result: sanitizeRegistrationResult(record.result),
-      error: typeof record.error === "string" ? record.error.slice(0, 160) : "",
-      feedback: typeof record.feedback === "string" ? record.feedback.slice(0, 240) : "",
-      feedbackLevel: typeof record.feedbackLevel === "string" ? record.feedbackLevel : "info",
-      createdAt: Number.isFinite(record.createdAt) ? record.createdAt : undefined,
-      updatedAt: Number.isFinite(record.updatedAt) ? record.updatedAt : undefined
-    }));
+    .map((record) => {
+      const importCodex = record.importCodex !== false;
+      return {
+        id: record.id,
+        email: typeof record.email === "string" ? record.email : "",
+        mode: !importCodex
+          ? "manual-browser"
+          : record.mode === "oauth"
+            ? "oauth"
+            : "playwright",
+        importCodex,
+        state: typeof record.state === "string" ? record.state : "idle",
+        phoneInputCount: Number.isFinite(record.phoneInputCount) ? Math.max(0, Math.floor(record.phoneInputCount)) : 0,
+        name: typeof record.name === "string" ? record.name : "jdd",
+        age: Number.isFinite(record.age) ? record.age : 24,
+        result: sanitizeRegistrationResult(record.result),
+        error: typeof record.error === "string" ? record.error.slice(0, 160) : "",
+        feedback: typeof record.feedback === "string" ? record.feedback.slice(0, 240) : "",
+        feedbackLevel: typeof record.feedbackLevel === "string" ? record.feedbackLevel : "info",
+        createdAt: Number.isFinite(record.createdAt) ? record.createdAt : undefined,
+        updatedAt: Number.isFinite(record.updatedAt) ? record.updatedAt : undefined
+      };
+    });
 }
 
 function sanitizeRegistrationResult(result) {

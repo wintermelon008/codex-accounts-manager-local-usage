@@ -115,6 +115,40 @@ test("a new LIYE session does not reuse an old order that already has a code", a
   await session.dispose();
 });
 
+test("a failed LIYE order stops polling and exposes the upstream error", async () => {
+  const client = fakeClient({
+    order: { id: "order-failed", status: "waiting", phone: "+8613800000000" },
+    statuses: [{ id: "order-failed", status: "failed", phone: "+8613800000000", error: "订单上游缺失" }]
+  });
+  const session = new LIYEPhoneOrderSession({ clientFactory: () => client, pollIntervalMs: 250 });
+
+  await session.start("card-secret");
+  await waitFor(() => session.snapshot().phase === "error");
+
+  const result = session.snapshot();
+  assert.equal(result.running, false);
+  assert.match(result.error, /订单上游缺失/u);
+  assert.equal(client.statusCalls, 1);
+  await session.dispose();
+});
+
+test("a used LIYE card does not revive a historical failed order", async () => {
+  const client = fakeClient({
+    cardStatus: "processing",
+    order: { id: "order-new", status: "waiting", phone: "+8613911111111" },
+    existingOrders: [{ id: "order-failed", status: "failed", error: "订单上游缺失" }]
+  });
+  const session = new LIYEPhoneOrderSession({ clientFactory: () => client, pollIntervalMs: 250 });
+
+  const result = await session.start("card-secret");
+
+  assert.equal(result.phase, "error");
+  assert.match(result.error, /没有可恢复的订单/u);
+  assert.equal(result.order, null);
+  assert.equal(client.createCalls, 0);
+  await session.dispose();
+});
+
 test("number replacement is performed only by the explicit replace action and resumes polling", async () => {
   const client = fakeClient({
     order: { id: "order-2", status: "waiting", phone: "+8613900000000" },
@@ -172,7 +206,7 @@ test("cancel action stops the order without an automatic timeout cancellation", 
   assert.equal(session.snapshot().running, false);
 });
 
-function fakeClient({ order, statuses = [], replacement, replacementError, existingOrders = [] } = {}) {
+function fakeClient({ order, statuses = [], replacement, replacementError, existingOrders = [], cardStatus = "available" } = {}) {
   let statusIndex = 0;
   return {
     statusCalls: 0,
@@ -182,7 +216,7 @@ function fakeClient({ order, statuses = [], replacement, replacementError, exist
       assert.equal(code, "card-secret");
     },
     async cardMe() {
-      return { authenticated: true, card: { status: "available" } };
+      return { authenticated: true, card: { status: cardStatus } };
     },
     async orders() {
       return existingOrders.map((item) => ({ ...item }));

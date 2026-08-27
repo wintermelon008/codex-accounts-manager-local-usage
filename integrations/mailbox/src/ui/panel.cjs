@@ -9,7 +9,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
   const registrationOnly = mode === "registration";
   const panelTitle = registrationOnly ? "注册助手" : "Mailbox";
   const panelSubtitle = registrationOnly
-    ? "从邮箱库选择或输入新邮箱，手机号和验证码由你手动填写"
+    ? "从邮箱库选择或输入新邮箱；GPT 注册在外部浏览器手动完成"
     : "邮箱列表与当前选中邮箱详情";
   const headerActions = registrationOnly
     ? '<button type="button" data-action="refresh">刷新本地状态</button><button type="button" class="danger" data-action="registration-cleanup-all">清除所有记录</button>'
@@ -397,10 +397,20 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const sessionId = target.dataset.sessionId;
           if (sessionId) send("registrationRefreshEmailCode", { sessionId });
         }
-        else if (action === "registration-copy-phone" || action === "registration-copy-code" || action === "registration-copy-email-code") {
+        else if (action === "registration-stop-email-code") {
+          const sessionId = target.dataset.sessionId;
+          if (sessionId) send("registrationStopEmailCode", { sessionId });
+        }
+        else if (action === "registration-copy-email" || action === "registration-copy-phone" || action === "registration-copy-code" || action === "registration-copy-email-code") {
           copyText(
             target.dataset.value || "",
-            action === "registration-copy-phone" ? "手机号已复制" : action === "registration-copy-email-code" ? "邮箱验证码已复制" : "验证码已复制"
+            action === "registration-copy-email"
+              ? "邮箱已复制"
+              : action === "registration-copy-phone"
+                ? "手机号已复制"
+                : action === "registration-copy-email-code"
+                  ? "邮箱验证码已复制"
+                  : "验证码已复制"
           );
         }
         else if (action === "toggle-registration") { registrationPanelOpen = !registrationPanelOpen; render(); }
@@ -408,12 +418,18 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const emailInput = document.getElementById("registrationEmailInput");
           const email = emailInput?.value?.trim() || "";
           if (!email) return;
+          const importCodex = target.dataset.importCodex !== "false";
+          const mailbox = (state.mailboxes || []).find((item) => normalizeEmail(item.address) === normalizeEmail(email));
           if (hasManagedCodexEmail(email)) {
             showNotice("该邮箱已经导入 Codex 账号，请选择其他邮箱", "warning");
             return;
           }
+          if (!importCodex && mailbox?.gptRegistered) {
+            showNotice("该邮箱已经注册 GPT 账号，请改用“注册并导入 Codex”或选择其他邮箱", "warning");
+            return;
+          }
           void copyText(email, "邮箱已复制");
-          send("registrationCreate", { email, maxRetries: registrationMaxRetries });
+          send("registrationCreate", { email, importCodex, maxRetries: registrationMaxRetries });
         }
         else if (action === "registration-fill-email-code") {
           fillRegistrationInput(target.dataset.sessionId || "", "emailCode", target.dataset.value || "");
@@ -428,6 +444,21 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const sessionId = target.dataset.sessionId;
           if (!sessionId) return;
           send("registrationAuthorize", { sessionId });
+        }
+        else if (action === "registration-complete-manual") {
+          const sessionId = target.dataset.sessionId;
+          if (!sessionId) return;
+          send("registrationCompleteManual", { sessionId });
+        }
+        else if (action === "registration-codex-import") {
+          const sessionId = target.dataset.sessionId;
+          if (!sessionId) return;
+          send("registrationCodexImport", { sessionId });
+        }
+        else if (action === "registration-cancel-codex-import") {
+          const sessionId = target.dataset.sessionId;
+          if (!sessionId) return;
+          send("registrationCancelCodexImport", { sessionId });
         }
         else if (action === "registration-submit-email-code") {
           const sessionId = target.dataset.sessionId;
@@ -657,7 +688,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         submitting_authorization: "正在提交最后继续",
         completed: "已完成",
         failed: "失败",
-        cancelled: "已取消"
+        cancelled: "已取消",
+        awaiting_manual_registration: "等待网页手动完成"
       };
 
       const PHONE_ORDER_PHASE_LABELS = {
@@ -679,6 +711,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         idle: "未开始查询",
         searching: "正在查询邮箱",
         received: "已收到邮箱验证码",
+        checked: "已完成一次查询",
         expired: "查询窗口已结束",
         cancelled: "已停止查询",
         error: "邮箱查询失败"
@@ -689,7 +722,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const collapsedClass = registrationPanelOpen ? "" : " registration-collapsed";
         const sessionsHtml = sessions.length
           ? sessions.map(renderRegistrationSession).join("")
-          : '<p class="muted">还没有注册会话。填写邮箱后创建会话；接码平台拿到号码后会自动读取验证码，换号和取消取号仍需你点击，手机号和验证码不会自动填写或提交。</p>';
+          : '<p class="muted">还没有注册会话。填写邮箱后创建会话；GPT 注册会在外部浏览器手动完成，邮箱查询和接码都需要你点击操作。</p>';
         return '<div id="registrationPanel" class="registration-panel' + collapsedClass + '">' +
           '<div class="registration-header" data-action="toggle-registration"><h2>注册助手</h2><span class="registration-toggle">' + (registrationPanelOpen ? "收起 ▲" : "展开 ▼") + '</span></div>' +
           '<div class="registration-content">' +
@@ -702,8 +735,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function renderRegistrationCreateForm() {
         return '<div class="registration-form">' +
           '<div class="field"><label for="registrationEmailInput">邮箱</label><input id="registrationEmailInput" type="email" value="' + esc(registrationEmail) + '" placeholder="your-email@example.com"></div>' +
-          '<div><button type="button" data-action="registration-create" class="primary">开始注册</button></div>' +
-          '<p class="field-note">开始注册后优先使用 Codex OAuth 浏览器流程；邮箱、密码、手机号、验证码和最终授权在浏览器中完成。面板只显示/复制邮箱码和接码内容，不会自动填写或提交。重新取号与取消取号均不会自动发生。</p>' +
+          '<div class="actions" style="justify-content:flex-start"><button type="button" data-action="registration-create" data-import-codex="true" class="primary">注册并导入 Codex</button><button type="button" data-action="registration-create" data-import-codex="false">注册 GPT</button></div>' +
+          '<p class="field-note">“注册并导入 Codex”保持原有 Manager OAuth 注册/导入流程；“注册 GPT”只打开独立网页，不等待 OAuth 回调、不写入 Manager 账号库。GPT 路线会自动复制邮箱，邮箱查询和接码均由下方按钮手动控制。</p>' +
         '</div>';
       }
 
@@ -721,12 +754,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             (allMailboxes.length && managedCount === allMailboxes.length ? "邮箱库中的邮箱均已导入 Codex，请直接输入其他邮箱。" : allMailboxes.length ? "没有匹配的已导入邮箱。" : "邮箱库为空，请直接输入新邮箱。") +
             '</div>';
         const managedNote = managedCount
-          ? '<div class="field-note">已自动隐藏 ' + managedCount + ' 个已经导入 Codex 的邮箱。</div>'
+          ? '<div class="field-note">已自动隐藏 ' + managedCount + ' 个已经导入 Codex 的邮箱；标记为“GPT 已注册”但尚未接入 Codex 的邮箱仍可选择。</div>'
           : '';
         const sessions = [...(state.registrationSessions || [])].reverse();
         const sessionsHtml = sessions.length
           ? sessions.map(renderRegistrationSession).join("")
-          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱。</p>';
+          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱；进入 GPT 注册网页后会自动查询一次邮箱验证码。</p>';
         return '<div class="registration-standalone">' +
           '<section class="registration-standalone-card">' +
             '<h2>选择注册邮箱</h2>' +
@@ -745,7 +778,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function renderRegistrationMailboxOption(mailbox) {
         const selected = mailbox.id === selectedRegistrationMailboxId;
         const provider = (state.providers || []).find((item) => item.id === mailbox.providerId);
-        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span>' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span>' + (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + '</div></button>';
+        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span>' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span>' + (mailbox.gptRegistered ? '<span class="tag success">GPT 已注册</span>' : '') + (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + '</div></button>';
       }
 
       function filterRegistrationMailboxes() {
@@ -775,14 +808,19 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
 
       function renderRegistrationSession(session) {
         const registrationMailbox = (state.mailboxes || []).find((mailbox) => normalizeEmail(mailbox.address) === normalizeEmail(session.email));
-        const label = session.mode === "oauth" && session.state === "completed"
-          ? "Codex OAuth 导入完成"
+        const importCodex = session.importCodex !== false;
+        const label = session.state === "completed"
+          ? importCodex
+            ? session.mode === "oauth" ? "注册并导入 Codex 完成" : "GPT 注册完成（待手动导入 Codex）"
+            : "GPT 注册完成"
           : REGISTRATION_STATE_LABELS[session.state] || session.state;
         const sessionStatusClass = session.state === "completed" ? " success" : session.state === "failed" ? " error" : "";
         const progressHtml = session.mode === "oauth"
-          ? '<div class="field-note" role="status">当前路线：Codex OAuth。注册页面由外部浏览器承载，完成后结果会自动回传并导入 Manager。</div>'
-          : renderRegistrationProgress(session.state);
-        const inputHtml = renderRegistrationInputs(session);
+          ? '<div class="field-note" role="status">当前路线：注册并导入 Codex（Manager OAuth）。注册页面由外部浏览器承载，完成后结果会自动回传并导入 Manager。</div>'
+          : session.mode === "manual-browser"
+            ? '<div class="field-note" role="status">当前路线：注册 GPT（外部浏览器人工操作）。网页打开后会自动查询一次邮箱验证码；本面板还提供手动邮箱查询、手机号/短信接码和复制，不调用 OAuth 回调，也不会自动填写网页。</div>'
+            : renderRegistrationProgress(session.state);
+        const inputHtml = renderRegistrationInputs(session, registrationMailbox);
         const phoneOrderHtml = renderPhoneOrder(session);
         const emailCodeHtml = renderRegistrationEmailCode(session);
         const errorHtml = session.error ? '<div class="tag" style="margin-top:8px;color:var(--danger)">' + esc(session.error) + '</div>' : "";
@@ -796,8 +834,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const mailboxDeleteButton = registrationMailbox
           ? '<button type="button" class="secondary small danger" data-action="registration-delete-mailbox" data-mailbox-id="' + esc(registrationMailbox.id) + '" title="直接从邮箱库删除该邮箱">删除邮箱</button>'
           : "";
+        const routeLabel = importCodex ? (session.mode === "oauth" ? "Codex OAuth" : "注册并导入 Codex（需手动导入）") : "注册 GPT";
         return '<div class="registration-session">' +
-          '<div class="registration-session-header"><span class="registration-session-email">' + esc(session.email) + '</span><span class="registration-session-header-actions"><span class="tag">' + (session.mode === "oauth" ? "Codex OAuth" : '已尝试号码 ' + (session.phoneInputCount || 0) + ' 次') + '</span>' + mailboxDeleteButton + '</span></div>' +
+          '<div class="registration-session-header"><span class="registration-session-email">' + esc(session.email) + '</span><span class="registration-session-header-actions"><span class="tag">' + routeLabel + (session.mode === "oauth" ? "" : ' · 已尝试号码 ' + (session.phoneInputCount || 0) + ' 次') + '</span>' + mailboxDeleteButton + '</span></div>' +
           '<div class="registration-session-status' + sessionStatusClass + '">' + esc(label) + '</div>' +
           progressHtml +
           errorHtml +
@@ -845,23 +884,31 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const copyButton = code
           ? '<button type="button" class="secondary small" data-action="registration-copy-email-code" data-session-id="' + esc(session.id) + '" data-value="' + esc(code) + '">复制邮箱验证码</button>'
           : '<button type="button" class="secondary small" disabled>复制邮箱验证码</button>';
-        const terminal = ["completed", "failed", "cancelled"].includes(session.state);
+        const manualBrowser = session.mode === "manual-browser";
+        const emailCodeMode = manualBrowser ? "进入后自动查询一次，可手动查询" : "自动查询";
+        // Completing GPT registration hands this card to the subsequent Codex
+        // import. Keep manual mailbox assistance available for that handoff.
+        const terminal = ["completed", "failed", "cancelled"].includes(session.state) && !(manualBrowser && session.state === "completed");
+        const queryRunning = emailCode.running === true;
         const refreshButton = terminal
-          ? '<button type="button" class="secondary small" disabled>重新查询</button>'
-          : '<button type="button" class="secondary small" data-action="registration-refresh-email-code" data-session-id="' + esc(session.id) + '">重新查询</button>';
+          ? '<button type="button" class="secondary small" disabled>' + (manualBrowser ? "查询邮件" : "重新查询") + '</button>'
+          : '<button type="button" class="secondary small" data-action="registration-refresh-email-code" data-session-id="' + esc(session.id) + '">' + (manualBrowser ? (queryRunning ? "重新查询" : "查询邮件") : "重新查询") + '</button>';
+        const stopButton = manualBrowser && queryRunning
+          ? '<button type="button" class="secondary small danger" data-action="registration-stop-email-code" data-session-id="' + esc(session.id) + '">停止查询</button>'
+          : "";
         const detail = emailCode.subject ? ' · ' + esc(emailCode.subject) : "";
         return '<div class="registration-email-code">' +
-          '<div class="registration-email-code-head"><strong>邮箱验证码（自动查询，仅显示）</strong><span class="registration-phone-order-source">' + refreshButton + '<span class="tag' + statusClass + '">' + esc(phaseLabel) + '</span></span></div>' +
+          '<div class="registration-email-code-head"><strong>邮箱验证码（' + emailCodeMode + '，仅显示）</strong><span class="registration-phone-order-source">' + refreshButton + stopButton + '<span class="tag' + statusClass + '">' + esc(phaseLabel) + '</span></span></div>' +
           '<div class="registration-email-code-grid">' +
             '<div class="registration-email-code-result"><label>最新邮箱验证码</label><strong>' + esc(code || "— — —") + '</strong>' + copyButton + '</div>' +
             '<div class="registration-email-code-result"><label>邮件收到时间</label><strong>' + esc(receivedAt ? formatDate(receivedAt) : "— — —") + '</strong></div>' +
           '</div>' +
-          '<div class="field-note" aria-live="polite">' + esc(emailCode.message || "注册开始后自动查询最近 30 分钟的邮件") + detail + '</div>' +
+          '<div class="field-note" aria-live="polite">' + esc(emailCode.message || (manualBrowser ? "进入 GPT 注册网页后自动查询一次；之后可点击“查询邮件”查询最近 30 分钟的邮件" : "注册开始后自动查询最近 30 分钟的邮件")) + detail + '</div>' +
           (emailCode.error ? '<div class="tag error" style="margin-top:8px">' + esc(emailCode.error) + '</div>' : "") +
         '</div>';
       }
 
-      function renderRegistrationInputs(session) {
+      function renderRegistrationInputs(session, registrationMailbox) {
         const values = registrationInputValues[session.id] || {};
         const terminal = ["completed", "failed", "cancelled"].includes(session.state);
         if (session.mode === "oauth") {
@@ -869,6 +916,31 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             ? '<div class="registration-session-actions"><button type="button" data-action="registration-cleanup" data-session-id="' + esc(session.id) + '">清除记录</button></div>'
             : '<div class="registration-session-actions"><button type="button" data-action="registration-cancel" data-session-id="' + esc(session.id) + '">取消 OAuth 流程</button></div>';
           return '<div class="field-note">请在已打开的 Codex OAuth 浏览器窗口中完成当前页面。邮箱验证码和接码平台内容仍可在本面板查看并复制，但不会提交到外部浏览器。</div>' + actionHtml;
+        }
+        if (session.mode === "manual-browser") {
+          const linked = registrationMailbox && hasManagedCodexEmail(registrationMailbox.address);
+          const importing = registrationMailbox && (state.codexImports || []).includes(registrationMailbox.id);
+          const importCancellable = importing && state.codexImportCancellable === true;
+          const manualReady = session.state === "awaiting_manual_registration";
+          const completeButton = terminal
+            ? ""
+            : manualReady
+              ? '<button type="button" class="primary" data-action="registration-complete-manual" data-session-id="' + esc(session.id) + '">完成 GPT 注册</button>'
+              : '<button type="button" class="primary" disabled>等待网页打开</button>';
+          const importButton = session.state === "completed" && registrationMailbox && !linked && state.codexImportAvailable
+            ? '<button type="button" class="primary" data-action="registration-codex-import" data-session-id="' + esc(session.id) + '"' + (importing ? " disabled" : "") + '>' + (importing ? "Codex 导入中…" : "导入 Codex") + '</button>'
+            : "";
+          const cancelImportButton = importCancellable
+            ? '<button type="button" class="danger" data-action="registration-cancel-codex-import" data-session-id="' + esc(session.id) + '">终止 Codex 导入</button>'
+            : "";
+          const actionHtml = terminal
+            ? '<div class="registration-session-actions">' + importButton + cancelImportButton + '<button type="button" data-action="registration-cleanup" data-session-id="' + esc(session.id) + '">清除记录</button></div>'
+            : '<div class="registration-session-actions">' + completeButton + '<button type="button" data-action="registration-cancel" data-session-id="' + esc(session.id) + '">关闭/取消助手</button></div>';
+          const copyEmailButton = '<button type="button" class="secondary small" data-action="registration-copy-email" data-session-id="' + esc(session.id) + '" data-value="' + esc(session.email) + '">再次复制邮箱</button>';
+          const handoffNote = session.state === "completed"
+            ? '<div class="field-note">GPT 注册完成后，邮箱查询和接码会继续保持手动可用，供下方 Codex 导入使用。</div>'
+            : "";
+          return '<div class="field-note">网页已由 Manager 打开。请在网页中手动填写并提交密码、邮箱码、手机号、短信码和最终确认；此助手不会读取或提交网页表单。' + copyEmailButton + '</div>' + handoffNote + actionHtml;
         }
         const emailCodeReady = session.state === "awaiting_email_code";
         const phoneReady = session.state === "awaiting_phone_input";
@@ -912,8 +984,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const code = String(order.smsCode || "").trim();
         const phase = String(orderState.phase || "idle");
         const active = orderState.running === true;
-        const canReplace = active && ["waiting", "polling"].includes(phase) && !code && Number(orderState.replacements || 0) < Number(orderState.maxReplacements || 0);
-        const canCancel = active && !["received", "completed", "cancelled", "error", "timed_out"].includes(phase);
+        const manualBrowser = session.mode === "manual-browser";
+        // A completed GPT-only session can still need a phone while its
+        // follow-up Codex OAuth browser is running.
+        const terminal = ["completed", "failed", "cancelled"].includes(session.state) && !(manualBrowser && session.state === "completed");
+        const canReplace = !terminal && active && ["waiting", "polling"].includes(phase) && !code && Number(orderState.replacements || 0) < Number(orderState.maxReplacements || 0);
+        const canCancel = !terminal && active && !["received", "completed", "cancelled", "error", "timed_out"].includes(phase);
         const sources = Array.isArray(state.phoneSources) && state.phoneSources.length
           ? state.phoneSources
           : [{ id: "liye", displayName: "LIYE", websiteUrl: "https://liye.5x20.cn" }];
@@ -946,11 +1022,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const keyVisibilityNote = hiddenAvailableKeyCount > 0
           ? '<div class="field-note">可用 Key 共 ' + availableKeys.length + ' 个，选择器仅显示前 5 个；其余仍保留在 Key 池中。</div>'
           : "";
-        const configDisabled = active ? " disabled" : "";
+        const configDisabled = active || terminal ? " disabled" : "";
         const keyInput = registrationPhoneKeyInputs[session.id] || "";
-        const canAcquire = !active && !["received", "completed"].includes(phase);
+        const canAcquireAfterGpt = manualBrowser && session.state === "completed";
+        const canAcquire = !terminal && !active && (canAcquireAfterGpt || !["received", "completed"].includes(phase));
         const keyPoolDetails = '<details class="registration-key-pool"><summary>管理接码 Key 池 <span class="registration-key-pool-count">' + Number(keyPool.available || 0) + ' 个可用 · ' + Number(keyPool.inUse || 0) + ' 个使用中</span></summary>' +
-          (!active ? '<div class="registration-session-input"><label for="registrationPhoneKeyInput-' + esc(session.id) + '">加入 Key 池（可多行粘贴）</label><textarea id="registrationPhoneKeyInput-' + esc(session.id) + '" rows="2" autocomplete="off" spellcheck="false" placeholder="每行一个接码平台 Key">' + esc(keyInput) + '</textarea><button type="button" class="secondary small" data-action="registration-add-phone-key" data-session-id="' + esc(session.id) + '">加入 Key 池</button></div>' : '') +
+          (!active && !terminal ? '<div class="registration-session-input"><label for="registrationPhoneKeyInput-' + esc(session.id) + '">加入 Key 池（可多行粘贴）</label><textarea id="registrationPhoneKeyInput-' + esc(session.id) + '" rows="2" autocomplete="off" spellcheck="false" placeholder="每行一个接码平台 Key">' + esc(keyInput) + '</textarea><button type="button" class="secondary small" data-action="registration-add-phone-key" data-session-id="' + esc(session.id) + '">加入 Key 池</button></div>' : '') +
           (keys.length ? '<div class="registration-key-pool-list" aria-label="接码平台 Key 池">' + keys.map((key) => '<div class="registration-key-pool-row"><span class="key-mask" title="仅显示脱敏值">' + esc(key.masked || key.id) + '</span><span>' + esc(key.status === "in_use" ? "使用中" : "可用") + '</span><button type="button" class="secondary small" data-action="registration-remove-phone-key" data-key-id="' + esc(key.id) + '"' + (key.status === "in_use" ? " disabled" : "") + '>删除</button></div>').join("") + '</div>' : '<div class="field-note">暂未保存 Key。展开后可粘贴添加。</div>') +
           '</details>';
         const acquireHtml = '<div class="registration-phone-config">' +
@@ -985,13 +1062,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           (canAcquire ? '<button type="button" class="primary" data-action="registration-acquire-phone" data-session-id="' + esc(session.id) + '"' + (selectedKeyAvailable ? "" : " disabled") + '>开始取号</button>' : '') +
           '</div>';
         return '<div class="registration-phone-order">' +
-          '<div class="registration-phone-order-head"><strong>接码平台（自动读取短信）</strong><span class="registration-phone-order-source">' + sourceLink + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' 成功率：' + esc(successRate) + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
+          '<div class="registration-phone-order-head"><strong>接码平台（' + (manualBrowser ? "手动控制" : "手动确认，自动读取短信") + '）</strong><span class="registration-phone-order-source">' + sourceLink + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' 成功率：' + esc(successRate) + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
           acquireHtml +
           '<div class="registration-phone-order-grid">' +
             '<div class="registration-phone-result"><label>当前手机号</label><strong>' + esc(phone || "— — —") + '</strong>' + phoneButton + '</div>' +
             '<div class="registration-phone-result"><label>验证码</label><strong>' + esc(code || "— — —") + '</strong>' + codeButton + '</div>' +
           '</div>' +
-          '<div class="field-note">手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。' + (availability ? " · " + availability : "") + '</div>' +
+          '<div class="field-note">' + (manualBrowser ? "只有点击开始取号/重新取号后才会访问接码来源；手机号和验证码只显示/复制，不会自动填写或提交到注册网页。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "") + '</div>' +
           actionHtml +
           (orderState.message ? '<div class="field-note" aria-live="polite">' + esc(orderState.message) + '</div>' : "") +
           (orderState.error ? '<div class="tag" style="margin-top:8px;color:var(--danger)">' + esc(orderState.error) + '</div>' : "") +
@@ -1060,6 +1137,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         return '<div class="mailbox-row-wrap"><label class="mailbox-select"><input class="mailbox-checkbox" type="checkbox" value="' + esc(mailbox.id) + '" ' + (selectedMailboxIds.has(mailbox.id) ? "checked" : "") + ' aria-label="选择 ' + esc(mailbox.address) + '"></label><button class="mailbox-row ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '" data-action="select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">' +
           '<div class="row-title"><span class="row-number">' + (index + 1) + '</span><span class="address">' + esc(mailbox.displayName || mailbox.address) + '</span></div>' +
           '<div class="row-meta"><span class="address">' + esc(mailbox.address) + '</span><span class="tag">' + esc(mailbox.providerId) + '</span><span class="tag ' + statusClass + '">' + esc(status) + '</span>' +
+          (mailbox.gptRegistered ? '<span class="tag success">GPT 已注册</span>' : '') +
           (state.codexImportAvailable ? '<span class="tag ' + (codexLinked ? 'success' : 'warning') + '">' + (codexLinked ? 'Codex 已接入' : '未接入 Codex') + '</span>' : '') +
           (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "查询失败") + '</span>' : '') + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
       }
@@ -1083,11 +1161,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         );
         const codexLinked = isCodexLinked(mailbox);
         const mailboxError = mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "查询失败") + '：' + esc(mailbox.lastError.message || "查询失败") + '</span>' : '';
+        const registrationStatus = (mailbox.gptRegistered ? '<span class="tag success">GPT 已注册</span>' : '') + (codexLinked ? '<span class="tag success">Codex 已接入</span>' : '');
         const actionLabel = (action, label) => busyAction === action ? '<span class="button-spinner" aria-hidden="true"></span>' + ({ query: "查询中…", wait: "监听中…", renewal: "续期中…", stop: "停止中…", codexImport: "导入中…" }[action] || label) : label;
         const codexImportButton = state.codexImportAvailable && !codexLinked
           ? '<button class="primary ' + (codexImportPending ? 'is-pending' : '') + '" data-action="codex-import" data-mailbox-id="' + esc(mailbox.id) + '" ' + ((codexImportPending || operation || (requestedAction && !codexImportPending)) ? 'disabled' : '') + ' aria-busy="' + codexImportPending + '">' + (codexImportPending ? '<span class="button-spinner" aria-hidden="true"></span>导入中…' : 'Codex 导入') + '</button>'
           : '';
-        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag">来源：' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag">' + capability + '</span><span class="tag">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span>' + mailboxError + '</div></div>' +
+        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag">来源：' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag">' + capability + '</span><span class="tag">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span>' + registrationStatus + mailboxError + '</div></div>' +
           '<div class="detail-header-actions">' + codexImportButton + '<button data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">编辑账号</button><button class="danger" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">删除账号</button></div>' +
           '<div class="detail-actions"><div class="actions">' +
           '<button class="' + (busyAction === "query" ? 'is-pending' : '') + '" data-action="submit-query" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "query") + '">' + actionLabel("query", "查询邮件") + '</button>' +

@@ -129,6 +129,43 @@ test("editing changes the display name and can replace opaque provider credentia
   assert.equal((await pool.getAccount(id)).credentials.refreshToken, "refresh-two");
 });
 
+test("GPT registration status persists through reimport, editing, and a new pool instance", async () => {
+  let clock = 100;
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore, now: () => ++clock });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "gpt-status@example.com----password-one----client-one----refresh-one"
+  })).imported;
+
+  const marked = await pool.markGptRegistered(id);
+  assert.equal(marked.gptRegistered, true);
+  assert.equal(marked.gptRegisteredAt, 102);
+
+  const reimported = (await pool.importProvider({
+    provider,
+    input: "gpt-status@example.com----password-two----client-one----refresh-two",
+    displayName: "已注册 GPT"
+  })).imported[0];
+  assert.equal(reimported.gptRegistered, true);
+  assert.equal(reimported.gptRegisteredAt, 102);
+
+  const edited = await pool.updateAccount(id, {
+    provider,
+    input: "gpt-status@example.com----password-three----client-one----refresh-three",
+    displayName: "已注册 GPT（已编辑）"
+  });
+  assert.equal(edited.gptRegistered, true);
+  assert.equal(edited.gptRegisteredAt, 102);
+
+  const restored = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  await restored.load();
+  assert.equal(restored.listMetadata()[0].gptRegistered, true);
+  assert.equal(restored.listMetadata()[0].gptRegisteredAt, 102);
+});
+
 test("deleting an account removes its secret, detail and metadata entry", async () => {
   const stores = memoryStores();
   const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });

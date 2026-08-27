@@ -105,6 +105,225 @@ test("registration assistant uses the Manager Codex OAuth flow when it is availa
   integration.dispose();
 });
 
+test("registration assistant starts the GPT-only route without OAuth and queries email once after browser entry", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query(account) {
+      queryCalls += 1;
+      return {
+        ok: true,
+        providerId: "mock",
+        address: account.address,
+        messages: [{
+          id: "gpt-registration-email-message",
+          subject: "OpenAI verification code",
+          receivedAt: new Date().toISOString(),
+          codes: ["246810"]
+        }],
+        codes: ["246810"]
+      };
+    }
+  };
+  let oauthCalls = 0;
+  let queryCalls = 0;
+  let browserOptions;
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async startOAuthAccountImport() {
+      oauthCalls += 1;
+      throw new Error("GPT-only route must not call OAuth");
+    },
+    async openRegistrationBrowser(options) {
+      browserOptions = options;
+      return { opened: true };
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await integration.pool.importProvider({ provider, input: "gpt-only@example.com|credential" });
+
+  const sessionId = await integration.createRegistrationSession({
+    email: "gpt-only@example.com",
+    importCodex: false
+  });
+  await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.state === "awaiting_manual_registration");
+  const session = integration.registrationManager.getSessionState(sessionId);
+  assert.equal(session.importCodex, false);
+  assert.equal(session.mode, "manual-browser");
+  assert.equal(oauthCalls, 0);
+  assert.deepEqual(browserOptions, { clipboardText: "gpt-only@example.com" });
+  await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.emailCode?.phase === "received");
+  assert.equal(queryCalls, 1);
+  assert.equal(integration.registrationManager.getSessionState(sessionId).emailCode.code, "246810");
+  assert.equal(integration.registrationEmailWatchers.has(sessionId), false);
+
+  await integration.completeManualRegistrationSession(sessionId);
+  const state = await integration.getPanelState();
+  assert.equal(state.mailboxes[0].gptRegistered, true);
+  assert.equal(typeof state.mailboxes[0].gptRegisteredAt, "number");
+  integration.dispose();
+});
+
+test("closing the registration panel cancels GPT-only sessions but leaves the original OAuth route alone", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let rejectOAuth;
+  let cancelledOperationId;
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async openRegistrationBrowser() { return { opened: true }; },
+    startOAuthAccountImport() {
+      return new Promise((_resolve, reject) => { rejectOAuth = reject; });
+    },
+    cancelOAuthAccountImport(operationId) {
+      cancelledOperationId = operationId;
+      rejectOAuth?.(new Error("OAuth login cancelled by user."));
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  await integration.openRegistrationPanel();
+
+  const gptSessionId = integration.registrationManager.createSession({
+    email: "close-gpt@example.com",
+    importCodex: false
+  });
+  const oauthSessionId = integration.registrationManager.createSession({
+    email: "close-oauth@example.com",
+    password: "manual-password"
+  });
+  const gptStarted = integration.registrationManager.startSession(gptSessionId);
+  const oauthStarted = integration.registrationManager.startSession(oauthSessionId);
+  await waitFor(() => integration.registrationManager.getSessionState(gptSessionId)?.state === "awaiting_manual_registration");
+  await waitFor(() => integration.registrationManager.getSessionState(oauthSessionId)?.state === "awaiting_oauth");
+
+  vscode.panels[0].dispose();
+  await waitFor(() => integration.registrationManager.getSessionState(gptSessionId)?.state === "cancelled");
+  assert.equal(integration.registrationManager.getSessionState(oauthSessionId).state, "awaiting_oauth");
+  assert.equal(cancelledOperationId, undefined);
+
+  await integration.registrationManager.cancelSession(oauthSessionId);
+  await Promise.all([gptStarted, oauthStarted]);
+  integration.dispose();
+});
+
+test("completed GPT-only registration can hand off the same mailbox to Codex import", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let importOptions;
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, providerId: "mock", messages: [], codes: [] }; }
+  };
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async getManagedAccountEmails() { return []; },
+    async openRegistrationBrowser() { return { opened: true }; },
+    async startOAuthAccountImport(options) {
+      importOptions = options;
+      return { accountId: "account-after-gpt", email: options.expectedEmail, quotaRefreshed: true };
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await integration.pool.importProvider({ provider, input: "handoff@example.com|credential" });
+  const sessionId = await integration.createRegistrationSession({ email: "handoff@example.com", importCodex: false });
+  await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.state === "awaiting_manual_registration");
+
+  await integration.completeManualRegistrationSession(sessionId);
+  await waitFor(() => integration.pool.listMetadata()[0]?.gptRegistered === true);
+  await integration.runRegistrationCodexImport(sessionId);
+  await waitFor(() => importOptions && integration.codexImports.size === 0);
+
+  assert.equal(importOptions.expectedEmail, "handoff@example.com");
+  assert.match(importOptions.operationId, /^mailbox-codex-import:/u);
+  integration.dispose();
+});
+
+test("registration assistant can terminate an in-flight Codex handoff without cancelling the completed GPT session", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let startedOptions;
+  let cancelledOperationId;
+  let rejectImport;
+  const importGate = new Promise((_resolve, reject) => { rejectImport = reject; });
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, providerId: "mock", messages: [], codes: [] }; }
+  };
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async getManagedAccountEmails() { return []; },
+    async openRegistrationBrowser() { return { opened: true }; },
+    async startOAuthAccountImport(options) {
+      startedOptions = options;
+      return importGate;
+    },
+    cancelOAuthAccountImport(operationId) {
+      cancelledOperationId = operationId;
+      rejectImport(new Error("OAuth login cancelled by user."));
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await integration.openRegistrationPanel();
+  await integration.pool.importProvider({ provider, input: "cancel-handoff@example.com|credential" });
+  const sessionId = await integration.createRegistrationSession({ email: "cancel-handoff@example.com", importCodex: false });
+  await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.state === "awaiting_manual_registration");
+  await integration.completeManualRegistrationSession(sessionId);
+  await integration.runRegistrationCodexImport(sessionId);
+  await waitFor(() => integration.codexImports.size === 1);
+
+  await vscode.panels[0].webview.emit({
+    type: "mailbox:action",
+    action: "registrationCancelCodexImport",
+    sessionId
+  });
+  await waitFor(() => integration.codexImports.size === 0);
+
+  assert.equal(cancelledOperationId, startedOptions.operationId);
+  assert.equal(integration.registrationManager.getSessionState(sessionId).state, "completed");
+  assert.equal(
+    vscode.panels[0].webview.messages.some(
+      (message) => message.type === "toast" && message.action === "registrationCancelCodexImport" && message.level === "success"
+    ),
+    true
+  );
+  assert.equal(
+    vscode.panels[0].webview.messages.some(
+      (message) => message.type === "toast" && message.action === "codexImport" && message.level === "error"
+    ),
+    false
+  );
+  integration.dispose();
+});
+
 test("deleting a mailbox cancels its active registration OAuth flow", async () => {
   const vscode = createVscode();
   const context = createContext();
