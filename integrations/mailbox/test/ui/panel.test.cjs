@@ -17,6 +17,16 @@ test("standalone registration panel provides mailbox-library selection and direc
   assert.match(html, /清除所有记录/u);
   assert.match(html, /邮箱库为空，请直接输入新邮箱/u);
   assert.match(html, /已自动隐藏/u);
+  assert.match(html, /注册并导入 Codex/u);
+  assert.match(html, /注册 GPT/u);
+  assert.match(html, /data-import-codex="true"/u);
+  assert.match(html, /data-import-codex="false"/u);
+  assert.match(html, /完成 GPT 注册/u);
+  assert.match(html, /导入 Codex/u);
+  assert.match(html, /registrationCompleteManual/u);
+  assert.match(html, /registrationCodexImport/u);
+  assert.match(html, /registrationStopEmailCode/u);
+  assert.match(html, /manual-browser/u);
   assert.match(html, /hasManagedCodexEmail/u);
   assert.match(html, /选择邮箱只会填入地址，不会自动开始注册/u);
   assert.match(html, /不会自动填写或提交/u);
@@ -105,7 +115,8 @@ test("registration mailbox library hides emails already imported into Codex", ()
     state: {
       mailboxes: [
         { id: "mailbox:linked", providerId: "mock", address: "linked@example.com", displayName: "linked@example.com" },
-        { id: "mailbox:free", providerId: "mock", address: "free@example.com", displayName: "free@example.com" }
+        { id: "mailbox:free", providerId: "mock", address: "free@example.com", displayName: "free@example.com" },
+        { id: "mailbox:gpt", providerId: "mock", address: "gpt@example.com", displayName: "gpt@example.com", gptRegistered: true }
       ],
       providers: [{ id: "mock", displayName: "Mock", capabilities: {}, importSchema: {} }],
       managedAccountEmailsAvailable: true,
@@ -116,6 +127,8 @@ test("registration mailbox library hides emails already imported into Codex", ()
 
   assert.doesNotMatch(renderedHtml, /linked@example\.com/iu);
   assert.match(renderedHtml, /free@example\.com/u);
+  assert.match(renderedHtml, /gpt@example\.com/u);
+  assert.match(renderedHtml, /GPT 已注册/u);
   assert.match(renderedHtml, /已自动隐藏 1 个/u);
 });
 
@@ -276,6 +289,78 @@ test("OAuth registration sessions point to the external browser and keep panel d
   assert.match(renderedHtml, /registration-copy-email-code/u);
   assert.match(renderedHtml, /取消 OAuth 流程/u);
   assert.doesNotMatch(renderedHtml, /registration-submit-email-code/u);
+});
+
+test("completed GPT sessions keep manual helpers and expose Codex import termination", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const messages = [];
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [{ id: "mailbox:gpt", address: "gpt@example.com", displayName: "gpt@example.com", providerId: "mock" }],
+      providers: [],
+      managedAccountEmails: [],
+      codexImportAvailable: true,
+      codexImports: ["mailbox:gpt"],
+      codexImportCancellable: true,
+      phoneSources: [{ id: "liye", displayName: "LIYE" }],
+      registrationKeyPool: {
+        count: 1,
+        available: 1,
+        inUse: 0,
+        keys: [{ id: "key:gpt", masked: "KEY…GPT", status: "available" }]
+      },
+      registrationSessions: [{
+        id: "session:gpt",
+        email: "gpt@example.com",
+        mode: "manual-browser",
+        importCodex: false,
+        state: "completed",
+        phoneOrder: { phase: "received", running: false },
+        emailCode: { phase: "idle" }
+      }]
+    }
+  } });
+
+  assert.match(renderedHtml, /data-action="registration-refresh-email-code"/u);
+  assert.match(renderedHtml, /data-action="registration-acquire-phone"[^>]*>开始取号/u);
+  assert.match(renderedHtml, /<select id="registrationPhoneKey-session:gpt">/u);
+  assert.match(renderedHtml, /data-action="registration-cancel-codex-import"/u);
+
+  documentListeners.get("click")({ target: {
+    disabled: false,
+    dataset: { action: "registration-cancel-codex-import", sessionId: "session:gpt" },
+    closest() { return this; }
+  } });
+  assert.equal(messages.at(-1).action, "registrationCancelCodexImport");
 });
 
 test("registration cards delete their mailbox directly and the header clears all registration records", () => {

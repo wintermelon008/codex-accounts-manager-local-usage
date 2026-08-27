@@ -264,6 +264,48 @@ test("registration flow delegates to the Manager Codex OAuth import when availab
   assert.equal(session.result.accountId, "account-1");
 });
 
+test("GPT-only registration opens the external browser without Playwright or Codex OAuth", async () => {
+  let oauthCalls = 0;
+  let browserOptions;
+  let playwrightCalled = false;
+  const session = createTestSession({
+    email: "gpt-only@example.com",
+    password: "secret-password",
+    importCodex: false,
+    startOAuthImport: async () => {
+      oauthCalls += 1;
+      return { accountId: "must-not-import" };
+    },
+    openRegistrationBrowser: async (options) => {
+      browserOptions = options;
+      return { opened: true };
+    }
+  });
+  session._launchBrowser = async () => {
+    playwrightCalled = true;
+    throw new Error("GPT-only route must not launch Playwright");
+  };
+
+  await session.start();
+
+  assert.equal(session.importCodex, false);
+  assert.equal(session.mode, "manual-browser");
+  assert.equal(session.state, STATES.AWAITING_MANUAL_REGISTRATION);
+  assert.equal(oauthCalls, 0);
+  assert.equal(playwrightCalled, false);
+  assert.deepEqual(browserOptions, { clipboardText: "gpt-only@example.com" });
+
+  let phoneOrderCancelled = false;
+  session.phoneOrder = {
+    state: { running: true },
+    async cancelNumber() { phoneOrderCancelled = true; }
+  };
+  const completed = await session.completeManualRegistration();
+  assert.equal(completed.accepted, true);
+  assert.equal(session.state, STATES.COMPLETED);
+  assert.equal(phoneOrderCancelled, false);
+});
+
 test("registration flow cancels an in-flight Manager Codex OAuth import", async () => {
   let rejectOAuth;
   let cancelledOperationId;

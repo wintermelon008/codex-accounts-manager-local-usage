@@ -74,6 +74,44 @@ test("registration email watcher queries the matching imported provider and expo
   assert.equal(states.at(-1).phase, "received");
 });
 
+test("registration email watcher can perform exactly one query for GPT browser entry", async () => {
+  const now = Date.parse("2026-08-20T12:00:00.000Z");
+  let queryCount = 0;
+  const watcher = new RegistrationEmailCodeWatcher({
+    pool: {
+      listMetadata: () => [{ id: "mailbox-1", providerId: "mock", address: "person@example.com", enabled: true }],
+      getAccount: async () => ({ id: "mailbox-1", providerId: "mock", address: "person@example.com", credentials: { token: "opaque" } }),
+      recordQueryResult: async () => undefined
+    },
+    providers: {
+      get: () => ({
+        apiVersion: 1,
+        id: "mock",
+        capabilities: { history: "latest", maxMessages: 1 },
+        parseImport: () => ({ entries: [], failed: [] }),
+        async query() {
+          queryCount += 1;
+          return {
+            ok: true,
+            messages: [{ receivedAt: new Date(now).toISOString(), codes: ["246810"], subject: "OpenAI code" }],
+            codes: ["246810"]
+          };
+        }
+      })
+    },
+    now: () => now,
+    sleep: async () => { throw new Error("one-shot query must not sleep"); }
+  });
+
+  const result = await watcher.queryOnce("PERSON@example.com");
+
+  assert.equal(queryCount, 1);
+  assert.equal(result.phase, "received");
+  assert.equal(result.code, "246810");
+  assert.equal(result.running, false);
+  assert.equal(watcher.isRunning(), false);
+});
+
 test("registration email watcher reports an unimported address without polling", async () => {
   let queryCount = 0;
   const watcher = new RegistrationEmailCodeWatcher({

@@ -99,6 +99,12 @@ test("registration assistant records are shared without persisting passwords", a
       mode: "oauth",
       state: "completed",
       result: { email: "one@example.com", accountId: "account-1", password: "must-not-persist" }
+    }, {
+      id: "session-2",
+      email: "two@example.com",
+      mode: "playwright",
+      importCodex: false,
+      state: "completed"
     }]);
 
     const second = createServerRegistrationSessionStore({ storageUri: { fsPath: root } });
@@ -106,6 +112,9 @@ test("registration assistant records are shared without persisting passwords", a
     assert.equal(records[0].email, "one@example.com");
     assert.equal(records[0].result.accountId, "account-1");
     assert.equal("password" in records[0].result, false);
+    assert.equal(records[0].importCodex, true);
+    assert.equal(records[1].importCodex, false);
+    assert.equal(records[1].mode, "manual-browser");
     assert.equal((await fs.stat(path.join(root, REGISTRATION_SESSION_FILE))).mode & 0o777, 0o600);
   } finally {
     await fs.rm(root, { recursive: true, force: true });

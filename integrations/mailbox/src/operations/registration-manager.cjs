@@ -1,6 +1,6 @@
 "use strict";
 
-// 注册管理器：管理多个并发注册会话（页面状态检测 + 人工验证码确认）。
+// 注册管理器：管理多个并发注册会话（自动后备流程 + GPT 手动浏览器辅助）。
 // 接码平台只提供识别/读取内容，手机号、验证码和最终授权均由用户显式确认。
 
 const EventEmitter = require("node:events");
@@ -13,10 +13,12 @@ class RegistrationManager extends EventEmitter {
     this.maxConcurrent = options.maxConcurrent || 3;
     this.startOAuthImport = typeof options.startOAuthImport === "function" ? options.startOAuthImport : null;
     this.cancelOAuthImport = typeof options.cancelOAuthImport === "function" ? options.cancelOAuthImport : null;
+    this.openRegistrationBrowser = typeof options.openRegistrationBrowser === "function" ? options.openRegistrationBrowser : null;
   }
 
   createSession(params) {
-    if (!params.email || !params.password) {
+    const importCodex = params.importCodex !== false;
+    if (!params.email || (importCodex && !params.password)) {
       throw new Error("缺少必填参数：email 或 password");
     }
 
@@ -25,8 +27,10 @@ class RegistrationManager extends EventEmitter {
       password: params.password,
       name: params.name || "jdd",
       age: params.age || 24,
-      startOAuthImport: this.startOAuthImport,
-      cancelOAuthImport: this.cancelOAuthImport,
+      importCodex,
+      startOAuthImport: importCodex ? this.startOAuthImport : null,
+      cancelOAuthImport: importCodex ? this.cancelOAuthImport : null,
+      openRegistrationBrowser: importCodex ? null : this.openRegistrationBrowser,
       onStateChange: (event) => {
         this.emit("stateChange", { sessionId: session.id, ...event });
       },
@@ -75,6 +79,11 @@ class RegistrationManager extends EventEmitter {
   async authorizeSession(sessionId) {
     const session = this._get(sessionId);
     return session.authorize();
+  }
+
+  completeManualRegistration(sessionId) {
+    const session = this._get(sessionId);
+    return session.completeManualRegistration();
   }
 
   async acquirePhoneNumber(sessionId, cardCode, options = {}) {
@@ -129,6 +138,7 @@ class RegistrationManager extends EventEmitter {
       email: session.email,
       state: session.state,
       mode: session.mode,
+      importCodex: session.importCodex,
       phoneInputCount: session.phoneInputCount,
       phoneOrder: session.getPhoneOrderState(),
       emailCode: session.getEmailCodeState(),
@@ -145,6 +155,7 @@ class RegistrationManager extends EventEmitter {
       email: s.email,
       state: s.state,
       mode: s.mode,
+      importCodex: s.importCodex,
       phoneInputCount: s.phoneInputCount,
     }));
   }
@@ -154,6 +165,7 @@ class RegistrationManager extends EventEmitter {
       id: session.id,
       email: session.email,
       mode: session.mode,
+      importCodex: session.importCodex,
       state: session.state,
       phoneInputCount: session.phoneInputCount,
       name: session.name,
@@ -178,17 +190,27 @@ class RegistrationManager extends EventEmitter {
         continue;
       }
 
+      // Records written before the two-route UI represented the original
+      // registration action, which now means registration plus Codex import.
+      const importCodex = record.importCodex !== false;
       const session = new RegistrationSession({
         email: record.email,
         password: "",
         name: record.name || "jdd",
         age: record.age || 24,
-        startOAuthImport: record.mode === "oauth" ? this.startOAuthImport : null,
-        cancelOAuthImport: record.mode === "oauth" ? this.cancelOAuthImport : null
+        importCodex,
+        startOAuthImport: importCodex && record.mode === "oauth" ? this.startOAuthImport : null,
+        cancelOAuthImport: importCodex && record.mode === "oauth" ? this.cancelOAuthImport : null,
+        openRegistrationBrowser: !importCodex ? this.openRegistrationBrowser : null
       });
       session.id = record.id;
       session.oauthOperationId = `registration-oauth:${session.id}`;
-      session.mode = record.mode === "oauth" ? "oauth" : "playwright";
+      session.importCodex = importCodex;
+      session.mode = importCodex && record.mode === "oauth"
+        ? "oauth"
+        : !importCodex
+          ? "manual-browser"
+          : "playwright";
       session.phoneInputCount = Number.isFinite(record.phoneInputCount) ? Math.max(0, Math.floor(record.phoneInputCount)) : 0;
       session.result = persistableResult(record.result);
       session.error = typeof record.error === "string" && record.error ? new Error(record.error) : null;

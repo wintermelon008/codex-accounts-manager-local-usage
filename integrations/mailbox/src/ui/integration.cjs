@@ -89,9 +89,13 @@ class MailboxIntegration {
       cancelOAuthImport: typeof this.api?.cancelOAuthAccountImport === "function"
         ? (operationId) => this.api.cancelOAuthAccountImport(operationId)
         : undefined,
+      openRegistrationBrowser: typeof this.api?.openRegistrationBrowser === "function"
+        ? (options) => this.api.openRegistrationBrowser(options)
+        : undefined,
     });
     this.registrationDiagnostics = createRegistrationDiagnostics(vscode, context);
     this.registrationEmailWatchers = new Map();
+    this.registrationGptStatusSync = Promise.resolve();
     this.registrationClipboardCopied = new Map();
     this.registrationClipboardQueues = new Map();
     const serverRegistrationKeyStore = createLocalRegistrationKeyStore(context.globalStorageUri);
@@ -101,11 +105,28 @@ class MailboxIntegration {
     });
     this.registrationPhoneKeyClaims = new Map();
     this.registrationManager.on("stateChange", (event) => {
-      if (event?.state === STATES.STARTING) {
+      // GPT-only is a browser handoff. Once the external page is actually
+      // open, perform one mailbox query; continuous polling remains explicit.
+      if (
+        event?.state === STATES.AWAITING_MANUAL_REGISTRATION &&
+        event.mode === "manual-browser" &&
+        event.browserOpened === true
+      ) {
+        this.startRegistrationEmailQueryOnce(event.sessionId);
+      }
+      // The original Codex route keeps its watcher. GPT-only never starts a
+      // continuous watcher automatically.
+      if (event?.state === STATES.STARTING && event.mode !== "manual-browser") {
         this.startRegistrationEmailWatcher(event.sessionId);
       }
-      if ([STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(event?.state)) {
+      if (
+        [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(event?.state) &&
+        !(event?.state === STATES.COMPLETED && event.mode === "manual-browser")
+      ) {
         this.stopRegistrationEmailWatcher(event.sessionId);
+      }
+      if (event?.state === STATES.COMPLETED) {
+        this.queueRegistrationGptStatusSync(event.sessionId);
       }
       void this.syncRegistrationPhoneKey(event).catch((error) => {
         this.postPanelMessage({
@@ -157,6 +178,7 @@ class MailboxIntegration {
       if (restored.interrupted > 0) {
         await this.persistRegistrationSessions();
       }
+      await this.syncCompletedRegistrationMailboxStates();
     } catch (error) {
       this.loadError = safeError(error, "服务器邮箱池状态不可用");
     }
@@ -378,6 +400,9 @@ class MailboxIntegration {
         case "registrationRefreshEmailCode":
           await this.refreshRegistrationEmailCode(message.sessionId);
           return;
+        case "registrationStopEmailCode":
+          await this.stopRegistrationEmailCode(message.sessionId);
+          return;
         case "registrationSubmitPhone":
           await this.submitRegistrationPhone(message.sessionId, message.phoneNumber);
           return;
@@ -386,6 +411,15 @@ class MailboxIntegration {
           return;
         case "registrationAuthorize":
           await this.authorizeRegistrationSession(message.sessionId);
+          return;
+        case "registrationCompleteManual":
+          await this.completeManualRegistrationSession(message.sessionId);
+          return;
+        case "registrationCodexImport":
+          await this.runRegistrationCodexImport(message.sessionId);
+          return;
+        case "registrationCancelCodexImport":
+          await this.cancelRegistrationCodexImport(message.sessionId);
           return;
         case "registrationAcquirePhone":
           await this.acquireRegistrationPhone(message.sessionId, {
@@ -416,9 +450,7 @@ class MailboxIntegration {
           await this.cancelRegistrationSession(message.sessionId);
           return;
         case "registrationCleanup":
-          this.stopRegistrationEmailWatcher(message.sessionId);
-          this.registrationManager.cleanupSession(message.sessionId);
-          await this.publishPanelState();
+          await this.cleanupRegistrationSession(message.sessionId);
           return;
         case "registrationCleanupAll":
           await this.cleanupAllRegistrationSessions();
@@ -494,7 +526,7 @@ class MailboxIntegration {
         throw new Error("请先停止邮箱当前操作");
       }
     }
-    await this.cancelRegistrationOAuthForMailbox(mailboxId);
+    await this.cancelRegistrationForMailbox(mailboxId);
     await this.pool.deleteAccount(mailboxId);
     if (this.selectedMailboxId === mailboxId) {
       this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
@@ -556,6 +588,53 @@ class MailboxIntegration {
     await this.publishPanelState();
   }
 
+  async runRegistrationCodexImport(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    const session = this.registrationManager.getSessionState(id);
+    if (!session || session.importCodex !== false || session.state !== STATES.COMPLETED) {
+      throw new Error("请先完成 GPT 网页注册，再导入 Codex");
+    }
+    const mailbox = this.findMailboxByEmail(session.email);
+    if (!mailbox) {
+      throw new Error("该邮箱不在邮箱池中，请先导入邮箱凭据后再导入 Codex");
+    }
+    await this.runCodexImport(mailbox.id);
+  }
+
+  async cancelRegistrationCodexImport(sessionId, { silent = false } = {}) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    const session = this.registrationManager.getSessionState(id);
+    if (!session || session.mode !== "manual-browser" || session.state !== STATES.COMPLETED) {
+      if (silent) return false;
+      throw new Error("当前没有可终止的 GPT 后续 Codex 导入");
+    }
+    const mailbox = this.findMailboxByEmail(session.email);
+    const operationId = mailbox ? this.codexImports.get(mailbox.id) : undefined;
+    if (typeof operationId !== "string" || !operationId) {
+      if (silent) return false;
+      throw new Error("当前没有正在进行的 Codex 导入");
+    }
+    if (typeof this.api?.cancelOAuthAccountImport !== "function") {
+      if (silent) return false;
+      throw new Error("当前 Manager 不支持终止 Codex OAuth 导入");
+    }
+
+    this.api.cancelOAuthAccountImport(operationId);
+    this.codexImports.delete(mailbox.id);
+    if (!silent) {
+      this.postPanelMessage({
+        type: "toast",
+        level: "success",
+        action: "registrationCancelCodexImport",
+        sessionId: id,
+        mailboxId: mailbox.id,
+        message: "Codex 导入已终止，可继续取号或稍后重新导入"
+      });
+    }
+    await this.publishPanelState();
+    return true;
+  }
+
   async runCodexImportOperation(mailbox, operationId) {
     try {
       const result = await this.api.startOAuthAccountImport({
@@ -601,17 +680,23 @@ class MailboxIntegration {
     if (!email) {
       throw new Error("请填写邮箱");
     }
+    const importCodex = message.importCodex !== false && message.importCodex !== "false";
     const codexImportState = await this.getCodexImportState();
     if (codexImportState.managedEmailsAvailable && codexImportState.emails.some((item) => normalizeEmail(item) === normalizeEmail(email))) {
       throw new Error("该邮箱已经导入 Codex 账号，请选择其他邮箱");
+    }
+    const mailbox = this.findMailboxByEmail(email);
+    if (!importCodex && mailbox?.gptRegistered) {
+      throw new Error("该邮箱已经注册 GPT 账号，请改用“注册并导入 Codex”或选择其他邮箱");
     }
     const sessionId = this.registrationManager.createSession({
       email,
       password: typeof message.password === "string" && message.password ? message.password : "Chatgpt189687",
       name: typeof message.name === "string" && message.name ? message.name : "jdd",
-      age: Number.isFinite(message.age) ? message.age : 24
+      age: Number.isFinite(message.age) ? message.age : 24,
+      importCodex
     });
-    // “开始注册”按钮应同时启动已创建的浏览器辅助会话；手机号/验证码仍由用户手动填写。
+    // 创建后立即启动对应路线；手机号/验证码仍由用户手动填写。
     await this.startRegistrationSession(sessionId);
     await this.publishPanelState();
     return sessionId;
@@ -635,7 +720,8 @@ class MailboxIntegration {
       return;
     }
     const session = this.registrationManager.getSessionState(sessionId);
-    if (!session || [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(session.state)) {
+    const completedManualRegistration = session?.mode === "manual-browser" && session.state === STATES.COMPLETED;
+    if (!session || ([STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(session.state) && !completedManualRegistration)) {
       return;
     }
 
@@ -665,11 +751,45 @@ class MailboxIntegration {
           // The registration session may no longer exist.
         }
       })
-      .finally(() => {
-        if (this.registrationEmailWatchers.get(sessionId) === watcher && !watcher.isRunning()) {
-          this.registrationEmailWatchers.delete(sessionId);
+      .finally(() => this.cleanupRegistrationEmailWatcher(sessionId, watcher));
+  }
+
+  startRegistrationEmailQueryOnce(sessionId) {
+    if (typeof sessionId !== "string" || this.registrationEmailWatchers.has(sessionId)) {
+      return;
+    }
+    const session = this.registrationManager.getSessionState(sessionId);
+    if (!session || session.mode !== "manual-browser" || session.state !== STATES.AWAITING_MANUAL_REGISTRATION) {
+      return;
+    }
+
+    const watcher = new RegistrationEmailCodeWatcher({
+      pool: this.pool,
+      providers: this.providers,
+      onStateChange: (emailCode) => {
+        try {
+          this.registrationManager.setEmailCodeState(sessionId, emailCode);
+        } catch {
+          // The registration session may be cleaned while a provider request is finishing.
         }
-      });
+      }
+    });
+    this.registrationEmailWatchers.set(sessionId, watcher);
+    const promise = watcher.queryOnce(session.email);
+    void promise
+      .catch((error) => {
+        try {
+          this.registrationManager.setEmailCodeState(sessionId, {
+            phase: "error",
+            running: false,
+            error: safeError(error, "邮箱验证码查询失败"),
+            message: "邮箱验证码查询失败"
+          });
+        } catch {
+          // The registration session may no longer exist.
+        }
+      })
+      .finally(() => this.cleanupRegistrationEmailWatcher(sessionId, watcher));
   }
 
   stopRegistrationEmailWatcher(sessionId) {
@@ -682,16 +802,38 @@ class MailboxIntegration {
     return true;
   }
 
+  cleanupRegistrationEmailWatcher(sessionId, watcher) {
+    if (this.registrationEmailWatchers.get(sessionId) === watcher && !watcher.isRunning()) {
+      this.registrationEmailWatchers.delete(sessionId);
+    }
+  }
+
+  async stopRegistrationEmailCode(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    const stopped = this.stopRegistrationEmailWatcher(id);
+    if (!stopped) {
+      return;
+    }
+    await this.publishPanelState();
+  }
+
   async refreshRegistrationEmailCode(sessionId) {
     const id = this.requireRegistrationSessionId(sessionId);
     const session = this.registrationManager.getSessionState(id);
     if (!session) throw new Error("注册会话不存在");
     let watcher = this.registrationEmailWatchers.get(id);
-    if (!watcher) {
+    if (!watcher || !watcher.isRunning()) {
+      if (watcher) this.registrationEmailWatchers.delete(id);
       this.startRegistrationEmailWatcher(id);
-      watcher = this.registrationEmailWatchers.get(id);
+      await this.publishPanelState();
+      return;
     }
-    if (!watcher) throw new Error("当前注册会话没有可刷新的邮箱查询任务");
+    if (session.mode === "manual-browser") {
+      this.stopRegistrationEmailWatcher(id);
+      this.startRegistrationEmailWatcher(id);
+      await this.publishPanelState();
+      return;
+    }
     void watcher.refresh(session.email, {
       ignoreCode: session.emailCode?.code,
       ignoreReceivedAt: session.emailCode?.receivedAt
@@ -702,7 +844,7 @@ class MailboxIntegration {
         action: "registrationRefreshEmailCode",
         message: safeError(error, "邮箱验证码刷新失败")
       });
-    });
+    }).finally(() => this.cleanupRegistrationEmailWatcher(id, watcher));
     await this.publishPanelState();
   }
 
@@ -739,11 +881,14 @@ class MailboxIntegration {
     }
     const result = await this.registrationManager.submitVerificationCode(id, code.trim());
     if (result?.accepted) {
+      const session = this.registrationManager.getSessionState(id);
       this.postPanelMessage({
         type: "toast",
         level: "success",
         action: "registrationComplete",
-        message: "注册表单已提交完成。请使用下方“Codex 导入”按钮完成登录导入。"
+        message: session?.importCodex === false
+          ? "GPT 注册表单已提交完成，请在注册页面出现最后继续时确认完成。"
+          : "注册表单已提交完成。请使用下方“确认授权并完成”按钮完成注册；如未走 OAuth，之后可再导入 Codex。"
       });
     }
     await this.publishPanelState();
@@ -760,6 +905,23 @@ class MailboxIntegration {
         message: result.message || "注册和授权已完成。"
       });
     }
+    await this.publishPanelState();
+  }
+
+  async completeManualRegistrationSession(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    const session = this.registrationManager.getSessionState(id);
+    if (!session || session.mode !== "manual-browser") {
+      throw new Error("当前会话不是 GPT 手动注册会话");
+    }
+    const result = await this.registrationManager.completeManualRegistration(id);
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationCompleteManual",
+      sessionId: id,
+      message: result?.message || "GPT 注册已完成（未导入 Codex）"
+    });
     await this.publishPanelState();
   }
 
@@ -914,6 +1076,11 @@ class MailboxIntegration {
   syncRegistrationClipboard(event) {
     const sessionId = typeof event?.sessionId === "string" ? event.sessionId : "";
     if (!sessionId) return Promise.resolve();
+    if (this.registrationManager.getSessionState(sessionId)?.mode === "manual-browser") {
+      // The GPT-only route is intentionally copy-controlled: only the mailbox
+      // address is copied when the external registration page opens.
+      return Promise.resolve();
+    }
 
     const previous = this.registrationClipboardQueues.get(sessionId) || Promise.resolve();
     const task = previous
@@ -1017,9 +1184,24 @@ class MailboxIntegration {
     await this.publishPanelState();
   }
 
+  async cleanupRegistrationSession(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    const session = this.registrationManager.getSessionState(id);
+    await this.cancelRegistrationCodexImport(id, { silent: true });
+    this.stopRegistrationEmailWatcher(id);
+    if (session?.phoneOrder?.running) {
+      await this.registrationManager.cancelPhoneNumber(id).catch(() => undefined);
+    }
+    await this.releaseRegistrationPhoneKey(id);
+    this.registrationManager.cleanupSession(id);
+    await this.publishPanelState();
+    this.publish();
+  }
+
   async cleanupAllRegistrationSessions() {
     const sessions = this.registrationManager.getAllSessions();
     for (const session of sessions) {
+      await this.cancelRegistrationCodexImport(session.id, { silent: true });
       this.stopRegistrationEmailWatcher(session.id);
       await this.registrationManager.cancelSession(session.id);
       await this.releaseRegistrationPhoneKey(session.id);
@@ -1114,7 +1296,7 @@ class MailboxIntegration {
     return stopped;
   }
 
-  async cancelRegistrationOAuthForMailbox(mailboxId) {
+  async cancelRegistrationForMailbox(mailboxId) {
     const mailbox = this.pool.listMetadata().find((item) => item.id === mailboxId);
     if (!mailbox) {
       return false;
@@ -1125,7 +1307,6 @@ class MailboxIntegration {
       .getAllSessions()
       .filter(
         (session) =>
-          session.mode === "oauth" &&
           normalizeEmail(session.email) === normalizeEmail(mailbox.address) &&
           !terminalStates.includes(session.state)
       );
@@ -1147,7 +1328,7 @@ class MailboxIntegration {
           throw new Error("请先停止邮箱当前操作");
         }
       }
-      await this.cancelRegistrationOAuthForMailbox(mailboxId);
+      await this.cancelRegistrationForMailbox(mailboxId);
     }
     for (const mailboxId of mailboxIds) {
       await this.pool.deleteAccount(mailboxId);
@@ -1191,11 +1372,55 @@ class MailboxIntegration {
     return normalized;
   }
 
+  findMailboxByEmail(email) {
+    const normalized = normalizeEmail(email);
+    if (!normalized || !this.pool.isLoaded()) {
+      return undefined;
+    }
+    return this.pool.listMetadata().find((mailbox) => normalizeEmail(mailbox.address) === normalized);
+  }
+
+  queueRegistrationGptStatusSync(sessionId) {
+    this.registrationGptStatusSync = this.registrationGptStatusSync
+      .catch(() => undefined)
+      .then(() => this.syncRegistrationGptStatus(sessionId))
+      .catch((error) => {
+        this.postPanelMessage({
+          type: "toast",
+          level: "warning",
+          action: "registrationGptStatus",
+          message: safeError(error, "GPT 注册状态保存失败")
+        });
+      });
+  }
+
+  async syncRegistrationGptStatus(sessionId) {
+    const session = this.registrationManager.getSessionState(sessionId);
+    if (!session || session.state !== STATES.COMPLETED) {
+      return false;
+    }
+    const mailbox = this.findMailboxByEmail(session.email);
+    if (!mailbox) {
+      return false;
+    }
+    await this.pool.markGptRegistered(mailbox.id);
+    return true;
+  }
+
+  async syncCompletedRegistrationMailboxStates() {
+    await this.registrationGptStatusSync;
+    for (const session of this.registrationManager.getAllSessions()) {
+      if (session.state === STATES.COMPLETED) {
+        await this.syncRegistrationGptStatus(session.id);
+      }
+    }
+  }
+
   async getPanelState() {
     if (this.pool.isLoaded()) {
       await this.pool.reload();
     }
-    const mailboxes = this.pool.isLoaded() ? this.pool.listMetadata() : [];
+    let mailboxes = this.pool.isLoaded() ? this.pool.listMetadata() : [];
     const persistedSelectedMailboxId = await this.sharedMailboxStores.metadataStore.get(SELECTED_MAILBOX_KEY);
     if (typeof persistedSelectedMailboxId === "string" && mailboxes.some((mailbox) => mailbox.id === persistedSelectedMailboxId)) {
       this.selectedMailboxId = persistedSelectedMailboxId;
@@ -1209,6 +1434,8 @@ class MailboxIntegration {
     if (restored.interrupted > 0) {
       await this.persistRegistrationSessions();
     }
+    await this.syncCompletedRegistrationMailboxStates();
+    mailboxes = this.pool.isLoaded() ? this.pool.listMetadata() : [];
     const selectedMailbox = mailboxes.find((mailbox) => mailbox.id === this.selectedMailboxId);
     const detail = selectedMailbox ? await this.pool.getDetail(selectedMailbox.id) : undefined;
     const codexImportState = await this.getCodexImportState();
@@ -1290,6 +1517,51 @@ class MailboxIntegration {
     }
     this.registrationPanel = undefined;
     this.publish();
+    if (!this.disposed) {
+      void this.cancelManualRegistrationSessions();
+    }
+  }
+
+  async cancelManualRegistrationSessions() {
+    const terminalStates = [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED];
+    const sessions = this.registrationManager
+      .getAllSessions()
+      .filter((session) => {
+        if (session.mode !== "manual-browser") return false;
+        const state = this.registrationManager.getSessionState(session.id);
+        const mailbox = this.findMailboxByEmail(session.email);
+        return (
+          !terminalStates.includes(session.state) ||
+          this.registrationEmailWatchers.has(session.id) ||
+          state?.phoneOrder?.running === true ||
+          Boolean(mailbox && this.codexImports.has(mailbox.id))
+        );
+      });
+
+    for (const session of sessions) {
+      this.stopRegistrationEmailWatcher(session.id);
+      try {
+        await this.cancelRegistrationCodexImport(session.id, { silent: true });
+        if (!terminalStates.includes(session.state)) {
+          await this.registrationManager.cancelSession(session.id);
+        } else if (this.registrationManager.getSessionState(session.id)?.phoneOrder?.running) {
+          await this.registrationManager.cancelPhoneNumber(session.id);
+        }
+      } catch (error) {
+        this.registrationDiagnostics.record({
+          level: "error",
+          sessionId: session.id,
+          msg: `关闭注册助手时取消 GPT 会话失败：${safeError(error, "未知错误")}`
+        });
+      } finally {
+        await this.releaseRegistrationPhoneKey(session.id).catch(() => undefined);
+      }
+    }
+    if (sessions.length > 0) {
+      await this.persistRegistrationSessions().catch(() => undefined);
+      this.publish();
+      await this.publishPanelState();
+    }
   }
 
   publish() {
