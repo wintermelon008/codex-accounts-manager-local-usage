@@ -4,6 +4,7 @@ const { createServerMailboxStores, createServerRegistrationSessionStore } = requ
 const { Eight92Provider } = require("../core/providers/eight92.cjs");
 const { BoyaProvider } = require("../core/providers/boya.cjs");
 const { CdnsProvider } = require("../core/providers/cdns.cjs");
+const { isOpenAiAccountDeactivatedMessage } = require("../core/messages.cjs");
 const { MailboxProviderRegistry } = require("../core/providers/index.cjs");
 const { MailboxPool } = require("../mailbox/storage.cjs");
 const { MailboxOperationCoordinator } = require("../operations/coordinator.cjs");
@@ -338,6 +339,12 @@ class MailboxIntegration {
         case "delete":
           await this.deleteMailbox(message.mailboxId);
           return;
+        case "deleteMailboxAndCodex":
+          await this.deleteMailboxAndCodex(message.mailboxId);
+          return;
+        case "deleteDeactivatedMailboxes":
+          await this.deleteDeactivatedMailboxes();
+          return;
         case "registrationDeleteMailbox":
           await this.deleteMailbox(message.mailboxId);
           return;
@@ -346,6 +353,9 @@ class MailboxIntegration {
           return;
         case "batchQuery":
           await this.runQueryMany(message.mailboxIds);
+          return;
+        case "queryReauthorizationMailboxes":
+          await this.runReauthorizationQueries();
           return;
         case "wait":
           await this.runWait(message.mailboxId);
@@ -537,6 +547,137 @@ class MailboxIntegration {
     this.publish();
   }
 
+  async deleteMailboxAndCodex(id, { notify = true } = {}) {
+    const mailboxId = this.requireMailboxId(id);
+    const mailbox = this.pool.listMetadata().find((item) => item.id === mailboxId);
+    if (!mailbox?.openaiAccountDeactivated) {
+      throw new Error("未检测到 OpenAI account deactivated 邮件，不能执行联删");
+    }
+    const detail = await this.pool.getDetail(mailboxId);
+    if (!hasOpenAiAccountDeactivationMessage(detail)) {
+      throw new Error("对应邮箱没有保存的 OpenAI account deactivated 邮件，不能执行联删");
+    }
+    if (typeof this.api?.getManagedAccountDirectory !== "function" || typeof this.api?.removeManagedAccount !== "function") {
+      throw new Error("当前 Manager 未提供删除邮箱与 Codex 账号所需的能力");
+    }
+    const directory = normalizeManagedAccountDirectory(await this.api.getManagedAccountDirectory());
+    const managedAccount = directory.find((account) => normalizeEmail(account.email) === normalizeEmail(mailbox.address));
+    if (!managedAccount) {
+      throw new Error("未找到与该邮箱匹配的 Codex 账号");
+    }
+    if (!managedAccount.requiresReauthorization) {
+      throw new Error("对应 Codex 账号当前不需要重新授权，已取消联删");
+    }
+
+    const result = { mailboxDeleted: false, codexDeleted: false };
+    if (this.coordinator.isActive(mailboxId) || this.codexImports.has(mailboxId)) {
+      const stopped = await this.stopMailbox(mailboxId);
+      if (!stopped && (this.coordinator.isActive(mailboxId) || this.codexImports.has(mailboxId))) {
+        throw new Error("请先停止邮箱当前操作");
+      }
+    }
+    await this.cancelRegistrationForMailbox(mailboxId);
+    await this.pool.deleteAccount(mailboxId);
+    result.mailboxDeleted = true;
+    if (this.selectedMailboxId === mailboxId) {
+      this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
+      await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+    }
+
+    try {
+      await this.api.removeManagedAccount(managedAccount.accountId);
+    } catch (error) {
+      result.error = safeError(error, "未知错误");
+      if (notify) {
+        this.postPanelMessage({
+          type: "toast",
+          level: "warning",
+          action: "deleteMailboxAndCodex",
+          mailboxId,
+          message: `邮箱已删除，但 Codex 账号删除失败：${result.error}`
+        });
+        await this.publishPanelState();
+        this.publish();
+      }
+      return result;
+    }
+
+    result.codexDeleted = true;
+    if (notify) {
+      this.postPanelMessage({
+        type: "toast",
+        level: "success",
+        action: "deleteMailboxAndCodex",
+        mailboxId,
+        message: "邮箱与 Codex 账号已删除"
+      });
+      await this.publishPanelState();
+      this.publish();
+    }
+    return result;
+  }
+
+  async deleteDeactivatedMailboxes() {
+    const candidates = await this.getDeactivatedMailboxCandidates();
+    if (candidates.length === 0) {
+      throw new Error("当前没有同时满足失效邮件、邮箱匹配和需要重新授权条件的账号");
+    }
+
+    const removed = [];
+    const failed = [];
+    for (const candidate of candidates) {
+      try {
+        const result = await this.deleteMailboxAndCodex(candidate.mailbox.id, { notify: false });
+        if (result.codexDeleted === true) {
+          removed.push(candidate.mailbox.id);
+        } else {
+          failed.push(result.error || "Codex 账号删除失败");
+        }
+      } catch (error) {
+        failed.push(safeError(error, "联删失败"));
+      }
+    }
+
+    const total = candidates.length;
+    const level = failed.length === 0 ? "success" : removed.length > 0 ? "warning" : "error";
+    const message = failed.length === 0
+      ? `已删除 ${removed.length} 个失效邮箱及对应 Codex 账号`
+      : `已完成 ${removed.length}/${total} 个联删，${failed.length} 个失败：${failed[0]}`;
+    this.postPanelMessage({
+      type: "toast",
+      level,
+      action: "deleteDeactivatedMailboxes",
+      mailboxIds: candidates.map((candidate) => candidate.mailbox.id),
+      message
+    });
+    await this.publishPanelState();
+    this.publish();
+  }
+
+  async getDeactivatedMailboxCandidates() {
+    if (typeof this.api?.getManagedAccountDirectory !== "function" || typeof this.api?.removeManagedAccount !== "function") {
+      throw new Error("当前 Manager 未提供删除邮箱与 Codex 账号所需的能力");
+    }
+    const directory = normalizeManagedAccountDirectory(await this.api.getManagedAccountDirectory());
+    const candidates = [];
+    for (const mailbox of this.pool.listMetadata()) {
+      if (mailbox.openaiAccountDeactivated !== true) {
+        continue;
+      }
+      const detail = await this.pool.getDetail(mailbox.id);
+      if (!hasOpenAiAccountDeactivationMessage(detail)) {
+        continue;
+      }
+      const managedAccount = directory.find(
+        (account) => normalizeEmail(account.email) === normalizeEmail(mailbox.address) && account.requiresReauthorization
+      );
+      if (managedAccount) {
+        candidates.push({ mailbox, managedAccount });
+      }
+    }
+    return candidates;
+  }
+
   async runQuery(mailboxId) {
     const id = this.requireSelectedId(mailboxId);
     void this.runOperation(id, "query", () => this.coordinator.queryOnce([id])).catch(() => undefined);
@@ -547,6 +688,27 @@ class MailboxIntegration {
     const ids = this.requireMailboxIds(mailboxIds, "请先选择要查询的邮箱");
     void this.runOperation(ids, "query", () => this.coordinator.queryOnce(ids)).catch(() => undefined);
     await this.publishPanelState();
+  }
+
+  async runReauthorizationQueries() {
+    if (typeof this.api?.getManagedAccountDirectory !== "function") {
+      throw new Error("当前 Manager 未提供需要重新授权账号目录");
+    }
+    const directory = normalizeManagedAccountDirectory(await this.api.getManagedAccountDirectory());
+    const reauthorizationEmails = new Set(
+      directory
+        .filter((account) => account.requiresReauthorization)
+        .map((account) => normalizeEmail(account.email))
+        .filter(Boolean)
+    );
+    const mailboxIds = this.pool
+      .listMetadata({ includeDisabled: false })
+      .filter((mailbox) => reauthorizationEmails.has(normalizeEmail(mailbox.address)))
+      .map((mailbox) => mailbox.id);
+    if (mailboxIds.length === 0) {
+      throw new Error("没有找到需要重新授权账号对应的邮箱");
+    }
+    await this.runQueryMany(mailboxIds);
   }
 
   async runWait(mailboxId) {
@@ -1451,6 +1613,9 @@ class MailboxIntegration {
       codexImportAvailable: codexImportState.available,
       managedAccountEmailsAvailable: codexImportState.managedEmailsAvailable,
       managedAccountEmails: codexImportState.emails,
+      managedAccounts: codexImportState.accounts,
+      managedAccountDirectoryAvailable: codexImportState.directoryAvailable,
+      managedAccountRemovalAvailable: codexImportState.removalAvailable,
       phoneSources: listRegistrationPhoneSources(),
       registrationKeyPool,
       registrationSessions: this.registrationManager.getAllSessions().map((session) =>
@@ -1473,17 +1638,47 @@ class MailboxIntegration {
 
   async getCodexImportState() {
     if (typeof this.api?.getManagedAccountEmails !== "function") {
-      return { available: false, managedEmailsAvailable: false, emails: [] };
+      if (typeof this.api?.getManagedAccountDirectory !== "function") {
+        return {
+          available: false,
+          managedEmailsAvailable: false,
+          emails: [],
+          accounts: [],
+          directoryAvailable: false,
+          removalAvailable: false
+        };
+      }
     }
     try {
+      if (typeof this.api?.getManagedAccountDirectory === "function") {
+        const accounts = normalizeManagedAccountDirectory(await this.api.getManagedAccountDirectory());
+        return {
+          available: typeof this.api.startOAuthAccountImport === "function",
+          managedEmailsAvailable: true,
+          emails: accounts.map((account) => account.email),
+          accounts,
+          directoryAvailable: true,
+          removalAvailable: typeof this.api.removeManagedAccount === "function"
+        };
+      }
       const emails = await this.api.getManagedAccountEmails();
       return {
         available: typeof this.api.startOAuthAccountImport === "function",
         managedEmailsAvailable: true,
-        emails: Array.isArray(emails) ? emails.filter((email) => typeof email === "string") : []
+        emails: Array.isArray(emails) ? emails.filter((email) => typeof email === "string") : [],
+        accounts: [],
+        directoryAvailable: false,
+        removalAvailable: false
       };
     } catch {
-      return { available: false, managedEmailsAvailable: false, emails: [] };
+      return {
+        available: false,
+        managedEmailsAvailable: false,
+        emails: [],
+        accounts: [],
+        directoryAvailable: false,
+        removalAvailable: false
+      };
     }
   }
 
@@ -1628,6 +1823,24 @@ function toPanelMailbox(mailbox) {
 
 function normalizeEmail(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeManagedAccountDirectory(entries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => ({
+      accountId: typeof entry.accountId === "string" ? entry.accountId.trim() : "",
+      email: typeof entry.email === "string" ? entry.email.trim() : "",
+      requiresReauthorization: entry.requiresReauthorization === true
+    }))
+    .filter((entry) => Boolean(entry.accountId && entry.email));
+}
+
+function hasOpenAiAccountDeactivationMessage(detail) {
+  return Array.isArray(detail?.messages) && detail.messages.some(isOpenAiAccountDeactivatedMessage);
 }
 
 function normalizeClipboardText(value) {

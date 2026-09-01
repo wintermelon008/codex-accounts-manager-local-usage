@@ -66,10 +66,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .notice.success { color: var(--success); border-color: color-mix(in srgb, var(--success) 35%, var(--border)); background: color-mix(in srgb, var(--success) 8%, transparent); }
     .notice.warning { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 35%, var(--border)); background: color-mix(in srgb, var(--warning) 8%, transparent); }
     .notice.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, transparent); }
-    .layout { flex: 1 1 auto; display: grid; grid-template-columns: minmax(240px, 310px) minmax(0, 1fr); gap: 14px; min-height: 0; }
+    .layout { flex: 1 1 auto; display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow: auto; padding-right: 2px; }
     #app { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
     .box { min-height: 0; height: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
-    .layout > .box:first-child { display: flex; flex-direction: column; }
+    .layout > .box:first-child { display: flex; flex-direction: column; flex: 0 0 760px; height: 760px; min-height: 760px; }
+    .layout > .box.detail { flex: 0 0 auto; height: auto; min-height: 520px; }
     .box-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 15px; border-bottom: 1px solid var(--border); }
     .mailbox-list-header { align-items: flex-start; }
     .mailbox-list-toolbar { padding: 10px 12px; border-bottom: 1px solid var(--border); }
@@ -82,23 +83,25 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .selection-tools button, .batch-tools button { padding: 5px 8px; font-size: 11px; }
     .batch-tools { margin-top: 8px; }
     .batch-tools .danger { color: var(--danger); }
-    .mailbox-list { flex: 1; min-height: 0; max-height: none; overflow: auto; overscroll-behavior: contain; }
-    .mailbox-row-wrap { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; border-bottom: 1px solid var(--border); }
-    .mailbox-row-wrap:last-child { border-bottom: 0; }
-    .mailbox-select { display: grid; place-items: start center; padding-top: 16px; cursor: pointer; }
+    .mailbox-list { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); grid-auto-rows: max-content; align-content: start; gap: 10px; min-height: 0; padding: 12px; overflow: auto; overscroll-behavior: contain; }
+    .mailbox-row-wrap { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--text) 3%, transparent); overflow: hidden; }
+    .mailbox-row-wrap.selected { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
+    .mailbox-select { position: absolute; z-index: 1; top: 12px; left: 12px; display: grid; place-items: center; padding: 0; cursor: pointer; }
     .mailbox-select input { width: auto; margin: 0; }
-    .mailbox-row { display: block; width: 100%; min-width: 0; text-align: left; border: 0; border-radius: 0; background: transparent; padding: 13px 10px 13px 14px; }
+    .mailbox-row { display: block; width: 100%; min-width: 0; flex: 0 0 auto; text-align: left; border: 0; border-radius: 0; background: transparent; padding: 14px 12px 10px 40px; }
     .mailbox-row.selected { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
     .mailbox-row:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-    .mailbox-row-actions { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 0; background: transparent; }
+    .mailbox-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 0 12px 12px; background: transparent; }
     .mailbox-row-action { padding: 5px 6px; font-size: 11px; white-space: nowrap; }
     .row-number { color: var(--muted); margin-right: 6px; }
     .address { overflow-wrap: anywhere; word-break: break-word; }
     .row-title { font-weight: 650; line-height: 1.4; }
     .row-meta { display: flex; flex-wrap: wrap; gap: 6px 9px; margin-top: 7px; color: var(--muted); font-size: 12px; }
+    .mailbox-card-time { margin-top: 9px; color: var(--muted); font-size: 11px; line-height: 1.4; }
     .tag { display: inline-flex; align-items: center; width: fit-content; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); font-size: 11px; }
     .tag.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
     .tag.success { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+    .tag.warning { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
     .empty-list, .empty-detail { display: grid; place-items: center; min-height: 270px; padding: 28px; color: var(--muted); text-align: center; }
     .detail { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     .detail-header { flex: none; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
@@ -107,7 +110,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .detail-name { margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
     .detail-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
     .detail-actions { flex: none; padding: 12px 20px; border-bottom: 1px solid var(--border); }
-    .content { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 16px 20px 22px; }
+    .content { flex: 1 1 auto; min-height: 0; overflow: visible; overscroll-behavior: auto; padding: 16px 20px 22px; }
     .hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
     .hero-label { color: var(--muted); font-size: 12px; }
     .code { margin-top: 3px; color: var(--accent); font-size: clamp(34px, 6vw, 62px); font-weight: 800; letter-spacing: .08em; line-height: 1.1; }
@@ -212,6 +215,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-mailbox-picker-tools { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
     .registration-mailbox-picker-tools input { flex: 1 1 220px; min-width: 160px; }
     .registration-mailbox-picker-tools select { width: auto; min-width: 130px; }
+    .registration-mailbox-picker-tools label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; }
+    .registration-mailbox-picker-tools label input { width: auto; min-width: 0; }
     .registration-mailbox-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(235px, 1fr)); gap: 8px; max-height: 250px; margin-top: 10px; overflow: auto; }
     .registration-mailbox-option { min-width: 0; padding: 10px; text-align: left; }
     .registration-mailbox-option.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
@@ -225,9 +230,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       .top-actions { margin-top: 12px; justify-content: flex-start; }
       body { overflow: auto; }
       .shell { height: auto; min-height: 100vh; }
-      .layout { flex: none; grid-template-columns: 1fr; min-height: 0; }
-      .layout > .box { height: auto; }
-      .mailbox-list { flex: none; min-height: 180px; max-height: 280px; }
+      .layout { flex: none; min-height: 0; }
+      .layout > .box:first-child { flex-basis: 760px; height: 760px; min-height: 760px; }
+      .layout > .box.detail { min-height: 520px; }
       .mailbox-row-action { padding-inline: 5px; }
       .registration-phone-config { grid-template-columns: 1fr; }
       .registration-standalone { padding-inline: 0; }
@@ -274,6 +279,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationMailboxSearch = "";
       let registrationMailboxSort = "nameAsc";
       let registrationMailboxProviderFilter = "";
+      let registrationOnlyUnregisteredGpt = false;
       let registrationMaxRetries = 25;
       let registrationPhoneKeyInputs = {};
       let registrationPhoneSourceSelections = {};
@@ -314,7 +320,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           render();
         }
         if (message.type === "toast") {
-          if (["query", "wait", "renewal", "batchStop", "batchDelete"].includes(message.action)) pendingBatchAction = "";
+          if (["query", "wait", "renewal", "batchStop", "batchDelete", "deleteDeactivatedMailboxes", "queryReauthorizationMailboxes"].includes(message.action)) pendingBatchAction = "";
           if (message.level === "success" || message.level === "warning" || message.level === "error") {
             const mailboxId = message.mailboxId || state.selectedMailboxId;
             if (mailboxId && message.action === "codexImport") pendingCodexImports[mailboxId] = false;
@@ -367,10 +373,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "select-visible") selectVisibleMailboxes();
         else if (action === "clear-selection") { selectedMailboxIds.clear(); render(); }
         else if (action === "batch-query") requestBatchAction("batchQuery");
+        else if (action === "query-reauthorization-mailboxes") requestReauthorizationQueries();
         else if (action === "batch-wait") requestBatchAction("batchWait");
         else if (action === "batch-renewal") requestBatchAction("batchRenewal");
         else if (action === "batch-stop") requestBatchAction("batchStop");
         else if (action === "batch-delete") requestBatchDelete();
+        else if (action === "delete-deactivated-mailboxes") requestDeleteDeactivatedMailboxes();
         else if (action === "select-message") { selectedMessageId = target.dataset.messageId || ""; render(); }
         else if (action === "open-import") {
           importOpen = true;
@@ -383,6 +391,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "confirm-delete") confirmDelete();
         else if (action === "edit-mailbox") openEditModal(target.dataset.mailboxId || "");
         else if (action === "delete-mailbox") requestDelete(target.dataset.mailboxId || "");
+        else if (action === "delete-mailbox-and-codex") requestDeleteMailboxAndCodex(target.dataset.mailboxId || "");
         else if (action === "codex-import") requestCodexImport(target.dataset.mailboxId || state.selectedMailboxId);
         else if (action === "submit-query" || action === "submit-wait" || action === "submit-renewal" || action === "stop") {
           requestAction(action.replace("submit-", ""), state.selectedMailboxId);
@@ -546,6 +555,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         if (target.id === "mailboxProviderFilter") { providerFilter = target.value || ""; render(); }
         if (target.id === "registrationMailboxSort") { registrationMailboxSort = target.value || "nameAsc"; render(); }
         if (target.id === "registrationMailboxProviderFilter") { registrationMailboxProviderFilter = target.value || ""; render(); }
+        if (target.id === "registrationOnlyUnregisteredGpt") { registrationOnlyUnregisteredGpt = target.checked === true; render(); }
         if (target.id.startsWith("registrationPhoneSource-")) {
           registrationPhoneSourceSelections[target.id.slice("registrationPhoneSource-".length)] = target.value || "liye";
         }
@@ -612,6 +622,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
 
       function render() {
         const mailboxList = document.querySelector(".mailbox-list");
+        const layout = document.querySelector(".layout");
         const content = document.querySelector(".content");
         const searchInput = document.getElementById("mailboxSearch");
         const registrationSearchInput = document.getElementById("registrationMailboxSearch");
@@ -626,9 +637,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const registrationEmailSelectionStart = registrationEmailInput?.selectionStart;
         const registrationEmailSelectionEnd = registrationEmailInput?.selectionEnd;
         const mailboxScrollTop = mailboxList?.scrollTop || 0;
+        const layoutScrollTop = layout?.scrollTop || 0;
         const contentScrollTop = content?.scrollTop || 0;
         const registrationStandalone = document.querySelector(".registration-standalone");
         const registrationStandaloneScrollTop = registrationStandalone?.scrollTop || 0;
+        const registrationMailboxList = document.querySelector(".registration-mailbox-list");
+        const registrationMailboxListScrollTop = registrationMailboxList?.scrollTop || 0;
         document.querySelector(".modal-backdrop")?.remove();
         document.getElementById("registrationPanel")?.remove();
         if (registrationOnly) {
@@ -641,11 +655,15 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         if (editOpenMailboxId) document.body.insertAdjacentHTML("beforeend", renderEditModal());
         if (deleteConfirm) document.body.insertAdjacentHTML("beforeend", renderDeleteConfirmModal());
         const nextMailboxList = document.querySelector(".mailbox-list");
+        const nextLayout = document.querySelector(".layout");
         const nextContent = document.querySelector(".content");
         const nextRegistrationStandalone = document.querySelector(".registration-standalone");
+        const nextRegistrationMailboxList = document.querySelector(".registration-mailbox-list");
         if (nextMailboxList) nextMailboxList.scrollTop = mailboxScrollTop;
+        if (nextLayout) nextLayout.scrollTop = layoutScrollTop;
         if (nextContent) nextContent.scrollTop = contentScrollTop;
         if (nextRegistrationStandalone) nextRegistrationStandalone.scrollTop = registrationStandaloneScrollTop;
+        if (nextRegistrationMailboxList) nextRegistrationMailboxList.scrollTop = registrationMailboxListScrollTop;
         if (keepSearchFocus) {
           const nextSearchInput = document.getElementById("mailboxSearch");
           nextSearchInput?.focus();
@@ -751,7 +769,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const mailboxRows = mailboxes.length
           ? mailboxes.map(renderRegistrationMailboxOption).join("")
           : '<div class="empty-list" style="min-height:120px;grid-column:1/-1">' +
-            (allMailboxes.length && managedCount === allMailboxes.length ? "邮箱库中的邮箱均已导入 Codex，请直接输入其他邮箱。" : allMailboxes.length ? "没有匹配的已导入邮箱。" : "邮箱库为空，请直接输入新邮箱。") +
+            (allMailboxes.length && managedCount === allMailboxes.length ? "邮箱库中的邮箱均已导入 Codex，请直接输入其他邮箱。" : allMailboxes.length && registrationOnlyUnregisteredGpt ? "没有未注册 GPT 的邮箱。" : allMailboxes.length ? "没有匹配的已导入邮箱。" : "邮箱库为空，请直接输入新邮箱。") +
             '</div>';
         const managedNote = managedCount
           ? '<div class="field-note">已自动隐藏 ' + managedCount + ' 个已经导入 Codex 的邮箱；标记为“GPT 已注册”但尚未接入 Codex 的邮箱仍可选择。</div>'
@@ -766,7 +784,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             '<p class="muted">可按邮箱库筛选并点击选择，也可以在下方直接输入一个新邮箱。选择邮箱只会填入地址，不会自动开始注册。</p>' +
             '<div class="registration-mailbox-picker">' +
               '<div class="registration-mailbox-picker-head"><strong>已导入邮箱库</strong><span class="tag">' + mailboxes.length + '/' + allMailboxes.length + '</span></div>' +
-              '<div class="registration-mailbox-picker-tools"><input id="registrationMailboxSearch" type="search" value="' + esc(registrationMailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索注册邮箱"><select id="registrationMailboxProviderFilter" aria-label="按邮箱来源筛选注册邮箱"><option value="">全部来源</option>' + providerOptions + '</select><select id="registrationMailboxSort" aria-label="注册邮箱排序"><option value="nameAsc" ' + (registrationMailboxSort === "nameAsc" ? "selected" : "") + '>名称升序</option><option value="nameDesc" ' + (registrationMailboxSort === "nameDesc" ? "selected" : "") + '>名称降序</option><option value="queryDesc" ' + (registrationMailboxSort === "queryDesc" ? "selected" : "") + '>最近查询</option><option value="codeFirst" ' + (registrationMailboxSort === "codeFirst" ? "selected" : "") + '>已出码优先</option></select></div>' +
+              '<div class="registration-mailbox-picker-tools"><input id="registrationMailboxSearch" type="search" value="' + esc(registrationMailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索注册邮箱"><select id="registrationMailboxProviderFilter" aria-label="按邮箱来源筛选注册邮箱"><option value="">全部来源</option>' + providerOptions + '</select><select id="registrationMailboxSort" aria-label="注册邮箱排序"><option value="nameAsc" ' + (registrationMailboxSort === "nameAsc" ? "selected" : "") + '>名称升序</option><option value="nameDesc" ' + (registrationMailboxSort === "nameDesc" ? "selected" : "") + '>名称降序</option><option value="queryDesc" ' + (registrationMailboxSort === "queryDesc" ? "selected" : "") + '>最近查询</option><option value="codeFirst" ' + (registrationMailboxSort === "codeFirst" ? "selected" : "") + '>已出码优先</option><option value="renewalAsc" ' + (registrationMailboxSort === "renewalAsc" ? "selected" : "") + '>最久未续期</option></select><label title="只显示尚未标记为已注册 GPT 的邮箱"><input id="registrationOnlyUnregisteredGpt" type="checkbox" ' + (registrationOnlyUnregisteredGpt ? "checked" : "") + '> 仅显示未注册 GPT</label></div>' +
               '<div class="registration-mailbox-list">' + mailboxRows + '</div>' + managedNote +
             '</div>' +
             '<div class="registration-standalone-content">' + renderRegistrationCreateForm() + '</div>' +
@@ -778,13 +796,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function renderRegistrationMailboxOption(mailbox) {
         const selected = mailbox.id === selectedRegistrationMailboxId;
         const provider = (state.providers || []).find((item) => item.id === mailbox.providerId);
-        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span>' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span>' + (mailbox.gptRegistered ? '<span class="tag success">GPT 已注册</span>' : '') + (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + '</div></button>';
+        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span>' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span><span>' + esc(mailboxActivityLabel(mailbox)) + '</span>' + (mailbox.gptRegistered ? '<span class="tag success">GPT 已注册</span>' : '') + (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + '</div></button>';
       }
 
       function filterRegistrationMailboxes() {
         const query = registrationMailboxSearch.trim().toLowerCase();
         return (state.mailboxes || []).filter((mailbox) => {
           if (hasManagedCodexEmail(mailbox.address)) return false;
+          if (registrationOnlyUnregisteredGpt && mailbox.gptRegistered === true) return false;
           if (query && !matchesMailboxSearch(mailbox, query)) return false;
           if (registrationMailboxProviderFilter && mailbox.providerId !== registrationMailboxProviderFilter) return false;
           return true;
@@ -794,6 +813,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function compareRegistrationMailboxes(left, right) {
         if (registrationMailboxSort === "queryDesc") return (right.lastQueryAt || 0) - (left.lastQueryAt || 0) || compareText(left, right);
         if (registrationMailboxSort === "codeFirst") return Number(Boolean(right.latestCode)) - Number(Boolean(left.latestCode)) || compareText(left, right);
+        if (registrationMailboxSort === "renewalAsc") return mailboxRenewalSortValue(left) - mailboxRenewalSortValue(right) || compareText(left, right);
         const result = compareText(left, right);
         return registrationMailboxSort === "nameDesc" ? -result : result;
       }
@@ -1080,6 +1100,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const filteredMailboxes = filterMailboxes();
         const sortedMailboxes = [...filteredMailboxes].sort(compareMailboxes);
         const query = mailboxSearch.trim().toLowerCase();
+        const deactivatedMailboxCount = allMailboxes.filter((mailbox) => mailbox.openaiAccountDeactivated === true).length;
+        const deactivatedCandidates = getDeactivatedMailboxCandidates();
+        const reauthorizationMailboxIds = getReauthorizationMailboxIds();
+        const hasActiveMailboxOperation = (state.operations || []).length > 0 || (state.codexImports || []).length > 0;
         const codexFilterAvailable = state.codexImportAvailable === true;
         const selectedHasRenewal = [...selectedMailboxIds].some((mailboxId) => {
           const mailbox = allMailboxes.find((item) => item.id === mailboxId);
@@ -1092,8 +1116,17 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const selected = state.selected;
         const filterActive = Boolean(query || providerFilter || onlyUnlinkedCodex);
         const providerOptions = (state.providers || []).map((provider) => '<option value="' + esc(provider.id) + '" ' + (providerFilter === provider.id ? "selected" : "") + '>' + esc(provider.displayName || provider.id) + '（' + esc(provider.id) + '）</option>').join("");
+        const deactivatedSummary = deactivatedMailboxCount > 0
+          ? '<span class="tag warning">OpenAI 失效邮件：' + deactivatedMailboxCount + '</span>'
+          : '';
+        const deactivatedDeleteButton = state.managedAccountRemovalAvailable === true
+          ? '<button type="button" class="danger" data-action="delete-deactivated-mailboxes" ' + (deactivatedCandidates.length > 0 && !pendingBatchAction && !hasActiveMailboxOperation ? '' : 'disabled') + '>删除失效邮箱与 Codex 账号（' + deactivatedCandidates.length + '）</button>'
+          : '';
+        const reauthorizationQueryButton = state.managedAccountDirectoryAvailable === true
+          ? '<button type="button" data-action="query-reauthorization-mailboxes" ' + (reauthorizationMailboxIds.length > 0 && !pendingBatchAction && !hasActiveMailboxOperation ? '' : 'disabled') + '>查询需重新授权账号邮箱（' + reauthorizationMailboxIds.length + '）</button>'
+          : '';
         return '<div class="layout">' +
-          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><select id="mailboxSort" aria-label="邮箱排序"><option value="nameAsc" ' + (mailboxSort === "nameAsc" ? "selected" : "") + '>名称升序</option><option value="nameDesc" ' + (mailboxSort === "nameDesc" ? "selected" : "") + '>名称降序</option><option value="queryDesc" ' + (mailboxSort === "queryDesc" ? "selected" : "") + '>最近查询</option><option value="codeFirst" ' + (mailboxSort === "codeFirst" ? "selected" : "") + '>已出码优先</option></select><label title="' + (codexFilterAvailable ? '依据当前 Manager 已接入账号目录判断' : '当前 Manager 未提供账号目录') + '"><input id="onlyUnlinkedCodex" type="checkbox" ' + (onlyUnlinkedCodex ? "checked" : "") + (codexFilterAvailable ? "" : " disabled") + '> 仅未接入 Codex</label></div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button><button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button></div></div><div class="mailbox-list">' + rows + '</div></section>' +
+          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><select id="mailboxSort" aria-label="邮箱排序"><option value="nameAsc" ' + (mailboxSort === "nameAsc" ? "selected" : "") + '>名称升序</option><option value="nameDesc" ' + (mailboxSort === "nameDesc" ? "selected" : "") + '>名称降序</option><option value="queryDesc" ' + (mailboxSort === "queryDesc" ? "selected" : "") + '>最近查询</option><option value="codeFirst" ' + (mailboxSort === "codeFirst" ? "selected" : "") + '>已出码优先</option><option value="renewalAsc" ' + (mailboxSort === "renewalAsc" ? "selected" : "") + '>最久未续期</option></select><label title="' + (codexFilterAvailable ? '依据当前 Manager 已接入账号目录判断' : '当前 Manager 未提供账号目录') + '"><input id="onlyUnlinkedCodex" type="checkbox" ' + (onlyUnlinkedCodex ? "checked" : "") + (codexFilterAvailable ? "" : " disabled") + '> 仅未接入 Codex</label>' + deactivatedSummary + '</div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button>' + reauthorizationQueryButton + '<button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button>' + deactivatedDeleteButton + '</div></div><div class="mailbox-list">' + rows + '</div></section>' +
           '<section class="box detail">' + (selected ? renderSelected(selected) : '<div class="empty-detail"><div><h2>选择一个邮箱</h2><p class="muted" style="margin-top:8px">其他邮箱的邮件详情不会在未选中时渲染或查询。</p></div></div>') + '</section>' +
           '</div>';
       }
@@ -1101,8 +1134,19 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function compareMailboxes(left, right) {
         if (mailboxSort === "queryDesc") return (right.lastQueryAt || 0) - (left.lastQueryAt || 0) || compareText(left, right);
         if (mailboxSort === "codeFirst") return Number(Boolean(right.latestCode)) - Number(Boolean(left.latestCode)) || compareText(left, right);
+        if (mailboxSort === "renewalAsc") return mailboxRenewalSortValue(left) - mailboxRenewalSortValue(right) || compareText(left, right);
         const result = compareText(left, right);
         return mailboxSort === "nameDesc" ? -result : result;
+      }
+
+      function mailboxRenewalSortValue(mailbox) {
+        return timestampValue(mailbox?.lastRenewalAt) || timestampValue(mailbox?.createdAt) || 0;
+      }
+
+      function mailboxActivityLabel(mailbox) {
+        const renewed = timestampValue(mailbox?.lastRenewalAt) > 0;
+        const value = renewed ? mailbox.lastRenewalAt : mailbox?.createdAt;
+        return (renewed ? "上次续期" : "添加时间") + "：" + formatDate(value);
       }
 
       function compareText(left, right) {
@@ -1134,12 +1178,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const statusClass = mailbox.lastStatus === "error" ? "error" : mailbox.latestCode ? "success" : "";
         const codexLinked = isCodexLinked(mailbox);
         const mailboxError = mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "查询失败") + '：' + esc(mailbox.lastError.message || "查询失败") + '</span>' : '';
-        return '<div class="mailbox-row-wrap"><label class="mailbox-select"><input class="mailbox-checkbox" type="checkbox" value="' + esc(mailbox.id) + '" ' + (selectedMailboxIds.has(mailbox.id) ? "checked" : "") + ' aria-label="选择 ' + esc(mailbox.address) + '"></label><button class="mailbox-row ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '" data-action="select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">' +
+        return '<div class="mailbox-row-wrap ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '"><label class="mailbox-select"><input class="mailbox-checkbox" type="checkbox" value="' + esc(mailbox.id) + '" ' + (selectedMailboxIds.has(mailbox.id) ? "checked" : "") + ' aria-label="选择 ' + esc(mailbox.address) + '"></label><button class="mailbox-row ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '" data-action="select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">' +
           '<div class="row-title"><span class="row-number">' + (index + 1) + '</span><span class="address">' + esc(mailbox.displayName || mailbox.address) + '</span></div>' +
           '<div class="row-meta"><span class="address">' + esc(mailbox.address) + '</span><span class="tag">' + esc(mailbox.providerId) + '</span><span class="tag ' + statusClass + '">' + esc(status) + '</span>' +
           (mailbox.gptRegistered ? '<span class="tag success">GPT 已注册</span>' : '') +
           (state.codexImportAvailable ? '<span class="tag ' + (codexLinked ? 'success' : 'warning') + '">' + (codexLinked ? 'Codex 已接入' : '未接入 Codex') + '</span>' : '') +
-          (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "查询失败") + '</span>' : '') + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
+          (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "查询失败") + '</span>' : '') + '</div><div class="mailbox-card-time">' + esc(mailboxActivityLabel(mailbox)) + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
       }
 
       function renderSelected(selected) {
@@ -1160,14 +1204,23 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           requestedAction === "stop"
         );
         const codexLinked = isCodexLinked(mailbox);
+        const managedAccount = getManagedAccountForMailbox(mailbox);
+        const canDeleteMailboxAndCodex = Boolean(
+          mailbox.openaiAccountDeactivated === true &&
+          managedAccount?.requiresReauthorization === true &&
+          state.managedAccountRemovalAvailable === true
+        );
         const mailboxError = mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "查询失败") + '：' + esc(mailbox.lastError.message || "查询失败") + '</span>' : '';
         const registrationStatus = (mailbox.gptRegistered ? '<span class="tag success">GPT 已注册</span>' : '') + (codexLinked ? '<span class="tag success">Codex 已接入</span>' : '');
         const actionLabel = (action, label) => busyAction === action ? '<span class="button-spinner" aria-hidden="true"></span>' + ({ query: "查询中…", wait: "监听中…", renewal: "续期中…", stop: "停止中…", codexImport: "导入中…" }[action] || label) : label;
         const codexImportButton = state.codexImportAvailable && !codexLinked
           ? '<button class="primary ' + (codexImportPending ? 'is-pending' : '') + '" data-action="codex-import" data-mailbox-id="' + esc(mailbox.id) + '" ' + ((codexImportPending || operation || (requestedAction && !codexImportPending)) ? 'disabled' : '') + ' aria-busy="' + codexImportPending + '">' + (codexImportPending ? '<span class="button-spinner" aria-hidden="true"></span>导入中…' : 'Codex 导入') + '</button>'
           : '';
-        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag">来源：' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag">' + capability + '</span><span class="tag">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span>' + registrationStatus + mailboxError + '</div></div>' +
-          '<div class="detail-header-actions">' + codexImportButton + '<button data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">编辑账号</button><button class="danger" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">删除账号</button></div>' +
+        const deleteMailboxAndCodexButton = canDeleteMailboxAndCodex
+          ? '<button class="danger" data-action="delete-mailbox-and-codex" data-mailbox-id="' + esc(mailbox.id) + '">删除邮箱与 Codex 账号</button>'
+          : '';
+        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag">来源：' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag">' + capability + '</span><span class="tag">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span><span class="tag">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + registrationStatus + mailboxError + '</div></div>' +
+          '<div class="detail-header-actions">' + codexImportButton + '<button data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">编辑账号</button><button class="danger" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">删除账号</button>' + deleteMailboxAndCodexButton + '</div>' +
           '<div class="detail-actions"><div class="actions">' +
           '<button class="' + (busyAction === "query" ? 'is-pending' : '') + '" data-action="submit-query" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "query") + '">' + actionLabel("query", "查询邮件") + '</button>' +
           '<button class="primary ' + (busyAction === "wait" ? 'is-pending' : '') + '" data-action="submit-wait" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "wait") + '">' + actionLabel("wait", "接收验证码") + '</button>' +
@@ -1210,6 +1263,32 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function hasManagedCodexEmail(address) {
         const normalized = normalizeEmail(address);
         return Boolean(normalized) && (state.managedAccountEmails || []).some((email) => normalizeEmail(email) === normalized);
+      }
+
+      function getManagedAccountForMailbox(mailbox) {
+        const normalized = normalizeEmail(mailbox?.address);
+        return normalized
+          ? (state.managedAccounts || []).find((account) => normalizeEmail(account.email) === normalized)
+          : undefined;
+      }
+
+      function getReauthorizationMailboxIds() {
+        if (state.managedAccountDirectoryAvailable !== true) return [];
+        const emails = new Set((state.managedAccounts || [])
+          .filter((account) => account.requiresReauthorization === true)
+          .map((account) => normalizeEmail(account.email))
+          .filter(Boolean));
+        return (state.mailboxes || [])
+          .filter((mailbox) => mailbox.enabled !== false && emails.has(normalizeEmail(mailbox.address)))
+          .map((mailbox) => mailbox.id);
+      }
+
+      function getDeactivatedMailboxCandidates() {
+        if (state.managedAccountRemovalAvailable !== true) return [];
+        return (state.mailboxes || []).filter((mailbox) => {
+          const managedAccount = getManagedAccountForMailbox(mailbox);
+          return mailbox.openaiAccountDeactivated === true && managedAccount?.requiresReauthorization === true;
+        });
       }
 
       function isCodexLinked(mailbox) {
@@ -1347,6 +1426,25 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         render();
       }
 
+      function requestDeleteMailboxAndCodex(mailboxId) {
+        const mailbox = (state.mailboxes || []).find((item) => item.id === mailboxId);
+        const managedAccount = mailbox && getManagedAccountForMailbox(mailbox);
+        if (!mailbox || mailbox.openaiAccountDeactivated !== true || managedAccount?.requiresReauthorization !== true || state.managedAccountRemovalAvailable !== true) return;
+        importOpen = false;
+        editOpenMailboxId = "";
+        deleteConfirm = { kind: "singleAndCodex", mailboxId, address: mailbox.address };
+        render();
+      }
+
+      function requestDeleteDeactivatedMailboxes() {
+        const mailboxes = getDeactivatedMailboxCandidates();
+        if (!mailboxes.length) return;
+        importOpen = false;
+        editOpenMailboxId = "";
+        deleteConfirm = { kind: "deactivated", mailboxIds: mailboxes.map((mailbox) => mailbox.id) };
+        render();
+      }
+
       function requestAction(action, mailboxId) {
         if (!mailboxId) return;
         pendingActions[mailboxId] = action;
@@ -1378,6 +1476,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         send(action, { mailboxIds });
       }
 
+      function requestReauthorizationQueries() {
+        const mailboxIds = getReauthorizationMailboxIds();
+        if (!mailboxIds.length) return;
+        pendingBatchAction = "queryReauthorizationMailboxes";
+        render();
+        send("queryReauthorizationMailboxes");
+      }
+
       function requestBatchDelete() {
         const mailboxIds = [...selectedMailboxIds];
         if (!mailboxIds.length) return;
@@ -1395,6 +1501,18 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           send("delete", { mailboxId: request.mailboxId });
           return;
         }
+        if (request.kind === "singleAndCodex") {
+          pendingActions[request.mailboxId] = "deleteMailboxAndCodex";
+          render();
+          send("deleteMailboxAndCodex", { mailboxId: request.mailboxId });
+          return;
+        }
+        if (request.kind === "deactivated") {
+          pendingBatchAction = "deleteDeactivatedMailboxes";
+          render();
+          send("deleteDeactivatedMailboxes");
+          return;
+        }
         pendingBatchAction = "batchDelete";
         render();
         send("batchDelete", { mailboxIds: request.mailboxIds });
@@ -1403,9 +1521,15 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function renderDeleteConfirmModal() {
         if (!deleteConfirm) return "";
         const isBatch = deleteConfirm.kind === "batch";
-        const title = isBatch ? "批量删除邮箱" : "删除邮箱";
+        const isMailboxAndCodex = deleteConfirm.kind === "singleAndCodex";
+        const isDeactivatedBatch = deleteConfirm.kind === "deactivated";
+        const title = isBatch ? "批量删除邮箱" : isDeactivatedBatch ? "批量删除失效邮箱与 Codex 账号" : isMailboxAndCodex ? "删除邮箱与 Codex 账号" : "删除邮箱";
         const body = isBatch
           ? '确定删除已选择的 ' + deleteConfirm.mailboxIds.length + ' 个邮箱吗？本地凭据和邮件详情也会一并清理。'
+          : isDeactivatedBatch
+            ? '将删除 ' + deleteConfirm.mailboxIds.length + ' 个已收到 OpenAI account deactivated 邮件、且对应 Codex 账号需要重新授权的邮箱和账号。此操作不可恢复，确定继续吗？'
+          : isMailboxAndCodex
+            ? '将同时删除邮箱凭据、邮件详情和对应 Codex 账号。此操作不可恢复，确定继续吗？'
           : '确定删除邮箱 ' + esc(deleteConfirm.address) + ' 吗？本地凭据和邮件详情也会一并清理。';
         return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle"><h2 id="deleteConfirmTitle">' + title + '</h2><p class="muted">' + body + '</p><div class="modal-actions"><button type="button" data-action="cancel-delete">取消</button><button type="button" class="danger" data-action="confirm-delete">确认删除</button></div></section></div>';
       }

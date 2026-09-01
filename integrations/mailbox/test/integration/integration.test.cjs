@@ -593,6 +593,61 @@ test("selected mailbox ids support a parallel batch query and batch delete", asy
   integration.dispose();
 });
 
+test("queries only mailboxes linked to reauthorization-required Codex accounts", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let registration;
+  const queried = [];
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      return {
+        entries: String(input).split("\n").filter(Boolean).map((line) => ({
+          address: line.split("|")[0],
+          credentials: { credential: line.split("|")[1] }
+        })),
+        failed: []
+      };
+    },
+    async query(account) {
+      queried.push(account.address);
+      return { ok: true, providerId: "mock", address: account.address, messages: [], codes: [] };
+    }
+  };
+  const api = {
+    registerDashboardIntegration(value) {
+      registration = value;
+      return { dispose() {} };
+    },
+    async getManagedAccountDirectory() {
+      return [
+        { accountId: "codex-reauthorize", email: "reauthorize@example.com", requiresReauthorization: true },
+        { accountId: "codex-healthy", email: "healthy@example.com", requiresReauthorization: false },
+        { accountId: "codex-missing-mailbox", email: "missing@example.com", requiresReauthorization: true }
+      ];
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await registration.runAction("open");
+  await vscode.panels[0].webview.emit({
+    type: "mailbox:action",
+    action: "import",
+    providerId: "mock",
+    input: "reauthorize@example.com|credential\nhealthy@example.com|credential"
+  });
+
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "queryReauthorizationMailboxes" });
+  await waitFor(() => integration.coordinator.isActive() === false && queried.length === 1);
+
+  assert.deepEqual(queried, ["reauthorize@example.com"]);
+  integration.dispose();
+});
+
 test("provider failures remain visible as safe mailbox status details", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -722,6 +777,191 @@ test("Codex import is offered only for an unlinked mailbox and uses the optional
     expectedEmail: "new@example.com",
     clipboardText: "new@example.com"
   });
+  integration.dispose();
+});
+
+test("an OpenAI-deactivated mailbox can remove its reauthorization-required Codex account", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const removedAccountIds = [];
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query(account) {
+      return {
+        ok: true,
+        providerId: "mock",
+        address: account.address,
+        messages: [{
+          id: "deactivated-message",
+          subject: "Your account has been deactivated",
+          from: ["no-reply", "openai.com"].join("@"),
+          body: "Your account has been deactivated."
+        }],
+        codes: []
+      };
+    }
+  };
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async getManagedAccountEmails() { return ["deactivated@example.com"]; },
+    async getManagedAccountDirectory() {
+      return [{ accountId: "codex-account-1", email: "deactivated@example.com", requiresReauthorization: true }];
+    },
+    async removeManagedAccount(accountId) { removedAccountIds.push(accountId); }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await integration.openPanel();
+  await vscode.panels[0].webview.emit({
+    type: "mailbox:action",
+    action: "import",
+    providerId: "mock",
+    input: "deactivated@example.com|credential"
+  });
+  const mailboxId = integration.pool.listMetadata()[0].id;
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "query", mailboxId });
+  await waitFor(() => integration.coordinator.isActive(mailboxId) === false && integration.pool.listMetadata()[0].openaiAccountDeactivated === true);
+
+  const state = await integration.getPanelState();
+  assert.deepEqual(state.managedAccounts, [{
+    accountId: "codex-account-1",
+    email: "deactivated@example.com",
+    requiresReauthorization: true
+  }]);
+  assert.equal(state.managedAccountRemovalAvailable, true);
+
+  await vscode.panels[0].webview.emit({
+    type: "mailbox:action",
+    action: "deleteMailboxAndCodex",
+    mailboxId
+  });
+  assert.deepEqual(removedAccountIds, ["codex-account-1"]);
+  assert.equal(integration.pool.listMetadata().length, 0);
+  assert.equal(
+    vscode.panels[0].webview.messages.some(
+      (message) => message.type === "toast" && message.action === "deleteMailboxAndCodex" && message.level === "success"
+    ),
+    true
+  );
+  integration.dispose();
+});
+
+test("bulk deactivated cleanup only removes matched accounts that require reauthorization", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const removedAccountIds = [];
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      return {
+        entries: String(input).split("\n").filter(Boolean).map((address) => ({ address, credentials: { credential: address } })),
+        failed: []
+      };
+    },
+    async query() {
+      return { ok: true, messages: [], codes: [] };
+    }
+  };
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async getManagedAccountDirectory() {
+      return [
+        { accountId: "codex-eligible", email: "eligible@example.com", requiresReauthorization: true },
+        { accountId: "codex-healthy", email: "healthy@example.com", requiresReauthorization: false },
+        { accountId: "codex-unflagged", email: "unflagged@example.com", requiresReauthorization: true }
+      ];
+    },
+    async removeManagedAccount(accountId) { removedAccountIds.push(accountId); }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  const imported = await integration.pool.importProvider({
+    provider,
+    input: "eligible@example.com\nhealthy@example.com\nunflagged@example.com"
+  });
+  const ids = new Map(imported.imported.map((mailbox) => [mailbox.address, mailbox.id]));
+  const deactivationMessage = {
+    subject: "Your account has been deactivated",
+    from: ["no-reply", "openai.com"].join("@"),
+    body: "Your account has been deactivated."
+  };
+  await integration.pool.recordQueryResult(ids.get("eligible@example.com"), { ok: true, messages: [{ id: "eligible", ...deactivationMessage }] });
+  await integration.pool.recordQueryResult(ids.get("healthy@example.com"), { ok: true, messages: [{ id: "healthy", ...deactivationMessage }] });
+
+  await integration.deleteDeactivatedMailboxes();
+
+  assert.deepEqual(removedAccountIds, ["codex-eligible"]);
+  assert.deepEqual(integration.pool.listMetadata().map((mailbox) => mailbox.address).sort(), [
+    "healthy@example.com",
+    "unflagged@example.com"
+  ]);
+  integration.dispose();
+});
+
+test("deactivated cleanup rechecks the matching mailbox message before deleting", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const removedAccountIds = [];
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, messages: [], codes: [] }; }
+  };
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    async getManagedAccountDirectory() {
+      return [{ accountId: "codex-stale", email: "stale@example.com", requiresReauthorization: true }];
+    },
+    async removeManagedAccount(accountId) { removedAccountIds.push(accountId); }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  const [{ id }] = (await integration.pool.importProvider({
+    provider,
+    input: "stale@example.com|credential"
+  })).imported;
+  const deactivationMessage = {
+    id: "stale-deactivated",
+    subject: "Your account has been deactivated",
+    from: ["no-reply", "openai.com"].join("@"),
+    body: "Your account has been deactivated."
+  };
+  await integration.pool.recordQueryResult(id, { ok: true, messages: [deactivationMessage] });
+  // Simulate a legacy stale summary marker after replacing the saved detail
+  // with an ordinary result. A marker alone must not authorize a destructive action.
+  await integration.pool.recordQueryResult(id, { ok: true, messages: [] });
+  integration.pool.metadata.accounts[0].openaiAccountDeactivated = true;
+  assert.equal(integration.pool.listMetadata()[0].openaiAccountDeactivated, true);
+
+  await assert.rejects(
+    () => integration.deleteMailboxAndCodex(id),
+    /对应邮箱没有保存的 OpenAI account deactivated 邮件/u
+  );
+  await assert.rejects(
+    () => integration.deleteDeactivatedMailboxes(),
+    /当前没有同时满足失效邮件、邮箱匹配和需要重新授权条件的账号/u
+  );
+  assert.deepEqual(removedAccountIds, []);
+  assert.equal(integration.pool.listMetadata().length, 1);
   integration.dispose();
 });
 

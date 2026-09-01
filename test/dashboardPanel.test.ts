@@ -24,6 +24,7 @@ import {
   getDashboardVisibleAccounts,
   getHighWeeklyQuotaHiddenAccountIds,
   getLowWeeklyQuotaAccountIds,
+  getReauthorizeAccountIds,
   parsePercentageInput
 } from "../webview-src/dashboard/helpers";
 import { createInitialState, reducer } from "../webview-src/dashboard/state";
@@ -253,6 +254,17 @@ describe("Dashboard account selection", () => {
 
     expect(getLowWeeklyQuotaAccountIds(accounts, 4.5)).toEqual(["hide-at-custom-threshold"]);
     expect(getHighWeeklyQuotaHiddenAccountIds(accounts, 87.5)).toEqual(["show-at-custom-threshold"]);
+  });
+
+  it("only targets real accounts that need reauthorization for the deactivated cleanup action", () => {
+    const accounts = [
+      { id: "reauthorize", accountKind: "chatgpt", healthKind: "reauthorize" },
+      { id: "dismissed-reauthorize", accountKind: "chatgpt", healthKind: "reauthorize", dismissedHealth: true },
+      { id: "refresh-failed", accountKind: "chatgpt", healthKind: "refresh_failed" },
+      { id: "virtual", accountKind: "sub2api", healthKind: "reauthorize" }
+    ] as DashboardState["accounts"];
+
+    expect(getReauthorizeAccountIds(accounts)).toEqual(["reauthorize", "dismissed-reauthorize"]);
   });
 
   it("accepts only percentage-formatted values in the weekly quota inputs", () => {

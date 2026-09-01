@@ -5,6 +5,10 @@ describe("ManagerIntegrationHost", () => {
   it("exposes the optional sanitized account directory and direct OAuth handoff", async () => {
     const gateway = createGateway();
     const getManagedAccountEmails = vi.fn(async () => ["linked@example.com"] as const);
+    const getManagedAccountDirectory = vi.fn(async () => [
+      { accountId: "account-1", email: "linked@example.com", requiresReauthorization: true }
+    ] as const);
+    const removeManagedAccount = vi.fn(async () => undefined);
     const startOAuthAccountImport = vi.fn(async (options: { expectedEmail?: string } = {}) => ({
       accountId: "account-1",
       email: options.expectedEmail ?? "linked@example.com",
@@ -33,17 +37,25 @@ describe("ManagerIntegrationHost", () => {
     }));
     const host = new ManagerIntegrationHost(gateway.operations, undefined, {
       getManagedAccountEmails,
+      getManagedAccountDirectory,
+      removeManagedAccount,
       startOAuthAccountImport,
       cancelOAuthAccountImport,
       importSharedAccountsToBalancePool
     });
 
     await expect(host.api.getManagedAccountEmails?.()).resolves.toEqual(["linked@example.com"]);
+    await expect(host.api.getManagedAccountDirectory?.()).resolves.toEqual([
+      { accountId: "account-1", email: "linked@example.com", requiresReauthorization: true }
+    ]);
+    await expect(host.api.removeManagedAccount?.("account-1")).resolves.toBeUndefined();
     await expect(host.api.startOAuthAccountImport?.({ expectedEmail: "mailbox@example.com" })).resolves.toMatchObject({
       accountId: "account-1",
       email: "mailbox@example.com"
     });
     expect(getManagedAccountEmails).toHaveBeenCalledOnce();
+    expect(getManagedAccountDirectory).toHaveBeenCalledOnce();
+    expect(removeManagedAccount).toHaveBeenCalledWith("account-1");
     expect(startOAuthAccountImport).toHaveBeenCalledWith({ expectedEmail: "mailbox@example.com" });
     host.api.cancelOAuthAccountImport?.("mailbox-operation-1");
     expect(cancelOAuthAccountImport).toHaveBeenCalledWith("mailbox-operation-1");
@@ -57,6 +69,22 @@ describe("ManagerIntegrationHost", () => {
       account_id: "account-1",
       tokens: { id_token: "id-token", access_token: "access-token" }
     });
+    host.dispose();
+  });
+
+  it("does not expose unavailable account-directory capabilities", () => {
+    const gateway = createGateway();
+    const host = new ManagerIntegrationHost(gateway.operations, undefined, {
+      getManagedAccountEmails: async () => [],
+      startOAuthAccountImport: async () => ({
+        accountId: "account-1",
+        email: "account@example.com",
+        quotaRefreshed: false
+      })
+    });
+
+    expect(host.api.getManagedAccountDirectory).toBeUndefined();
+    expect(host.api.removeManagedAccount).toBeUndefined();
     host.dispose();
   });
 

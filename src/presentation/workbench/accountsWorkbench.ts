@@ -19,6 +19,7 @@ import { AccountsStatusBarProvider } from "../../ui";
 import { registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import { isSub2ApiAccount, type SharedCodexAccountJson } from "../../core/types";
+import { resolveAccountHealth } from "../../application/accounts/health";
 import { getErrorMessage } from "../../core/errors";
 import {
   importSharedAccountsIntoBalancePool,
@@ -43,6 +44,7 @@ import {
 import { extractClaims } from "../../utils/jwt";
 import { refreshQuotaSummaryPanel } from "../dashboard/panel";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
+import { getTokenAutomationSnapshot } from "./tokenAutomationState";
 import {
   registerAutoRefreshScheduler,
   registerSeamlessUsageLimitMonitor,
@@ -106,6 +108,29 @@ export class AccountsWorkbench {
                 .filter((email): email is string => Boolean(email))
             )
           ];
+        },
+        getManagedAccountDirectory: async () => {
+          const automation = getTokenAutomationSnapshot();
+          const accounts = await this.repo.listAccounts();
+          return accounts
+            .filter((account) => !isSub2ApiAccount(account))
+            .map((account) => ({
+              accountId: account.id,
+              email: account.email,
+              requiresReauthorization: resolveAccountHealth(account, undefined, automation).kind === "reauthorize"
+            }));
+        },
+        removeManagedAccount: async (accountId) => {
+          const account = await this.repo.getAccount(accountId);
+          if (!account) {
+            throw new Error(`Codex account '${accountId}' was not found`);
+          }
+          if (isSub2ApiAccount(account)) {
+            throw new Error("Gateway virtual accounts cannot be removed through the Mailbox integration");
+          }
+          await this.repo.removeAccount(accountId);
+          void this.statusBar.refresh();
+          void refreshQuotaSummaryPanel();
         },
         startOAuthAccountImport: (options) => this.startOAuthAccountImport(options),
         cancelOAuthAccountImport: (operationId) => this.cancelOAuthAccountImport(operationId),

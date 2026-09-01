@@ -6,6 +6,8 @@ const { redactText } = require("./errors.cjs");
 
 const MAX_BODY_LENGTH = 8_000;
 const MAX_PREVIEW_LENGTH = 320;
+const OPENAI_DEACTIVATED_PATTERN = /\baccount\s+(?:deactivated|(?:has\s+been|was|is)(?:\s+\w+)?\s+deactivated)\b/iu;
+const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu;
 
 function normalizeMessages(items) {
   if (!Array.isArray(items)) {
@@ -75,8 +77,26 @@ function normalizeDate(value) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
 }
 
+function isOpenAiAccountDeactivatedMessage(message) {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const sender = typeof message.from === "string" ? message.from : "";
+  const email = sender.match(EMAIL_PATTERN)?.[0]?.toLowerCase();
+  if (!email) {
+    return false;
+  }
+  const domain = email.slice(email.lastIndexOf("@") + 1);
+  if (domain !== "openai.com" && !domain.endsWith(".openai.com")) {
+    return false;
+  }
+  return OPENAI_DEACTIVATED_PATTERN.test(
+    [message.subject, message.preview, message.body].filter((value) => typeof value === "string").join("\n")
+  );
+}
+
 function digest(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-module.exports = { normalizeMessage, normalizeMessages };
+module.exports = { isOpenAiAccountDeactivatedMessage, normalizeMessage, normalizeMessages };
