@@ -97,6 +97,8 @@ class MailboxIntegration {
     this.registrationDiagnostics = createRegistrationDiagnostics(vscode, context);
     this.registrationEmailWatchers = new Map();
     this.registrationGptStatusSync = Promise.resolve();
+    this.registrationSessionsPersistence = Promise.resolve();
+    this.registrationSessionsOperation = Promise.resolve();
     this.registrationClipboardCopied = new Map();
     this.registrationClipboardQueues = new Map();
     const serverRegistrationKeyStore = createLocalRegistrationKeyStore(context.globalStorageUri);
@@ -203,6 +205,7 @@ class MailboxIntegration {
       this.registration = this.api.registerDashboardIntegration({
         id: INTEGRATION_ID,
         getViewModel: () => this.getViewModel(),
+        getDeactivatedMailboxEmails: () => this.getDeactivatedMailboxEmails(),
         runAction: (actionId) => this.runAction(actionId),
         onDidChange: this.events.event
       });
@@ -245,6 +248,16 @@ class MailboxIntegration {
         { id: "open", label: "Mailbox", enabled: !this.loadError, tone: "primary", tooltip: "打开独立 Mailbox 面板" }
       ]
     };
+  }
+
+  getDeactivatedMailboxEmails() {
+    if (!this.pool.isLoaded()) {
+      return [];
+    }
+    return this.pool
+      .listMetadata()
+      .filter((mailbox) => mailbox.openaiAccountDeactivated === true)
+      .map((mailbox) => mailbox.address);
   }
 
   async runAction(actionId) {
@@ -1361,14 +1374,18 @@ class MailboxIntegration {
   }
 
   async cleanupAllRegistrationSessions() {
-    const sessions = this.registrationManager.getAllSessions();
-    for (const session of sessions) {
-      await this.cancelRegistrationCodexImport(session.id, { silent: true });
-      this.stopRegistrationEmailWatcher(session.id);
-      await this.registrationManager.cancelSession(session.id);
-      await this.releaseRegistrationPhoneKey(session.id);
-      this.registrationManager.cleanupSession(session.id);
-    }
+    const sessions = await this.withRegistrationSessionsOperation(async () => {
+      const currentSessions = this.registrationManager.getAllSessions();
+      for (const session of currentSessions) {
+        await this.cancelRegistrationCodexImport(session.id, { silent: true });
+        this.stopRegistrationEmailWatcher(session.id);
+        await this.registrationManager.cancelSession(session.id);
+        await this.releaseRegistrationPhoneKey(session.id);
+        this.registrationManager.cleanupSession(session.id);
+      }
+      await this.persistRegistrationSessions();
+      return currentSessions;
+    });
     this.postPanelMessage({
       type: "toast",
       level: sessions.length ? "success" : "warning",
@@ -1592,10 +1609,12 @@ class MailboxIntegration {
       this.selectedMailboxId = mailboxes[0]?.id;
       await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
     }
-    const restored = this.registrationManager.restoreSessions(await this.registrationSessionStore.load());
-    if (restored.interrupted > 0) {
-      await this.persistRegistrationSessions();
-    }
+    await this.withRegistrationSessionsOperation(async () => {
+      const restored = this.registrationManager.restoreSessions(await this.registrationSessionStore.load());
+      if (restored.interrupted > 0) {
+        await this.persistRegistrationSessions();
+      }
+    });
     await this.syncCompletedRegistrationMailboxStates();
     mailboxes = this.pool.isLoaded() ? this.pool.listMetadata() : [];
     const selectedMailbox = mailboxes.find((mailbox) => mailbox.id === this.selectedMailboxId);
@@ -1625,7 +1644,25 @@ class MailboxIntegration {
   }
 
   async persistRegistrationSessions() {
-    await this.registrationSessionStore.save(this.registrationManager.getSessionRecords());
+    const records = this.registrationManager.getSessionRecords();
+    this.registrationSessionsPersistence = this.registrationSessionsPersistence
+      .catch(() => undefined)
+      .then(() => this.registrationSessionStore.save(records));
+    await this.registrationSessionsPersistence;
+  }
+
+  async withRegistrationSessionsOperation(operation) {
+    const previous = this.registrationSessionsOperation;
+    let release;
+    this.registrationSessionsOperation = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   async getRegistrationKeyPoolState() {
