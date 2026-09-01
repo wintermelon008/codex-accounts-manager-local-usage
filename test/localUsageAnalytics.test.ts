@@ -368,6 +368,122 @@ describe("scanLocalUsageSessions", () => {
     expect(result.byModel).toEqual([expect.objectContaining({ model: "child-model", totalTokens: 70 })]);
   });
 
+  it("counts a fresh spawned subagent rollout when the trigger metadata is absent", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    await writeSession(sessionsPath, "2026/07/14/fresh-subagent.jsonl", [
+      {
+        type: "session_meta",
+        timestamp: "2026-07-14T01:00:00.000Z",
+        payload: {
+          id: "child-thread",
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1
+              }
+            }
+          }
+        }
+      },
+      { type: "session_meta", timestamp: "2026-07-14T01:00:00.001Z", payload: { id: "parent-thread" } },
+      { type: "turn_context", payload: { model: "child-model" } },
+      cumulativeTokenCountEvent("2026-07-14T01:00:00.200Z", {
+        inputTokens: 80,
+        cachedInputTokens: 60,
+        outputTokens: 20,
+        reasoningOutputTokens: 5,
+        totalTokens: 100
+      }),
+      cumulativeTokenCountEvent("2026-07-14T01:00:00.800Z", {
+        inputTokens: 120,
+        cachedInputTokens: 90,
+        outputTokens: 30,
+        reasoningOutputTokens: 7,
+        totalTokens: 150
+      })
+    ]);
+
+    const result = await scanLocalUsageSessions({
+      sessionsPath,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.eventCount).toBe(2);
+    expect(result.total).toEqual({
+      inputTokens: 120,
+      cachedInputTokens: 90,
+      outputTokens: 30,
+      reasoningOutputTokens: 7,
+      totalTokens: 150
+    });
+    expect(result.byModel).toEqual([expect.objectContaining({ model: "child-model", totalTokens: 150 })]);
+  });
+
+  it("drops a dense copied startup prefix when a spawned rollout has no trigger metadata", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const startupRecords = Array.from({ length: 16 }, (_, index) => {
+      const inputTokens = (index + 1) * 10;
+      const outputTokens = (index + 1) * 2;
+      return cumulativeTokenCountEvent(new Date(Date.parse("2026-07-14T01:00:00.100Z") + index * 25).toISOString(), {
+        inputTokens,
+        cachedInputTokens: inputTokens - 2,
+        outputTokens,
+        reasoningOutputTokens: 1,
+        totalTokens: inputTokens + outputTokens
+      });
+    });
+    await writeSession(sessionsPath, "2026/07/14/copied-subagent.jsonl", [
+      {
+        type: "session_meta",
+        timestamp: "2026-07-14T01:00:00.000Z",
+        payload: {
+          id: "child-thread",
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1
+              }
+            }
+          }
+        }
+      },
+      { type: "session_meta", timestamp: "2026-07-14T01:00:00.001Z", payload: { id: "parent-thread" } },
+      { type: "turn_context", payload: { model: "parent-model" } },
+      ...startupRecords,
+      { type: "turn_context", payload: { model: "child-model" } },
+      cumulativeTokenCountEvent("2026-07-14T01:00:02.000Z", {
+        inputTokens: 200,
+        cachedInputTokens: 180,
+        outputTokens: 40,
+        reasoningOutputTokens: 3,
+        totalTokens: 240
+      })
+    ]);
+
+    const result = await scanLocalUsageSessions({
+      sessionsPath,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.eventCount).toBe(1);
+    expect(result.total).toEqual({
+      inputTokens: 40,
+      cachedInputTokens: 22,
+      outputTokens: 8,
+      reasoningOutputTokens: 2,
+      totalTokens: 48
+    });
+    expect(result.byModel).toEqual([expect.objectContaining({ model: "child-model", totalTokens: 48 })]);
+  });
+
   it("skips session files that cannot contain records in the requested period", async () => {
     const root = await createTempDirectory();
     const sessionsPath = path.join(root, "sessions");
