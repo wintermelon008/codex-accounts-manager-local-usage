@@ -2,7 +2,7 @@
   "name": "codex-accounts-mailbox",
   "displayName": "Codex Accounts Mailbox",
   "description": "Optional provider-neutral mailbox query and manual credential renewal integration for Codex Accounts Manager.",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "publisher": "codex-accounts",
   "license": "MIT",
   "repository": {

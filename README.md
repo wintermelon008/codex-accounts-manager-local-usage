@@ -46,7 +46,7 @@
 ## 可选本地集成
 
 - [飞书私聊 M+/S+ 导入包](docs/integrations/feishu-private-import.md)：仅接收管理员一对一文本消息；M+ 写入 Manager 的显式本地收件箱，S+ 只写入独立私有队列。
-- [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；Gateway 以“手动 / Gateway”虚拟账号出现在已保存账号和手动切换列表，卡片内显示 tracker 用量/估算价格和配置动作，但不伪造 OAuth 账号或进入任何自动账号池。
+- [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；Gateway 默认隐藏已保存账号中的“手动 / Gateway”虚拟账号卡片，开启后可在卡片内显示 tracker 用量/估算价格和配置动作，但不伪造 OAuth 账号或进入任何自动账号池。
 - [多来源 BugTeam 账号集成](docs/integrations/bugteam.md)：独立 VSIX 按来源卡片维护 BugTeam 官方 API 与超级炸弹车；支持服务端候补或本地库存候补，订单完成后统一导入并启用符合额度条件的无感池账号，但不会自动切换当前账号。
 
 ## 安装与更新
