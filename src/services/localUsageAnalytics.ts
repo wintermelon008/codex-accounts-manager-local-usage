@@ -36,6 +36,12 @@ const PEER_REFRESH_POLL_MS = 50;
 const MAX_USAGE_ATTRIBUTION_JOURNAL_BYTES = 2 * 1024 * 1024;
 const MAX_USAGE_ATTRIBUTION_LINE_BYTES = 1_024;
 const MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH = 256;
+// Older subagent rollouts copied the parent transcript and its cumulative
+// token snapshots into the child file during startup. Newer rollouts often
+// omit inter_agent_communication_metadata entirely, so use the short dense
+// startup burst as a fallback boundary detector for those files.
+const SUBAGENT_INHERITED_HISTORY_DETECTION_WINDOW_MS = 1_000;
+const SUBAGENT_INHERITED_HISTORY_MIN_TOKEN_EVENTS = 16;
 // Codex can report the same quota reset boundary a few seconds apart across
 // adjacent token events. A real five-hour or long-term quota reset is much
 // farther away, so keep one minute of room for that observation jitter.
@@ -150,6 +156,13 @@ type TokenUsageHighWater = {
 type TokenUsageAdvance = {
   highWater: TokenUsageHighWater;
   delta?: MutableTotals;
+};
+
+type PendingSubagentUsage = {
+  usage: MutableTotals;
+  timestamp: number;
+  model: string;
+  quotaWindows: Array<Pick<AccountTokenUsageWindow, "window" | "resetAt">>;
 };
 
 /**
@@ -561,8 +574,67 @@ async function scanLocalUsageSessionsInternal(
     let fileHasLocalUsage = false;
     let firstSessionMetaSeen = false;
     let shouldCountUsage = true;
+    let spawnedSubagentSession = false;
+    let subagentStartupAt: number | undefined;
+    let subagentStartupTokenEvents = 0;
+    let pendingSubagentUsage: PendingSubagentUsage[] = [];
     let usageHighWater: TokenUsageHighWater | undefined;
     const sessionThreadIds = new Set<string>();
+
+    const processUsageEvent = (
+      usage: MutableTotals,
+      timestamp: number,
+      model: string,
+      quotaWindows: Array<Pick<AccountTokenUsageWindow, "window" | "resetAt">>
+    ): void => {
+      const localTimestamp = zonedDateTimeParts(timestamp, input.timeZone);
+      const date = localTimestamp.date;
+      const includesLocalUsage = allowedDates.has(date);
+      const includesShortUsage = timestamp >= shortUsageStartAt;
+      const includesAccountUsage = tracksAccountUsage && timestamp >= oldestAccountUsageTimestamp;
+      if (!includesLocalUsage && !includesShortUsage && !includesAccountUsage) {
+        return;
+      }
+
+      if (includesAccountUsage) {
+        const attributionRecord = findUsageAttribution(sessionThreadIds, timestamp, attribution.byThread);
+        if (attributionRecord && quotaWindows.length > 0) {
+          addAccountTokenUsage(accountUsageWindows, attributionRecord.a, quotaWindows, model, usage, timestamp);
+          attributedEventCount += 1;
+        }
+      }
+
+      if (includesShortUsage) {
+        const bucketStartAt = localUsageBucketStartAt(timestamp, input.timeZone);
+        const bucket = by3Hour.get(bucketStartAt);
+        if (bucket) {
+          addTotals(bucket, usage);
+          bucket.eventCount += 1;
+        }
+        const bucketModel = getOrCreateBucketModelBucket(by3HourAndModel, bucketStartAt, model);
+        addTotals(bucketModel, usage);
+      }
+
+      if (!includesLocalUsage) {
+        return;
+      }
+
+      const day = byDate.get(date);
+      if (!day) {
+        return;
+      }
+
+      const modelBucket = getOrCreateModelBucket(byModel, model);
+      const dayModelBucket = getOrCreateDayModelBucket(byDayAndModel, date, model);
+      addTotals(total, usage);
+      addTotals(day, usage);
+      addTotals(modelBucket, usage);
+      addTotals(dayModelBucket, usage);
+      day.eventCount += 1;
+
+      eventCount += 1;
+      fileHasLocalUsage = true;
+    };
 
     try {
       const lines = readline.createInterface({
@@ -593,7 +665,11 @@ async function scanLocalUsageSessionsInternal(
             for (const threadId of readSessionThreadIds(payload)) {
               sessionThreadIds.add(threadId);
             }
-            shouldCountUsage = !isSpawnedSubagentSession(payload);
+            spawnedSubagentSession = isSpawnedSubagentSession(payload);
+            shouldCountUsage = !spawnedSubagentSession;
+            if (spawnedSubagentSession) {
+              subagentStartupAt = timestampFromEvent(event["timestamp"]);
+            }
           }
           continue;
         }
@@ -601,6 +677,7 @@ async function scanLocalUsageSessionsInternal(
         if (event["type"] === "inter_agent_communication_metadata") {
           if (payload["trigger_turn"] === true) {
             shouldCountUsage = true;
+            pendingSubagentUsage = [];
           }
           continue;
         }
@@ -620,7 +697,7 @@ async function scanLocalUsageSessionsInternal(
         const advanced = advanceTokenUsageHighWater(payload, usageHighWater);
         usageHighWater = advanced?.highWater ?? usageHighWater;
         const usage = advanced?.delta;
-        if (!usage || !shouldCountUsage) {
+        if (!usage) {
           continue;
         }
 
@@ -629,56 +706,49 @@ async function scanLocalUsageSessionsInternal(
           continue;
         }
 
-        const localTimestamp = zonedDateTimeParts(timestamp, input.timeZone);
-        const date = localTimestamp.date;
-        const includesLocalUsage = allowedDates.has(date);
-        const includesShortUsage = timestamp >= shortUsageStartAt;
-        const includesAccountUsage = tracksAccountUsage && timestamp >= oldestAccountUsageTimestamp;
-        if (!includesLocalUsage && !includesShortUsage && !includesAccountUsage) {
-          continue;
-        }
-
         const model = currentModel || UNKNOWN_MODEL;
+        const observation: PendingSubagentUsage = {
+          usage,
+          timestamp,
+          model,
+          quotaWindows: readTokenUsageQuotaWindows(payload)
+        };
 
-        if (includesAccountUsage) {
-          const attributionRecord = findUsageAttribution(sessionThreadIds, timestamp, attribution.byThread);
-          const quotaWindows = readTokenUsageQuotaWindows(payload);
-          if (attributionRecord && quotaWindows.length > 0) {
-            addAccountTokenUsage(accountUsageWindows, attributionRecord.a, quotaWindows, model, usage, timestamp);
-            attributedEventCount += 1;
+        if (spawnedSubagentSession && !shouldCountUsage) {
+          const startupOffset = subagentStartupAt == null ? undefined : timestamp - subagentStartupAt;
+          if (startupOffset != null && startupOffset <= SUBAGENT_INHERITED_HISTORY_DETECTION_WINDOW_MS) {
+            subagentStartupTokenEvents += 1;
+            if (subagentStartupTokenEvents < SUBAGENT_INHERITED_HISTORY_MIN_TOKEN_EVENTS) {
+              pendingSubagentUsage.push(observation);
+            } else {
+              // Once the startup burst is confirmed as inherited history, the
+              // buffered snapshots are all part of that copied prefix.
+              pendingSubagentUsage = [];
+            }
+            continue;
           }
-        }
 
-        if (includesShortUsage) {
-          const bucketStartAt = localUsageBucketStartAt(timestamp, input.timeZone);
-          const bucket = by3Hour.get(bucketStartAt);
-          if (bucket) {
-            addTotals(bucket, usage);
-            bucket.eventCount += 1;
+          shouldCountUsage = true;
+          if (subagentStartupTokenEvents < SUBAGENT_INHERITED_HISTORY_MIN_TOKEN_EVENTS) {
+            for (const pending of pendingSubagentUsage) {
+              processUsageEvent(pending.usage, pending.timestamp, pending.model, pending.quotaWindows);
+            }
           }
-          const bucketModel = getOrCreateBucketModelBucket(by3HourAndModel, bucketStartAt, model);
-          addTotals(bucketModel, usage);
+          pendingSubagentUsage = [];
         }
 
-        if (!includesLocalUsage) {
-          continue;
+        if (shouldCountUsage) {
+          processUsageEvent(observation.usage, observation.timestamp, observation.model, observation.quotaWindows);
         }
+      }
 
-        const day = byDate.get(date);
-        if (!day) {
-          continue;
+      // A short fresh subagent can finish before its first token event leaves
+      // the startup window. If no dense copied-history prefix was detected,
+      // those buffered observations are real usage and must be replayed.
+      if (spawnedSubagentSession && !shouldCountUsage) {
+        for (const pending of pendingSubagentUsage) {
+          processUsageEvent(pending.usage, pending.timestamp, pending.model, pending.quotaWindows);
         }
-
-        const modelBucket = getOrCreateModelBucket(byModel, model);
-        const dayModelBucket = getOrCreateDayModelBucket(byDayAndModel, date, model);
-        addTotals(total, usage);
-        addTotals(day, usage);
-        addTotals(modelBucket, usage);
-        addTotals(dayModelBucket, usage);
-        day.eventCount += 1;
-
-        eventCount += 1;
-        fileHasLocalUsage = true;
       }
     } catch (error) {
       // Session files can rotate while Codex is running. Ignore only this file
