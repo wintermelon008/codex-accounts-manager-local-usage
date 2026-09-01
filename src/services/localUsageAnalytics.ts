@@ -24,24 +24,30 @@ export const LOCAL_USAGE_SCAN_LEASE_MS = 60 * 1000;
 export const ACCOUNT_TOKEN_USAGE_RETENTION_DAYS = 31;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const CACHE_FILE_NAME = "local-usage-analytics-v7.json";
-export const ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME = "account-token-usage-v2.json";
+const CACHE_FILE_NAME = "local-usage-analytics-v9.json";
+export const ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME = "account-token-usage-v4.json";
 export const ACCOUNT_USAGE_ATTRIBUTION_DIRECTORY_NAME = "account-usage-attribution";
 export const LOCAL_USAGE_SCAN_LEASE_FILE_NAME = `${CACHE_FILE_NAME}.scan-lease`;
-const CACHE_SCHEMA_VERSION = 7;
-const ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_VERSION = 9;
+const ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION = 4;
 const UNKNOWN_MODEL = "unknown";
 const PEER_REFRESH_WAIT_MS = 2_000;
 const PEER_REFRESH_POLL_MS = 50;
 const MAX_USAGE_ATTRIBUTION_JOURNAL_BYTES = 2 * 1024 * 1024;
 const MAX_USAGE_ATTRIBUTION_LINE_BYTES = 1_024;
 const MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH = 256;
+// Older subagent rollouts copied the parent transcript and cumulative token
+// snapshots into the child file during startup. Newer rollouts can omit
+// inter_agent_communication_metadata entirely, so use the short dense startup
+// burst as a fallback boundary detector for those files.
+const SUBAGENT_INHERITED_HISTORY_DETECTION_WINDOW_MS = 1_000;
+const SUBAGENT_INHERITED_HISTORY_MIN_TOKEN_EVENTS = 16;
 // Codex can report the same quota reset boundary a few seconds apart across
 // adjacent token events. A real five-hour or long-term quota reset is much
 // farther away, so keep one minute of room for that observation jitter.
 const ACCOUNT_USAGE_RESET_DRIFT_TOLERANCE_SECONDS = 60;
 const LOCAL_USAGE_EVENT_MARKER =
-  /"type"\s*:\s*"(?:session_meta|turn_context|token_count|inter_agent_communication_metadata)"/;
+  /"type"\s*:\s*"(?:session_meta|turn_context|token_count|inter_agent_communication_metadata|task_started)"/;
 const ZONED_DATE_TIME_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 
 type ZonedDateTimeParts = {
@@ -150,6 +156,15 @@ type TokenUsageHighWater = {
 type TokenUsageAdvance = {
   highWater: TokenUsageHighWater;
   delta?: MutableTotals;
+};
+
+type ScannedTokenUsage = {
+  usage: MutableTotals;
+  timestamp: number;
+  model: string;
+  attributionAccountId?: string;
+  quotaWindows: Array<Pick<AccountTokenUsageWindow, "window" | "resetAt">>;
+  afterSubagentBoundary: boolean;
 };
 
 /**
@@ -523,14 +538,8 @@ async function scanLocalUsageSessionsInternal(
   }
 
   const allowedDates = new Set(recentDateKeys(input.now, input.periodDays, input.timeZone));
-  const shortStartDate = shiftLocalDate(
-    zonedDateTimeParts(input.now, input.timeZone),
-    -(shortPeriodDays - 1)
-  );
-  const shortUsageStartAt = localDateTimeToTimestamp(
-    { ...shortStartDate, hour: 0 },
-    input.timeZone
-  );
+  const shortStartDate = shiftLocalDate(zonedDateTimeParts(input.now, input.timeZone), -(shortPeriodDays - 1));
+  const shortUsageStartAt = localDateTimeToTimestamp({ ...shortStartDate, hour: 0 }, input.timeZone);
   const oldestAccountUsageTimestamp = tracksAccountUsage
     ? input.now - ACCOUNT_TOKEN_USAGE_RETENTION_DAYS * DAY_MS
     : Number.POSITIVE_INFINITY;
@@ -554,15 +563,74 @@ async function scanLocalUsageSessionsInternal(
       Math.floor(input.periodDays),
       shortPeriodDays,
       tracksAccountUsage ? ACCOUNT_TOKEN_USAGE_RETENTION_DAYS : 0
-    ) + 1) * DAY_MS;
+    ) +
+      1) *
+      DAY_MS;
   const files = await findJsonlFiles(input.sessionsPath, oldestRelevantMtime);
   for (const file of files) {
     let currentModel = UNKNOWN_MODEL;
     let fileHasLocalUsage = false;
     let firstSessionMetaSeen = false;
     let shouldCountUsage = true;
+    let isSpawnedSubagent = false;
+    let sawTaskStarted = false;
+    let subagentUsageBoundaryReached = false;
+    let subagentStartupAt: number | undefined;
+    let subagentStartupTokenEvents = 0;
     let usageHighWater: TokenUsageHighWater | undefined;
     const sessionThreadIds = new Set<string>();
+    const pendingSubagentUsage: ScannedTokenUsage[] = [];
+
+    const recordUsage = (observation: ScannedTokenUsage): void => {
+      const localTimestamp = zonedDateTimeParts(observation.timestamp, input.timeZone);
+      const date = localTimestamp.date;
+      const includesLocalUsage = allowedDates.has(date);
+      const includesShortUsage = observation.timestamp >= shortUsageStartAt;
+      const includesAccountUsage = tracksAccountUsage && observation.timestamp >= oldestAccountUsageTimestamp;
+
+      if (includesAccountUsage && observation.attributionAccountId && observation.quotaWindows.length > 0) {
+        addAccountTokenUsage(
+          accountUsageWindows,
+          observation.attributionAccountId,
+          observation.quotaWindows,
+          observation.model,
+          observation.usage,
+          observation.timestamp
+        );
+        attributedEventCount += 1;
+      }
+
+      if (includesShortUsage) {
+        const bucketStartAt = localUsageBucketStartAt(observation.timestamp, input.timeZone);
+        const bucket = by3Hour.get(bucketStartAt);
+        if (bucket) {
+          addTotals(bucket, observation.usage);
+          bucket.eventCount += 1;
+        }
+        const bucketModel = getOrCreateBucketModelBucket(by3HourAndModel, bucketStartAt, observation.model);
+        addTotals(bucketModel, observation.usage);
+      }
+
+      if (!includesLocalUsage) {
+        return;
+      }
+
+      const day = byDate.get(date);
+      if (!day) {
+        return;
+      }
+
+      const modelBucket = getOrCreateModelBucket(byModel, observation.model);
+      const dayModelBucket = getOrCreateDayModelBucket(byDayAndModel, date, observation.model);
+      addTotals(total, observation.usage);
+      addTotals(day, observation.usage);
+      addTotals(modelBucket, observation.usage);
+      addTotals(dayModelBucket, observation.usage);
+      day.eventCount += 1;
+
+      eventCount += 1;
+      fileHasLocalUsage = true;
+    };
 
     try {
       const lines = readline.createInterface({
@@ -593,7 +661,11 @@ async function scanLocalUsageSessionsInternal(
             for (const threadId of readSessionThreadIds(payload)) {
               sessionThreadIds.add(threadId);
             }
-            shouldCountUsage = !isSpawnedSubagentSession(payload);
+            isSpawnedSubagent = isSpawnedSubagentSession(payload);
+            shouldCountUsage = !isSpawnedSubagent;
+            if (isSpawnedSubagent) {
+              subagentStartupAt = timestampFromEvent(event["timestamp"]);
+            }
           }
           continue;
         }
@@ -601,11 +673,27 @@ async function scanLocalUsageSessionsInternal(
         if (event["type"] === "inter_agent_communication_metadata") {
           if (payload["trigger_turn"] === true) {
             shouldCountUsage = true;
+            if (isSpawnedSubagent) {
+              // A trigger is the authoritative child-turn boundary. Any
+              // observations buffered before it came from copied history.
+              pendingSubagentUsage.length = 0;
+            }
           }
           continue;
         }
 
+        if (event["type"] === "event_msg" && payload["type"] === "task_started") {
+          sawTaskStarted = true;
+          continue;
+        }
+
         if (event["type"] === "turn_context") {
+          if (isSpawnedSubagent && !shouldCountUsage && sawTaskStarted) {
+            // Older spawned session files do not always contain the
+            // inter-agent marker. Their first task_started -> turn_context
+            // boundary is the best available child-owned usage boundary.
+            subagentUsageBoundaryReached = true;
+          }
           const model = payload["model"];
           if (typeof model === "string" && model.trim()) {
             currentModel = model.trim();
@@ -620,7 +708,7 @@ async function scanLocalUsageSessionsInternal(
         const advanced = advanceTokenUsageHighWater(payload, usageHighWater);
         usageHighWater = advanced?.highWater ?? usageHighWater;
         const usage = advanced?.delta;
-        if (!usage || !shouldCountUsage) {
+        if (!usage) {
           continue;
         }
 
@@ -639,46 +727,68 @@ async function scanLocalUsageSessionsInternal(
         }
 
         const model = currentModel || UNKNOWN_MODEL;
+        const attributionRecord = includesAccountUsage
+          ? findUsageAttribution(sessionThreadIds, timestamp, attribution.byThread)
+          : undefined;
+        const observation: ScannedTokenUsage = {
+          usage,
+          timestamp,
+          model,
+          attributionAccountId: attributionRecord?.a,
+          quotaWindows: includesAccountUsage ? readTokenUsageQuotaWindows(payload) : [],
+          afterSubagentBoundary: subagentUsageBoundaryReached
+        };
 
-        if (includesAccountUsage) {
-          const attributionRecord = findUsageAttribution(sessionThreadIds, timestamp, attribution.byThread);
-          const quotaWindows = readTokenUsageQuotaWindows(payload);
-          if (attributionRecord && quotaWindows.length > 0) {
-            addAccountTokenUsage(accountUsageWindows, attributionRecord.a, quotaWindows, model, usage, timestamp);
-            attributedEventCount += 1;
+        if (isSpawnedSubagent && !shouldCountUsage && !sawTaskStarted && !subagentUsageBoundaryReached) {
+          const startupOffset = subagentStartupAt == null ? undefined : timestamp - subagentStartupAt;
+          if (
+            startupOffset != null &&
+            startupOffset >= 0 &&
+            startupOffset <= SUBAGENT_INHERITED_HISTORY_DETECTION_WINDOW_MS
+          ) {
+            subagentStartupTokenEvents += 1;
+            if (subagentStartupTokenEvents < SUBAGENT_INHERITED_HISTORY_MIN_TOKEN_EVENTS) {
+              pendingSubagentUsage.push(observation);
+            } else {
+              // Once the startup burst is dense enough to identify copied
+              // history, discard the buffered snapshots as well.
+              pendingSubagentUsage.length = 0;
+            }
+            continue;
           }
+
+          shouldCountUsage = true;
+          if (subagentStartupTokenEvents < SUBAGENT_INHERITED_HISTORY_MIN_TOKEN_EVENTS) {
+            for (const pending of pendingSubagentUsage) {
+              recordUsage(pending);
+            }
+          }
+          pendingSubagentUsage.length = 0;
         }
 
-        if (includesShortUsage) {
-          const bucketStartAt = localUsageBucketStartAt(timestamp, input.timeZone);
-          const bucket = by3Hour.get(bucketStartAt);
-          if (bucket) {
-            addTotals(bucket, usage);
-            bucket.eventCount += 1;
-          }
-          const bucketModel = getOrCreateBucketModelBucket(by3HourAndModel, bucketStartAt, model);
-          addTotals(bucketModel, usage);
-        }
-
-        if (!includesLocalUsage) {
+        if (!shouldCountUsage) {
+          pendingSubagentUsage.push(observation);
           continue;
         }
 
-        const day = byDate.get(date);
-        if (!day) {
-          continue;
+        recordUsage(observation);
+      }
+
+      if (isSpawnedSubagent && !shouldCountUsage) {
+        if (subagentUsageBoundaryReached) {
+          for (const observation of pendingSubagentUsage) {
+            if (observation.afterSubagentBoundary) {
+              recordUsage(observation);
+            }
+          }
+        } else if (!sawTaskStarted) {
+          // A short fresh subagent can finish before its first token event
+          // leaves the startup window. If no dense copied-history prefix was
+          // detected, those buffered observations are real usage.
+          for (const observation of pendingSubagentUsage) {
+            recordUsage(observation);
+          }
         }
-
-        const modelBucket = getOrCreateModelBucket(byModel, model);
-        const dayModelBucket = getOrCreateDayModelBucket(byDayAndModel, date, model);
-        addTotals(total, usage);
-        addTotals(day, usage);
-        addTotals(modelBucket, usage);
-        addTotals(dayModelBucket, usage);
-        day.eventCount += 1;
-
-        eventCount += 1;
-        fileHasLocalUsage = true;
       }
     } catch (error) {
       // Session files can rotate while Codex is running. Ignore only this file
@@ -841,9 +951,7 @@ function mergeLocalUsageSnapshots(
     dailyRows.set(row.date, row);
   }
 
-  const dailyModelRows = new Map(
-    previous?.byDayAndModel.map((row) => [`${row.date}\u0000${row.model}`, row]) ?? []
-  );
+  const dailyModelRows = new Map(previous?.byDayAndModel.map((row) => [`${row.date}\u0000${row.model}`, row]) ?? []);
   for (const key of [...dailyModelRows.keys()]) {
     if (scannedDates.has(key.split("\u0000", 1)[0] ?? "")) {
       dailyModelRows.delete(key);
@@ -861,7 +969,9 @@ function mergeLocalUsageSnapshots(
   for (const row of scannedBy3Hour) {
     shortRows.set(row.startAt, row);
   }
-  const retainedShortStarts = new Set(recent3HourBuckets(calculatedAt, LOCAL_USAGE_SHORT_PERIOD_DAYS, timeZone).map((row) => row.startAt));
+  const retainedShortStarts = new Set(
+    recent3HourBuckets(calculatedAt, LOCAL_USAGE_SHORT_PERIOD_DAYS, timeZone).map((row) => row.startAt)
+  );
   for (const startAt of shortRows.keys()) {
     if (!retainedShortStarts.has(startAt)) {
       shortRows.delete(startAt);
@@ -927,8 +1037,11 @@ function mergeUsageCoverage(
     return fallback;
   }
   return {
-    dailyStartDate: [fallback.dailyStartDate, scannedDates[0] ?? fallback.dailyStartDate].sort()[0] ?? fallback.dailyStartDate,
-    dailyEndDate: [fallback.dailyEndDate, scannedDates[scannedDates.length - 1] ?? fallback.dailyEndDate].sort().at(-1) ?? fallback.dailyEndDate
+    dailyStartDate:
+      [fallback.dailyStartDate, scannedDates[0] ?? fallback.dailyStartDate].sort()[0] ?? fallback.dailyStartDate,
+    dailyEndDate:
+      [fallback.dailyEndDate, scannedDates[scannedDates.length - 1] ?? fallback.dailyEndDate].sort().at(-1) ??
+      fallback.dailyEndDate
   };
 }
 
@@ -1150,7 +1263,9 @@ function classifyTokenUsageQuotaWindows(
   });
 }
 
-function classifyQuotaWindowByDuration(windowMinutes: number | undefined): AccountTokenUsageWindow["window"] | undefined {
+function classifyQuotaWindowByDuration(
+  windowMinutes: number | undefined
+): AccountTokenUsageWindow["window"] | undefined {
   if (windowMinutes == null) {
     return undefined;
   }
@@ -1460,7 +1575,23 @@ function advanceTokenUsageHighWater(
   }
 
   const previousTotalTokens = previous?.totals.totalTokens ?? 0;
-  if (cumulative.totals.totalTokens <= previousTotalTokens) {
+  if (cumulative.totals.totalTokens < previousTotalTokens) {
+    const highWater: TokenUsageHighWater = cumulative.hasCompleteComponents
+      ? {
+          totals: cumulative.totals,
+          hasCompleteComponents: true
+        }
+      : {
+          totals: {
+            ...emptyTotals(),
+            totalTokens: cumulative.totals.totalTokens
+          },
+          hasCompleteComponents: false
+        };
+    return { highWater, delta: last };
+  }
+
+  if (cumulative.totals.totalTokens === previousTotalTokens) {
     return previous ? { highWater: previous } : undefined;
   }
 
@@ -1712,7 +1843,10 @@ function zonedDateTimeParts(timestamp: number, timeZone: string): ZonedDateTimeP
   };
 }
 
-function shiftLocalDate(dateTime: ZonedDateTimeParts, days: number): Pick<ZonedDateTimeParts, "year" | "month" | "day"> {
+function shiftLocalDate(
+  dateTime: ZonedDateTimeParts,
+  days: number
+): Pick<ZonedDateTimeParts, "year" | "month" | "day"> {
   const shifted = new Date(Date.UTC(dateTime.year, dateTime.month - 1, dateTime.day + days));
   return {
     year: shifted.getUTCFullYear(),
@@ -2004,7 +2138,12 @@ function isUsageDayModel(value: unknown): value is DashboardLocalUsageDayModelVi
 
 function isUsageBucketModel(value: unknown): value is DashboardLocalUsageBucketModelViewModel {
   const candidate = asRecord(value);
-  return Boolean(candidate && isFiniteNumber(candidate["startAt"]) && typeof candidate["model"] === "string" && isTokenTotals(candidate));
+  return Boolean(
+    candidate &&
+    isFiniteNumber(candidate["startAt"]) &&
+    typeof candidate["model"] === "string" &&
+    isTokenTotals(candidate)
+  );
 }
 
 function isTokenTotals(value: unknown): value is DashboardLocalUsageTokenTotals {

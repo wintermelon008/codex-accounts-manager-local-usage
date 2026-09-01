@@ -127,8 +127,16 @@ describe("scanLocalUsageSessions", () => {
       totalTokens: 50
     });
     expect(result.by3HourAndModel).toEqual([
-      expect.objectContaining({ startAt: Date.parse("2026-07-14T07:00:00.000Z"), model: "gpt-5.6-sol", totalTokens: 10 }),
-      expect.objectContaining({ startAt: Date.parse("2026-07-14T10:00:00.000Z"), model: "gpt-5.6-luna", totalTokens: 50 })
+      expect.objectContaining({
+        startAt: Date.parse("2026-07-14T07:00:00.000Z"),
+        model: "gpt-5.6-sol",
+        totalTokens: 10
+      }),
+      expect.objectContaining({
+        startAt: Date.parse("2026-07-14T10:00:00.000Z"),
+        model: "gpt-5.6-luna",
+        totalTokens: 50
+      })
     ]);
   });
 
@@ -159,7 +167,7 @@ describe("scanLocalUsageSessions", () => {
     });
   });
 
-  it("uses cumulative high-water deltas instead of repeated last-token reports", async () => {
+  it("uses cumulative high-water deltas, deduplicates repeats, and rebases after a counter reset", async () => {
     const root = await createTempDirectory();
     const sessionsPath = path.join(root, "sessions");
     await writeSession(sessionsPath, "2026/07/14/root.jsonl", [
@@ -245,13 +253,13 @@ describe("scanLocalUsageSessions", () => {
       now: NOW
     });
 
-    expect(result.eventCount).toBe(1);
+    expect(result.eventCount).toBe(2);
     expect(result.total).toEqual({
-      inputTokens: 40,
-      cachedInputTokens: 30,
-      outputTokens: 10,
-      reasoningOutputTokens: 2,
-      totalTokens: 50
+      inputTokens: 120,
+      cachedInputTokens: 90,
+      outputTokens: 30,
+      reasoningOutputTokens: 7,
+      totalTokens: 150
     });
   });
 
@@ -366,6 +374,301 @@ describe("scanLocalUsageSessions", () => {
       totalTokens: 70
     });
     expect(result.byModel).toEqual([expect.objectContaining({ model: "child-model", totalTokens: 70 })]);
+  });
+
+  it("counts an unmarked spawned subagent after its own task boundary and attributes it", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const attributionDirectory = path.join(root, "usage-attribution");
+    const rateLimits = {
+      primary: { resets_at: 1_800_000_000 },
+      secondary: { resets_at: 1_800_604_800 }
+    };
+    await writeSession(sessionsPath, "2026/07/14/unmarked-subagent.jsonl", [
+      {
+        type: "session_meta",
+        payload: {
+          id: "child-thread",
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1
+              }
+            }
+          }
+        }
+      },
+      { type: "event_msg", payload: { type: "task_started" } },
+      cumulativeTokenCountEvent(
+        "2026-07-14T00:00:10.000Z",
+        {
+          inputTokens: 80,
+          cachedInputTokens: 60,
+          outputTokens: 20,
+          reasoningOutputTokens: 5,
+          totalTokens: 100
+        },
+        undefined,
+        rateLimits
+      ),
+      { type: "turn_context", payload: { model: "child-model" } },
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:00:00.000Z",
+        {
+          inputTokens: 110,
+          cachedInputTokens: 80,
+          outputTokens: 30,
+          reasoningOutputTokens: 7,
+          totalTokens: 140
+        },
+        {
+          inputTokens: 30,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          reasoningOutputTokens: 2,
+          totalTokens: 40
+        },
+        rateLimits
+      ),
+      cumulativeTokenCountEvent(
+        "2026-07-14T02:00:00.000Z",
+        {
+          inputTokens: 140,
+          cachedInputTokens: 105,
+          outputTokens: 40,
+          reasoningOutputTokens: 9,
+          totalTokens: 180
+        },
+        {
+          inputTokens: 30,
+          cachedInputTokens: 25,
+          outputTokens: 10,
+          reasoningOutputTokens: 2,
+          totalTokens: 40
+        },
+        rateLimits
+      )
+    ]);
+    await writeUsageAttribution(attributionDirectory, [
+      { v: 1, t: Date.parse("2026-07-14T00:00:00.000Z"), th: "child-thread", a: "local-account" }
+    ]);
+
+    const result = await scanLocalUsageAndAccountTokenUsage({
+      sessionsPath,
+      usageAttributionDirectory: attributionDirectory,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.localUsage.total).toEqual({
+      inputTokens: 60,
+      cachedInputTokens: 45,
+      outputTokens: 20,
+      reasoningOutputTokens: 4,
+      totalTokens: 80
+    });
+    expect(
+      findAccountTokenUsageWindow(result.accountTokenUsage, "local-account", "hourly", 1_800_000_000)
+    ).toMatchObject({
+      totalTokens: 80,
+      byModel: [expect.objectContaining({ model: "child-model", totalTokens: 80 })]
+    });
+  });
+
+  it("counts a fresh spawned subagent rollout when the trigger metadata is absent", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    await writeSession(sessionsPath, "2026/07/14/fresh-subagent.jsonl", [
+      {
+        type: "session_meta",
+        timestamp: "2026-07-14T01:00:00.000Z",
+        payload: {
+          id: "child-thread",
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1
+              }
+            }
+          }
+        }
+      },
+      { type: "session_meta", timestamp: "2026-07-14T01:00:00.001Z", payload: { id: "parent-thread" } },
+      { type: "turn_context", payload: { model: "child-model" } },
+      cumulativeTokenCountEvent("2026-07-14T01:00:00.200Z", {
+        inputTokens: 80,
+        cachedInputTokens: 60,
+        outputTokens: 20,
+        reasoningOutputTokens: 5,
+        totalTokens: 100
+      }),
+      cumulativeTokenCountEvent("2026-07-14T01:00:00.800Z", {
+        inputTokens: 120,
+        cachedInputTokens: 90,
+        outputTokens: 30,
+        reasoningOutputTokens: 7,
+        totalTokens: 150
+      })
+    ]);
+
+    const result = await scanLocalUsageSessions({
+      sessionsPath,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.eventCount).toBe(2);
+    expect(result.total).toEqual({
+      inputTokens: 120,
+      cachedInputTokens: 90,
+      outputTokens: 30,
+      reasoningOutputTokens: 7,
+      totalTokens: 150
+    });
+    expect(result.byModel).toEqual([expect.objectContaining({ model: "child-model", totalTokens: 150 })]);
+  });
+
+  it("drops a dense copied startup prefix when a spawned rollout has no trigger metadata", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const startupRecords = Array.from({ length: 16 }, (_, index) => {
+      const inputTokens = (index + 1) * 10;
+      const outputTokens = (index + 1) * 2;
+      return cumulativeTokenCountEvent(new Date(Date.parse("2026-07-14T01:00:00.100Z") + index * 25).toISOString(), {
+        inputTokens,
+        cachedInputTokens: inputTokens - 2,
+        outputTokens,
+        reasoningOutputTokens: 1,
+        totalTokens: inputTokens + outputTokens
+      });
+    });
+    await writeSession(sessionsPath, "2026/07/14/copied-subagent.jsonl", [
+      {
+        type: "session_meta",
+        timestamp: "2026-07-14T01:00:00.000Z",
+        payload: {
+          id: "child-thread",
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1
+              }
+            }
+          }
+        }
+      },
+      { type: "session_meta", timestamp: "2026-07-14T01:00:00.001Z", payload: { id: "parent-thread" } },
+      { type: "turn_context", payload: { model: "parent-model" } },
+      ...startupRecords,
+      { type: "turn_context", payload: { model: "child-model" } },
+      cumulativeTokenCountEvent("2026-07-14T01:00:02.000Z", {
+        inputTokens: 200,
+        cachedInputTokens: 180,
+        outputTokens: 40,
+        reasoningOutputTokens: 3,
+        totalTokens: 240
+      })
+    ]);
+
+    const result = await scanLocalUsageSessions({
+      sessionsPath,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.eventCount).toBe(1);
+    expect(result.total).toEqual({
+      inputTokens: 40,
+      cachedInputTokens: 22,
+      outputTokens: 8,
+      reasoningOutputTokens: 2,
+      totalTokens: 48
+    });
+    expect(result.byModel).toEqual([expect.objectContaining({ model: "child-model", totalTokens: 48 })]);
+  });
+
+  it("attributes a fresh unmarked spawned subagent to its account", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const attributionDirectory = path.join(root, "usage-attribution");
+    const rateLimits = {
+      primary: { resets_at: 1_800_000_000 },
+      secondary: { resets_at: 1_800_604_800 }
+    };
+    await writeSession(sessionsPath, "2026/07/14/fresh-attributed-subagent.jsonl", [
+      {
+        type: "session_meta",
+        timestamp: "2026-07-14T01:00:00.000Z",
+        payload: {
+          id: "child-thread",
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1
+              }
+            }
+          }
+        }
+      },
+      { type: "turn_context", payload: { model: "child-model" } },
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:00:00.200Z",
+        {
+          inputTokens: 80,
+          cachedInputTokens: 60,
+          outputTokens: 20,
+          reasoningOutputTokens: 5,
+          totalTokens: 100
+        },
+        undefined,
+        rateLimits
+      ),
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:00:00.800Z",
+        {
+          inputTokens: 120,
+          cachedInputTokens: 90,
+          outputTokens: 30,
+          reasoningOutputTokens: 7,
+          totalTokens: 150
+        },
+        {
+          inputTokens: 40,
+          cachedInputTokens: 30,
+          outputTokens: 10,
+          reasoningOutputTokens: 2,
+          totalTokens: 50
+        },
+        rateLimits
+      )
+    ]);
+    await writeUsageAttribution(attributionDirectory, [
+      { v: 1, t: Date.parse("2026-07-14T00:00:00.000Z"), th: "child-thread", a: "local-account" }
+    ]);
+
+    const result = await scanLocalUsageAndAccountTokenUsage({
+      sessionsPath,
+      usageAttributionDirectory: attributionDirectory,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.localUsage.total.totalTokens).toBe(150);
+    expect(
+      findAccountTokenUsageWindow(result.accountTokenUsage, "local-account", "hourly", 1_800_000_000)
+    ).toMatchObject({
+      totalTokens: 150,
+      byModel: [expect.objectContaining({ model: "child-model", totalTokens: 150 })],
+      eventCount: 2
+    });
   });
 
   it("skips session files that cannot contain records in the requested period", async () => {
@@ -713,9 +1016,7 @@ describe("scanLocalUsageSessions", () => {
     });
 
     expect(result.localUsage.total.totalTokens).toBe(50);
-    expect(
-      findAccountTokenUsageWindow(result.accountTokenUsage, "local-account", "weekly", resetAt)
-    ).toMatchObject({
+    expect(findAccountTokenUsageWindow(result.accountTokenUsage, "local-account", "weekly", resetAt)).toMatchObject({
       resetAt,
       inputTokens: 105,
       cachedInputTokens: 30,
@@ -724,7 +1025,9 @@ describe("scanLocalUsageSessions", () => {
       totalTokens: 150,
       eventCount: 2
     });
-    expect(findAccountTokenUsageWindow(result.accountTokenUsage, "local-account", "weekly", resetAt + 62)).toBeUndefined();
+    expect(
+      findAccountTokenUsageWindow(result.accountTokenUsage, "local-account", "weekly", resetAt + 62)
+    ).toBeUndefined();
   });
 });
 
@@ -754,7 +1057,7 @@ describe("LocalUsageAnalyticsService", () => {
     const firstCached = await service.getSnapshot();
     expect(firstCached.total.totalTokens).toBe(100);
     expect(scanner).toHaveBeenCalledTimes(1);
-    await expect(readFile(path.join(storagePath, "local-usage-analytics-v7.json"), "utf8")).resolves.toContain(
+    await expect(readFile(path.join(storagePath, "local-usage-analytics-v9.json"), "utf8")).resolves.toContain(
       '"totalTokens":100'
     );
 
@@ -1034,7 +1337,7 @@ describe("LocalUsageAnalyticsService", () => {
     await service.getSnapshot(refreshed.resolve);
     await refreshed.promise;
 
-    const persisted = await readFile(path.join(storagePath, "local-usage-analytics-v7.json"), "utf8");
+    const persisted = await readFile(path.join(storagePath, "local-usage-analytics-v9.json"), "utf8");
     expect(persisted).toContain('"totalTokens":13');
     expect(persisted).not.toContain(secretMessage);
     expect(persisted).not.toContain(secretAccountId);
