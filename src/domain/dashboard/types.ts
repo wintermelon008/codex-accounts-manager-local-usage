@@ -158,6 +158,7 @@ export interface DashboardCopy {
   batchRefreshBtn: string;
   batchResyncBtn: string;
   batchRemoveBtn: string;
+  removeDeactivatedAccountsBtn: string;
   batchExportBtn: string;
   batchSelectedCount: string;
   batchResultTitle: string;

@@ -86,6 +86,115 @@ test("query details are persisted separately and only selected details need to b
   assert.equal(pool.listMetadata()[0].latestCode, "123456");
 });
 
+test("querying an OpenAI deactivation notice marks the mailbox and keeps the marker after reload", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "deactivated@example.com----password----client----refresh"
+  })).imported;
+
+  const ordinary = await pool.recordQueryResult(id, {
+    ok: true,
+    messages: [{ id: "ordinary", subject: "OpenAI verification code", from: ["no-reply", "openai.com"].join("@") }]
+  });
+  assert.equal(ordinary.openaiAccountDeactivated, false);
+
+  const marked = await pool.recordQueryResult(id, {
+    ok: true,
+    messages: [{
+      id: "deactivated",
+      subject: "Your account has been deactivated",
+      from: ["no-reply", "openai.com"].join("@"),
+      body: "Your account has been deactivated."
+    }]
+  });
+  assert.equal(marked.openaiAccountDeactivated, true);
+
+  const restored = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  await restored.load();
+  assert.equal(restored.listMetadata()[0].openaiAccountDeactivated, true);
+});
+
+test("a clean successful query clears a stale deactivation marker", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "stale@example.com----password----client----refresh"
+  })).imported;
+
+  await pool.recordQueryResult(id, {
+    ok: true,
+    messages: [{
+      id: "stale-deactivated",
+      subject: "Your account has been deactivated",
+      from: ["no-reply", "openai.com"].join("@"),
+      body: "Your account has been deactivated."
+    }]
+  });
+  assert.equal(pool.listMetadata()[0].openaiAccountDeactivated, true);
+
+  const cleared = await pool.recordQueryResult(id, {
+    ok: true,
+    messages: [{ id: "ordinary", subject: "OpenAI verification code", from: ["no-reply", "openai.com"].join("@") }]
+  });
+  assert.equal(cleared.openaiAccountDeactivated, false);
+  assert.equal(pool.listMetadata()[0].openaiAccountDeactivated, false);
+});
+
+test("loading the pool backfills deactivation markers from existing message details", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "historical@example.com----password----client----refresh"
+  })).imported;
+
+  await stores.metadata.update(detailKey(id), {
+    mailboxId: id,
+    messages: [{
+      id: "historical-deactivated",
+      subject: "OpenAI account deactivated",
+      from: ["no-reply", "openai.com"].join("@"),
+      body: "Your account has been deactivated."
+    }]
+  });
+
+  const restored = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  await restored.load();
+  assert.equal(restored.listMetadata()[0].openaiAccountDeactivated, true);
+});
+
+test("loading the pool clears a stale marker when stored details have no deactivation notice", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "stale-detail@example.com----password----client----refresh"
+  })).imported;
+
+  const metadata = stores.metadata.values.get(METADATA_KEY);
+  metadata.accounts[0].openaiAccountDeactivated = true;
+  await stores.metadata.update(METADATA_KEY, metadata);
+  await stores.metadata.update(detailKey(id), {
+    mailboxId: id,
+    messages: [{ id: "ordinary", subject: "OpenAI verification code", from: ["no-reply", "openai.com"].join("@") }]
+  });
+
+  const restored = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  await restored.load();
+  assert.equal(restored.listMetadata()[0].openaiAccountDeactivated, false);
+});
+
 test("renewal writes a new secret only after the provider reports changed credentials", async () => {
   let clock = 100;
   const stores = memoryStores();
@@ -100,8 +209,9 @@ test("renewal writes a new secret only after the provider reports changed creden
     account: { address: "one@example.com", credentials: { refreshToken: "should-not-write" } }
   });
   assert.match(stores.secretStore.values.get(secretKey(id)), /refresh-one/u);
+  assert.equal(pool.listMetadata()[0].lastRenewalAt, undefined);
 
-  await pool.recordRenewalResult(id, {
+  const renewed = await pool.recordRenewalResult(id, {
     ok: true,
     status: "updated",
     account: {
@@ -111,6 +221,70 @@ test("renewal writes a new secret only after the provider reports changed creden
   });
   assert.match(stores.secretStore.values.get(secretKey(id)), /refresh-two/u);
   assert.equal((await pool.getAccount(id)).credentials.refreshToken, "refresh-two");
+  assert.equal(renewed.lastRenewalAt, 103);
+
+  await pool.recordRenewalResult(id, {
+    ok: false,
+    status: "error",
+    error: { stage: "refresh", code: "temporary_failure", message: "temporary failure" }
+  });
+  assert.equal(pool.listMetadata()[0].lastRenewalAt, 103);
+});
+
+test("overlapping successful renewals preserve every mailbox timestamp", async () => {
+  let clock = 100;
+  const stores = memoryStores();
+  let metadataReads = 0;
+  let secretReads = 0;
+  const metadataGet = stores.metadata.get;
+  stores.metadata.get = async (key) => {
+    const value = await metadataGet(key);
+    if (key === METADATA_KEY) {
+      const delay = metadataReads++ === 0 ? 0 : 10;
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    return value;
+  };
+  const secretGet = stores.secretStore.get;
+  stores.secretStore.get = async (key) => {
+    const value = await secretGet(key);
+    const delay = secretReads++ === 0 ? 20 : 0;
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    return value;
+  };
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore, now: () => ++clock });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const imported = (await pool.importProvider({
+    provider,
+    input: [
+      "one@example.com----password-one----client-one----refresh-one",
+      "two@example.com----password-two----client-two----refresh-two"
+    ].join("\n")
+  })).imported;
+  metadataReads = 0;
+  secretReads = 0;
+
+  await Promise.all(imported.map((mailbox, index) => pool.recordRenewalResult(mailbox.id, {
+    ok: true,
+    status: "updated",
+    account: {
+      address: mailbox.address,
+      credentials: {
+        email: mailbox.address,
+        password: "password-" + (index === 0 ? "one" : "two"),
+        clientId: "client-" + (index === 0 ? "one" : "two"),
+        refreshToken: "refresh-renewed-" + (index + 1)
+      }
+    }
+  })));
+
+  const persisted = stores.metadata.values.get(METADATA_KEY);
+  assert.equal(persisted.accounts.filter((account) => account.lastRenewalAt != null).length, 2);
+  assert.deepEqual(
+    new Map(persisted.accounts.map((account) => [account.address, account.lastRenewalAt])),
+    new Map([["one@example.com", 103], ["two@example.com", 104]])
+  );
 });
 
 test("editing changes the display name and can replace opaque provider credentials", async () => {
@@ -199,6 +373,17 @@ test("editing can switch the provider format while keeping the mailbox address",
     input: "one@example.com----password-one----client-one----refresh-one"
   })).imported;
 
+  await pool.recordQueryResult(id, {
+    ok: true,
+    messages: [{
+      id: "deactivated",
+      subject: "Your account has been deactivated",
+      from: ["no-reply", "openai.com"].join("@"),
+      body: "Your account has been deactivated."
+    }]
+  });
+  assert.equal(pool.listMetadata()[0].openaiAccountDeactivated, true);
+
   const updated = await pool.updateAccount(id, {
     provider: replacementProvider,
     providerId: replacementProvider.id,
@@ -207,6 +392,7 @@ test("editing can switch the provider format while keeping the mailbox address",
   });
   assert.equal(updated.providerId, "mock-format");
   assert.equal(updated.address, "one@example.com");
+  assert.equal(updated.openaiAccountDeactivated, false);
   assert.equal((await pool.getAccount(id)).credentials.token, "replacement-token");
 });
 

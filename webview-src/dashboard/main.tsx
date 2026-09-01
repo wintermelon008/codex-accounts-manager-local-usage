@@ -15,10 +15,12 @@ import { ActionButton, BatchSelectionBar, OverviewSection, RecoveryPanel } from 
 import { postMessageToHost } from "./host";
 import {
   formatSavedAccountsSummary,
+  formatTemplate,
   getDashboardAccountPage,
   getHighWeeklyQuotaHiddenAccountIds,
   getLowWeeklyQuotaAccountIds,
   getDashboardVisibleAccounts,
+  getReauthorizeAccountIds,
   normalizeThresholds,
   resolveLockMinutes,
   resolveOverviewAccount
@@ -151,6 +153,8 @@ function App() {
     snapshot.accounts,
     snapshot.settings.unhideWeeklyQuotaThreshold
   );
+  const reauthorizeAccountIds = getReauthorizeAccountIds(snapshot.accounts);
+  const reauthorizeAccountCount = reauthorizeAccountIds.length;
   const hiddenAccountsToggleLabel = resolveHiddenAccountsToggleLabel(
     snapshot.lang,
     showHiddenAccounts,
@@ -589,6 +593,18 @@ function App() {
                     highWeeklyQuotaHiddenAccountIds.length,
                     snapshot.settings.unhideWeeklyQuotaThreshold
                   )}
+                </ActionButton>
+                <ActionButton
+                  class="toolbar-btn danger"
+                  pending={batchRemovePending}
+                  disabled={
+                    reauthorizeAccountCount === 0 ||
+                    hasGlobalPendingAction ||
+                    snapshot.indexHealth.status === "corrupted_unrecoverable"
+                  }
+                  onClick={() => sendAction("batchRemove", undefined, { accountIds: reauthorizeAccountIds })}
+                >
+                  {formatTemplate(snapshot.copy.removeDeactivatedAccountsBtn, { count: reauthorizeAccountCount })}
                 </ActionButton>
                 {selectedCount > 0 ? (
                   <BatchSelectionBar

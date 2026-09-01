@@ -127,8 +127,17 @@ export type BalancePoolAccountResult = {
   status: "ready" | "refresh_failed" | "not_eligible" | "import_failed";
 };
 
+/** Sanitized account identity and health data for trusted local integrations. */
+export type ManagedAccountDirectoryEntry = {
+  accountId: string;
+  email: string;
+  requiresReauthorization: boolean;
+};
+
 export type AccountImportOperations = {
   getManagedAccountEmails: () => Promise<readonly string[]>;
+  getManagedAccountDirectory?: () => Promise<readonly ManagedAccountDirectoryEntry[]>;
+  removeManagedAccount?: (accountId: string) => Promise<void>;
   startOAuthAccountImport: (options?: OAuthAccountImportOptions) => Promise<OAuthAccountImportResult>;
   cancelOAuthAccountImport?: (operationId: string) => void;
   /** Opens the standalone GPT registration page without starting an OAuth callback waiter. */
@@ -148,6 +157,10 @@ export type CodexAccountsIntegrationApi = {
   registerVirtualAccount: (registration: VirtualAccountRegistration) => Promise<vscode.Disposable>;
   /** Optional sanitized account-directory capability for integrations such as Mailbox. */
   getManagedAccountEmails?: () => Promise<readonly string[]>;
+  /** Optional sanitized account directory with the current reauthorization state. */
+  getManagedAccountDirectory?: () => Promise<readonly ManagedAccountDirectoryEntry[]>;
+  /** Optional account removal handoff for integrations that have already validated a directory entry. */
+  removeManagedAccount?: (accountId: string) => Promise<void>;
   /** Optional direct OAuth handoff; this intentionally does not open the Dashboard modal. */
   startOAuthAccountImport?: (options?: OAuthAccountImportOptions) => Promise<OAuthAccountImportResult>;
   /** Optional cancellation for an in-flight direct OAuth handoff. */
@@ -221,6 +234,12 @@ export class ManagerIntegrationHost implements vscode.Disposable {
       ...(this.accountImportOperations
         ? {
             getManagedAccountEmails: () => this.getManagedAccountEmails(),
+            ...(this.accountImportOperations.getManagedAccountDirectory
+              ? { getManagedAccountDirectory: () => this.getManagedAccountDirectory() }
+              : {}),
+            ...(this.accountImportOperations.removeManagedAccount
+              ? { removeManagedAccount: (accountId: string) => this.removeManagedAccount(accountId) }
+              : {}),
             startOAuthAccountImport: (options?: OAuthAccountImportOptions) => this.startOAuthAccountImport(options),
             ...(this.accountImportOperations.cancelOAuthAccountImport
               ? { cancelOAuthAccountImport: (operationId: string) => this.cancelOAuthAccountImport(operationId) }
@@ -248,6 +267,25 @@ export class ManagerIntegrationHost implements vscode.Disposable {
       return [];
     }
     return this.accountImportOperations.getManagedAccountEmails();
+  }
+
+  async getManagedAccountDirectory(): Promise<readonly ManagedAccountDirectoryEntry[]> {
+    this.throwIfDisposed();
+    const directory = this.accountImportOperations?.getManagedAccountDirectory;
+    if (!directory) {
+      throw new Error("Managed account directory is unavailable in this Manager build");
+    }
+    return directory();
+  }
+
+  async removeManagedAccount(accountId: string): Promise<void> {
+    this.throwIfDisposed();
+    const remove = this.accountImportOperations?.removeManagedAccount;
+    if (!remove) {
+      throw new Error("Managed account removal is unavailable in this Manager build");
+    }
+    await remove(accountId);
+    this.fireDidChange();
   }
 
   async startOAuthAccountImport(options?: OAuthAccountImportOptions): Promise<OAuthAccountImportResult> {

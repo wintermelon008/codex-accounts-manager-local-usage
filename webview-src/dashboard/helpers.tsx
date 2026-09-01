@@ -68,6 +68,13 @@ export function getDashboardVisibleAccounts(
   );
 }
 
+/** Returns real accounts currently marked as requiring OAuth reauthorization. */
+export function getReauthorizeAccountIds(accounts: readonly DashboardAccountViewModel[]): string[] {
+  return accounts.flatMap((account) =>
+    account.accountKind !== "sub2api" && account.healthKind === "reauthorize" ? [account.id] : []
+  );
+}
+
 function isAccountInVisibleGroup(account: DashboardAccountViewModel, settings: DashboardSettings): boolean {
   switch (account.accountGroup) {
     case "A":

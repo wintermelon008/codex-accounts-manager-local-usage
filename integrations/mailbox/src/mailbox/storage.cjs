@@ -2,6 +2,7 @@
 
 const crypto = require("node:crypto");
 const { normalizeMailboxAccount, normalizeMailboxAddress } = require("../core/account.cjs");
+const { isOpenAiAccountDeactivatedMessage } = require("../core/messages.cjs");
 
 // This is intentionally a new namespace. The redesign is a clean install and
 // must not accidentally read provider-specific data from the old extension.
@@ -29,12 +30,23 @@ class MailboxPool {
     this.now = now;
     this.metadata = emptyMetadata();
     this.loaded = false;
+    this.deactivationBackfillDone = false;
+    // Metadata changes are read-modify-write operations on one shared index.
+    this.metadataOperationQueue = Promise.resolve();
   }
 
   async load() {
+    return this.enqueueMetadataOperation(() => this.loadFromStore());
+  }
+
+  async loadFromStore() {
     const raw = await this.metadataStore.get(METADATA_KEY);
     this.metadata = parseMetadata(raw);
     this.loaded = true;
+    if (!this.deactivationBackfillDone) {
+      await this.backfillOpenAiAccountDeactivationFlags();
+      this.deactivationBackfillDone = true;
+    }
     return this.getMetadata();
   }
 
@@ -44,6 +56,24 @@ class MailboxPool {
 
   isLoaded() {
     return this.loaded;
+  }
+
+  async backfillOpenAiAccountDeactivationFlags() {
+    this.assertLoaded();
+    let changed = false;
+    for (const metadata of this.metadata.accounts) {
+      const detail = await this.metadataStore.get(detailKey(metadata.id));
+      const messages = normalizeStoredMessages(detail?.messages);
+      const hasDeactivationNotice = messages.some(isOpenAiAccountDeactivatedMessage);
+      if (metadata.openaiAccountDeactivated !== hasDeactivationNotice) {
+        metadata.openaiAccountDeactivated = hasDeactivationNotice;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.persistMetadata();
+    }
+    return changed;
   }
 
   getMetadata() {
@@ -94,219 +124,238 @@ class MailboxPool {
   }
 
   async importProvider({ provider, input, displayName } = {}) {
-    await this.load();
-    this.assertLoaded();
-    if (!provider || typeof provider.parseImport !== "function") {
-      throw new TypeError("A mailbox provider is required for import");
-    }
-
-    const parsed = provider.parseImport(input);
-    const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
-    const imported = [];
-    const failed = Array.isArray(parsed?.failed) ? parsed.failed.map(sanitizeImportFailure) : [];
-
-    for (const entry of entries) {
-      try {
-        const normalized = normalizeImportedEntry(entry);
-        const id = makeMailboxId(provider.id, normalized.address);
-        const previous = this.metadata.accounts.find((account) => account.id === id);
-        const timestamp = this.now();
-        await this.secretStore.store(
-          secretKey(id),
-          JSON.stringify({ providerId: provider.id, address: normalized.address, credentials: normalized.credentials })
-        );
-        const next = {
-          id,
-          providerId: provider.id,
-          address: normalized.address,
-          displayName: normalizeDisplayName(displayName, normalized.address),
-          enabled: previous?.enabled !== false,
-          createdAt: previous?.createdAt ?? timestamp,
-          updatedAt: timestamp,
-          lastQueryAt: previous?.lastQueryAt,
-          lastRenewalAt: previous?.lastRenewalAt,
-          lastStatus: previous?.lastStatus,
-          lastError: previous?.lastError,
-          latestCode: previous?.latestCode,
-          latestMessage: previous?.latestMessage,
-          messageCount: previous?.messageCount ?? 0,
-          gptRegistered: previous?.gptRegistered === true,
-          gptRegisteredAt: numberOrUndefined(previous?.gptRegisteredAt),
-          historyMode: provider.capabilities?.history === "latest" ? "latest" : "recent"
-        };
-        replaceMetadataAccount(this.metadata.accounts, next);
-        imported.push(sanitizeMetadata(next));
-      } catch (error) {
-        failed.push({ line: undefined, message: safeMessage(error, "Invalid mailbox entry") });
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      if (!provider || typeof provider.parseImport !== "function") {
+        throw new TypeError("A mailbox provider is required for import");
       }
-    }
 
-    if (imported.length > 0) {
-      await this.persistMetadata();
-    }
-    return { imported, failed };
+      const parsed = provider.parseImport(input);
+      const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
+      const imported = [];
+      const failed = Array.isArray(parsed?.failed) ? parsed.failed.map(sanitizeImportFailure) : [];
+
+      for (const entry of entries) {
+        try {
+          const normalized = normalizeImportedEntry(entry);
+          const id = makeMailboxId(provider.id, normalized.address);
+          const previous = this.metadata.accounts.find((account) => account.id === id);
+          const timestamp = this.now();
+          await this.secretStore.store(
+            secretKey(id),
+            JSON.stringify({ providerId: provider.id, address: normalized.address, credentials: normalized.credentials })
+          );
+          const next = {
+            id,
+            providerId: provider.id,
+            address: normalized.address,
+            displayName: normalizeDisplayName(displayName, normalized.address),
+            enabled: previous?.enabled !== false,
+            createdAt: previous?.createdAt ?? timestamp,
+            updatedAt: timestamp,
+            lastQueryAt: previous?.lastQueryAt,
+            lastRenewalAt: previous?.lastRenewalAt,
+            lastStatus: previous?.lastStatus,
+            lastError: previous?.lastError,
+            latestCode: previous?.latestCode,
+            latestMessage: previous?.latestMessage,
+            messageCount: previous?.messageCount ?? 0,
+            openaiAccountDeactivated: previous?.openaiAccountDeactivated === true,
+            gptRegistered: previous?.gptRegistered === true,
+            gptRegisteredAt: numberOrUndefined(previous?.gptRegisteredAt),
+            historyMode: provider.capabilities?.history === "latest" ? "latest" : "recent"
+          };
+          replaceMetadataAccount(this.metadata.accounts, next);
+          imported.push(sanitizeMetadata(next));
+        } catch (error) {
+          failed.push({ line: undefined, message: safeMessage(error, "Invalid mailbox entry") });
+        }
+      }
+
+      if (imported.length > 0) {
+        await this.persistMetadata();
+      }
+      return { imported, failed };
+    });
   }
 
   async recordQueryResult(id, result, { historyMode } = {}) {
-    await this.load();
-    this.assertLoaded();
-    const metadata = this.requireMetadata(id);
-    const timestamp = this.now();
-    metadata.lastQueryAt = timestamp;
-    metadata.updatedAt = timestamp;
-    metadata.lastStatus = result?.ok ? (result.codes?.length ? "code_found" : "ready") : "error";
-    metadata.lastError = result?.ok ? undefined : sanitizeError(result?.error);
-    if (result?.ok) {
-      const messages = normalizeStoredMessages(result.messages);
-      metadata.latestCode = firstCode(result.codes, messages);
-      metadata.latestMessage = messages[0] ? summarizeMessage(messages[0]) : undefined;
-      metadata.messageCount = messages.length;
-      if (historyMode === "latest" || historyMode === "recent") {
-        metadata.historyMode = historyMode;
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const metadata = this.requireMetadata(id);
+      const timestamp = this.now();
+      metadata.lastQueryAt = timestamp;
+      metadata.updatedAt = timestamp;
+      metadata.lastStatus = result?.ok ? (result.codes?.length ? "code_found" : "ready") : "error";
+      metadata.lastError = result?.ok ? undefined : sanitizeError(result?.error);
+      if (result?.ok) {
+        const messages = normalizeStoredMessages(result.messages);
+        metadata.openaiAccountDeactivated = messages.some(isOpenAiAccountDeactivatedMessage);
+        metadata.latestCode = firstCode(result.codes, messages);
+        metadata.latestMessage = messages[0] ? summarizeMessage(messages[0]) : undefined;
+        metadata.messageCount = messages.length;
+        if (historyMode === "latest" || historyMode === "recent") {
+          metadata.historyMode = historyMode;
+        }
+        await this.metadataStore.update(detailKey(id), {
+          mailboxId: id,
+          providerId: metadata.providerId,
+          fetchedAt: result.fetchedAt ?? new Date(timestamp).toISOString(),
+          codes: normalizeCodes(result.codes),
+          messages
+        });
       }
-      await this.metadataStore.update(detailKey(id), {
-        mailboxId: id,
-        providerId: metadata.providerId,
-        fetchedAt: result.fetchedAt ?? new Date(timestamp).toISOString(),
-        codes: normalizeCodes(result.codes),
-        messages
-      });
-    }
-    await this.persistMetadata();
-    return sanitizeMetadata(metadata);
+      await this.persistMetadata();
+      return sanitizeMetadata(metadata);
+    });
   }
 
   async recordRenewalResult(id, result) {
-    await this.load();
-    this.assertLoaded();
-    const metadata = this.requireMetadata(id);
-    const timestamp = this.now();
-    metadata.updatedAt = timestamp;
-    metadata.lastRenewalAt = timestamp;
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const metadata = this.requireMetadata(id);
+      const timestamp = this.now();
+      metadata.updatedAt = timestamp;
 
-    if (result?.ok && result.status === "updated" && result.account) {
-      const current = await this.readAccount(id);
-      if (!current) {
-        throw new Error("Mailbox credentials are unavailable");
+      if (result?.ok && result.status === "updated" && result.account) {
+        const current = await this.readAccount(id);
+        if (!current) {
+          throw new Error("Mailbox credentials are unavailable");
+        }
+        const updated = normalizeImportedEntry(result.account);
+        if (updated.address.toLowerCase() !== metadata.address.toLowerCase()) {
+          throw new Error("Provider renewal changed the mailbox address");
+        }
+        await this.secretStore.store(
+          secretKey(id),
+          JSON.stringify({ providerId: metadata.providerId, address: metadata.address, credentials: updated.credentials })
+        );
+        metadata.lastRenewalAt = timestamp;
+        metadata.lastStatus = "renewed";
+        metadata.lastError = undefined;
+      } else if (result?.ok && result.status === "unchanged") {
+        metadata.lastStatus = "unchanged";
+        metadata.lastError = undefined;
+      } else {
+        metadata.lastStatus = "error";
+        metadata.lastError = sanitizeError(result?.error);
       }
-      const updated = normalizeImportedEntry(result.account);
-      if (updated.address.toLowerCase() !== metadata.address.toLowerCase()) {
-        throw new Error("Provider renewal changed the mailbox address");
-      }
-      await this.secretStore.store(
-        secretKey(id),
-        JSON.stringify({ providerId: metadata.providerId, address: metadata.address, credentials: updated.credentials })
-      );
-      metadata.lastStatus = "renewed";
-      metadata.lastError = undefined;
-    } else if (result?.ok && result.status === "unchanged") {
-      metadata.lastStatus = "unchanged";
-      metadata.lastError = undefined;
-    } else {
-      metadata.lastStatus = "error";
-      metadata.lastError = sanitizeError(result?.error);
-    }
 
-    await this.persistMetadata();
-    return sanitizeMetadata(metadata);
+      await this.persistMetadata();
+      return sanitizeMetadata(metadata);
+    });
   }
 
   async setDisplayName(id, displayName) {
-    await this.load();
-    this.assertLoaded();
-    const metadata = this.requireMetadata(id);
-    metadata.displayName = normalizeDisplayName(displayName, metadata.address);
-    metadata.updatedAt = this.now();
-    await this.persistMetadata();
-    return sanitizeMetadata(metadata);
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const metadata = this.requireMetadata(id);
+      metadata.displayName = normalizeDisplayName(displayName, metadata.address);
+      metadata.updatedAt = this.now();
+      await this.persistMetadata();
+      return sanitizeMetadata(metadata);
+    });
   }
 
   async markGptRegistered(id) {
-    await this.load();
-    this.assertLoaded();
-    const metadata = this.requireMetadata(id);
-    if (metadata.gptRegistered !== true) {
-      metadata.gptRegistered = true;
-      metadata.gptRegisteredAt = numberOrUndefined(metadata.gptRegisteredAt) ?? this.now();
-      metadata.updatedAt = this.now();
-      await this.persistMetadata();
-    }
-    return sanitizeMetadata(metadata);
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const metadata = this.requireMetadata(id);
+      if (metadata.gptRegistered !== true) {
+        metadata.gptRegistered = true;
+        metadata.gptRegisteredAt = numberOrUndefined(metadata.gptRegisteredAt) ?? this.now();
+        metadata.updatedAt = this.now();
+        await this.persistMetadata();
+      }
+      return sanitizeMetadata(metadata);
+    });
   }
 
   async updateAccount(id, { provider, providerId, input, displayName } = {}) {
-    await this.load();
-    this.assertLoaded();
-    const metadata = this.requireMetadata(id);
-    const replacement = typeof input === "string" && input.trim() ? input.trim() : undefined;
-    const nextProviderId = typeof providerId === "string" && providerId ? providerId : metadata.providerId;
-    const providerChanged = nextProviderId !== metadata.providerId;
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const metadata = this.requireMetadata(id);
+      const replacement = typeof input === "string" && input.trim() ? input.trim() : undefined;
+      const nextProviderId = typeof providerId === "string" && providerId ? providerId : metadata.providerId;
+      const providerChanged = nextProviderId !== metadata.providerId;
 
-    if (providerChanged || replacement) {
-      if (!provider || provider.id !== nextProviderId || typeof provider.parseImport !== "function") {
-        throw new Error("Mailbox provider is unavailable for credential editing");
+      if (providerChanged || replacement) {
+        if (!provider || provider.id !== nextProviderId || typeof provider.parseImport !== "function") {
+          throw new Error("Mailbox provider is unavailable for credential editing");
+        }
+        if (!replacement) {
+          throw new Error("切换邮箱来源 / 格式时必须填写凭据");
+        }
+        const parsed = provider.parseImport(replacement);
+        const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
+        const failed = Array.isArray(parsed?.failed) ? parsed.failed : [];
+        if (failed.length > 0 || entries.length !== 1) {
+          throw new Error("替换凭据时必须提供一行有效的邮箱来源格式");
+        }
+        const normalized = normalizeImportedEntry(entries[0]);
+        if (normalized.address.toLowerCase() !== metadata.address.toLowerCase()) {
+          throw new Error("编辑凭据不能更改邮箱地址；如需新增地址，请重新导入");
+        }
+        await this.secretStore.store(
+          secretKey(id),
+          JSON.stringify({ providerId: nextProviderId, address: metadata.address, credentials: normalized.credentials })
+        );
+        if (providerChanged) {
+          await this.metadataStore.update(detailKey(id), undefined);
+          metadata.latestCode = undefined;
+          metadata.latestMessage = undefined;
+          metadata.messageCount = 0;
+          metadata.openaiAccountDeactivated = false;
+          metadata.lastStatus = undefined;
+          metadata.lastError = undefined;
+          metadata.lastQueryAt = undefined;
+          metadata.lastRenewalAt = undefined;
+        }
+        metadata.providerId = nextProviderId;
+        metadata.historyMode = provider.capabilities?.history === "latest" ? "latest" : "recent";
       }
-      if (!replacement) {
-        throw new Error("切换邮箱来源 / 格式时必须填写凭据");
-      }
-      const parsed = provider.parseImport(replacement);
-      const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
-      const failed = Array.isArray(parsed?.failed) ? parsed.failed : [];
-      if (failed.length > 0 || entries.length !== 1) {
-        throw new Error("替换凭据时必须提供一行有效的邮箱来源格式");
-      }
-      const normalized = normalizeImportedEntry(entries[0]);
-      if (normalized.address.toLowerCase() !== metadata.address.toLowerCase()) {
-        throw new Error("编辑凭据不能更改邮箱地址；如需新增地址，请重新导入");
-      }
-      await this.secretStore.store(
-        secretKey(id),
-        JSON.stringify({ providerId: nextProviderId, address: metadata.address, credentials: normalized.credentials })
-      );
-      if (providerChanged) {
-        await this.metadataStore.update(detailKey(id), undefined);
-        metadata.latestCode = undefined;
-        metadata.latestMessage = undefined;
-        metadata.messageCount = 0;
-        metadata.lastStatus = undefined;
-        metadata.lastError = undefined;
-        metadata.lastQueryAt = undefined;
-        metadata.lastRenewalAt = undefined;
-      }
-      metadata.providerId = nextProviderId;
-      metadata.historyMode = provider.capabilities?.history === "latest" ? "latest" : "recent";
-    }
 
-    metadata.displayName = normalizeDisplayName(displayName, metadata.address);
-    metadata.updatedAt = this.now();
-    await this.persistMetadata();
-    return sanitizeMetadata(metadata);
+      metadata.displayName = normalizeDisplayName(displayName, metadata.address);
+      metadata.updatedAt = this.now();
+      await this.persistMetadata();
+      return sanitizeMetadata(metadata);
+    });
   }
 
   async deleteAccount(id) {
-    await this.load();
-    this.assertLoaded();
-    const index = this.metadata.accounts.findIndex((account) => account.id === id);
-    if (index === -1) {
-      throw new Error("Mailbox is not in the provider-neutral pool");
-    }
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const index = this.metadata.accounts.findIndex((account) => account.id === id);
+      if (index === -1) {
+        throw new Error("Mailbox is not in the provider-neutral pool");
+      }
 
-    // Remove private material before removing the public index entry. If a
-    // storage operation fails, the account remains visible for recovery.
-    await this.secretStore.delete(secretKey(id));
-    await this.metadataStore.update(detailKey(id), undefined);
-    this.metadata.accounts.splice(index, 1);
-    await this.persistMetadata();
+      // Remove private material before removing the public index entry. If a
+      // storage operation fails, the account remains visible for recovery.
+      await this.secretStore.delete(secretKey(id));
+      await this.metadataStore.update(detailKey(id), undefined);
+      this.metadata.accounts.splice(index, 1);
+      await this.persistMetadata();
+    });
   }
 
   async setEnabled(id, enabled) {
-    await this.load();
-    this.assertLoaded();
-    const metadata = this.requireMetadata(id);
-    metadata.enabled = enabled === true;
-    metadata.updatedAt = this.now();
-    await this.persistMetadata();
-    return sanitizeMetadata(metadata);
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const metadata = this.requireMetadata(id);
+      metadata.enabled = enabled === true;
+      metadata.updatedAt = this.now();
+      await this.persistMetadata();
+      return sanitizeMetadata(metadata);
+    });
   }
 
   async readAccount(id) {
@@ -338,6 +387,13 @@ class MailboxPool {
 
   async persistMetadata() {
     await this.metadataStore.update(METADATA_KEY, this.metadata);
+  }
+
+  enqueueMetadataOperation(operation) {
+    // Provider calls may run in parallel; their shared metadata read-modify-write needs ordering.
+    const next = this.metadataOperationQueue.then(operation, operation);
+    this.metadataOperationQueue = next.catch(() => undefined);
+    return next;
   }
 
   assertLoaded() {
@@ -404,6 +460,7 @@ function sanitizeMetadata(entry) {
     latestCode: typeof entry.latestCode === "string" ? entry.latestCode : undefined,
     latestMessage: entry.latestMessage ? summarizeMessage(entry.latestMessage) : undefined,
     messageCount: Number.isFinite(entry.messageCount) ? Math.max(0, Math.floor(entry.messageCount)) : 0,
+    openaiAccountDeactivated: entry.openaiAccountDeactivated === true,
     gptRegistered: entry.gptRegistered === true,
     gptRegisteredAt: numberOrUndefined(entry.gptRegisteredAt),
     historyMode: entry.historyMode === "latest" ? "latest" : "recent"
