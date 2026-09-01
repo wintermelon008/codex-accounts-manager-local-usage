@@ -2,6 +2,31 @@
   "version": "1.0",
   "announcements": [
     {
+      "id": "ann-2026-09-codex-accounts-0-1-18-l1-dashboard-usage-mailbox",
+      "type": "fix",
+      "priority": 700,
+      "releaseVersion": "0.1.18-l1",
+      "title": "Codex Accounts Manager 0.1.18-l1 — dashboard, switching, usage, and mailbox fixes",
+      "summary": "Stabilizes account ordering and switching, fixes local subagent usage attribution, and gates blocked-account cleanup on Mailbox evidence.",
+      "content": "This local release improves account management and usage accounting.\n1. Dashboard ordering and controls: sort saved accounts by email name, import time, remaining quota, or the displayed quota reset time in either direction. The current window account and active account stay at the front, with stable tie-breaking; batch selection can be cleared at once, and card-only tag/status-bar/sync/details controls are removed.\n2. Switching performance and selection: account-level credential caches are invalidated instead of rereading every account, the current window identity updates after a switch, missing OAuth credentials are reported as reauthorization, and seamless switching prefers the first account in the same pool and plan priority Pro > Plus > Free.\n3. Local usage accounting: spawned subagents without trigger or task-boundary metadata now distinguish dense copied startup history from short real rollouts, preserve account attribution, and recover after cumulative counters reset.\n4. Mailbox safety: Remove blocked accounts appears only when the Mailbox integration is registered and usable, and only targets accounts that both require reauthorization and match a Mailbox address marked with an OpenAI account deactivated notice.\n5. Gateway visibility: the optional Sub2API card is hidden by default.",
+      "targetVersions": "*",
+      "targetLanguages": [
+        "*"
+      ],
+      "showOnce": true,
+      "popup": true,
+      "pinned": true,
+      "createdAt": "2026-09-02T00:00:00Z",
+      "expiresAt": null,
+      "locales": {
+        "zh": {
+          "title": "Codex Accounts Manager 0.1.18-l1 — Dashboard、切号、用量与 Mailbox 修复",
+          "summary": "稳定账号排序和切换，修复本地 subagent 用量归因，并让封禁账号清理依赖 Mailbox 证据。",
+          "content": "本地版本改进账号管理与用量统计。\n1. Dashboard 排序与操作：支持按邮箱名称、导入时间、剩余额度和显示的额度重置时间双向排序；当前窗口账号和启用账号固定在前面，同值排序稳定；多选支持一键取消全部选择，并移除卡片专属的标签、状态栏、同步和详情按钮。\n2. 切号性能与选择：账号级凭据缓存按账号失效，避免每次切换重新读取所有账号；切换后同步当前窗口身份；缺少 OAuth 凭据时标记为需要重新授权；无感切号按同池内 Pro > Plus > Free 和池顺序选择首个账号。\n3. 本地用量统计：没有 trigger 或任务边界标记的 spawned subagent 会区分启动时密集复制历史与短任务真实用量，保留账号归因，并在累计计数器回退后恢复统计。\n4. Mailbox 安全清理：只有 Mailbox 已注册且可用时才显示“删除封禁账号”，并且只处理同时需要重新授权、且对应邮箱已标记收到 OpenAI account deactivated 邮件的账号。\n5. Gateway 展示：Sub2API 可选卡片默认隐藏。"
+        }
+      }
+    },
+    {
       "id": "ann-2026-08-codex-tools-0-1-18-chatgpt-free-quota",
       "type": "fix",
       "priority": 600,

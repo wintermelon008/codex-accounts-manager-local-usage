@@ -19,14 +19,14 @@ npm --prefix integrations/sub2api-gateway run package
 
 在 VS Code 中使用 **Extensions: Install from VSIX…** 选择该包 `dist/` 中生成的 VSIX。安装后，重载窗口；Gateway 会通过 Manager 的版本化公开 API 注册虚拟账号卡片和一个动态设置项。Manager 未检测到该扩展时不会显示这个设置项。
 
-在 `Sub2API Gateway` 账号卡片中依次执行：
+安装并重载后，Sub2API Gateway 账号卡片默认不显示；如需使用，在 Manager 设置中打开“显示 Sub2API 账号卡片”，再在该账号卡片中依次执行：
 
 1. 选择“打开配置”，在本扩展自己的 VS Code 全局存储中创建示例配置。
 2. 将占位的下游地址、模型和逻辑密钥引用替换为目标设备自己的值。
 3. 选择“保存下游密钥”；填入可调用 `/v1` 的普通 API Key，而不是 Sub2API 管理端登录令牌。若复制的是完整 `Bearer <key>` 请求头，扩展会去除前缀；密钥只存入此可选扩展的 SecretStorage。
 4. 选择“使用 Sub2API”。首次安装 runtime 仍按提示重载窗口一次；runtime 已运行后，ChatGPT Auth ↔ Sub2API 的手动切换均不需要 reload。
 
-账号卡片会按本扩展 tracker 的真实完成 token 显示 5 小时、7 天和今日用量，并根据配置模型按内置标准 API 单价估算价格；没有观察到 token 时显示“尚未观察到”，不会用 `0` 或 `unlimited` 伪造余额。卡片内的“保存下游密钥”“刷新”“打开配置”动作仍由 Gateway 扩展执行，Manager 只渲染脱敏结果。设置中的“显示 Sub2API 账号卡片”开关只控制该虚拟账号卡片是否出现在 Dashboard，不会启用、停用或切换 Gateway 路由；路由仍通过账号卡片或手动切换列表操作。
+账号卡片会按本扩展 tracker 的真实完成 token 显示 5 小时、7 天和今日用量，并根据配置模型按内置标准 API 单价估算价格；没有观察到 token 时显示“尚未观察到”，不会用 `0` 或 `unlimited` 伪造余额。卡片内的“保存下游密钥”“刷新”“打开配置”动作仍由 Gateway 扩展执行，Manager 只渲染脱敏结果。设置中的“显示 Sub2API 账号卡片”开关默认关闭，只控制该虚拟账号卡片是否出现在 Dashboard，不会启用、停用或切换 Gateway 路由；路由仍通过账号卡片或手动切换列表操作。
 
 虚拟账号只在 Manager 索引中保存下游入口描述（Base URL、模型、`credentialRef`）以及 `accountKind: "sub2api"`、`manualOnly: true` 能力标记。下游 API Key 继续只存放在本扩展 SecretStorage；Manager 不读取、映射或展示 Sub2API 上游账号，不向 `auth.json` 写入虚拟 OAuth token。虚拟账号卡片显示 `Gateway · 手动`，隐藏额度窗口、订阅、quota error、token 健康和重新授权操作。
 
