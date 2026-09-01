@@ -41,7 +41,7 @@ class Sub2ApiGatewayIntegration {
     this.credentialPresent = false;
     this.observerCredentialPresent = false;
     this.selection = "inactive";
-    this.cardVisible = true;
+    this.cardVisible = false;
     this.runtimeTimer = undefined;
     this.inventoryTimer = undefined;
     this.refreshingInventory = undefined;
@@ -55,7 +55,7 @@ class Sub2ApiGatewayIntegration {
     this.gateway = this.api.registerGateway(INTEGRATION_ID);
     this.selection = readSelection(this.context.globalState.get(SELECTION_STATE_KEY));
     this.profileId = readProfileId(this.context.globalState.get(PROFILE_ID_STATE_KEY));
-    this.cardVisible = readBoolean(this.context.globalState.get(CARD_VISIBILITY_STATE_KEY), true);
+    this.cardVisible = readBoolean(this.context.globalState.get(CARD_VISIBILITY_STATE_KEY), false);
     await this.reloadConfiguration(true);
     await this.syncVirtualAccountRegistration();
     if (this.selection === "active" && this.config) {
