@@ -28,4 +28,27 @@ describe("account health", () => {
       message: "Token refresh failed (401)"
     });
   });
+
+  it("marks accounts without usable OAuth credentials for reauthorization", () => {
+    const account: CodexAccountRecord = {
+      id: "account-2",
+      email: "missing@example.com",
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 100
+    };
+
+    const health = resolveAccountHealth(account, undefined, {
+      enabled: true,
+      intervalMs: 300_000,
+      skewSeconds: 300,
+      accounts: {}
+    });
+
+    expect(health).toEqual({
+      kind: "reauthorize",
+      issueKey: "reauthorize:credentials_missing",
+      message: "Codex OAuth credentials are missing"
+    });
+  });
 });

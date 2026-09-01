@@ -151,6 +151,23 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).toContain("account-page-jump-input");
   });
 
+  it("renders account sorting as a field selector with a separate direction toggle", () => {
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+    const helpers = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/helpers.tsx"), "utf8");
+
+    expect(main).toContain('class="account-sort-select"');
+    expect(main).toContain('class="account-sort-direction"');
+    expect(main).toContain("ACCOUNT_SORT_KEYS");
+    expect(main).toContain("useState<DashboardAccountSort>({");
+    expect(main).toContain('key: "createdAt",');
+    expect(main).toContain('direction: "desc"');
+    expect(main).not.toContain("默认顺序");
+    expect(main).not.toContain("setAccountSort(undefined)");
+    expect(helpers).toContain("getQuotaResetAt");
+    expect(helpers).toContain("metric.resetAt");
+    expect(helpers).toContain("getDashboardAccountActivityRank");
+  });
+
   it("exposes a per-account seamless-switch pool toggle at the left of the card action row", () => {
     const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
     const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
@@ -163,6 +180,20 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(actions).toContain('onAction("toggleBalancePool", account.id)');
     expect(stylesheet).toContain(".saved-pool-toggle");
     expect(stylesheet).toContain("margin-right: auto");
+  });
+
+  it("removes card-only tag, status-bar, sync, and details action buttons", () => {
+    const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+
+    expect(card).not.toContain("saved-top-actions");
+    expect(card).not.toContain("saved-edit-tags-btn");
+    expect(card).not.toContain('onAction("toggleStatusBar", account.id)');
+    expect(card).not.toContain('onAction("resyncProfile", account.id)');
+    expect(card).not.toContain('onAction("details", account.id');
+    expect(main).not.toContain("onEditTags={() => handleEditAccountTags(account)}");
+    expect(main).toContain("isMailboxIntegrationActive(snapshot.integrations)");
+    expect(main).toContain("mailboxIntegrationActive && blockedAccountCount > 0");
   });
 
   it("renders Gateway profile choices as a compact card dropdown", () => {

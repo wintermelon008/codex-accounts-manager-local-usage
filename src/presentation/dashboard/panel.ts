@@ -19,6 +19,7 @@ import { clearDashboardCodexAppPath, dispatchDashboardClientMessage } from "./me
 import { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
+import { clearDashboardAccountOrder, getDashboardAccountOrder, setDashboardAccountOrder } from "./accountOrder";
 
 const DASHBOARD_VIEW_TYPE = "codexQuotaSummary";
 export const DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS = 1_000;
@@ -54,6 +55,9 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
     localUsage,
     accountTokenUsage
   );
+  if (getDashboardAccountOrder() === undefined) {
+    setDashboardAccountOrder(state.accounts.map((account) => account.id));
+  }
   void backfillMissingResetCreditExpiries(params.repo, state.accounts, params.schedulePublishState).catch(
     () => undefined
   );
@@ -114,6 +118,7 @@ class DashboardPanelController {
         this.oauth.dispose();
         this.configWatcher?.dispose();
         this.configWatcher = undefined;
+        clearDashboardAccountOrder();
         this.lastPublishedStateSignature = undefined;
         this.panel = undefined;
         this.webviewReady = false;
@@ -124,6 +129,9 @@ class DashboardPanelController {
           onReady: () => {
             this.webviewReady = true;
             this.schedulePublishState();
+          },
+          onAccountOrder: (accountIds) => {
+            setDashboardAccountOrder(accountIds);
           },
           onAction: async (actionMessage) => {
             await this.handleActionMessage(actionMessage);

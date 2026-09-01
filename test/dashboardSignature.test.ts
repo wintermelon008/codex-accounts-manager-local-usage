@@ -11,6 +11,7 @@ function createState(overrides?: {
   tokenUsage?: { totalTokens: number; resetAt: number };
   quotaCountdownStartAvailable?: boolean;
   metricWindowMinutes?: number;
+  mailboxDeactivated?: boolean;
 }): DashboardState {
   return {
     lang: "zh",
@@ -79,6 +80,7 @@ function createState(overrides?: {
         balancePoolEnabled: false,
         showInStatusBar: false,
         healthKind: "healthy",
+        mailboxDeactivated: overrides?.mailboxDeactivated ?? false,
         dismissedHealth: false,
         metrics:
           overrides?.metricWindowMinutes == null
@@ -127,6 +129,12 @@ describe("buildDashboardStateSignature", () => {
   it("changes when an account is hidden or unhidden", () => {
     expect(buildDashboardStateSignature(createState({ isHidden: true }))).not.toBe(
       buildDashboardStateSignature(createState({ isHidden: false }))
+    );
+  });
+
+  it("changes when the Mailbox deactivation marker changes", () => {
+    expect(buildDashboardStateSignature(createState({ mailboxDeactivated: true }))).not.toBe(
+      buildDashboardStateSignature(createState({ mailboxDeactivated: false }))
     );
   });
 

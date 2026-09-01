@@ -61,6 +61,9 @@ export class WorkbenchRefreshCoordinator {
       },
       markObservedAuthIdentity: (accountId?: string): void => {
         this.lastObservedAuthIdentity = accountId;
+        // Dashboard cards use this per-window runtime identity to show the
+        // account that actually owns this window after a seamless switch.
+        setCurrentWindowRuntimeAccountId(accountId);
       }
     };
   }
@@ -125,7 +128,10 @@ export class WorkbenchRefreshCoordinator {
           return;
         }
         syncInFlight = true;
-        this.repo.invalidateExternalStateCaches();
+        // syncActiveAccountFromAuthFile reads the changed auth.json directly
+        // and invalidates that account if its tokens changed. Keep unrelated
+        // Dashboard token entries warm during this external-file refresh.
+        this.repo.invalidateExternalStateCaches({ invalidateTokens: false });
         void this.syncActiveAccountFromExternalChange(
           view,
           () => {
@@ -215,6 +221,7 @@ export class WorkbenchRefreshCoordinator {
         async () => {
           const account = await this.repo.importCurrentAuth();
           this.lastObservedAuthIdentity = account.id;
+          setCurrentWindowRuntimeAccountId(account.id);
           const result = await refreshImportedAccountQuota(this.repo, account.id);
           view.refresh();
           await promptWindowReloadForAccount(account);
@@ -279,6 +286,7 @@ export class WorkbenchRefreshCoordinator {
         status: "unavailable" as const
       };
       if (runtimeOutcome.status === "switched") {
+        setCurrentWindowRuntimeAccountId(nextActive.id);
         return false;
       }
       if (runtimeOutcome.status === "deferred") {

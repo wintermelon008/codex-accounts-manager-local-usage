@@ -78,6 +78,25 @@ function createTokens(
   };
 }
 
+function createTokensWithEnvelopeAccountId(
+  accountId = "acct_123",
+  email = "dev@example.com",
+  userId = "user_123"
+): CodexTokens {
+  const authPayload = { user_id: userId };
+  return {
+    idToken: createJwt({
+      email,
+      "https://api.openai.com/auth": authPayload
+    }),
+    accessToken: createJwt({
+      "https://api.openai.com/auth": authPayload
+    }),
+    refreshToken: "refresh-token",
+    accountId
+  };
+}
+
 async function writeAideckAccountJson(accountId: string, value: Record<string, unknown>): Promise<void> {
   const root = path.join(process.env.AIDECK_DATA_DIR as string, "accounts", "codex");
   const accountFile = path.join(root, "accounts", `${accountId}.json`);
@@ -576,6 +595,70 @@ describe("AccountsRepository token persistence", () => {
     repo.dispose();
   });
 
+  it("accepts Aideck credentials whose account ID is only in mirror metadata", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const storageId = buildAccountStorageId("dev@example.com", "acct_envelope", undefined);
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [
+          {
+            id: storageId,
+            email: "dev@example.com",
+            userId: "user_envelope",
+            accountId: "acct_envelope",
+            isActive: false,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+
+    const externalTokens = createTokensWithEnvelopeAccountId("acct_envelope", "dev@example.com", "user_envelope");
+    await writeAideckAccountJson(storageId, {
+      id: storageId,
+      email: "dev@example.com",
+      user_id: "user_envelope",
+      account_id: "acct_envelope",
+      tokens: {
+        id_token: externalTokens.idToken,
+        access_token: externalTokens.accessToken,
+        refresh_token: "aideck-refresh-token",
+        account_id: "acct_envelope"
+      }
+    });
+
+    const repo = new AccountsRepository(context);
+    const merged = await repo.getTokens(storageId);
+
+    expect(merged?.idToken).toBe(externalTokens.idToken);
+    expect(merged?.accessToken).toBe(externalTokens.accessToken);
+    expect(merged?.refreshToken).toBe("aideck-refresh-token");
+    expect(merged?.accountId).toBe("acct_envelope");
+    expect(JSON.parse(secrets.get(`codex.account.${storageId}`) ?? "{}")).toMatchObject({
+      refreshToken: "aideck-refresh-token",
+      accountId: "acct_envelope"
+    });
+
+    repo.dispose();
+  });
+
   it("does not let the token TTL hide a mirror update from another host", async () => {
     const secrets = new Map<string, string>();
     const context = {
@@ -635,6 +718,57 @@ describe("AccountsRepository token persistence", () => {
       refreshToken: "external-refresh-token"
     });
 
+    repo.dispose();
+  });
+
+  it("keeps unrelated token cache entries warm after removing one account", async () => {
+    const secrets = new Map<string, string>();
+    const getSecret = vi.fn(async (key: string) => secrets.get(key));
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: getSecret,
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const first = createTokens("acct_first", "first@example.com");
+    const second = createTokens("acct_second", "second@example.com");
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [
+          { id: "first", email: "first@example.com", accountId: "acct_first", isActive: false, createdAt: 1, updatedAt: 1 },
+          {
+            id: "second",
+            email: "second@example.com",
+            accountId: "acct_second",
+            isActive: false,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+    await context.secrets.store("codex.account.first", JSON.stringify(first));
+    await context.secrets.store("codex.account.second", JSON.stringify(second));
+
+    const repo = new AccountsRepository(context);
+    await repo.getTokens("first");
+    await repo.getTokens("second");
+    expect(getSecret).toHaveBeenCalledTimes(2);
+
+    await repo.removeAccount("first");
+
+    expect((await repo.getTokens("second"))?.accountId).toBe("acct_second");
+    expect(getSecret).toHaveBeenCalledTimes(2);
     repo.dispose();
   });
 

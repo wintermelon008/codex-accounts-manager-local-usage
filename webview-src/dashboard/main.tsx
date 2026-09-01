@@ -1,12 +1,11 @@
 import { render } from "preact";
-import { useEffect, useMemo, useReducer, useState } from "preact/hooks";
+import { useEffect, useMemo, useReducer, useRef, useState } from "preact/hooks";
 import packageJson from "../../package.json";
 import type { CodexAccountGroup } from "../../src/core/types";
 import {
   DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS,
   DASHBOARD_ACCOUNTS_PAGE_SIZE,
   type DashboardAccountPageSize,
-  type DashboardAccountViewModel,
   type DashboardAccountPlanFilter,
   type DashboardSettingKey
 } from "../../src/domain/dashboard/types";
@@ -20,10 +19,14 @@ import {
   getHighWeeklyQuotaHiddenAccountIds,
   getLowWeeklyQuotaAccountIds,
   getDashboardVisibleAccounts,
-  getReauthorizeAccountIds,
+  getBlockedAccountIds,
+  isMailboxIntegrationActive,
   normalizeThresholds,
   resolveLockMinutes,
-  resolveOverviewAccount
+  resolveOverviewAccount,
+  sortDashboardAccountsForDisplay,
+  type DashboardAccountSort,
+  type DashboardAccountSortKey
 } from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
 import { BellIcon, BugTeamIcon, EyeIcon, EyeOffIcon, GitHubIcon, GlobeIcon, InfoIcon, MailIcon } from "./icons";
@@ -37,6 +40,7 @@ import { resolveDashboardThemeFromMedia } from "./theme";
 const GITHUB_PROJECT_URL = "https://github.com/wannanbigpig/codex-tools";
 const ACCOUNT_GROUPS: readonly CodexAccountGroup[] = ["A", "B", "C"];
 const ACCOUNT_PLAN_FILTERS: readonly DashboardAccountPlanFilter[] = ["free", "plus", "pro"];
+const ACCOUNT_SORT_KEYS: readonly DashboardAccountSortKey[] = ["name", "createdAt", "quota", "quotaUpdatedAt"];
 
 type SeamlessSwitchGroupVisibilityKey = Extract<
   DashboardSettingKey,
@@ -56,10 +60,15 @@ function getAccountGroupVisibilityKey(group: CodexAccountGroup): SeamlessSwitchG
 
 function App() {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
+  const lastDashboardAccountOrderRef = useRef("");
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
   const [selectedPlanFilters, setSelectedPlanFilters] = useState<DashboardAccountPlanFilter[]>([]);
+  const [accountSort, setAccountSort] = useState<DashboardAccountSort>({
+    key: "createdAt",
+    direction: "desc"
+  });
   const [accountsPage, setAccountsPage] = useState(1);
   const [accountsPageSize, setAccountsPageSize] = useState<DashboardAccountPageSize>(DASHBOARD_ACCOUNTS_PAGE_SIZE);
   const [accountPageJumpInput, setAccountPageJumpInput] = useState("");
@@ -68,13 +77,19 @@ function App() {
     dispatch
   );
   const snapshot = state.snapshot;
-  const displayedAccounts = useMemo(
-    () =>
-      snapshot
-        ? getDashboardVisibleAccounts(snapshot.accounts, snapshot.settings, showHiddenAccounts, selectedPlanFilters)
-        : [],
-    [selectedPlanFilters, showHiddenAccounts, snapshot]
-  );
+  const displayedAccounts = useMemo(() => {
+    if (!snapshot) {
+      return [];
+    }
+
+    const visibleAccounts = getDashboardVisibleAccounts(
+      snapshot.accounts,
+      snapshot.settings,
+      showHiddenAccounts,
+      selectedPlanFilters
+    );
+    return sortDashboardAccountsForDisplay(visibleAccounts, accountSort);
+  }, [accountSort, selectedPlanFilters, showHiddenAccounts, snapshot]);
   const modals = useDashboardModals({
     dispatch,
     sendAction,
@@ -108,6 +123,7 @@ function App() {
     setAccountsPage(1);
   }, [
     selectedPlanFilters,
+    accountSort,
     showHiddenAccounts,
     snapshot?.settings.seamlessSwitchGroupAVisible,
     snapshot?.settings.seamlessSwitchGroupBVisible,
@@ -129,6 +145,23 @@ function App() {
       visibleAccountIds: displayedAccounts.map((account) => account.id)
     });
   }, [dispatch, displayedAccounts]);
+
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+
+    const accountIds = sortDashboardAccountsForDisplay(snapshot.accounts, accountSort).map((account) => account.id);
+    const orderSignature = accountIds.join("\u0000");
+    if (lastDashboardAccountOrderRef.current === orderSignature) {
+      return;
+    }
+    lastDashboardAccountOrderRef.current = orderSignature;
+    postMessageToHost({
+      type: "dashboard:account-order",
+      accountIds
+    });
+  }, [accountSort, snapshot]);
 
   if (!snapshot) {
     return (
@@ -153,8 +186,9 @@ function App() {
     snapshot.accounts,
     snapshot.settings.unhideWeeklyQuotaThreshold
   );
-  const reauthorizeAccountIds = getReauthorizeAccountIds(snapshot.accounts);
-  const reauthorizeAccountCount = reauthorizeAccountIds.length;
+  const blockedAccountIds = getBlockedAccountIds(snapshot.accounts);
+  const blockedAccountCount = blockedAccountIds.length;
+  const mailboxIntegrationActive = isMailboxIntegrationActive(snapshot.integrations);
   const hiddenAccountsToggleLabel = resolveHiddenAccountsToggleLabel(
     snapshot.lang,
     showHiddenAccounts,
@@ -233,6 +267,13 @@ function App() {
     );
   };
 
+  const handleAccountSort = (key: DashboardAccountSortKey): void => {
+    setAccountsPage(1);
+    setAccountSort((current) =>
+      current.key === key ? { key, direction: current.direction === "asc" ? "desc" : "asc" } : { key, direction: "asc" }
+    );
+  };
+
   const selectedAccountIds = new Set(state.selectedAccountIds);
   const selectedCount = state.selectedAccountIds.length;
   const isAccountBusy = (accountId: string): boolean =>
@@ -280,12 +321,6 @@ function App() {
       return;
     }
     sendAction("shareTokens", undefined, { accountIds: state.selectedAccountIds });
-  };
-
-  const handleEditAccountTags = (account: DashboardAccountViewModel): void => {
-    sendAction("updateTags", account.id, {
-      mode: "set"
-    });
   };
 
   const handleAutoSwitchLock = (): void => {
@@ -492,6 +527,45 @@ function App() {
                 <div class="header-sub">{snapshot.copy.savedAccountsSub}</div>
               </div>
               <div class="saved-accounts-header-actions">
+                <div
+                  class="account-sort-controls"
+                  role="group"
+                  aria-label={resolveAccountSortGroupLabel(snapshot.lang)}
+                >
+                  <label class="account-sort-label" for="account-sort-select">
+                    {resolveAccountSortGroupLabel(snapshot.lang)}
+                  </label>
+                  <select
+                    id="account-sort-select"
+                    class="account-sort-select"
+                    value={accountSort.key}
+                    aria-label={resolveAccountSortSelectLabel(snapshot.lang)}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      const nextKey = ACCOUNT_SORT_KEYS.find((candidate) => candidate === value);
+                      if (nextKey) {
+                        handleAccountSort(nextKey);
+                      }
+                    }}
+                  >
+                    {ACCOUNT_SORT_KEYS.map((key) => (
+                      <option key={key} value={key}>
+                        {resolveAccountSortName(snapshot.lang, key)}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    class="account-sort-direction"
+                    type="button"
+                    title={resolveAccountSortDirectionLabel(snapshot.lang, accountSort)}
+                    aria-label={resolveAccountSortDirectionLabel(snapshot.lang, accountSort)}
+                    onClick={() => handleAccountSort(accountSort.key)}
+                  >
+                    <span class="account-sort-arrow" aria-hidden="true">
+                      {accountSort.direction === "desc" ? "▼" : "▲"}
+                    </span>
+                  </button>
+                </div>
                 <div class="account-group-filters" aria-label={resolveAccountGroupFiltersLabel(snapshot.lang)}>
                   {ACCOUNT_GROUPS.map((group) => {
                     const key = getAccountGroupVisibilityKey(group);
@@ -594,23 +668,25 @@ function App() {
                     snapshot.settings.unhideWeeklyQuotaThreshold
                   )}
                 </ActionButton>
-                <ActionButton
-                  class="toolbar-btn danger"
-                  pending={batchRemovePending}
-                  disabled={
-                    reauthorizeAccountCount === 0 ||
-                    hasGlobalPendingAction ||
-                    snapshot.indexHealth.status === "corrupted_unrecoverable"
-                  }
-                  onClick={() => sendAction("batchRemove", undefined, { accountIds: reauthorizeAccountIds })}
-                >
-                  {formatTemplate(snapshot.copy.removeDeactivatedAccountsBtn, { count: reauthorizeAccountCount })}
-                </ActionButton>
+                {mailboxIntegrationActive && blockedAccountCount > 0 ? (
+                  <ActionButton
+                    class="toolbar-btn danger"
+                    pending={batchRemovePending}
+                    disabled={
+                      hasGlobalPendingAction ||
+                      snapshot.indexHealth.status === "corrupted_unrecoverable"
+                    }
+                    onClick={() => sendAction("batchRemove", undefined, { accountIds: blockedAccountIds })}
+                  >
+                    {formatTemplate(snapshot.copy.removeBlockedAccountsBtn, { count: blockedAccountCount })}
+                  </ActionButton>
+                ) : null}
                 {selectedCount > 0 ? (
                   <BatchSelectionBar
                     copy={snapshot.copy}
                     lang={snapshot.lang}
                     selectedCount={selectedCount}
+                    onClearSelection={() => dispatch({ type: "clear-selection" })}
                     refreshPending={batchRefreshPending}
                     resyncPending={batchResyncPending}
                     removePending={batchRemovePending}
@@ -653,23 +729,18 @@ function App() {
                   reloadPromptPending={isActionPending("reloadPrompt", account.id)}
                   switchPending={isActionPending("switch", account.id)}
                   reauthorizePending={isActionPending("reauthorize", account.id)}
-                  resyncProfilePending={isActionPending("resyncProfile", account.id)}
                   refreshPending={isActionPending("refresh", account.id)}
                   copyImportJsonPending={isActionPending("copyAccountImportJson", account.id)}
                   copyImportJsonSucceeded={modals.copyFeedbackKey === `account-import-json:${account.id}`}
                   quotaCountdownStartPending={isActionPending("startQuotaCountdown", account.id)}
-                  detailsPending={isActionPending("details", account.id)}
                   removePending={isActionPending("remove", account.id)}
-                  togglePending={isActionPending("toggleStatusBar", account.id)}
                   poolTogglePending={isActionPending("toggleBalancePool", account.id)}
-                  updateTagsPending={isActionPending("updateTags", account.id)}
                   consumeResetCreditPending={isActionPending("consumeResetCredit", account.id)}
                   providerActionPending={state.pendingActions.some(
                     (request) => request.action === "integrationAction" && request.accountId === account.id
                   )}
                   selected={selectedAccountIds.has(account.id)}
                   onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
-                  onEditTags={() => handleEditAccountTags(account)}
                   onAction={sendAction}
                 />
               ))}
@@ -1017,6 +1088,66 @@ function resolveAccountGroupFiltersLabel(lang: string): string {
     return "帳號分組篩選";
   }
   return "Account group filters";
+}
+
+function resolveAccountSortGroupLabel(lang: string): string {
+  if (lang === "zh") {
+    return "账号排序";
+  }
+  if (lang === "zh-hant") {
+    return "帳號排序";
+  }
+  return "Account sorting";
+}
+
+function resolveAccountSortSelectLabel(lang: string): string {
+  if (lang === "zh") {
+    return "选择排序字段";
+  }
+  if (lang === "zh-hant") {
+    return "選擇排序欄位";
+  }
+  return "Choose sort field";
+}
+
+function resolveAccountSortName(lang: string, key: DashboardAccountSortKey): string {
+  if (lang === "zh") {
+    const labels: Record<DashboardAccountSortKey, string> = {
+      name: "名称",
+      createdAt: "导入时间",
+      quota: "剩余额度",
+      quotaUpdatedAt: "额度刷新时间"
+    };
+    return labels[key];
+  }
+  if (lang === "zh-hant") {
+    const labels: Record<DashboardAccountSortKey, string> = {
+      name: "名稱",
+      createdAt: "匯入時間",
+      quota: "剩餘配額",
+      quotaUpdatedAt: "配額更新時間"
+    };
+    return labels[key];
+  }
+  const labels: Record<DashboardAccountSortKey, string> = {
+    name: "Name",
+    createdAt: "Imported",
+    quota: "Remaining quota",
+    quotaUpdatedAt: "Quota refreshed"
+  };
+  return labels[key];
+}
+
+function resolveAccountSortDirectionLabel(lang: string, sort: DashboardAccountSort): string {
+  const name = resolveAccountSortName(lang, sort.key);
+  const ascending = sort.direction === "asc";
+  if (lang === "zh") {
+    return name + (ascending ? "正序" : "倒序") + "，点击切换为" + (ascending ? "倒序" : "正序");
+  }
+  if (lang === "zh-hant") {
+    return name + (ascending ? "正序" : "倒序") + "，點擊切換為" + (ascending ? "倒序" : "正序");
+  }
+  return name + " " + (ascending ? "ascending" : "descending") + "; click to switch";
 }
 
 function resolveAccountPlanFiltersLabel(lang: string): string {

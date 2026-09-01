@@ -54,6 +54,14 @@ export function resolveAccountHealth(
     };
   }
 
+  if (!tokens?.idToken || !tokens.accessToken) {
+    return {
+      kind: "reauthorize",
+      issueKey: "reauthorize:credentials_missing",
+      message: "Codex OAuth credentials are missing"
+    };
+  }
+
   if (
     automation.enabled &&
     tokens?.accessToken &&

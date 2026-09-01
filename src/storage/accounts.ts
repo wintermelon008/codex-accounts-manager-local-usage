@@ -155,10 +155,23 @@ export class AccountsRepository {
   /** 防止重复释放 */
   private disposed = false;
 
-  /** 任何 token 写入后清空整个缓存，下次 getTokens 重新从 SecretStore 读取 */
-  private invalidateTokenCache(): void {
+  /**
+   * 清理凭据缓存。账号级写入只使对应账号失效；只有外部状态整体变化时
+   * 才清空全部缓存，避免删除/刷新一个账号后重新读取整批 Keychain 凭据。
+   */
+  private invalidateTokenCache(accountId?: string): void {
+    if (accountId !== undefined) {
+      this.tokenCache.delete(accountId);
+      return;
+    }
     if (this.tokenCache.size > 0) {
       this.tokenCache.clear();
+    }
+  }
+
+  private invalidateIndexCache(): void {
+    if (!this.state.pendingSave) {
+      this.state.cache = null;
     }
   }
 
@@ -326,11 +339,11 @@ export class AccountsRepository {
     return revisions.join("|");
   }
 
-  invalidateExternalStateCaches(): void {
-    if (!this.state.pendingSave) {
-      this.state.cache = null;
+  invalidateExternalStateCaches(options: { invalidateTokens?: boolean } = {}): void {
+    this.invalidateIndexCache();
+    if (options.invalidateTokens !== false) {
+      this.invalidateTokenCache();
     }
-    this.invalidateTokenCache();
   }
 
   async tryAcquireSchedulerLease(
@@ -508,7 +521,7 @@ export class AccountsRepository {
     };
 
     await this.secretStore.setTokens(accountId, effectiveTokens);
-    this.invalidateTokenCache();
+    this.invalidateTokenCache(accountId);
     await mirrorAideckCodexAccount(account, effectiveTokens);
     if (options.notifyTokenChange !== false) {
       this.notifyTokensChanged([accountId]);
@@ -834,7 +847,7 @@ export class AccountsRepository {
       accountId: account.accountId ?? tokens.accountId
     };
     await this.secretStore.setTokens(id, storedTokens);
-    this.invalidateTokenCache();
+    this.invalidateTokenCache(id);
     await clearAideckCodexAccountTombstone(id);
     await mirrorAideckCodexAccount(account, storedTokens);
     if (account.isActive) {
@@ -897,7 +910,7 @@ export class AccountsRepository {
     const sharedAccounts: SharedCodexAccountJson[] = [];
 
     for (const account of accounts) {
-      const tokens = await this.secretStore.getTokens(account.id);
+      const tokens = await this.getTokens(account.id);
       if (!tokens?.idToken || !tokens.accessToken) {
         continue;
       }
@@ -999,7 +1012,7 @@ export class AccountsRepository {
         accountId: account.accountId ?? restoredTokens.accountId
       };
       await this.secretStore.setTokens(account.id, storedTokens);
-      this.invalidateTokenCache();
+      this.invalidateTokenCache(account.id);
       await mirrorAideckCodexAccount(account, storedTokens);
 
       if (options.persistImmediately) {
@@ -1045,7 +1058,10 @@ export class AccountsRepository {
   }
 
   private async switchAccountLocked(accountId: string): Promise<CodexAccountRecord> {
-    this.invalidateExternalStateCaches();
+    // The target account still validates its own mirror revision in getTokens.
+    // Keep the other cached credentials so the post-switch Dashboard does not
+    // synchronously reread every account from SecretStorage.
+    this.invalidateIndexCache();
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
 
@@ -1112,7 +1128,7 @@ export class AccountsRepository {
 
     if (!removed || !isSub2ApiAccount(removed)) {
       await this.secretStore.deleteTokens(accountId);
-      this.invalidateTokenCache();
+      this.invalidateTokenCache(accountId);
       clearQuotaCacheForAccount(accountId);
       await removeAideckCodexAccount(accountId);
     }
@@ -1395,7 +1411,7 @@ export class AccountsRepository {
         accountId: account.accountId ?? storedTokens.accountId
       };
       await this.secretStore.setTokens(accountId, effectiveNextTokens);
-      this.invalidateTokenCache();
+      this.invalidateTokenCache(accountId);
       await mirrorAideckCodexAccount(account, effectiveNextTokens);
       this.notifyTokensChanged([accountId]);
       if (account.isActive) {
@@ -1492,7 +1508,7 @@ export class AccountsRepository {
 
         if (shouldSyncTokensFromAuthFile(storedTokens, nextTokens)) {
           await this.secretStore.setTokens(derivedId, nextTokens);
-          this.invalidateTokenCache();
+          this.invalidateTokenCache(derivedId);
           await mirrorAideckCodexAccount(account, nextTokens);
           await mirrorAideckCurrentAccount(derivedId);
           clearQuotaCacheForAccount(derivedId);
@@ -1968,15 +1984,19 @@ function isMirrorSnapshotInternallyConsistent(
   }
 
   return !(
-    hasRequiredIdentityMismatch(normalizeEmailIdentity(external.email), claims.email) ||
-    hasRequiredIdentityMismatch(external.userId, claims.userId) ||
-    hasRequiredIdentityMismatch(external.accountId, claims.accountId) ||
-    hasRequiredIdentityMismatch(external.organizationId, claims.organizationId)
+    hasPresentIdentityMismatch(normalizeEmailIdentity(external.email), claims.email) ||
+    hasPresentIdentityMismatch(external.userId, claims.userId) ||
+    hasPresentIdentityMismatch(external.accountId, claims.accountId) ||
+    hasPresentIdentityMismatch(external.organizationId, claims.organizationId)
   );
 }
 
 function hasRequiredIdentityMismatch(expected: string | undefined, candidate: string | undefined): boolean {
   return Boolean(expected && expected !== candidate);
+}
+
+function hasPresentIdentityMismatch(expected: string | undefined, candidate: string | undefined): boolean {
+  return Boolean(expected && candidate && expected !== candidate);
 }
 
 /**

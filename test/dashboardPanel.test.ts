@@ -24,7 +24,8 @@ import {
   getDashboardVisibleAccounts,
   getHighWeeklyQuotaHiddenAccountIds,
   getLowWeeklyQuotaAccountIds,
-  getReauthorizeAccountIds,
+  getBlockedAccountIds,
+  isMailboxIntegrationActive,
   parsePercentageInput
 } from "../webview-src/dashboard/helpers";
 import { createInitialState, reducer } from "../webview-src/dashboard/state";
@@ -256,15 +257,24 @@ describe("Dashboard account selection", () => {
     expect(getHighWeeklyQuotaHiddenAccountIds(accounts, 87.5)).toEqual(["show-at-custom-threshold"]);
   });
 
-  it("only targets real accounts that need reauthorization for the deactivated cleanup action", () => {
+  it("only targets reauthorized real accounts with a Mailbox deactivation notice", () => {
     const accounts = [
-      { id: "reauthorize", accountKind: "chatgpt", healthKind: "reauthorize" },
-      { id: "dismissed-reauthorize", accountKind: "chatgpt", healthKind: "reauthorize", dismissedHealth: true },
-      { id: "refresh-failed", accountKind: "chatgpt", healthKind: "refresh_failed" },
-      { id: "virtual", accountKind: "sub2api", healthKind: "reauthorize" }
+      { id: "eligible", accountKind: "chatgpt", healthKind: "reauthorize", mailboxDeactivated: true },
+      { id: "missing-notice", accountKind: "chatgpt", healthKind: "reauthorize", mailboxDeactivated: false },
+      { id: "refresh-failed", accountKind: "chatgpt", healthKind: "refresh_failed", mailboxDeactivated: true },
+      { id: "virtual", accountKind: "sub2api", healthKind: "reauthorize", mailboxDeactivated: true }
     ] as DashboardState["accounts"];
 
-    expect(getReauthorizeAccountIds(accounts)).toEqual(["reauthorize", "dismissed-reauthorize"]);
+    expect(getBlockedAccountIds(accounts)).toEqual(["eligible"]);
+  });
+
+  it("exposes blocked-account removal only while Mailbox is registered and usable", () => {
+    expect(isMailboxIntegrationActive(undefined)).toBe(false);
+    expect(isMailboxIntegrationActive([])).toBe(false);
+    expect(isMailboxIntegrationActive([{ id: "mailbox", status: "inactive" }])).toBe(false);
+    expect(isMailboxIntegrationActive([{ id: "mailbox", status: "error" }])).toBe(false);
+    expect(isMailboxIntegrationActive([{ id: "mailbox", status: "ready" }])).toBe(true);
+    expect(isMailboxIntegrationActive([{ id: "mailbox", status: "active" }])).toBe(true);
   });
 
   it("accepts only percentage-formatted values in the weekly quota inputs", () => {
@@ -285,6 +295,14 @@ describe("Dashboard account selection", () => {
     const nextState = reducer(state, { type: "deselect-accounts", accountIds: ["hidden-account"] });
 
     expect(nextState.selectedAccountIds).toEqual(["still-selected"]);
+  });
+
+  it("clears every selected account from the batch selection", () => {
+    let state = createInitialState();
+    state = reducer(state, { type: "toggle-select", accountId: "first-account" });
+    state = reducer(state, { type: "toggle-select", accountId: "second-account" });
+
+    expect(reducer(state, { type: "clear-selection" }).selectedAccountIds).toEqual([]);
   });
 
   it("clears accounts that leave the group filter while retaining visible selections", () => {

@@ -5,6 +5,7 @@ import {
   DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD,
   type DashboardAccountViewModel,
   type DashboardAccountPlanFilter,
+  type DashboardIntegrationViewModel,
   type DashboardSettings,
   type DashboardState
 } from "../../src/domain/dashboard/types";
@@ -21,6 +22,13 @@ export type DashboardAccountPage<T> = {
   startIndex: number;
   endIndex: number;
   accounts: T[];
+};
+
+export type DashboardAccountSortKey = "name" | "createdAt" | "quota" | "quotaUpdatedAt";
+export type DashboardAccountSortDirection = "asc" | "desc";
+export type DashboardAccountSort = {
+  key: DashboardAccountSortKey;
+  direction: DashboardAccountSortDirection;
 };
 
 /**
@@ -68,10 +76,115 @@ export function getDashboardVisibleAccounts(
   );
 }
 
-/** Returns real accounts currently marked as requiring OAuth reauthorization. */
-export function getReauthorizeAccountIds(accounts: readonly DashboardAccountViewModel[]): string[] {
+/** Sorts the already-filtered Dashboard account list without changing persisted account order. */
+export function sortDashboardAccountsForDisplay(
+  accounts: readonly DashboardAccountViewModel[],
+  sort: DashboardAccountSort | undefined
+): DashboardAccountViewModel[] {
+  return [...accounts].sort((left, right) => {
+    const activeDifference = getDashboardAccountActivityRank(right) - getDashboardAccountActivityRank(left);
+    if (activeDifference !== 0) {
+      return activeDifference;
+    }
+    if (!sort) {
+      return 0;
+    }
+
+    const direction = sort.direction === "asc" ? 1 : -1;
+    let primaryDifference: number;
+    switch (sort.key) {
+      case "name":
+        primaryDifference = direction * compareDashboardAccountName(left, right);
+        break;
+      case "createdAt":
+        primaryDifference = compareOptionalNumbers(left.createdAt, right.createdAt, direction);
+        break;
+      case "quota":
+        primaryDifference = compareOptionalNumbers(getRemainingQuota(left), getRemainingQuota(right), direction);
+        break;
+      case "quotaUpdatedAt":
+        primaryDifference = compareOptionalNumbers(getQuotaResetAt(left), getQuotaResetAt(right), direction);
+        break;
+    }
+    if (primaryDifference !== 0) {
+      return primaryDifference;
+    }
+    return compareDashboardAccountIdentity(left, right);
+  });
+}
+
+function getDashboardAccountActivityRank(account: DashboardAccountViewModel): number {
+  if (account.isCurrentWindowAccount) {
+    return 3;
+  }
+  return account.providerActive === true ? 2 : account.isActive ? 1 : 0;
+}
+
+function compareDashboardAccountIdentity(left: DashboardAccountViewModel, right: DashboardAccountViewModel): number {
+  return (
+    compareDashboardAccountName(left, right) ||
+    left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function compareDashboardAccountName(left: DashboardAccountViewModel, right: DashboardAccountViewModel): number {
+  return getDashboardAccountName(left).localeCompare(getDashboardAccountName(right), undefined, {
+    sensitivity: "base"
+  });
+}
+
+function getDashboardAccountName(account: DashboardAccountViewModel): string {
+  return account.email.trim() || account.displayName.trim();
+}
+
+function getRemainingQuota(account: DashboardAccountViewModel): number | undefined {
+  const weeklyMetric = account.metrics.find((metric) => metric.key === "weekly");
+  return weeklyMetric?.visible &&
+    typeof weeklyMetric.percentage === "number" &&
+    Number.isFinite(weeklyMetric.percentage)
+    ? weeklyMetric.percentage
+    : undefined;
+}
+
+function getQuotaResetAt(account: DashboardAccountViewModel): number | undefined {
+  const weeklyMetric = account.metrics.find(
+    (metric) => metric.key === "weekly" && metric.visible && typeof metric.resetAt === "number" && Number.isFinite(metric.resetAt)
+  );
+  return weeklyMetric?.resetAt;
+}
+
+function compareOptionalNumbers(left: number | undefined, right: number | undefined, direction: number): number {
+  if (left === undefined || right === undefined) {
+    if (left === right) {
+      return 0;
+    }
+    return left === undefined ? 1 : -1;
+  }
+
+  return direction * (left - right);
+}
+
+/** Returns real accounts that need reauthorization and have a matching deactivation notice in Mailbox. */
+export function getBlockedAccountIds(accounts: readonly DashboardAccountViewModel[]): string[] {
   return accounts.flatMap((account) =>
-    account.accountKind !== "sub2api" && account.healthKind === "reauthorize" ? [account.id] : []
+    account.accountKind !== "sub2api" &&
+    account.healthKind === "reauthorize" &&
+    account.mailboxDeactivated === true
+      ? [account.id]
+      : []
+  );
+}
+
+/** The optional Mailbox extension must be registered and usable before blocked-account actions are exposed. */
+export function isMailboxIntegrationActive(
+  integrations: readonly Pick<DashboardIntegrationViewModel, "id" | "status">[] | undefined
+): boolean {
+  return (
+    integrations?.some(
+      (integration) =>
+        integration.id === "mailbox" && (integration.status === "ready" || integration.status === "active")
+    ) ?? false
   );
 }
 

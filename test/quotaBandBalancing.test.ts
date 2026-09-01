@@ -34,11 +34,13 @@ describe("5-hour quota band balancing", () => {
     expect(didQuotaBandDrop(3, 5)).toBe(false);
   });
 
-  it("selects the strongest fresh pool account and uses least-recently-selected as a stable tie-break", () => {
+  it("selects the first fresh pool account within the highest available plan tier", () => {
     const now = 10_000_000;
     const active = account("active", 59, now);
     const accountB = account("b", 82, now, 20_000);
     const accountC = account("c", 82, now, 20_000);
+    accountB.planType = "plus";
+    accountC.planType = "plus";
     const stale = account("stale", 100, now - BALANCE_QUOTA_MAX_AGE_MS - 1);
     const outsidePool = account("outside", 100, now);
     outsidePool.balancePoolEnabled = false;
@@ -48,10 +50,28 @@ describe("5-hour quota band balancing", () => {
         accounts: [active, accountB, accountC, stale, outsidePool],
         activeAccountId: active.id,
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
-        lastSelectedAt: { b: 9_000, c: 1_000 },
         now
       })?.id
-    ).toBe("c");
+    ).toBe("b");
+  });
+
+  it("uses the current Dashboard order within the same plan tier", () => {
+    const now = 10_000_000;
+    const active = account("active", 59, now);
+    const repositoryFirst = account("repository-first", 82, now, 20_000);
+    const dashboardFirst = account("dashboard-first", 82, now, 20_000);
+    repositoryFirst.planType = "plus";
+    dashboardFirst.planType = "plus";
+
+    expect(
+      selectBalanceCandidate({
+        accounts: [active, repositoryFirst, dashboardFirst],
+        accountOrder: [active.id, dashboardFirst.id, repositoryFirst.id],
+        activeAccountId: active.id,
+        activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
+        now
+      })?.id
+    ).toBe(dashboardFirst.id);
   });
 
   it("does not switch to an account in a lower band", () => {
@@ -64,7 +84,6 @@ describe("5-hour quota band balancing", () => {
         accounts: [active, lower],
         activeAccountId: active.id,
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
-        lastSelectedAt: {},
         now
       })
     ).toBeUndefined();
@@ -82,7 +101,6 @@ describe("5-hour quota band balancing", () => {
         accounts: [active, hidden, visible],
         activeAccountId: active.id,
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
-        lastSelectedAt: {},
         now
       })?.id
     ).toBe("visible");
@@ -93,7 +111,6 @@ describe("5-hour quota band balancing", () => {
         accounts: [active, visible],
         activeAccountId: active.id,
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
-        lastSelectedAt: {},
         now
       })
     ).toBeUndefined();
@@ -112,7 +129,6 @@ describe("5-hour quota band balancing", () => {
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage, 25),
         quotaBandSize: 25,
         switchThreshold: 1,
-        lastSelectedAt: {},
         now
       })?.id
     ).toBe("healthy");
@@ -129,7 +145,6 @@ describe("5-hour quota band balancing", () => {
         accounts: [active, weeklyDepleted],
         activeAccountId: active.id,
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
-        lastSelectedAt: {},
         now
       })
     ).toBeUndefined();
@@ -151,7 +166,6 @@ describe("5-hour quota band balancing", () => {
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
         switchThreshold: 1,
         thresholdQuota: "weekly",
-        lastSelectedAt: {},
         now
       })?.id
     ).toBe("high-hourly-low-weekly");
@@ -168,7 +182,6 @@ describe("5-hour quota band balancing", () => {
         accounts: [active, malformed, future],
         activeAccountId: active.id,
         activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
-        lastSelectedAt: {},
         now
       })
     ).toBeUndefined();
@@ -203,7 +216,6 @@ describe("5-hour quota band balancing", () => {
       activeAccountId: active.id,
       activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
       switchThreshold: 3 as const,
-      lastSelectedAt: {},
       now
     };
 
@@ -212,7 +224,7 @@ describe("5-hour quota band balancing", () => {
     expect(selectBalanceCandidate(params)?.id).toBe("reserve");
   });
 
-  it("leaves a depleted reserve for recovered windowed quota before choosing the strongest reserve", () => {
+  it("leaves a depleted reserve for recovered windowed quota before choosing the first reserve in pool order", () => {
     const now = 10_000_000;
     const active = reserveAccount("active", 3, now);
     const recovered = account("recovered", 20, now);
@@ -223,13 +235,12 @@ describe("5-hour quota band balancing", () => {
       activeAccountId: active.id,
       activeBand: 0,
       switchThreshold: 3 as const,
-      lastSelectedAt: {},
       now
     };
 
     expect(selectBalanceCandidate(params)?.id).toBe("recovered");
     recovered.quotaSummary!.hourlyPercentage = 2;
-    expect(selectBalanceCandidate(params)?.id).toBe("reserve-high");
+    expect(selectBalanceCandidate(params)?.id).toBe("reserve-low");
   });
 
   it("uses a windowed candidate strictly above the unified threshold before reserve", () => {
@@ -244,7 +255,6 @@ describe("5-hour quota band balancing", () => {
       activeBand: 1,
       switchThreshold: 1 as const,
       thresholdQuota: "weekly" as const,
-      lastSelectedAt: {},
       now
     };
 
@@ -253,7 +263,7 @@ describe("5-hour quota band balancing", () => {
     expect(selectBalanceCandidate(params)?.id).toBe("reserve");
   });
 
-  it("prioritizes higher five-hour quota before plan tier and recognizes K12 as Free", () => {
+  it("prioritizes plan tier before quota and recognizes K12 as Free", () => {
     const now = 10_000_000;
     const active = account("active", 1, now);
     active.planType = "free";
@@ -269,18 +279,17 @@ describe("5-hour quota band balancing", () => {
       activeBand: 1,
       switchThreshold: 1 as const,
       requireFreshFreeCandidates: true,
-      lastSelectedAt: {},
       now
     };
 
+    expect(selectBalanceCandidate(params)?.id).toBe("pro");
+    pro.quotaSummary!.hourlyPercentage = 1;
     expect(selectBalanceCandidate(params)?.id).toBe("plus");
-    plus.quotaSummary!.hourlyPercentage = 80;
-    expect(selectBalanceCandidate(params)?.id).toBe("k12");
     expect(isFreePlanType("ChatGPT Free Plan")).toBe(true);
     expect(isFreePlanType("ChatGPT K-12 Plan")).toBe(true);
   });
 
-  it("uses fresh Free/K12 reserve candidates by weekly quota when no five-hour target exists", () => {
+  it("uses plan tier and pool order for fresh Free/K12 reserve candidates", () => {
     const now = 10_000_000;
     const active = account("active", 1, now);
     active.planType = "free";
@@ -296,13 +305,12 @@ describe("5-hour quota band balancing", () => {
       activeBand: 1,
       switchThreshold: 1 as const,
       requireFreshFreeCandidates: true,
-      lastSelectedAt: {},
       now
     };
 
-    expect(selectBalanceCandidate(params)?.id).toBe("free-reserve");
-    freeReserve.lastQuotaAt = now - FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS - 1;
     expect(selectBalanceCandidate(params)?.id).toBe("plus-reserve");
+    plusReserve.lastQuotaAt = now - BALANCE_QUOTA_MAX_AGE_MS - 1;
+    expect(selectBalanceCandidate(params)?.id).toBe("free-reserve");
   });
 
   it("keeps a dropped band pending until a candidate switch is acknowledged", () => {
@@ -347,7 +355,6 @@ describe("5-hour quota band balancing", () => {
     expect(getSeamlessSwitchRuntimeSnapshot().hourlyBands?.["reserve"]).toBe(4);
     recordSeamlessSelection("reserve", undefined);
     expect(getSeamlessSwitchRuntimeSnapshot().hourlyBands?.["reserve"]).toBeUndefined();
-    expect(getSeamlessSwitchRuntimeSnapshot().lastSelectedAt?.["reserve"]).toBeTypeOf("number");
   });
 });
 

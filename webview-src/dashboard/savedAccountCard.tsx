@@ -12,7 +12,6 @@ import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCou
 import { getSensitiveDisplayValue, renderTagList } from "./helpers";
 import {
   CopyIcon,
-  EditTagsIcon,
   SuccessIcon,
   renderDetailsIcon,
   renderQuotaCountdownStartIcon,
@@ -21,7 +20,6 @@ import {
   renderReloadIcon,
   renderRemoveIcon,
   renderResetCreditsIcon,
-  renderResyncProfileIcon,
   renderSwitchIcon
 } from "./icons";
 import { ActionButton } from "./primitives";
@@ -39,33 +37,25 @@ export function SavedAccountCard(props: {
   reloadPromptPending: boolean;
   switchPending: boolean;
   reauthorizePending: boolean;
-  resyncProfilePending: boolean;
   refreshPending: boolean;
   copyImportJsonPending: boolean;
   copyImportJsonSucceeded: boolean;
   quotaCountdownStartPending: boolean;
-  detailsPending: boolean;
   removePending: boolean;
-  togglePending: boolean;
   poolTogglePending: boolean;
-  updateTagsPending: boolean;
   consumeResetCreditPending: boolean;
   providerActionPending: boolean;
   selected: boolean;
   onToggleSelected: () => void;
-  onEditTags: () => void;
   onAction: (
     action:
-      | "details"
       | "switch"
       | "reloadPrompt"
       | "reauthorize"
-      | "resyncProfile"
       | "refresh"
       | "copyAccountImportJson"
       | "startQuotaCountdown"
       | "remove"
-      | "toggleStatusBar"
       | "toggleBalancePool"
       | "consumeResetCredit"
       | "integrationAction"
@@ -99,11 +89,6 @@ export function SavedAccountCard(props: {
           : "Add to seamless-switch pool";
   const showReauthorizeButton = !virtual && account.healthKind === "reauthorize" && !account.dismissedHealth;
   const [flipped, setFlipped] = useState(false);
-  const showResyncButton = !virtual && account.healthKind !== "reauthorize";
-  const resyncButtonLabel =
-    (account.healthKind === "disabled" || account.healthKind === "quota") && !account.dismissedHealth
-      ? copy.resyncProfileBtn
-      : copy.syncProfileBtn;
   const hasErrorHealth =
     !account.dismissedHealth &&
     (account.healthKind === "reauthorize" ||
@@ -171,46 +156,6 @@ export function SavedAccountCard(props: {
           onKeyDown={(event) => handleFlipKey(event, true)}
         >
           <div class="saved-head">
-            <div class="saved-top-actions" onClick={stopFlip}>
-              {!account.isActive && !account.providerActive ? (
-                <button
-                  class={`saved-control saved-status-toggle ${account.canToggleStatusBar ? "" : "disabled"} ${account.showInStatusBar ? "is-checked" : ""}`}
-                  type="button"
-                  aria-label={account.statusToggleTitle}
-                  aria-pressed={account.showInStatusBar}
-                  aria-disabled={!account.canToggleStatusBar || props.busy}
-                  onClick={() => {
-                    if (!account.canToggleStatusBar || props.busy) {
-                      return;
-                    }
-                    onAction("toggleStatusBar", account.id);
-                  }}
-                >
-                  <span class="saved-status-toggle-indicator" aria-hidden="true">
-                    <span></span>
-                  </span>
-                  <span class="saved-control-tip align-right" aria-hidden="true">
-                    {account.statusToggleTitle}
-                  </span>
-                </button>
-              ) : null}
-              <button
-                class="saved-control saved-edit-tags-btn"
-                type="button"
-                aria-label={copy.editTagsBtn}
-                disabled={props.busy}
-                onClick={props.onEditTags}
-              >
-                {props.updateTagsPending ? (
-                  <span class="saved-toggle-spinner" aria-hidden="true"></span>
-                ) : (
-                  <EditTagsIcon />
-                )}
-                <span class="saved-control-tip align-right" aria-hidden="true">
-                  {copy.editTagsBtn}
-                </span>
-              </button>
-            </div>
             <div class="saved-title">
               <h3>
                 <button
@@ -242,12 +187,11 @@ export function SavedAccountCard(props: {
                     {resolveAccountGroupLabel(account.accountGroup, props.lang)}
                   </span>
                 ) : null}
-                {account.isActive ? <span class="pill active">{copy.primaryAccount}</span> : null}
                 {virtual ? <span class="pill gateway-active">{gatewayActive ? "Gateway · 手动 · 当前" : "Gateway · 手动"}</span> : null}
                 {account.isCurrentWindowAccount && !virtual ? <span class="pill active">{copy.current}</span> : null}
                 {account.balancePoolEnabled && !virtual ? (
                   <span class="pill active">
-                    {props.lang === "zh" ? "无感切号池" : props.lang === "zh-hant" ? "無感切換池" : "Seamless Pool"}
+                    {props.lang === "zh" ? "无感" : props.lang === "zh-hant" ? "無感" : "Seamless"}
                   </span>
                 ) : null}
                 {!virtual ? renderHealthPill(account) : null}
@@ -337,16 +281,6 @@ export function SavedAccountCard(props: {
                 onClick={() => onAction("reauthorize", account.id)}
               />
             ) : null}
-            {showResyncButton ? (
-              <ActionButton
-                icon={renderResyncProfileIcon()}
-                iconOnly
-                label={resyncButtonLabel}
-                pending={props.resyncProfilePending}
-                disabled={props.busy}
-                onClick={() => onAction("resyncProfile", account.id)}
-              />
-            ) : null}
             <ActionButton
               icon={renderSwitchIcon()}
               iconOnly
@@ -431,14 +365,6 @@ export function SavedAccountCard(props: {
                 onClick={() => onAction("consumeResetCredit", account.id)}
               />
             ) : null}
-            <ActionButton
-              icon={renderDetailsIcon()}
-              iconOnly
-              label={copy.detailsBtn}
-              pending={props.detailsPending}
-              disabled={props.busy}
-              onClick={() => onAction("details", account.id, { privacyMode })}
-            />
             <ActionButton
               icon={renderRemoveIcon()}
               iconOnly

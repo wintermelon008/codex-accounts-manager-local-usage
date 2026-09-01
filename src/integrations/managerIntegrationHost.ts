@@ -25,6 +25,8 @@ export type DashboardIntegrationRegistration = {
   id: string;
   getViewModel: () => DashboardIntegrationViewModel;
   runAction: (actionId: string) => void | Promise<void>;
+  /** Optional sanitized mailbox addresses that have a persisted OpenAI deactivation notice. */
+  getDeactivatedMailboxEmails?: () => readonly string[];
   onDidChange?: IntegrationChangeEvent;
 };
 
@@ -342,6 +344,33 @@ export class ManagerIntegrationHost implements vscode.Disposable {
     return [...this.dashboardIntegrations.values()]
       .sort((left, right) => left.id.localeCompare(right.id))
       .map((registration) => this.readDashboardViewModel(registration));
+  }
+
+  getDeactivatedMailboxEmails(): string[] {
+    if (this.disposed) {
+      return [];
+    }
+
+    const emails = new Set<string>();
+    for (const registration of this.dashboardIntegrations.values()) {
+      if (!registration.getDeactivatedMailboxEmails) {
+        continue;
+      }
+      try {
+        for (const email of registration.getDeactivatedMailboxEmails()) {
+          if (typeof email !== "string") {
+            continue;
+          }
+          const normalized = email.trim();
+          if (normalized) {
+            emails.add(normalized);
+          }
+        }
+      } catch {
+        // A broken optional integration must not affect the core Dashboard.
+      }
+    }
+    return [...emails];
   }
 
   getVirtualAccountCards(): Array<{ accountId: string; card: DashboardProviderAccountCardViewModel }> {

@@ -68,7 +68,6 @@ describe("Sub2API virtual account boundaries", () => {
         accounts,
         activeAccountId: active.id,
         activeBand: 1,
-        lastSelectedAt: {},
         now: Date.now()
       })?.id
     ).toBe("target");
@@ -118,6 +117,40 @@ describe("Sub2API virtual account boundaries", () => {
     expect(rendered.quotaIssueKind).toBeUndefined();
     expect(rendered.lastTokenRefreshAt).toBeUndefined();
     expect(rendered.statusColor).toBe("var(--accent-blue)");
+  });
+
+  it("maps only the Mailbox deactivation address marker into the Dashboard account", async () => {
+    const previousHost = getActiveManagerIntegrationHost();
+    const host = new ManagerIntegrationHost({} as never);
+    host.api.registerDashboardIntegration({
+      id: "mailbox",
+      getViewModel: () => ({ id: "mailbox", title: "Mailbox", status: "ready", actions: [] }),
+      getDeactivatedMailboxEmails: () => ["MARKED@EXAMPLE.INVALID"],
+      runAction: vi.fn()
+    });
+    setActiveManagerIntegrationHost(host);
+    try {
+      const account = chatgpt("marked");
+      account.email = "marked@example.invalid";
+      const state = await buildDashboardState(
+        {
+          listAccounts: vi.fn(async () => [account]),
+          getTokens: vi.fn(async () => undefined),
+          getIndexHealthSummary: vi.fn(async () => ({ status: "healthy", availableBackups: 0 }))
+        } as never,
+        {
+          resolveLanguage: () => "zh",
+          getDashboardSettings: () => ({ codexAppPath: "" })
+        } as never,
+        "",
+        { announcements: [], unreadIds: [] }
+      );
+
+      expect(state.accounts[0]?.mailboxDeactivated).toBe(true);
+    } finally {
+      host.dispose();
+      setActiveManagerIntegrationHost(previousHost);
+    }
   });
 
   it("bounds Dashboard token reads and skips desktop detection while restart is disabled", async () => {

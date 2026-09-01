@@ -67,6 +67,7 @@ export function BatchSelectionBar(props: {
   copy: DashboardCopy;
   lang: DashboardState["lang"];
   selectedCount: number;
+  onClearSelection: () => void;
   refreshPending: boolean;
   resyncPending: boolean;
   removePending: boolean;
@@ -87,6 +88,9 @@ export function BatchSelectionBar(props: {
   return (
     <div class="batch-bar">
       <div class="batch-bar-actions">
+        <ActionButton class="toolbar-btn" onClick={props.onClearSelection}>
+          {props.lang === "zh" ? "取消选择" : props.lang === "zh-hant" ? "取消選擇" : "Clear selection"}
+        </ActionButton>
         <ActionButton class="toolbar-btn" disabled={props.selectedCount < 2} onClick={props.onSetBalancePool}>
           {props.lang === "zh" ? "移入无感池" : props.lang === "zh-hant" ? "移入無感池" : "Move into Seamless Pool"}
         </ActionButton>
