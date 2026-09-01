@@ -89,7 +89,7 @@ test("normalizes a pasted Bearer prefix and sends a single downstream authorizat
   assert.deepEqual(health, { kind: "healthy", message: "下游健康检查成功。" });
 });
 
-test("the Manager setting only persists card visibility and never changes the Gateway route", async (t) => {
+test("the Manager setting defaults card visibility off and never changes the Gateway route", async (t) => {
   const storage = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-integration-"));
   t.after(() => fs.rm(storage, { recursive: true, force: true }));
   const api = createApi();
@@ -99,11 +99,11 @@ test("the Manager setting only persists card visibility and never changes the Ga
 
   const setting = api.virtualRegistrations[0].setting;
   assert.equal(setting.id, "sub2api-gateway-card-visible");
-  assert.equal(setting.getEnabled(), true);
-  await setting.setEnabled(false);
-
   assert.equal(setting.getEnabled(), false);
-  assert.equal(context.globalState.get("sub2apiGateway.cardVisibility.v1"), false);
+  await setting.setEnabled(true);
+
+  assert.equal(setting.getEnabled(), true);
+  assert.equal(context.globalState.get("sub2apiGateway.cardVisibility.v1"), true);
   assert.equal(api.gatewayActivateCalls, 0);
   assert.equal(api.gatewayDeactivateCalls, 0);
   integration.dispose();
