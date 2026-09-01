@@ -27,7 +27,7 @@ export function didQuotaBandDrop(previousBand: number | undefined, currentBand: 
 }
 
 export function selectBalanceCandidate(params: {
-  accounts: CodexAccountRecord[];
+  accounts: readonly CodexAccountRecord[];
   activeAccountId: string;
   activeBand: number;
   quotaBandSize?: SeamlessQuotaBandSize;
@@ -39,7 +39,8 @@ export function selectBalanceCandidate(params: {
    * Reserve accounts remain eligible, but their quota must be freshly observed.
    */
   requireFreshFreeCandidates?: boolean;
-  lastSelectedAt: Readonly<Record<string, number | undefined>>;
+  /** The account order currently shown by the Dashboard, when it is open. */
+  accountOrder?: readonly string[];
   now?: number;
 }): CodexAccountRecord | undefined {
   const now = params.now ?? Date.now();
@@ -54,6 +55,7 @@ export function selectBalanceCandidate(params: {
   }
 
   const switchThreshold = params.switchThreshold ?? DEFAULT_SEAMLESS_SWITCH_THRESHOLD;
+  const poolOrder = createPoolOrder(params.accounts, params.accountOrder);
   const candidates = params.accounts.filter(
     (account) =>
       account.id !== params.activeAccountId &&
@@ -86,14 +88,12 @@ export function selectBalanceCandidate(params: {
   if (thresholdRecoveryMode) {
     const recoveredWindowed = windowedCandidates
       .filter((account) => account.quotaSummary!.hourlyPercentage > switchThreshold)
-      .sort((left, right) => compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize))[0];
+      .sort((left, right) => compareSeamlessCandidates(left, right, poolOrder))[0];
     if (recoveredWindowed) {
       return recoveredWindowed;
     }
 
-    const reserve = reserveCandidates.sort((left, right) =>
-      compareReserveCandidates(left, right, params.lastSelectedAt)
-    )[0];
+    const reserve = reserveCandidates.sort((left, right) => compareSeamlessCandidates(left, right, poolOrder))[0];
     if (reserve) {
       return reserve;
     }
@@ -111,7 +111,25 @@ export function selectBalanceCandidate(params: {
         getFiveHourQuotaBand(account.quotaSummary!.hourlyPercentage, params.quotaBandSize) >= params.activeBand &&
         account.quotaSummary!.hourlyPercentage > activeQuota.hourlyPercentage
     )
-    .sort((left, right) => compareBalanceCandidates(left, right, params.lastSelectedAt, params.quotaBandSize))[0];
+    .sort((left, right) => compareSeamlessCandidates(left, right, poolOrder))[0];
+}
+
+function createPoolOrder(
+  accounts: readonly CodexAccountRecord[],
+  preferredOrder: readonly string[] | undefined
+): ReadonlyMap<string, number> {
+  const order = new Map<string, number>();
+  for (const accountId of preferredOrder ?? []) {
+    if (!order.has(accountId)) {
+      order.set(accountId, order.size);
+    }
+  }
+  for (const account of accounts) {
+    if (!order.has(account.id)) {
+      order.set(account.id, order.size);
+    }
+  }
+  return order;
 }
 
 export function isVerifiedFreeWindowedAccount(account: CodexAccountRecord, now = Date.now()): boolean {
@@ -178,47 +196,17 @@ export function hasUsableWeeklyQuota(account: CodexAccountRecord): boolean {
   );
 }
 
-function compareBalanceCandidates(
+function compareSeamlessCandidates(
   left: CodexAccountRecord,
   right: CodexAccountRecord,
-  lastSelectedAt: Readonly<Record<string, number | undefined>>,
-  quotaBandSize: SeamlessQuotaBandSize = QUOTA_BAND_SIZE
+  poolOrder: ReadonlyMap<string, number>
 ): number {
-  const leftQuota = left.quotaSummary!;
-  const rightQuota = right.quotaSummary!;
-  const bandDifference =
-    getFiveHourQuotaBand(rightQuota.hourlyPercentage, quotaBandSize) -
-    getFiveHourQuotaBand(leftQuota.hourlyPercentage, quotaBandSize);
-  if (bandDifference !== 0) {
-    return bandDifference;
-  }
-
-  const percentageDifference = rightQuota.hourlyPercentage - leftQuota.hourlyPercentage;
-  if (percentageDifference !== 0) {
-    return percentageDifference;
-  }
-
-  const weeklyPercentageDifference = rightQuota.weeklyPercentage - leftQuota.weeklyPercentage;
-  if (weeklyPercentageDifference !== 0) {
-    return weeklyPercentageDifference;
-  }
-
-  const planPriorityDifference = getQuotaPlanPriority(left.planType) - getQuotaPlanPriority(right.planType);
+  const planPriorityDifference = getSeamlessPlanPriority(right.planType) - getSeamlessPlanPriority(left.planType);
   if (planPriorityDifference !== 0) {
     return planPriorityDifference;
   }
 
-  const leftReset = leftQuota.hourlyResetTime ?? Number.POSITIVE_INFINITY;
-  const rightReset = rightQuota.hourlyResetTime ?? Number.POSITIVE_INFINITY;
-  if (leftReset !== rightReset) {
-    return leftReset - rightReset;
-  }
-
-  const lastSelectedDifference = (lastSelectedAt[left.id] ?? 0) - (lastSelectedAt[right.id] ?? 0);
-  if (lastSelectedDifference !== 0) {
-    return lastSelectedDifference;
-  }
-  return left.id.localeCompare(right.id);
+  return (poolOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (poolOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER);
 }
 
 function hasFreshFreeSwitchThresholdQuota(account: CodexAccountRecord, now: number): boolean {
@@ -228,26 +216,17 @@ function hasFreshFreeSwitchThresholdQuota(account: CodexAccountRecord, now: numb
   );
 }
 
-function compareReserveCandidates(
-  left: CodexAccountRecord,
-  right: CodexAccountRecord,
-  lastSelectedAt: Readonly<Record<string, number | undefined>>
-): number {
-  const weeklyDifference = right.quotaSummary!.weeklyPercentage - left.quotaSummary!.weeklyPercentage;
-  if (weeklyDifference !== 0) {
-    return weeklyDifference;
+function getSeamlessPlanPriority(planType: string | undefined): number {
+  switch (getQuotaPlanPriority(planType)) {
+    case 2:
+      return 3;
+    case 1:
+      return 2;
+    case 0:
+      return 1;
+    default:
+      return 0;
   }
-
-  const planPriorityDifference = getQuotaPlanPriority(left.planType) - getQuotaPlanPriority(right.planType);
-  if (planPriorityDifference !== 0) {
-    return planPriorityDifference;
-  }
-
-  const lastSelectedDifference = (lastSelectedAt[left.id] ?? 0) - (lastSelectedAt[right.id] ?? 0);
-  if (lastSelectedDifference !== 0) {
-    return lastSelectedDifference;
-  }
-  return left.id.localeCompare(right.id);
 }
 
 export function getQuotaPlanPriority(planType: string | undefined): number {

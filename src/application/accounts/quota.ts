@@ -26,9 +26,9 @@ import {
   isAutoSwitchLocked,
   recordAutoSwitchReason
 } from "../../presentation/workbench/autoSwitchState";
+import { getDashboardAccountOrder } from "../../presentation/dashboard/accountOrder";
 import {
   acknowledgeSeamlessQuotaBand,
-  getSeamlessSwitchRuntimeSnapshot,
   observeSeamlessQuotaBand,
   recordSeamlessSelection
 } from "../../presentation/workbench/seamlessSwitchState";
@@ -447,9 +447,9 @@ async function executeSeamlessBalanceSwitch(params: {
     return false;
   }
 
-  const lastSelectedAt = getSeamlessSwitchRuntimeSnapshot().lastSelectedAt ?? {};
   const next = selectBalanceCandidate({
     accounts,
+    accountOrder: getDashboardAccountOrder(),
     activeAccountId: active.id,
     activeBand,
     quotaBandSize,
@@ -457,7 +457,6 @@ async function executeSeamlessBalanceSwitch(params: {
     thresholdQuota,
     forceRecoveryMode: thresholdSwitch && runtimeUsageLimit,
     requireFreshFreeCandidates: thresholdSwitch && activeIsFree,
-    lastSelectedAt,
     now
   });
   if (!next) {

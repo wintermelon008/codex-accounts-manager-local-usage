@@ -282,7 +282,7 @@ describe("seamless 5-hour quota-band switching", () => {
     });
   });
 
-  it("ranks a Free account's windowed targets by five-hour quota before plan tier", async () => {
+  it("prioritizes the higher plan tier before five-hour quota", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
@@ -327,7 +327,7 @@ describe("seamless 5-hour quota-band switching", () => {
     const plusReserve = reserveAccount("plus-reserve", false, 90);
     plusReserve.planType = "plus";
     const repo = repository(active, plusReserve, freeReserve);
-    const switchRuntimeAccount = vi.fn(async () => switched(freeReserve));
+    const switchRuntimeAccount = vi.fn(async () => switched(plusReserve));
 
     await expect(
       maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, {
@@ -336,7 +336,7 @@ describe("seamless 5-hour quota-band switching", () => {
       })
     ).resolves.toBe(true);
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(freeReserve.id, {
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(plusReserve.id, {
       gracePeriodMs: 0,
       recoverRecentUsageLimitedTurns: true
     });
@@ -435,7 +435,7 @@ describe("seamless 5-hour quota-band switching", () => {
     const plusReserve = reserveAccount("plus-reserve", false, 90);
     plusReserve.planType = "plus";
     const repo = repository(active, plusReserve, freeReserve);
-    const switchRuntimeAccount = vi.fn(async () => switched(freeReserve));
+    const switchRuntimeAccount = vi.fn(async () => switched(plusReserve));
 
     await expect(
       maybeSeamlessBalanceSwitchForActiveQuota(
@@ -445,7 +445,7 @@ describe("seamless 5-hour quota-band switching", () => {
       )
     ).resolves.toBe(true);
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(freeReserve.id, {
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(plusReserve.id, {
       gracePeriodMs: 0,
       recoverRecentUsageLimitedTurns: true
     });
@@ -676,7 +676,7 @@ describe("seamless 5-hour quota-band switching", () => {
     });
   });
 
-  it("chooses the reserve account with the strongest long-term quota when no windowed account recovered", async () => {
+  it("chooses the first eligible reserve in pool order when no windowed account recovered", async () => {
     configure({
       seamlessSwitchEnabled: true,
       seamlessSwitchQuotaBandsEnabled: true,
@@ -687,7 +687,7 @@ describe("seamless 5-hour quota-band switching", () => {
     const lowerReserve = reserveAccount("reserve-low", false, 60);
     const strongerReserve = reserveAccount("reserve-high", false, 90);
     const repo = repository(active, lowerReserve, strongerReserve);
-    const switchRuntimeAccount = vi.fn(async () => switched(strongerReserve));
+    const switchRuntimeAccount = vi.fn(async () => switched(lowerReserve));
 
     await expect(
       maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, {
@@ -696,7 +696,7 @@ describe("seamless 5-hour quota-band switching", () => {
       })
     ).resolves.toBe(true);
 
-    expect(switchRuntimeAccount).toHaveBeenCalledWith(strongerReserve.id, {
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(lowerReserve.id, {
       gracePeriodMs: 0,
       recoverRecentUsageLimitedTurns: true
     });

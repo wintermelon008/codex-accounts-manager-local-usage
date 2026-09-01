@@ -4,13 +4,11 @@ import type { SeamlessQuotaBandSize } from "../../core/types";
 
 type SeamlessSwitchRuntimeState = {
   hourlyBands?: Record<string, number>;
-  lastSelectedAt?: Record<string, number>;
   quotaBandSize?: SeamlessQuotaBandSize;
 };
 
 type LegacyAutoSwitchRuntimeState = {
   hourlyBands?: Record<string, number>;
-  balanceLastSelectedAt?: Record<string, number>;
 };
 
 const GLOBAL_STATE_KEY = "codexAccounts.seamlessSwitchRuntimeState";
@@ -24,9 +22,8 @@ export function initSeamlessSwitchRuntimeState(context: vscode.ExtensionContext)
   const saved = context.globalState.get<SeamlessSwitchRuntimeState>(GLOBAL_STATE_KEY);
   const legacy = context.globalState.get<LegacyAutoSwitchRuntimeState>(LEGACY_GLOBAL_STATE_KEY);
   state.hourlyBands = { ...(saved?.hourlyBands ?? legacy?.hourlyBands ?? {}) };
-  state.lastSelectedAt = { ...(saved?.lastSelectedAt ?? legacy?.balanceLastSelectedAt ?? {}) };
   state.quotaBandSize = saved?.quotaBandSize;
-  if (!saved && (legacy?.hourlyBands || legacy?.balanceLastSelectedAt)) {
+  if (!saved && legacy?.hourlyBands) {
     persist();
   }
 }
@@ -34,7 +31,6 @@ export function initSeamlessSwitchRuntimeState(context: vscode.ExtensionContext)
 export function getSeamlessSwitchRuntimeSnapshot(): SeamlessSwitchRuntimeState {
   return {
     hourlyBands: { ...(state.hourlyBands ?? {}) },
-    lastSelectedAt: { ...(state.lastSelectedAt ?? {}) },
     quotaBandSize: state.quotaBandSize
   };
 }
@@ -81,14 +77,12 @@ export function recordSeamlessSelection(
     delete hourlyBands[accountId];
     state.hourlyBands = hourlyBands;
   }
-  state.lastSelectedAt = { ...(state.lastSelectedAt ?? {}), [accountId]: Date.now() };
   state.quotaBandSize = quotaBandSize;
   persist();
 }
 
 export function resetSeamlessSwitchRuntimeState(): void {
   state.hourlyBands = {};
-  state.lastSelectedAt = {};
   state.quotaBandSize = undefined;
   persist();
 }
@@ -96,7 +90,6 @@ export function resetSeamlessSwitchRuntimeState(): void {
 function persist(): void {
   void extensionContext?.globalState.update(GLOBAL_STATE_KEY, {
     hourlyBands: state.hourlyBands,
-    lastSelectedAt: state.lastSelectedAt,
     quotaBandSize: state.quotaBandSize
   });
 }

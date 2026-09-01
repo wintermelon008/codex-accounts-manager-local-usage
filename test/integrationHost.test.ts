@@ -72,6 +72,21 @@ describe("ManagerIntegrationHost", () => {
     host.dispose();
   });
 
+  it("exposes only sanitized deactivation mailbox addresses from registered integrations", () => {
+    const gateway = createGateway();
+    const host = new ManagerIntegrationHost(gateway.operations);
+    host.api.registerDashboardIntegration({
+      id: "mailbox",
+      getViewModel: () => ({ id: "mailbox", title: "Mailbox", status: "ready", actions: [] }),
+      getDeactivatedMailboxEmails: () => [" blocked@example.com ", "blocked@example.com"],
+      runAction: vi.fn()
+    });
+
+    expect(host.getDeactivatedMailboxEmails()).toEqual(["blocked@example.com"]);
+    host.dispose();
+    expect(host.getDeactivatedMailboxEmails()).toEqual([]);
+  });
+
   it("does not expose unavailable account-directory capabilities", () => {
     const gateway = createGateway();
     const host = new ManagerIntegrationHost(gateway.operations, undefined, {

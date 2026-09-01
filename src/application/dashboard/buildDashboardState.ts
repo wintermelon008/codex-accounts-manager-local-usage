@@ -52,6 +52,11 @@ export async function buildDashboardState(
   const autoSwitchRuntime = getAutoSwitchRuntimeSnapshot();
   const integrationHost = getActiveManagerIntegrationHost();
   const integrations = integrationHost?.getDashboardIntegrations();
+  const deactivatedMailboxEmails = new Set(
+    (integrationHost?.getDeactivatedMailboxEmails() ?? [])
+      .map((email) => normalizeDashboardEmail(email))
+      .filter((email): email is string => Boolean(email))
+  );
   const integrationSettings = integrationHost?.getIntegrationSettings();
   const providerCards = new Map(
     integrationHost?.getVirtualAccountCards().map(({ accountId, card }) => [accountId, card] as const) ?? []
@@ -66,7 +71,7 @@ export async function buildDashboardState(
   );
   const accountViewStateById = new Map<string, DashboardAccountViewState>();
   await runWithConcurrencyLimit(accounts, DASHBOARD_TOKEN_READ_CONCURRENCY, async (account) => {
-    const tokens = isSub2ApiAccount(account) ? undefined : await repo.getTokens(account.id, { syncExternal: false });
+    const tokens = isSub2ApiAccount(account) ? undefined : await repo.getTokens(account.id);
     const health: ReturnType<typeof resolveAccountHealth> = isSub2ApiAccount(account)
       ? { kind: "healthy", issueKey: "virtual" }
       : resolveAccountHealth(account, tokens, tokenAutomation);
@@ -110,7 +115,8 @@ export async function buildDashboardState(
         currentWindowAccountId,
         autoSwitchRuntime,
         accountTokenUsage,
-        providerCards.get(account.id)
+        providerCards.get(account.id),
+        deactivatedMailboxEmails
       )
     )
   };
@@ -143,7 +149,8 @@ function mapAccount(
   currentWindowAccountId?: string,
   autoSwitchRuntime?: ReturnType<typeof getAutoSwitchRuntimeSnapshot>,
   accountTokenUsage?: AccountTokenUsageSnapshot,
-  providerCard?: DashboardAccountViewModel["providerCard"]
+  providerCard?: DashboardAccountViewModel["providerCard"],
+  deactivatedMailboxEmails?: ReadonlySet<string>
 ): DashboardAccountViewModel {
   const virtual = isSub2ApiAccount(account);
   const canToggleStatusBar = account.isActive || account.providerActive
@@ -188,6 +195,7 @@ function mapAccount(
     subscriptionTitle: subscription.title,
     subscriptionColor: subscription.color,
     addMethodLabel: virtual ? "Gateway | 手动" : `${formatAddMethod(account.addedVia, lang)} | ${formatAuthProvider(account.authProvider, lang)}`,
+    createdAt: account.createdAt,
     addedAtLabel: formatAddedAt(account.createdAt, copy.never),
     statusColor: virtual ? "var(--accent-blue)" : account.isActive ? "var(--accent-green)" : health.kind === "healthy" ? undefined : "#ef4444",
     planTypeLabel: virtual ? "Sub2API Gateway" : formatPlanTypeWithQuota(account, lang),
@@ -217,6 +225,9 @@ function mapAccount(
     lastTokenRefreshAt: virtual ? undefined : automationState?.lastRefreshAt,
     lastTokenRefreshError: virtual ? undefined : automationState?.lastError,
     lastQuotaAt: virtual ? undefined : account.lastQuotaAt,
+    mailboxDeactivated: virtual
+      ? undefined
+      : deactivatedMailboxEmails?.has(normalizeDashboardEmail(account.email) ?? "") === true,
     resetCreditsAvailable,
     resetCreditsNextExpiresAt,
     quotaCountdownStartAvailable: virtual ? false : isQuotaCountdownStartAvailable(account),
@@ -226,6 +237,14 @@ function mapAccount(
     providerCard: virtual ? providerCard : undefined,
     metrics: virtual ? [] : buildMetrics(account, copy, lang)
   };
+}
+
+function normalizeDashboardEmail(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function resolveAccountTokenUsage(

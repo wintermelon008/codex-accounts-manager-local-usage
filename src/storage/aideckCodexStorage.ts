@@ -562,10 +562,10 @@ function isMirrorSnapshotConsistent(snapshot: AideckMirrorTokenSnapshot): boolea
   }
 
   return !(
-    hasRequiredIdentityMismatch(normalizeEmail(snapshot.email), claims.email) ||
-    hasRequiredIdentityMismatch(snapshot.userId, claims.userId) ||
-    hasRequiredIdentityMismatch(snapshot.accountId, claims.accountId) ||
-    hasRequiredIdentityMismatch(snapshot.organizationId, claims.organizationId)
+    hasPresentIdentityMismatch(normalizeEmail(snapshot.email), claims.email) ||
+    hasPresentIdentityMismatch(snapshot.userId, claims.userId) ||
+    hasPresentIdentityMismatch(snapshot.accountId, claims.accountId) ||
+    hasPresentIdentityMismatch(snapshot.organizationId, claims.organizationId)
   );
 }
 
@@ -601,6 +601,10 @@ function normalizeEmail(email: string | undefined): string | undefined {
 
 function hasRequiredIdentityMismatch(expected: string | undefined, candidate: string | undefined): boolean {
   return Boolean(expected && expected !== candidate);
+}
+
+function hasPresentIdentityMismatch(expected: string | undefined, candidate: string | undefined): boolean {
+  return Boolean(expected && candidate && expected !== candidate);
 }
 
 async function readJsonFile(filePath: string): Promise<JsonRecord | undefined> {

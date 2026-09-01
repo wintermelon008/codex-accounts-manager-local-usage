@@ -158,7 +158,7 @@ export interface DashboardCopy {
   batchRefreshBtn: string;
   batchResyncBtn: string;
   batchRemoveBtn: string;
-  removeDeactivatedAccountsBtn: string;
+  removeBlockedAccountsBtn: string;
   batchExportBtn: string;
   batchSelectedCount: string;
   batchResultTitle: string;
@@ -424,6 +424,8 @@ export interface DashboardAccountViewModel {
   subscriptionTitle: string;
   subscriptionColor?: string;
   addMethodLabel: string;
+  /** Raw import timestamp used by local Dashboard sorting. */
+  createdAt?: number;
   addedAtLabel: string;
   statusColor?: string;
   planTypeLabel: string;
@@ -442,6 +444,8 @@ export interface DashboardAccountViewModel {
   hasQuota402: boolean;
   quotaIssueKind?: "disabled" | "auth" | "quota";
   healthKind: "healthy" | "expiring" | "refresh_failed" | "reauthorize" | "disabled" | "quota";
+  /** True only when the optional Mailbox integration marked this email as deactivated. */
+  mailboxDeactivated?: boolean;
   healthLabel: string;
   healthMessage?: string;
   healthIssueKey?: string;
@@ -744,6 +748,7 @@ export type DashboardHostMessage =
 
 export type DashboardClientMessage =
   | { type: "dashboard:ready" }
+  | { type: "dashboard:account-order"; accountIds: string[] }
   | {
       type: "dashboard:action";
       requestId: string;

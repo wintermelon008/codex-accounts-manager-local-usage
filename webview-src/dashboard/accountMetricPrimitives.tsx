@@ -14,7 +14,7 @@ export function renderHealthPill(account: DashboardAccountViewModel) {
 
   switch (account.healthKind) {
     case "healthy":
-      return <span class="pill ok">{account.healthLabel}</span>;
+      return null;
     case "expiring":
       return <span class="pill warning">{account.healthLabel}</span>;
     case "reauthorize":

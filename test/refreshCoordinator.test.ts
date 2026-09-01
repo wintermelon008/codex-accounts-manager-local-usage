@@ -13,7 +13,10 @@ import {
   SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS,
   SEAMLESS_USAGE_LIMIT_RETRY_MS
 } from "../src/presentation/workbench/schedulerRegistration";
-import { setCurrentWindowRuntimeAccountId } from "../src/presentation/workbench/windowRuntimeAccount";
+import {
+  getCurrentWindowRuntimeAccountId,
+  setCurrentWindowRuntimeAccountId
+} from "../src/presentation/workbench/windowRuntimeAccount";
 
 type TestableCoordinator = {
   lastObservedAuthIdentity?: string;
@@ -31,6 +34,20 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     vi.useRealTimers();
     vi.clearAllMocks();
     setCurrentWindowRuntimeAccountId(undefined);
+  });
+
+  it("keeps the Dashboard runtime identity in sync when a switch is observed", () => {
+    const coordinator = new WorkbenchRefreshCoordinator(
+      { subscriptions: [] } as never,
+      {} as never,
+      {} as never
+    );
+    const view = coordinator.createRefreshView();
+
+    setCurrentWindowRuntimeAccountId("account-a");
+    view.markObservedAuthIdentity("account-b");
+
+    expect(getCurrentWindowRuntimeAccountId()).toBe("account-b");
   });
 
   it("retries the same observed identity when its runtime switch was deferred", async () => {
