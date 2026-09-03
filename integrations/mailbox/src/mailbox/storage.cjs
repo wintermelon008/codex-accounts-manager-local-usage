@@ -2,7 +2,7 @@
 
 const crypto = require("node:crypto");
 const { normalizeMailboxAccount, normalizeMailboxAddress } = require("../core/account.cjs");
-const { isOpenAiAccountDeactivatedMessage } = require("../core/messages.cjs");
+const { isOpenAiAccountDeactivatedMessage, isOpenAiMessage } = require("../core/messages.cjs");
 
 // This is intentionally a new namespace. The redesign is a clean install and
 // must not accidentally read provider-specific data from the old extension.
@@ -65,8 +65,10 @@ class MailboxPool {
       const detail = await this.metadataStore.get(detailKey(metadata.id));
       const messages = normalizeStoredMessages(detail?.messages);
       const hasDeactivationNotice = messages.some(isOpenAiAccountDeactivatedMessage);
-      if (metadata.openaiAccountDeactivated !== hasDeactivationNotice) {
+      const firstOpenAiEmailAt = mergeFirstOpenAiEmailAt(metadata.firstOpenAiEmailAt, findFirstOpenAiEmailAt(messages));
+      if (metadata.openaiAccountDeactivated !== hasDeactivationNotice || metadata.firstOpenAiEmailAt !== firstOpenAiEmailAt) {
         metadata.openaiAccountDeactivated = hasDeactivationNotice;
+        metadata.firstOpenAiEmailAt = firstOpenAiEmailAt;
         changed = true;
       }
     }
@@ -162,6 +164,7 @@ class MailboxPool {
             latestMessage: previous?.latestMessage,
             messageCount: previous?.messageCount ?? 0,
             openaiAccountDeactivated: previous?.openaiAccountDeactivated === true,
+            firstOpenAiEmailAt: previous?.firstOpenAiEmailAt,
             gptRegistered: previous?.gptRegistered === true,
             gptRegisteredAt: numberOrUndefined(previous?.gptRegisteredAt),
             historyMode: provider.capabilities?.history === "latest" ? "latest" : "recent"
@@ -193,6 +196,7 @@ class MailboxPool {
       if (result?.ok) {
         const messages = normalizeStoredMessages(result.messages);
         metadata.openaiAccountDeactivated = messages.some(isOpenAiAccountDeactivatedMessage);
+        metadata.firstOpenAiEmailAt = mergeFirstOpenAiEmailAt(metadata.firstOpenAiEmailAt, findFirstOpenAiEmailAt(messages));
         metadata.latestCode = firstCode(result.codes, messages);
         metadata.latestMessage = messages[0] ? summarizeMessage(messages[0]) : undefined;
         metadata.messageCount = messages.length;
@@ -312,6 +316,7 @@ class MailboxPool {
           metadata.latestMessage = undefined;
           metadata.messageCount = 0;
           metadata.openaiAccountDeactivated = false;
+          metadata.firstOpenAiEmailAt = undefined;
           metadata.lastStatus = undefined;
           metadata.lastError = undefined;
           metadata.lastQueryAt = undefined;
@@ -461,6 +466,7 @@ function sanitizeMetadata(entry) {
     latestMessage: entry.latestMessage ? summarizeMessage(entry.latestMessage) : undefined,
     messageCount: Number.isFinite(entry.messageCount) ? Math.max(0, Math.floor(entry.messageCount)) : 0,
     openaiAccountDeactivated: entry.openaiAccountDeactivated === true,
+    firstOpenAiEmailAt: stringOrUndefined(entry.firstOpenAiEmailAt),
     gptRegistered: entry.gptRegistered === true,
     gptRegisteredAt: numberOrUndefined(entry.gptRegisteredAt),
     historyMode: entry.historyMode === "latest" ? "latest" : "recent"
@@ -495,6 +501,25 @@ function normalizeStoredMessages(messages) {
     body: safeText(message.body),
     codes: normalizeCodes(message.codes)
   }));
+}
+
+function findFirstOpenAiEmailAt(messages) {
+  const timestamps = messages
+    .filter(isOpenAiMessage)
+    .map((message) => Date.parse(message.receivedAt || ""))
+    .filter(Number.isFinite);
+  if (timestamps.length === 0) return undefined;
+  return new Date(Math.min(...timestamps)).toISOString();
+}
+
+function mergeFirstOpenAiEmailAt(current, candidate) {
+  if (!candidate) return stringOrUndefined(current);
+  const candidateTimestamp = Date.parse(candidate);
+  if (!Number.isFinite(candidateTimestamp)) return stringOrUndefined(current);
+  const currentTimestamp = Date.parse(String(current || ""));
+  return !Number.isFinite(currentTimestamp) || candidateTimestamp < currentTimestamp
+    ? new Date(candidateTimestamp).toISOString()
+    : stringOrUndefined(current);
 }
 
 function summarizeMessage(message) {

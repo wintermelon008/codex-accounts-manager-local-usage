@@ -29,7 +29,17 @@ import {
   type DashboardAccountSortKey
 } from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
-import { BellIcon, BugTeamIcon, EyeIcon, EyeOffIcon, GitHubIcon, GlobeIcon, InfoIcon, MailIcon } from "./icons";
+import {
+  BellIcon,
+  BugTeamIcon,
+  EyeIcon,
+  EyeOffIcon,
+  GitHubIcon,
+  GlobeIcon,
+  InfoIcon,
+  MailIcon,
+  UnlockIcon
+} from "./icons";
 import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
 import { SavedAccountCard } from "./savedAccountCard";
 import { LocalUsageSection } from "./localUsageSection";
@@ -274,6 +284,11 @@ function App() {
     );
   };
 
+  const handleForceFastModeToggle = (enabled: boolean): void => {
+    patchSettings({ forceFastModeEnabled: enabled });
+    sendSetting("forceFastModeEnabled", enabled);
+  };
+
   const selectedAccountIds = new Set(state.selectedAccountIds);
   const selectedCount = state.selectedAccountIds.length;
   const isAccountBusy = (accountId: string): boolean =>
@@ -296,6 +311,7 @@ function App() {
   const unhideAccountsPending = isActionPending("unhideAccounts");
   const setAccountGroupPending = isActionPending("setAccountGroup");
   const localUsageRefreshPending = isActionPending("refreshLocalUsage");
+  const unlockCodexSessionLocksPending = isActionPending("unlockCodexSessionLocks");
   const integrationActionPending = isActionPending("integrationAction");
   const topButtonIntegrations = (snapshot.integrations ?? []).flatMap((integration) => {
     const topButton =
@@ -433,6 +449,29 @@ function App() {
                 </span>
               </button>
               <button
+                id="unlockCodexSessionLocksButton"
+                class="settings-btn action-btn icon-only"
+                type="button"
+                title={resolveUnlockCodexSessionLocksLabel(snapshot.lang)}
+                aria-label={resolveUnlockCodexSessionLocksLabel(snapshot.lang)}
+                disabled={hasGlobalPendingAction || unlockCodexSessionLocksPending}
+                aria-busy={unlockCodexSessionLocksPending}
+                onClick={() => sendAction("unlockCodexSessionLocks")}
+              >
+                <span class="button-face">
+                  {unlockCodexSessionLocksPending ? (
+                    <span class="button-spinner" aria-hidden="true"></span>
+                  ) : (
+                    <span class="button-icon">
+                      <UnlockIcon />
+                    </span>
+                  )}
+                </span>
+                <span class="button-tip" aria-hidden="true">
+                  {resolveUnlockCodexSessionLocksLabel(snapshot.lang)}
+                </span>
+              </button>
+              <button
                 id="settingsOpenButton"
                 class="settings-btn action-btn icon-only"
                 type="button"
@@ -530,11 +569,26 @@ function App() {
                 <div
                   class="account-sort-controls"
                   role="group"
-                  aria-label={resolveAccountSortGroupLabel(snapshot.lang)}
+                  aria-label={resolveAccountControlsLabel(snapshot.lang)}
                 >
-                  <label class="account-sort-label" for="account-sort-select">
-                    {resolveAccountSortGroupLabel(snapshot.lang)}
-                  </label>
+                  <button
+                    id="forceFastModeToggle"
+                    class={`account-fast-mode-toggle ${snapshot.settings.forceFastModeEnabled ? "is-active" : ""}`}
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.forceFastModeEnabled}
+                    aria-label={resolveForceFastModeToggleLabel(
+                      snapshot.lang,
+                      snapshot.settings.forceFastModeEnabled
+                    )}
+                    title={resolveForceFastModeToggleLabel(snapshot.lang, snapshot.settings.forceFastModeEnabled)}
+                    onClick={() => handleForceFastModeToggle(!snapshot.settings.forceFastModeEnabled)}
+                  >
+                    <span class="account-fast-mode-label">Fast</span>
+                    <span class="account-fast-mode-track" aria-hidden="true">
+                      <span class="account-fast-mode-thumb" />
+                    </span>
+                  </button>
                   <select
                     id="account-sort-select"
                     class="account-sort-select"
@@ -1090,14 +1144,34 @@ function resolveAccountGroupFiltersLabel(lang: string): string {
   return "Account group filters";
 }
 
-function resolveAccountSortGroupLabel(lang: string): string {
+function resolveAccountControlsLabel(lang: string): string {
   if (lang === "zh") {
-    return "账号排序";
+    return "账号控制";
   }
   if (lang === "zh-hant") {
-    return "帳號排序";
+    return "帳號控制";
   }
-  return "Account sorting";
+  return "Account controls";
+}
+
+function resolveUnlockCodexSessionLocksLabel(lang: string): string {
+  if (lang === "zh") {
+    return "解锁失效 Codex 会话（不终止活跃会话）";
+  }
+  if (lang === "zh-hant") {
+    return "解除失效 Codex 會話鎖（不終止活躍會話）";
+  }
+  return "Unlock stale Codex sessions (does not terminate active sessions)";
+}
+
+function resolveForceFastModeToggleLabel(lang: string, enabled: boolean): string {
+  if (lang === "zh") {
+    return enabled ? "关闭 Fast 模式（下一回合生效）" : "开启 Fast 模式（下一回合生效）";
+  }
+  if (lang === "zh-hant") {
+    return enabled ? "關閉 Fast 模式（下一回合生效）" : "開啟 Fast 模式（下一回合生效）";
+  }
+  return enabled ? "Turn off Fast mode (applies next turn)" : "Turn on Fast mode (applies next turn)";
 }
 
 function resolveAccountSortSelectLabel(lang: string): string {

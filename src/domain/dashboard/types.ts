@@ -26,6 +26,7 @@ export type DashboardSettingKey =
   | "codexAppRestartEnabled"
   | "codexAppRestartMode"
   | "backgroundTokenRefreshEnabled"
+  | "forceFastModeEnabled"
   | "autoRefreshMinutes"
   | "autoSwitchEnabled"
   | "seamlessSwitchEnabled"
@@ -60,6 +61,7 @@ export interface DashboardSettings {
   codexAppRestartEnabled: boolean;
   codexAppRestartMode: "auto" | "manual";
   backgroundTokenRefreshEnabled: boolean;
+  forceFastModeEnabled: boolean;
   autoRefreshMinutes: number;
   autoSwitchEnabled: boolean;
   hotSwitchEnabled: boolean;
@@ -672,6 +674,7 @@ export type DashboardActionName =
   | "batchRemove"
   | "refreshView"
   | "refreshLocalUsage"
+  | "unlockCodexSessionLocks"
   | "resetSeamlessSwitchRuntime"
   | "integrationAction"
   | "integrationSetting"

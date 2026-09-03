@@ -11,6 +11,7 @@ import {
   getCodexAccountsConfiguration,
   getExternalControlPort,
   isExternalControlEnabled,
+  isForceFastModeEnabled,
   isLocalImportInboxEnabled,
   isSeamlessSwitchEnabled
 } from "../../infrastructure/config/extensionSettings";
@@ -51,9 +52,12 @@ import {
   registerTokenRefreshScheduler,
   type SeamlessUsageLimitMonitor
 } from "./schedulerRegistration";
+import { SessionHub, resolveSessionRegistryPath } from "../../sessions";
 
 const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
+const MANAGER_CONTROL_RETRY_INITIAL_DELAY_MS = 1_000;
+const MANAGER_CONTROL_RETRY_MAX_DELAY_MS = 10_000;
 const OPENAI_REGISTRATION_URL = "https://auth.openai.com/create-account";
 
 export class AccountsWorkbench {
@@ -64,7 +68,10 @@ export class AccountsWorkbench {
   private readonly runtimeSwitchCoordinator: RuntimeSwitchCoordinator;
   private readonly localImportInbox: LocalImportInbox | undefined;
   private readonly managerControlServer: ManagerControlServer;
+  private readonly sessionHub: SessionHub | undefined;
   private readonly integrationHost: ManagerIntegrationHost;
+  private managerControlRetryTimer: NodeJS.Timeout | undefined;
+  private managerControlRetryAttempt = 0;
   private readonly oauthImportCancellationSources = new Map<string, vscode.CancellationTokenSource>();
   private seamlessUsageLimitMonitor: SeamlessUsageLimitMonitor | undefined;
 
@@ -112,13 +119,25 @@ export class AccountsWorkbench {
         getManagedAccountDirectory: async () => {
           const automation = getTokenAutomationSnapshot();
           const accounts = await this.repo.listAccounts();
-          return accounts
-            .filter((account) => !isSub2ApiAccount(account))
-            .map((account) => ({
+          const managedAccounts = accounts.filter((account) => !isSub2ApiAccount(account));
+          const directory: Array<{
+            accountId: string;
+            email: string;
+            requiresReauthorization: boolean;
+          } | undefined> = managedAccounts.map(() => undefined);
+          await runWithConcurrencyLimit(managedAccounts, 3, async (account, index) => {
+            const tokens = await this.repo.getTokens(account.id);
+            directory[index] = {
               accountId: account.id,
               email: account.email,
-              requiresReauthorization: resolveAccountHealth(account, undefined, automation).kind === "reauthorize"
-            }));
+              requiresReauthorization: resolveAccountHealth(account, tokens, automation).kind === "reauthorize"
+            };
+          });
+          return directory.filter((entry): entry is {
+            accountId: string;
+            email: string;
+            requiresReauthorization: boolean;
+          } => entry !== undefined);
         },
         removeManagedAccount: async (accountId) => {
           const account = await this.repo.getAccount(accountId);
@@ -143,12 +162,16 @@ export class AccountsWorkbench {
           void this.statusBar.refresh();
         })
       : undefined;
+    this.sessionHub = isExternalControlEnabled()
+      ? new SessionHub(resolveSessionRegistryPath())
+      : undefined;
     this.managerControlServer = new ManagerControlServer({
       repo: this.repo,
       usage: new LocalUsageAnalyticsService({
         globalStoragePath: context.globalStorageUri.fsPath,
         backgroundRefreshEnabled: true
       }),
+      sessionHub: this.sessionHub,
       refreshQuotas: (accountIds) => this.refreshQuotasForControl(accountIds),
       enqueueImport: (accounts) => enqueueLocalImportJob(accounts),
       getImportStatus: (jobId) => readLocalImportStatus(jobId)
@@ -173,6 +196,10 @@ export class AccountsWorkbench {
     await measureStep("repo.init", async () => {
       await this.repo.init();
     });
+    const sessionHub = this.sessionHub;
+    if (sessionHub) {
+      await measureStep("sessionHub.init", () => sessionHub.init());
+    }
     this.context.subscriptions.push(this.managerControlServer);
     await measureStep("managerControlServer.start", () => this.startManagerControlServer());
     await measureStep("notifyIndexHealth", async () => {
@@ -182,11 +209,26 @@ export class AccountsWorkbench {
       await this.refreshCoordinator.initializeObservedAuthIdentity();
     });
     const hotSwitchSetup = await measureStep("hotSwitchRuntime.initialize", () => this.hotSwitchRuntime.initialize());
+    this.context.subscriptions.push(
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (!event.affectsConfiguration("codexAccounts.forceFastModeEnabled")) {
+          return;
+        }
+        void this.hotSwitchRuntime.setForceFastMode(isForceFastModeEnabled()).catch((error) => {
+          console.warn(`[codexAccounts] failed to update Fast mode in the active runtime: ${getErrorMessage(error)}`);
+        });
+      })
+    );
     this.context.subscriptions.push({ dispose: () => this.repo.dispose() });
     this.context.subscriptions.push({ dispose: () => this.refreshCoordinator.dispose() });
     this.context.subscriptions.push(this.hotSwitchRuntime);
     setActiveManagerIntegrationHost(this.integrationHost);
     this.context.subscriptions.push(this.integrationHost);
+    this.context.subscriptions.push(
+      this.repo.onDidChangeAccounts(() => {
+        this.integrationHost.notifyAccountDirectoryChanged();
+      })
+    );
     this.context.subscriptions.push(
       this.integrationHost.onDidChange(() => {
         void refreshQuotaSummaryPanel();
@@ -280,6 +322,10 @@ export class AccountsWorkbench {
   }
 
   dispose(): void {
+    if (this.managerControlRetryTimer) {
+      clearTimeout(this.managerControlRetryTimer);
+      this.managerControlRetryTimer = undefined;
+    }
     this.oauthImportCancellationSources.forEach((source) => {
       source.cancel();
       source.dispose();
@@ -313,13 +359,43 @@ export class AccountsWorkbench {
       return;
     }
 
+    this.managerControlRetryAttempt = 0;
+    await this.tryStartManagerControlServer(getExternalControlPort(), token);
+  }
+
+  private async tryStartManagerControlServer(port: number, token: string): Promise<void> {
     try {
-      const address = await this.managerControlServer.start(getExternalControlPort(), token);
+      const address = await this.managerControlServer.start(port, token);
+      this.managerControlRetryAttempt = 0;
       console.info(`[codexAccounts] manager control API listening on ${address.host}:${address.port}`);
     } catch (error) {
+      if (isAddressInUseError(error)) {
+        if (this.managerControlRetryAttempt === 0) {
+          console.warn(
+            `[codexAccounts] manager control port ${port} is already in use; waiting for the previous Manager host to exit before retrying`
+          );
+        }
+        this.scheduleManagerControlRetry(port, token);
+        return;
+      }
       console.warn(`[codexAccounts] manager control API could not start: ${getErrorMessage(error)}`);
       void vscode.window.showWarningMessage(`Manager 外部控制接口启动失败：${describeControlError(error)}`);
     }
+  }
+
+  private scheduleManagerControlRetry(port: number, token: string): void {
+    if (this.managerControlRetryTimer) {
+      return;
+    }
+    const delay = Math.min(
+      MANAGER_CONTROL_RETRY_INITIAL_DELAY_MS * 2 ** Math.min(this.managerControlRetryAttempt, 4),
+      MANAGER_CONTROL_RETRY_MAX_DELAY_MS
+    );
+    this.managerControlRetryAttempt += 1;
+    this.managerControlRetryTimer = setTimeout(() => {
+      this.managerControlRetryTimer = undefined;
+      void this.tryStartManagerControlServer(port, token);
+    }, delay);
   }
 
   private async refreshQuotasForControl(accountIds?: readonly string[]): Promise<ManagerControlRefreshSummary> {
@@ -569,4 +645,8 @@ function normalizeEmail(value: string | undefined): string | undefined {
 
 function describeControlError(error: unknown): string {
   return getErrorMessage(error);
+}
+
+function isAddressInUseError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "EADDRINUSE");
 }

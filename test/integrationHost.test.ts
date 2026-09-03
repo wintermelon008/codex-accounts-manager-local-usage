@@ -103,6 +103,21 @@ describe("ManagerIntegrationHost", () => {
     host.dispose();
   });
 
+  it("notifies integrations when the managed account directory changes", () => {
+    const gateway = createGateway();
+    const host = new ManagerIntegrationHost(gateway.operations);
+    const listener = vi.fn();
+    const subscription = host.api.onDidChange?.(listener);
+
+    host.notifyAccountDirectoryChanged();
+    expect(listener).toHaveBeenCalledOnce();
+
+    subscription?.dispose();
+    host.notifyAccountDirectoryChanged();
+    expect(listener).toHaveBeenCalledOnce();
+    host.dispose();
+  });
+
   it("exposes a browser-only GPT registration handoff without changing OAuth ownership", async () => {
     const gateway = createGateway();
     const openRegistrationBrowser = vi.fn(async (options: { clipboardText?: string } = {}) => {

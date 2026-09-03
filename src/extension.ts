@@ -5,6 +5,7 @@ import {
   getCodexProxyConfigurationError,
   initializeCodexProxyEnvironment
 } from "./infrastructure/config/proxyEnvironment";
+import { loadManagerControlEnvironment } from "./infrastructure/config/managerControlEnvironment";
 import { AccountsWorkbench } from "./presentation/workbench/accountsWorkbench";
 
 let workbench: AccountsWorkbench | undefined;
@@ -15,6 +16,7 @@ let workbench: AccountsWorkbench | undefined;
  * @param context - 扩展上下文
  */
 export async function activate(context: vscode.ExtensionContext): Promise<CodexAccountsIntegrationApi> {
+  await loadManagerControlEnvironment();
   await initializeCodexProxyEnvironment();
   const proxyError = getCodexProxyConfigurationError();
   if (proxyError) {

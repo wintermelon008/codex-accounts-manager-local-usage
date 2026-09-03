@@ -20,6 +20,7 @@ type Message = {
     id?: string;
     method?: string;
     threadId?: string;
+    serviceTier?: string;
     modelProviders?: string[] | null;
     turnId?: string;
     goalStatus?: string;
@@ -78,7 +79,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 12,
+      runtimeProtocolVersion: 13,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -127,6 +128,50 @@ describe("CodexHotSwitchBridge", () => {
       attributionFailureReason: "The app-server reported a different account for usage attribution"
     });
   });
+
+  it("updates Fast mode without restarting and applies it to direct ChatGPT turns", async () => {
+    const root = path.resolve(__dirname, "..");
+    const shimPath = path.join(root, "runtime", "codex-app-server-shim.cjs");
+    const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
+    shim = childProcess.spawn(shimPath, ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: fakeCliPath
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "fast-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "fast-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "unused-token",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    await expect(bridge.configureFastMode(true)).resolves.toEqual({ enabled: true });
+    await expect(bridge.getStatus()).resolves.toMatchObject({ forceFastMode: true });
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "fast-turn", method: "turn/start", params: { threadId: "fast-thread", input: [] } })}\n`
+    );
+    await expect(
+      messages.next((message) => message.method === "test/received" && message.params?.id === "fast-turn")
+    ).resolves.toMatchObject({
+      params: {
+        method: "turn/start",
+        serviceTier: "priority"
+      }
+    });
+
+    shim.stdin.write(`${JSON.stringify({ id: "fast-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "fast-complete");
+    await expect(bridge.configureFastMode(false)).resolves.toEqual({ enabled: false });
+    await expect(bridge.getStatus()).resolves.toMatchObject({ forceFastMode: false });
+  }, 15_000);
 
   it("waits for the app-server identity to settle after login before committing a switch", async () => {
     const root = path.resolve(__dirname, "..");

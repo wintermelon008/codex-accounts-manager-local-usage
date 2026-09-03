@@ -16,6 +16,8 @@ export type HotSwitchStatus = {
   activeTurns: number;
   pendingSwitch: boolean;
   switching: boolean;
+  /** Whether subsequent direct ChatGPT turns are forced onto the Fast tier. */
+  forceFastMode: boolean;
   httpTransportForced: boolean;
   transportMode: "http" | "default";
   providerKind: "chatgpt" | "gateway" | "default";
@@ -273,6 +275,10 @@ export class CodexHotSwitchBridge {
 
   async configureUsageLimitObservation(enabled: boolean): Promise<{ enabled: boolean }> {
     return this.request<{ enabled: boolean }>("runtime/usage/configure", { enabled }, REQUEST_TIMEOUT_MS);
+  }
+
+  async configureFastMode(enabled: boolean): Promise<{ enabled: boolean }> {
+    return this.request<{ enabled: boolean }>("runtime/fast-mode", { enabled }, REQUEST_TIMEOUT_MS);
   }
 
   async resetUsageLimitObservation(): Promise<{ reset: boolean }> {

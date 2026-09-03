@@ -95,6 +95,7 @@ If you only need upstream core account management, search the Extensions view fo
 - [Feishu private-chat M+/S+ importer](docs/integrations/feishu-private-import.md)
 - [Multi-source BugTeam account integration](docs/integrations/bugteam.md)
 - [Independent delivery, disablement, and migration](docs/integrations/README.md)
+- [Vserver session hub foundation](docs/SESSION_HUB.md)
 - [Core local text import inbox](docs/LOCAL_IMPORT_INBOX.md)
 - [Changelog](docs/CHANGELOG.md)
 

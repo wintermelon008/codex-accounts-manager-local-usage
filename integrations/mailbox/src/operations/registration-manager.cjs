@@ -238,7 +238,7 @@ class RegistrationManager extends EventEmitter {
 
   cleanupSession(sessionId) {
     const session = this.sessions.get(sessionId);
-    if (session && [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(session.state)) {
+    if (session) {
       this.sessions.delete(sessionId);
       this.emit("sessionCleaned", { sessionId });
     }

@@ -157,6 +157,8 @@ export type CodexAccountsIntegrationApi = {
   registerDashboardIntegration: (registration: DashboardIntegrationRegistration) => vscode.Disposable;
   registerGateway: (integrationId: string) => GatewayRuntimeLease;
   registerVirtualAccount: (registration: VirtualAccountRegistration) => Promise<vscode.Disposable>;
+  /** Optional notification that the sanitized Manager account directory changed. */
+  onDidChange?: IntegrationChangeEvent;
   /** Optional sanitized account-directory capability for integrations such as Mailbox. */
   getManagedAccountEmails?: () => Promise<readonly string[]>;
   /** Optional sanitized account directory with the current reauthorization state. */
@@ -217,6 +219,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
   private readonly gatewayLeases = new Map<string, GatewayRuntimeLeaseState>();
   private readonly virtualAccounts = new Map<string, RegisteredVirtualAccount>();
   private readonly changeListeners = new Set<() => void>();
+  private readonly accountDirectoryChangeListeners = new Set<() => void>();
   private virtualSwitchInFlight: Promise<RuntimeAccountSwitchOutcome> | undefined;
   private configuredGatewayOwner: string | undefined;
   private activeGatewayOwner: string | undefined;
@@ -233,6 +236,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
       registerDashboardIntegration: (registration) => this.registerDashboardIntegration(registration),
       registerGateway: (integrationId) => this.registerGateway(integrationId),
       registerVirtualAccount: (registration) => this.registerVirtualAccount(registration),
+      onDidChange: (listener) => this.onDidChangeAccountDirectory(listener),
       ...(this.accountImportOperations
         ? {
             getManagedAccountEmails: () => this.getManagedAccountEmails(),
@@ -333,6 +337,28 @@ export class ManagerIntegrationHost implements vscode.Disposable {
     return {
       dispose: () => {
         this.changeListeners.delete(listener);
+      }
+    };
+  }
+
+  /** Notify optional integrations that the current Manager account directory may have changed. */
+  notifyAccountDirectoryChanged(): void {
+    this.fireDidChange();
+    for (const listener of [...this.accountDirectoryChangeListeners]) {
+      try {
+        listener();
+      } catch {
+        // An optional integration must not break the Manager host event loop.
+      }
+    }
+  }
+
+  private onDidChangeAccountDirectory(listener: () => void): vscode.Disposable {
+    this.throwIfDisposed();
+    this.accountDirectoryChangeListeners.add(listener);
+    return {
+      dispose: () => {
+        this.accountDirectoryChangeListeners.delete(listener);
       }
     };
   }
@@ -527,6 +553,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
     this.virtualAccounts.clear();
     this.gatewayLeases.clear();
     this.changeListeners.clear();
+    this.accountDirectoryChangeListeners.clear();
     if (this.configuredGatewayOwner || this.gatewayTransitionOwner) {
       void this.gateway.deactivate().catch(() => undefined);
     }

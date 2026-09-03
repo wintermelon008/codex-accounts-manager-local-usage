@@ -618,6 +618,7 @@ function runtimeStatus(overrides: Partial<HotSwitchStatus> = {}): HotSwitchStatu
     activeTurns: 0,
     pendingSwitch: false,
     switching: false,
+    forceFastMode: false,
     httpTransportForced: false,
     transportMode: "http",
     providerKind: "chatgpt",

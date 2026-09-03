@@ -192,6 +192,70 @@ test("registration mailbox library can show only emails without GPT registration
   assert.match(renderedHtml, /id="registrationOnlyUnregisteredGpt" type="checkbox" checked/u);
 });
 
+test("registration mailbox library shows GPT age and filters registrations at seven days", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [
+        { id: "mailbox:old-gpt", providerId: "mock", address: "old-gpt@example.com", displayName: "old-gpt@example.com", gptRegistered: true, firstOpenAiEmailAt: new Date(now - 8 * day).toISOString() },
+        { id: "mailbox:recent-gpt", providerId: "mock", address: "recent-gpt@example.com", displayName: "recent-gpt@example.com", gptRegistered: true, firstOpenAiEmailAt: new Date(now - 6 * day).toISOString() },
+        { id: "mailbox:not-gpt", providerId: "mock", address: "not-gpt@example.com", displayName: "not-gpt@example.com", gptRegistered: false }
+      ],
+      providers: [{ id: "mock", displayName: "Mock", capabilities: {}, importSchema: {} }],
+      managedAccountEmails: [],
+      registrationSessions: []
+    }
+  } });
+
+  assert.match(renderedHtml, /仅 GPT 注册 ≥ 7 天/u);
+  assert.match(renderedHtml, /old-gpt@example\.com/u);
+  assert.match(renderedHtml, /recent-gpt@example\.com/u);
+  assert.match(renderedHtml, /GPT 已注册 \d+ 天/u);
+
+  documentListeners.get("change")({ target: {
+    id: "registrationOnlyGptSevenDays",
+    checked: true,
+    matches() { return false; },
+    closest() { return this; }
+  } });
+
+  assert.match(renderedHtml, /id="registrationOnlyGptSevenDays" type="checkbox" checked/u);
+  assert.match(renderedHtml, /old-gpt@example\.com/u);
+  assert.doesNotMatch(renderedHtml, /recent-gpt@example\.com/u);
+  assert.doesNotMatch(renderedHtml, /not-gpt@example\.com/u);
+});
+
 test("standalone registration panel preserves scroll position when selecting a mailbox", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -504,6 +568,11 @@ test("registration cards delete their mailbox directly and the header clears all
     dataset: { action: "registration-cleanup-all" },
     closest() { return this; }
   } });
+  click({ target: {
+    disabled: true,
+    dataset: { action: "registration-cleanup-all" },
+    closest() { return this; }
+  } });
 
   assert.deepEqual(messages.filter((message) => message.action !== "ready").map((message) => ({ action: message.action, mailboxId: message.mailboxId })), [
     { action: "registrationDeleteMailbox", mailboxId: "mailbox:registration" },
@@ -523,6 +592,16 @@ test("Mailbox panel fills the webview and lets the detail wheel scroll the layou
   assert.match(html, /mailboxActivityLabel\(mailbox\)/u);
   assert.match(html, /\.mailbox-list \{ flex: 1; display: grid; .*grid-auto-rows: max-content;/u);
   assert.match(html, /\.mailbox-row \{ display: block; width: 100%; min-width: 0; flex: 0 0 auto;/u);
+  assert.match(html, /\.mailbox-account-filters \{ display: inline-flex; flex: 0 0 auto; flex-wrap: nowrap;/u);
+  assert.match(html, /\.mailbox-list-tools label \{ display: inline-flex; align-items: center; gap: 1px;/u);
+  assert.match(html, /\.mailbox-list-tools label input \{ flex: 0 0 auto; width: auto; min-width: 0; margin: 0; padding: 0;/u);
+  assert.match(html, /\.mailbox-sort-controls \{ display: inline-flex; flex: 0 0 auto; align-items: center;/u);
+  assert.match(html, /class="mailbox-sort-select"/u);
+  assert.match(html, /data-action="toggle-mailbox-sort-direction"/u);
+  assert.match(html, /mailbox-sort-arrow/u);
+  assert.match(html, /\.mailbox-row-actions \{ display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 0 12px 8px;/u);
+  assert.doesNotMatch(html, /data-action="toggle-registration"/u);
+  assert.doesNotMatch(html, /class="top-actions">[^<]*<button[^>]*>注册助手/u);
   assert.match(html, /\.content \{ flex: 1 1 auto; min-height: 0; overflow: visible; overscroll-behavior: auto;/u);
   assert.match(html, /const layoutScrollTop = layout\?\.scrollTop \|\| 0;/u);
   assert.match(html, /if \(nextLayout\) nextLayout\.scrollTop = layoutScrollTop;/u);
@@ -577,6 +656,8 @@ test("Mailbox panel fills the webview and lets the detail wheel scroll the layou
   assert.match(html, /只把识别内容/u);
   assert.doesNotMatch(html, /window\.confirm\(/u);
   assert.match(html, /function renderDeleteConfirmModal\(/u);
+  assert.match(html, /\.tag\.source/u);
+  assert.match(html, /\.tag\.blocked/u);
   assert.match(html, /data-action="cancel-delete"/u);
   assert.match(html, /data-action="confirm-delete"/u);
   const selectedRenderer = html.slice(html.indexOf("function renderSelected(selected)"), html.indexOf("function renderMessageRow(message)"));
@@ -586,6 +667,8 @@ test("Mailbox panel fills the webview and lets the detail wheel scroll the layou
   assert.match(html, /mailboxProviderFilter/u);
   assert.match(html, /function filterMailboxes\(/u);
   assert.match(html, /onlyUnlinkedCodex/u);
+  assert.match(html, /onlyReauthorization/u);
+  assert.doesNotMatch(html, /query-reauthorization-mailboxes/u);
   assert.match(html, /按邮箱来源筛选/u);
   assert.match(html, /全选当前结果/u);
   assert.match(html, /批量查询/u);
@@ -594,7 +677,7 @@ test("Mailbox panel fills the webview and lets the detail wheel scroll the layou
   assert.match(html, /批量删除/u);
 });
 
-test("Mailbox cards display renewal fallback time and sort oldest renewal first", () => {
+test("Mailbox cards display renewal fallback time and sort renewal time in both directions", () => {
   const html = createMailboxPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
   assert.ok(script);
@@ -643,9 +726,85 @@ test("Mailbox cards display renewal fallback time and sort oldest renewal first"
   assert.match(renderedHtml, /添加时间：/u);
   assert.match(renderedHtml, /上次续期：/u);
   const change = documentListeners.get("change");
-  change({ target: { id: "mailboxSort", value: "renewalAsc", matches() { return false; } } });
+  change({ target: { id: "mailboxSort", value: "renewal", matches() { return false; } } });
   assert.ok(renderedHtml.indexOf("added@example.com") < renderedHtml.indexOf("old@example.com"));
   assert.ok(renderedHtml.indexOf("old@example.com") < renderedHtml.indexOf("recent@example.com"));
+  const click = documentListeners.get("click");
+  click({ target: {
+    disabled: false,
+    dataset: { action: "toggle-mailbox-sort-direction" },
+    closest() { return this; }
+  } });
+  assert.ok(renderedHtml.indexOf("recent@example.com") < renderedHtml.indexOf("old@example.com"));
+  assert.ok(renderedHtml.indexOf("old@example.com") < renderedHtml.indexOf("added@example.com"));
+  assert.match(renderedHtml, /mailbox-sort-arrow[^>]*>▼/u);
+});
+
+test("Mailbox latest code displays its query time and received time", () => {
+  const html = createMailboxPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const app = {};
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [{
+        id: "mailbox:code-time",
+        providerId: "mock",
+        address: "code-time@example.com",
+        displayName: "code-time@example.com",
+        latestCode: "208076"
+      }],
+      selectedMailboxId: "mailbox:code-time",
+      selected: {
+        mailbox: {
+          id: "mailbox:code-time",
+          providerId: "mock",
+          address: "code-time@example.com",
+          displayName: "code-time@example.com",
+          latestCode: "208076"
+        },
+        detail: {
+          fetchedAt: "2026-09-02T07:05:40.000Z",
+          codes: ["208076"],
+          messages: [{
+            id: "message:code-time",
+            subject: "OpenAI verification code",
+            receivedAt: "2026-09-02T07:04:12.000Z",
+            codes: ["208076"],
+            body: "Your verification code is 208076"
+          }]
+        }
+      },
+      operations: [],
+      codexImports: [],
+      providers: [{ id: "mock", displayName: "Mock", capabilities: {}, importSchema: {} }],
+      codexImportAvailable: false,
+      managedAccountEmails: []
+    }
+  } });
+
+  assert.match(app.innerHTML, /最近一次验证码/u);
+  assert.match(app.innerHTML, /验证码 208076/u);
+  assert.match(app.innerHTML, /查询于[^<]* · 收到于[^<]*/u);
 });
 
 test("selecting an available registration key enables phone ordering", () => {
@@ -934,10 +1093,15 @@ test("Mailbox offers one bulk action for all deactivated reauthorization matches
     }
   });
 
-  assert.match(app.innerHTML, /OpenAI 失效邮件：2/u);
-  assert.match(app.innerHTML, /data-action="query-reauthorization-mailboxes"/u);
-  assert.match(app.innerHTML, /查询需重新授权账号邮箱（1）/u);
-  assert.match(app.innerHTML, /删除失效邮箱与 Codex 账号（1）/u);
+  assert.match(app.innerHTML, /OpenAI 封禁：2/u);
+  assert.match(app.innerHTML, /id="onlyReauthorization"/u);
+  assert.doesNotMatch(app.innerHTML, /query-reauthorization-mailboxes/u);
+  assert.doesNotMatch(app.innerHTML, /查询需重新授权账号邮箱/u);
+  assert.match(app.innerHTML, /删除封禁账号（1）/u);
+  const change = documentListeners.get("change");
+  change({ target: { id: "onlyReauthorization", checked: true, matches() { return false; }, closest() { return this; } } });
+  assert.match(app.innerHTML, /eligible@example\.com/u);
+  assert.doesNotMatch(app.innerHTML, /healthy@example\.com/u);
   const click = documentListeners.get("click");
   click({ target: { disabled: false, dataset: { action: "delete-deactivated-mailboxes" }, closest() { return this; } } });
   assert.match(insertedModal, /将删除 1 个/u);
@@ -947,4 +1111,136 @@ test("Mailbox offers one bulk action for all deactivated reauthorization matches
   const deleteMessage = messages.at(-1);
   assert.equal(deleteMessage.type, "mailbox:action");
   assert.equal(deleteMessage.action, "deleteDeactivatedMailboxes");
+});
+
+test("Mailbox can filter only OpenAI-deactivated mailboxes", () => {
+  const html = createMailboxPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [
+        { id: "mailbox:blocked", providerId: "mock", address: "blocked@example.com", displayName: "blocked@example.com", openaiAccountDeactivated: true },
+        { id: "mailbox:ordinary", providerId: "mock", address: "ordinary@example.com", displayName: "ordinary@example.com", openaiAccountDeactivated: false }
+      ],
+      providers: [{ id: "mock", displayName: "Mock", capabilities: {}, importSchema: {} }],
+      operations: [],
+      codexImports: []
+    }
+  } });
+
+  assert.match(renderedHtml, /id="onlyOpenAiDeactivated"/u);
+  assert.match(renderedHtml, /blocked@example\.com/u);
+  assert.match(renderedHtml, /ordinary@example\.com/u);
+
+  documentListeners.get("change")({ target: {
+    id: "onlyOpenAiDeactivated",
+    checked: true,
+    matches() { return false; },
+    closest() { return this; }
+  } });
+
+  assert.match(renderedHtml, /id="onlyOpenAiDeactivated" type="checkbox" checked/u);
+  assert.match(renderedHtml, /blocked@example\.com/u);
+  assert.doesNotMatch(renderedHtml, /ordinary@example\.com/u);
+  assert.match(renderedHtml, />1\/2<\/span>/u);
+});
+
+test("Mailbox tags use compact semantic colors and do not expose code_found", () => {
+  const html = createMailboxPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const app = { insertAdjacentHTML() {} };
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [{
+        id: "mailbox:tagged",
+        providerId: "mock",
+        address: "tagged@example.com",
+        displayName: "tagged@example.com",
+        openaiAccountDeactivated: true,
+        gptRegistered: true,
+        latestCode: "123456",
+        lastStatus: "code_found",
+        lastError: { code: "temporary_failure", message: "provider detail" }
+      }],
+      selectedMailboxId: "mailbox:tagged",
+      selected: {
+        mailbox: {
+          id: "mailbox:tagged",
+          providerId: "mock",
+          address: "tagged@example.com",
+          displayName: "tagged@example.com",
+          openaiAccountDeactivated: true,
+          gptRegistered: true,
+          latestCode: "123456",
+          lastStatus: "code_found",
+          lastError: { code: "temporary_failure", message: "provider detail" }
+        },
+        detail: { messages: [], codes: [] }
+      },
+      operations: [],
+      codexImports: [],
+      providers: [{ id: "mock", displayName: "Mock", capabilities: {}, importSchema: {} }],
+      codexImportAvailable: true,
+      managedAccountEmails: ["tagged@example.com"],
+      managedAccounts: [],
+      managedAccountDirectoryAvailable: true,
+      managedAccountRemovalAvailable: false
+    }
+  } });
+
+  assert.match(app.innerHTML, /class="tag source">mock/u);
+  assert.match(app.innerHTML, /class="tag success">Codex 已接入/u);
+  assert.doesNotMatch(app.innerHTML, /GPT 已注册/u);
+  assert.match(app.innerHTML, /class="tag success">验证码 123456/u);
+  assert.match(app.innerHTML, /class="tag blocked">OpenAI 封禁/u);
+  assert.match(app.innerHTML, /class="tag error"[^>]*>temporary_failure/u);
+  assert.doesNotMatch(app.innerHTML, /code_found/u);
 });

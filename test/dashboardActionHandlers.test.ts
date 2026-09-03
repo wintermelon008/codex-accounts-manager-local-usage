@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
 import type { DashboardActionContext } from "../src/presentation/dashboard/actionHandlers";
 
-const { consumeResetCreditMock, startQuotaCountdownMock } = vi.hoisted(() => ({
+const { clearStaleCodexSessionLocksMock, consumeResetCreditMock, startQuotaCountdownMock } = vi.hoisted(() => ({
+  clearStaleCodexSessionLocksMock: vi.fn(),
   consumeResetCreditMock: vi.fn().mockResolvedValue(undefined),
   startQuotaCountdownMock: vi.fn().mockResolvedValue("started")
 }));
@@ -18,6 +19,14 @@ vi.mock("../src/services/quota", async () => {
 vi.mock("../src/application/accounts/quotaCountdown", () => ({
   startQuotaCountdownForAccount: startQuotaCountdownMock
 }));
+
+vi.mock("../src/sessions", async () => {
+  const actual = await vi.importActual<typeof import("../src/sessions")>("../src/sessions");
+  return {
+    ...actual,
+    clearStaleCodexSessionLocks: clearStaleCodexSessionLocksMock
+  };
+});
 
 import { executeDashboardActionMessage } from "../src/presentation/dashboard/actionHandlers";
 
@@ -71,6 +80,37 @@ describe("executeDashboardActionMessage", () => {
     );
 
     expect(refreshLocalUsage).toHaveBeenCalledOnce();
+    expect(result.status).toBe("completed");
+  });
+
+  it("clears stale Codex session locks without terminating active writers", async () => {
+    clearStaleCodexSessionLocksMock.mockResolvedValueOnce({
+      removedSessionIds: ["stale-session"],
+      activeSessionIds: ["active-session"]
+    });
+    const showWarningMessage = vi.mocked(vscode.window.showWarningMessage);
+    showWarningMessage.mockClear();
+
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: {} as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState: vi.fn(),
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "unlockCodexSessionLocks",
+        requestId: "req-session-unlock"
+      }
+    );
+
+    expect(clearStaleCodexSessionLocksMock).toHaveBeenCalledOnce();
+    expect(showWarningMessage).toHaveBeenCalledWith(expect.stringContaining("未强制终止"));
     expect(result.status).toBe("completed");
   });
 

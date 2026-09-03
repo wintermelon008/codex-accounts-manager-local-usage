@@ -24,6 +24,7 @@ import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { getActiveManagerIntegrationHost } from "../../integrations";
 import { startQuotaCountdownForAccount } from "../../application/accounts/quotaCountdown";
 import { buildCodexImportFile } from "../../codex/authFile";
+import { clearStaleCodexSessionLocks } from "../../sessions";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -135,6 +136,15 @@ async function runDashboardAction(
     case "refreshLocalUsage":
       await ctx.refreshLocalUsage?.();
       return undefined;
+    case "unlockCodexSessionLocks": {
+      const result = await clearStaleCodexSessionLocks();
+      showSessionLockCleanupResult(
+        ctx.resolveLanguage(),
+        result.removedSessionIds.length,
+        result.activeSessionIds.length
+      );
+      return undefined;
+    }
     case "resetSeamlessSwitchRuntime":
       await vscode.commands.executeCommand("codexAccounts.resetSeamlessSwitchRuntime");
       await ctx.publishState(true);
@@ -247,6 +257,27 @@ async function runDashboardAction(
     default:
       return undefined;
   }
+}
+
+function showSessionLockCleanupResult(language: DashboardLanguage, removedCount: number, activeCount: number): void {
+  if (activeCount > 0) {
+    void vscode.window.showWarningMessage(
+      language === "zh" || language === "zh-hant"
+        ? `已清理 ${removedCount} 个失效 Codex 会话锁；仍有 ${activeCount} 个会话由运行中的 Codex 占用，未强制终止。`
+        : `${removedCount} stale Codex session lock(s) cleared; ${activeCount} session(s) are still held by a running Codex process and were left untouched.`
+    );
+    return;
+  }
+
+  void vscode.window.showInformationMessage(
+    language === "zh" || language === "zh-hant"
+      ? removedCount > 0
+        ? `已解锁 ${removedCount} 个失效 Codex 会话。`
+        : "没有发现需要清理的失效 Codex 会话锁。"
+      : removedCount > 0
+        ? `${removedCount} stale Codex session(s) unlocked.`
+        : "No stale Codex session locks were found."
+  );
 }
 
 function resolveQuotaCountdownResultMessage(

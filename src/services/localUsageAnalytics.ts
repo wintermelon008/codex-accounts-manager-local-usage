@@ -42,9 +42,9 @@ const MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH = 256;
 // burst as a fallback boundary detector for those files.
 const SUBAGENT_INHERITED_HISTORY_DETECTION_WINDOW_MS = 1_000;
 const SUBAGENT_INHERITED_HISTORY_MIN_TOKEN_EVENTS = 16;
-// Codex can report the same quota reset boundary a few seconds apart across
-// adjacent token events. A real five-hour or long-term quota reset is much
-// farther away, so keep one minute of room for that observation jitter.
+// Legacy lookup callers can see the same quota reset boundary a few seconds
+// apart across adjacent token events. A real five-hour or long-term quota
+// reset is much farther away, so keep one minute of room for that jitter.
 const ACCOUNT_USAGE_RESET_DRIFT_TOLERANCE_SECONDS = 60;
 const LOCAL_USAGE_EVENT_MARKER =
   /"type"\s*:\s*"(?:session_meta|turn_context|token_count|inter_agent_communication_metadata|task_started)"/;
@@ -847,17 +847,31 @@ export function findAccountTokenUsageWindow(
   snapshot: AccountTokenUsageSnapshot | undefined,
   accountId: string,
   window: AccountTokenUsageWindow["window"],
-  resetAt: number | undefined
+  resetAt: number | undefined,
+  windowMinutes?: number
 ): AccountTokenUsageWindow | undefined {
   if (!snapshot || resetAt == null || !Number.isFinite(resetAt)) {
     return undefined;
   }
   const targetResetAt = Math.floor(resetAt);
-  const matchingWindows = snapshot.windowsByAccount[accountId]?.filter(
-    (candidate) =>
-      candidate.window === window &&
-      Math.abs(candidate.resetAt - targetResetAt) <= ACCOUNT_USAGE_RESET_DRIFT_TOLERANCE_SECONDS
-  );
+  const accountWindows = snapshot.windowsByAccount[accountId];
+  // Some provider reset timestamps are derived from a moving countdown rather
+  // than a fixed boundary. When the current window duration is known, use the
+  // observed event time to collect the current window; retain the exact match
+  // path for callers that only have the legacy reset timestamp.
+  const normalizedWindowMinutes =
+    windowMinutes != null && Number.isFinite(windowMinutes) && windowMinutes > 0 ? windowMinutes : undefined;
+  const matchingWindows = accountWindows?.filter((candidate) => {
+    if (candidate.window !== window) {
+      return false;
+    }
+    if (normalizedWindowMinutes != null) {
+      const windowStartAt = (targetResetAt - normalizedWindowMinutes * 60) * 1_000;
+      const latestObservedAt = snapshot.calculatedAt ?? Number.POSITIVE_INFINITY;
+      return candidate.lastObservedAt >= windowStartAt && candidate.lastObservedAt <= latestObservedAt;
+    }
+    return Math.abs(candidate.resetAt - targetResetAt) <= ACCOUNT_USAGE_RESET_DRIFT_TOLERANCE_SECONDS;
+  });
   if (!matchingWindows || matchingWindows.length === 0) {
     return undefined;
   }

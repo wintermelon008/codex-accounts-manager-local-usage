@@ -77,7 +77,7 @@ describe("extension manifest configuration", () => {
     const property = manifest.contributes?.configuration?.properties?.["codexAccounts.localImportInboxEnabled"];
 
     expect(property).toMatchObject({ type: "boolean", default: false });
-    expect(property?.markdownDescription).toContain("does not create, watch, or import");
+    expect(property?.markdownDescription).toContain("Manager control API also starts this inbox");
   });
 
   it("keeps optional provider configuration out of the Manager manifest", () => {
