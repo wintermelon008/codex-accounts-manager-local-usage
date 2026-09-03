@@ -256,7 +256,7 @@ test("BugTeam skips an existing managed account instead of importing it again", 
   let importAttempts = 0;
   const api = {
     registerDashboardIntegration() { return { dispose() {} }; },
-    async getManagedAccountEmails() { return ["PATRICIA_NAMDM@mail.com"]; },
+    async getManagedAccountEmails() { return ["EXISTING-MANAGED@example.test"]; },
     async importSharedAccountsToBalancePool() {
       importAttempts += 1;
       throw new Error("existing account must not be imported again");
@@ -265,7 +265,7 @@ test("BugTeam skips an existing managed account instead of importing it again", 
   const integration = new BugTeamIntegration(vscode, context, api);
 
   const summary = await integration.importSharedBundle({
-    accounts: [{ email: "patricia_namdm@mail.com", tokens: { id_token: "id", access_token: "access" } }]
+    accounts: [{ email: "existing-managed@example.test", tokens: { id_token: "id", access_token: "access" } }]
   });
 
   assert.equal(importAttempts, 0);
@@ -275,7 +275,7 @@ test("BugTeam skips an existing managed account instead of importing it again", 
   assert.equal(summary.poolEnabled, 0);
   assert.equal(summary.skippedExisting, 1);
   assert.deepEqual(summary.accounts, [{
-    email: "patricia_namdm@mail.com",
+    email: "existing-managed@example.test",
     poolEnabled: false,
     status: "already_exists"
   }]);
