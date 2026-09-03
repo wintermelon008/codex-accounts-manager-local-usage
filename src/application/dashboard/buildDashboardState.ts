@@ -247,7 +247,7 @@ function normalizeDashboardEmail(value: string | undefined): string | undefined 
   return normalized;
 }
 
-function resolveAccountTokenUsage(
+export function resolveAccountTokenUsage(
   account: CodexAccountRecord,
   snapshot: AccountTokenUsageSnapshot | undefined
 ): DashboardAccountViewModel["tokenUsage"] {
@@ -256,28 +256,50 @@ function resolveAccountTokenUsage(
   }
 
   const quota = account.quotaSummary;
-  const quotaWindow =
-    quota?.hourlyWindowPresent && quota.hourlyResetTime != null
-      ? { window: "hourly" as const, resetAt: quota.hourlyResetTime }
-      : quota?.weeklyWindowPresent && quota.weeklyResetTime != null
-        ? { window: "weekly" as const, resetAt: quota.weeklyResetTime }
-        : undefined;
-  if (!quotaWindow) {
+  const quotaWindows: Array<{ window: "hourly" | "weekly"; resetAt: number; windowMinutes?: number }> = [];
+  if (quota?.hourlyWindowPresent && quota.hourlyResetTime != null) {
+    quotaWindows.push({
+      window: "hourly",
+      resetAt: quota.hourlyResetTime,
+      windowMinutes: quota.hourlyWindowMinutes
+    });
+  }
+  if (quota?.weeklyWindowPresent && quota.weeklyResetTime != null) {
+    quotaWindows.push({
+      window: "weekly",
+      resetAt: quota.weeklyResetTime,
+      windowMinutes: quota.weeklyWindowMinutes
+    });
+  }
+  const preferredQuotaWindow = quotaWindows[0];
+  if (!preferredQuotaWindow) {
     return undefined;
   }
 
-  const observed = findAccountTokenUsageWindow(snapshot, account.id, quotaWindow.window, quotaWindow.resetAt);
-  if (observed) {
-    return {
-      ...observed,
-      calculatedAt: snapshot.calculatedAt,
-      status: "tracking"
-    };
+  // The app-server may expose the active primary limit as a long-term window
+  // even when the Manager quota response also has a five-hour window. Try all
+  // current account windows so that a weekly observation is not hidden behind
+  // the five-hour preference.
+  for (const quotaWindow of quotaWindows) {
+    const observed = findAccountTokenUsageWindow(
+      snapshot,
+      account.id,
+      quotaWindow.window,
+      quotaWindow.resetAt,
+      quotaWindow.windowMinutes
+    );
+    if (observed) {
+      return {
+        ...observed,
+        calculatedAt: snapshot.calculatedAt,
+        status: "tracking"
+      };
+    }
   }
 
   return {
-    window: quotaWindow.window,
-    resetAt: quotaWindow.resetAt,
+    window: preferredQuotaWindow.window,
+    resetAt: preferredQuotaWindow.resetAt,
     calculatedAt: snapshot.calculatedAt,
     status: snapshot.status === "loading" ? "loading" : "waiting",
     byModel: [],

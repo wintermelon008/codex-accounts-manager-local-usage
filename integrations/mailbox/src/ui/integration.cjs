@@ -75,6 +75,7 @@ class MailboxIntegration {
     });
     this.registration = undefined;
     this.registrationAssistantRegistration = undefined;
+    this.managerChangeSubscription = undefined;
     this.panel = undefined;
     this.registrationPanel = undefined;
     this.selectedMailboxId = undefined;
@@ -193,6 +194,15 @@ class MailboxIntegration {
       })
     );
     if (this.api) {
+      if (typeof this.api.onDidChange === "function") {
+        this.managerChangeSubscription = this.api.onDidChange(() => {
+          // Manager publishes after its account write returns. Queue the read
+          // so the directory and token cache observe the committed state.
+          void Promise.resolve()
+            .then(() => this.publishPanelState())
+            .catch(() => undefined);
+        });
+      }
       // Register the new standalone entry first so older lightweight test or
       // host adapters that retain one registration continue to resolve the
       // original Mailbox integration below.
@@ -366,9 +376,6 @@ class MailboxIntegration {
           return;
         case "batchQuery":
           await this.runQueryMany(message.mailboxIds);
-          return;
-        case "queryReauthorizationMailboxes":
-          await this.runReauthorizationQueries();
           return;
         case "wait":
           await this.runWait(message.mailboxId);
@@ -701,27 +708,6 @@ class MailboxIntegration {
     const ids = this.requireMailboxIds(mailboxIds, "请先选择要查询的邮箱");
     void this.runOperation(ids, "query", () => this.coordinator.queryOnce(ids)).catch(() => undefined);
     await this.publishPanelState();
-  }
-
-  async runReauthorizationQueries() {
-    if (typeof this.api?.getManagedAccountDirectory !== "function") {
-      throw new Error("当前 Manager 未提供需要重新授权账号目录");
-    }
-    const directory = normalizeManagedAccountDirectory(await this.api.getManagedAccountDirectory());
-    const reauthorizationEmails = new Set(
-      directory
-        .filter((account) => account.requiresReauthorization)
-        .map((account) => normalizeEmail(account.email))
-        .filter(Boolean)
-    );
-    const mailboxIds = this.pool
-      .listMetadata({ includeDisabled: false })
-      .filter((mailbox) => reauthorizationEmails.has(normalizeEmail(mailbox.address)))
-      .map((mailbox) => mailbox.id);
-    if (mailboxIds.length === 0) {
-      throw new Error("没有找到需要重新授权账号对应的邮箱");
-    }
-    await this.runQueryMany(mailboxIds);
   }
 
   async runWait(mailboxId) {
@@ -1837,6 +1823,8 @@ class MailboxIntegration {
     this.registrationPanel = undefined;
     this.registration?.dispose();
     this.registrationAssistantRegistration?.dispose();
+    this.managerChangeSubscription?.dispose?.();
+    this.managerChangeSubscription = undefined;
     this.registrationDiagnostics.dispose();
     this.events.dispose();
   }

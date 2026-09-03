@@ -42,6 +42,8 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
       return 8_000;
     case "refreshLocalUsage":
       return 120_000;
+    case "unlockCodexSessionLocks":
+      return 30_000;
     case "startQuotaCountdown":
       return 90_000;
     case "details":

@@ -81,6 +81,9 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain(".local-usage-refresh-btn");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
     expect(main).toContain('sendAction("refreshLocalUsage")');
+    expect(main).toContain('id="forceFastModeToggle"');
+    expect(main).toContain('sendSetting("forceFastModeEnabled", enabled)');
+    expect(main).not.toContain("账号排序");
   });
 
   it("presents seamless switching separately from the auto-switch trigger", () => {

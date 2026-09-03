@@ -26,6 +26,7 @@ function createState(overrides?: {
       displayLanguage: "zh",
       autoRefreshMinutes: 0,
       backgroundTokenRefreshEnabled: true,
+      forceFastModeEnabled: false,
       autoSwitchEnabled: false,
       hotSwitchEnabled: true,
       seamlessSwitchEnabled: true,

@@ -39,6 +39,20 @@ describe("handleDashboardSettingUpdate", () => {
     expect(fallbackSettings.unhideWeeklyQuotaThreshold).toBe(DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD);
   });
 
+  it("reads and persists the Fast mode switch", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    const get = vi.fn((key: string, fallback: unknown) => (key === "forceFastModeEnabled" ? true : fallback));
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get,
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+    } as never);
+
+    expect(new ExtensionSettingsStore().getDashboardSettings().forceFastModeEnabled).toBe(true);
+    await expect(handleDashboardSettingUpdate("forceFastModeEnabled", false)).resolves.toBe(true);
+    expect(update).toHaveBeenCalledWith("forceFastModeEnabled", false, vscode.ConfigurationTarget.Global);
+  });
+
   it("rejects invalid or crossed weekly quota threshold updates", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     const values: Record<string, unknown> = {

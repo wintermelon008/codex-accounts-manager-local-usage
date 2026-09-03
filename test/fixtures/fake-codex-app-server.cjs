@@ -51,6 +51,7 @@ function handleLine(line) {
       accountId: message.params && message.params.chatgptAccountId,
       runtimeAccountId: currentAccountId,
       threadId: message.params && message.params.threadId,
+      serviceTier: message.params && message.params.serviceTier,
       modelProviders: message.params && message.params.modelProviders,
       goalStatus: message.params && message.params.status,
       turnId: message.params && message.params.turnId,

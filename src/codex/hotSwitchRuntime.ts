@@ -8,7 +8,8 @@ import { decodeJwtPayload, extractClaims } from "../utils/jwt";
 import {
   getCodexAccountsConfiguration,
   normalizeHotSwitchGraceSeconds,
-  normalizeHotSwitchLongTurnPolicy
+  normalizeHotSwitchLongTurnPolicy,
+  isForceFastModeEnabled
 } from "../infrastructure/config/extensionSettings";
 import type { AccountsRepository } from "../storage";
 import {
@@ -41,7 +42,7 @@ const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
 const SHIM_FILE = "codex-app-server-shim.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 12;
+const RUNTIME_PROTOCOL_VERSION = 13;
 const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
 const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 const USAGE_ATTRIBUTION_RETRY_DELAY_MS = 5_000;
@@ -303,6 +304,14 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("Codex hot switch is not configured");
     }
     await this.bridge.configureUsageLimitObservation(enabled);
+  }
+
+  async setForceFastMode(enabled: boolean): Promise<boolean> {
+    if (!this.bridge) {
+      return false;
+    }
+    const result = await this.bridge.configureFastMode(enabled);
+    return result.enabled === enabled;
   }
 
   async resetUsageLimitObservation(): Promise<boolean> {
@@ -623,7 +632,13 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const realCliPath = remoteOverlay?.realCliPath ?? cliPath;
       await writeJsonAtomically(
         shimConfigDestination,
-        { realCliPath, forceHttpTransport: true, usageAttributionDirectory, gateway },
+        {
+          realCliPath,
+          forceHttpTransport: true,
+          forceFastMode: isForceFastModeEnabled(),
+          usageAttributionDirectory,
+          gateway
+        },
         0o600
       );
 
@@ -653,8 +668,10 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
           (localAccountId) => this.activateLocalAccount(localAccountId),
           (rollbackContextId) => this.restoreUnmanagedAccount(rollbackContextId)
         );
+        let runtimeStatusChecked = false;
         if (isOpenAiCodexExtensionActive()) {
           try {
+            runtimeStatusChecked = true;
             const status = await candidateBridge.getStatus();
             requiresReload =
               !status.ready ||
@@ -673,6 +690,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
           candidateBridge.dispose();
         } else {
           this.bridge = candidateBridge;
+          if (runtimeStatusChecked) {
+            await candidateBridge.configureFastMode(isForceFastModeEnabled());
+          }
           if (!gatewayState || gatewayState.active === false) {
             if (gatewayState?.config.autoFallbackToChatGpt !== true && gatewayState?.active === false) {
               await this.synchronizeChatGptRoute();

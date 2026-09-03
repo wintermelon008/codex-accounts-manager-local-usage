@@ -86,6 +86,36 @@ test("query details are persisted separately and only selected details need to b
   assert.equal(pool.listMetadata()[0].latestCode, "123456");
 });
 
+test("tracks the earliest received OpenAI email for GPT age across queries and reload", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "gpt-age@example.com----password----client----refresh"
+  })).imported;
+
+  await pool.recordQueryResult(id, {
+    ok: true,
+    messages: [
+      { id: "openai-later", from: "no-reply@openai.com", receivedAt: "2026-09-03T00:00:00.000Z" },
+      { id: "openai-first", from: "trustandsafety@tm.openai.com", receivedAt: "2026-09-01T00:00:00.000Z" }
+    ]
+  });
+  assert.equal(pool.listMetadata()[0].firstOpenAiEmailAt, "2026-09-01T00:00:00.000Z");
+
+  await pool.recordQueryResult(id, {
+    ok: true,
+    messages: [{ id: "openai-new", from: "no-reply@openai.com", receivedAt: "2026-09-08T00:00:00.000Z" }]
+  });
+  assert.equal(pool.listMetadata()[0].firstOpenAiEmailAt, "2026-09-01T00:00:00.000Z");
+
+  const restored = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  await restored.load();
+  assert.equal(restored.listMetadata()[0].firstOpenAiEmailAt, "2026-09-01T00:00:00.000Z");
+});
+
 test("querying an OpenAI deactivation notice marks the mailbox and keeps the marker after reload", async () => {
   const stores = memoryStores();
   const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });

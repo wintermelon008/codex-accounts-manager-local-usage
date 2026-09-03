@@ -75,6 +75,7 @@ function createState(): DashboardState {
       displayLanguage: "en",
       autoRefreshMinutes: 0,
       backgroundTokenRefreshEnabled: true,
+      forceFastModeEnabled: false,
       autoSwitchEnabled: false,
       hotSwitchEnabled: false,
       seamlessSwitchEnabled: false,

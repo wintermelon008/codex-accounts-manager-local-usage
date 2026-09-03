@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildMetrics, sortDashboardAccounts } from "../src/application/dashboard/buildDashboardState";
+import {
+  buildMetrics,
+  resolveAccountTokenUsage,
+  sortDashboardAccounts
+} from "../src/application/dashboard/buildDashboardState";
+import type { AccountTokenUsageSnapshot } from "../src/services/localUsageAnalytics";
 import { formatPlanType, getDashboardCopy } from "../src/application/dashboard/copy";
 import { sortDashboardAccountsForDisplay } from "../webview-src/dashboard/helpers";
 
@@ -79,6 +84,79 @@ describe("buildMetrics", () => {
       expect(metrics[1]?.label).toBe("每月");
     }
   );
+});
+
+describe("resolveAccountTokenUsage", () => {
+  it("falls back to and aggregates the current weekly window when reset timestamps drift", () => {
+    const weeklyResetAt = 1_800_604_800;
+    const snapshot: AccountTokenUsageSnapshot = {
+      status: "ready",
+      isRefreshing: false,
+      calculatedAt: weeklyResetAt * 1_000,
+      windowsByAccount: {
+        account: [
+          {
+            window: "weekly",
+            resetAt: weeklyResetAt - 300,
+            eventCount: 2,
+            lastObservedAt: 1_800_000_100 * 1_000,
+            byModel: [
+              {
+                model: "gpt-5.6-luna",
+                inputTokens: 90,
+                cachedInputTokens: 10,
+                outputTokens: 20,
+                reasoningOutputTokens: 5,
+                totalTokens: 110
+              }
+            ],
+            inputTokens: 90,
+            cachedInputTokens: 10,
+            outputTokens: 20,
+            reasoningOutputTokens: 5,
+            totalTokens: 110
+          },
+          {
+            window: "weekly",
+            resetAt: weeklyResetAt - 900,
+            eventCount: 1,
+            lastObservedAt: 1_800_100_000 * 1_000,
+            byModel: [],
+            inputTokens: 60,
+            cachedInputTokens: 0,
+            outputTokens: 10,
+            reasoningOutputTokens: 0,
+            totalTokens: 70
+          }
+        ]
+      }
+    };
+
+    const usage = resolveAccountTokenUsage(
+      {
+        id: "account",
+        email: "account@example.com",
+        isActive: true,
+        createdAt: 1,
+        updatedAt: 1,
+        quotaSummary: {
+          hourlyWindowPresent: true,
+          hourlyResetTime: 1_800_000_000,
+          weeklyWindowPresent: true,
+          weeklyResetTime: weeklyResetAt,
+          weeklyWindowMinutes: 10_080
+        }
+      },
+      snapshot
+    );
+
+    expect(usage).toMatchObject({
+      status: "tracking",
+      window: "weekly",
+      resetAt: weeklyResetAt,
+      totalTokens: 180
+    });
+  });
 });
 
 describe("sortDashboardAccountsForDisplay", () => {

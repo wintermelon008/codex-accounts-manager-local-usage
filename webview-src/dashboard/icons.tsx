@@ -173,6 +173,23 @@ export function EyeOffIcon() {
   );
 }
 
+export function UnlockIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M7.5 10V7.8A4.5 4.5 0 0 1 16.3 6"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+      <rect x="4.5" y="10" width="15" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <circle cx="12" cy="15" r="1.1" fill="currentColor" />
+      <path d="M12 16.1v1.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+    </svg>
+  );
+}
+
 export function GitHubIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">

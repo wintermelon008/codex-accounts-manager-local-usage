@@ -6,7 +6,11 @@ const { redactText } = require("./errors.cjs");
 
 const MAX_BODY_LENGTH = 8_000;
 const MAX_PREVIEW_LENGTH = 320;
-const OPENAI_DEACTIVATED_PATTERN = /\baccount\s+(?:deactivated|(?:has\s+been|was|is)(?:\s+\w+)?\s+deactivated)\b/iu;
+const OPENAI_DEACTIVATED_PATTERNS = [
+  /\baccount\s+(?:deactivated|(?:has\s+been|was|is)(?:\s+\w+)?\s+deactivated)\b/iu,
+  /访问权限\s*(?:已|被)?\s*停用/iu,
+  /(?:账户|帐户|账号)\s*(?:已|被)?\s*停用/iu
+];
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu;
 
 function normalizeMessages(items) {
@@ -78,25 +82,24 @@ function normalizeDate(value) {
 }
 
 function isOpenAiAccountDeactivatedMessage(message) {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
+  if (!isOpenAiMessage(message)) return false;
+  const text = [message.subject, message.preview, message.body]
+    .filter((value) => typeof value === "string")
+    .join("\n");
+  return OPENAI_DEACTIVATED_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function isOpenAiMessage(message) {
+  if (!message || typeof message !== "object") return false;
   const sender = typeof message.from === "string" ? message.from : "";
   const email = sender.match(EMAIL_PATTERN)?.[0]?.toLowerCase();
-  if (!email) {
-    return false;
-  }
+  if (!email) return false;
   const domain = email.slice(email.lastIndexOf("@") + 1);
-  if (domain !== "openai.com" && !domain.endsWith(".openai.com")) {
-    return false;
-  }
-  return OPENAI_DEACTIVATED_PATTERN.test(
-    [message.subject, message.preview, message.body].filter((value) => typeof value === "string").join("\n")
-  );
+  return domain === "openai.com" || domain.endsWith(".openai.com");
 }
 
 function digest(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-module.exports = { isOpenAiAccountDeactivatedMessage, normalizeMessage, normalizeMessages };
+module.exports = { isOpenAiAccountDeactivatedMessage, isOpenAiMessage, normalizeMessage, normalizeMessages };

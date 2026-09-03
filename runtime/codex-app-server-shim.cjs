@@ -33,7 +33,16 @@ const RECENT_USAGE_LIMITED_THREAD_TTL_MS = USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS;
 const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
-const RUNTIME_PROTOCOL_VERSION = 12;
+const RUNTIME_PROTOCOL_VERSION = 13;
+const FAST_MODE_SERVICE_TIER = "priority";
+const FAST_MODE_METHODS = new Set([
+  "thread/start",
+  "thread/resume",
+  "turn/start",
+  "turn/steer",
+  "review/start",
+  "thread/compact/start"
+]);
 const MAX_RECENT_SWITCH_OPERATIONS = 64;
 const SWITCH_OPERATION_TTL_MS = 10 * 60 * 1000;
 const SEAMLESS_HTTP_PROVIDER_ID = "codex-accounts-seamless-http";
@@ -65,6 +74,7 @@ const CHATGPT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
 const runtimeConfig = process.env.CODEX_ACCOUNTS_REAL_CLI ? {} : readRuntimeConfig();
 const realCliPath = process.env.CODEX_ACCOUNTS_REAL_CLI || runtimeConfig.realCliPath;
 const forceHttpTransport = runtimeConfig.forceHttpTransport !== false;
+let forceFastMode = runtimeConfig.forceFastMode === true;
 const usageAttributionDirectory = resolveUsageAttributionDirectory(runtimeConfig);
 const gatewayConfig = resolveGatewayConfig(runtimeConfig);
 
@@ -193,7 +203,7 @@ async function startRuntime() {
 }
 
 function handleOfficialLine(line) {
-  const message = parseJson(line);
+  let message = parseJson(line);
   if (!message) {
     writeChildLine(line);
     return;
@@ -209,6 +219,12 @@ function handleOfficialLine(line) {
   }
 
   if (rewriteThreadListProviderFilter(message)) {
+    line = JSON.stringify(message);
+  }
+
+  const fastModeMessage = applyFastModeToRequest(message);
+  if (fastModeMessage !== message) {
+    message = fastModeMessage;
     line = JSON.stringify(message);
   }
 
@@ -246,6 +262,28 @@ function handleOfficialLine(line) {
   }
 
   writeChildLine(line);
+}
+
+function applyFastModeToRequest(message) {
+  if (
+    !forceFastMode ||
+    (gatewayAdapter && gatewayAdapter.route === "gateway") ||
+    !FAST_MODE_METHODS.has(message.method)
+  ) {
+    return message;
+  }
+
+  if (!message.params || typeof message.params !== "object" || Array.isArray(message.params)) {
+    return message;
+  }
+
+  return {
+    ...message,
+    params: {
+      ...message.params,
+      serviceTier: FAST_MODE_SERVICE_TIER
+    }
+  };
 }
 
 function isGatewayModelListRequest(message) {
@@ -581,6 +619,15 @@ function handleControlLine(socket, line) {
     return;
   }
 
+  if (message.method === "runtime/fast-mode") {
+    try {
+      sendControlResult(socket, message.id, configureFastMode(message.params));
+    } catch (error) {
+      sendControlError(socket, message.id, safeErrorMessage(error));
+    }
+    return;
+  }
+
   if (message.method === "runtime/operation/status") {
     const operationId = message.params && message.params.operationId;
     if (!isValidSwitchOperationId(operationId)) {
@@ -680,6 +727,14 @@ function handleControlLine(socket, line) {
   }
 
   sendControlError(socket, message.id, "Unsupported control method");
+}
+
+function configureFastMode(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params) || typeof params.enabled !== "boolean") {
+    throw new Error("Invalid Fast mode configuration");
+  }
+  forceFastMode = params.enabled;
+  return { enabled: forceFastMode };
 }
 
 function queueRuntimeSwitch(socket, id, params) {
@@ -1406,7 +1461,7 @@ function sendInternalRequest(method, params, options = {}) {
       reject(new Error(`${method} timed out`));
     }, INTERNAL_REQUEST_TIMEOUT_MS);
     pendingInternalRequests.set(requestIdKey(id), { resolve, reject, timer, ...options });
-    writeChildMessage({ id, method, params });
+    writeChildMessage(applyFastModeToRequest({ id, method, params }));
   });
 }
 
@@ -1505,6 +1560,7 @@ function runtimeStatus() {
     activeTurns: getActiveTurnCount(),
     pendingSwitch: Boolean(pendingSwitch),
     switching: switching || goalRecoveryCount > 0,
+    forceFastMode,
     httpTransportForced: forceHttpTransport,
     transportMode: forceHttpTransport ? "http" : "default",
     providerKind:

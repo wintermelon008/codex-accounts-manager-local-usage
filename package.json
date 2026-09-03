@@ -117,15 +117,20 @@
           "default": true,
           "markdownDescription": "Automatically refresh saved account tokens in the background before they expire while VS Code is running."
         },
+        "codexAccounts.forceFastModeEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Force the Fast response-speed tier for new ChatGPT/Codex turns handled by the seamless runtime. Applies from the next turn without reloading; the active ChatGPT account and model must support Fast and it may consume more credits."
+        },
         "codexAccounts.localImportInboxEnabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Opt in to a private local inbox written by a separately configured Feishu command bot. Enabling the external Manager control API also starts this inbox for its authenticated import endpoint. When both are disabled, Codex Accounts Manager does not create, watch, or import from the inbox."
+          "markdownDescription": "Private local inbox written by a separately configured Feishu command bot. The Manager control API also starts this inbox."
         },
         "codexAccounts.externalControlEnabled": {
           "type": "boolean",
-          "default": false,
-          "markdownDescription": "Opt in to the local Manager control API used by the separate Feishu assistant. The API only binds to 127.0.0.1 and requires CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN in the Manager process environment."
+          "default": true,
+          "markdownDescription": "Manager control API used by Feishu and SessionHub."
         },
         "codexAccounts.externalControlPort": {
           "type": "number",
@@ -133,7 +138,7 @@
           "maximum": 65535,
           "multipleOf": 1,
           "default": 43117,
-          "markdownDescription": "Loopback port for the optional Manager control API. Set to 0 to let the operating system choose a port; the fixed default is easier for a same-device assistant configuration."
+          "markdownDescription": "Port for the Manager control API. Set to 0 to let the operating system choose a port."
         },
         "codexAccounts.autoSwitchEnabled": {
           "type": "boolean",
@@ -398,6 +403,7 @@
     "compile": "npm run typecheck:webview && npm run build:webview && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "npm run audit:integration-portability && npm run compile && npx --no-install vsce package",
+    "session-hub": "node scripts/session-hub.mjs",
     "audit:integration-portability": "node scripts/audit-integration-portability.mjs",
     "verify:seamless-auth": "node scripts/verify-seamless-http-auth.mjs",
     "lint": "eslint src webview-src --ext ts,tsx",

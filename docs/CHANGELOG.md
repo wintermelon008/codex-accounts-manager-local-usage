@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Mailbox 注册助手邮箱库新增“仅 GPT 注册 ≥ 7 天”筛选；已注册标签按第一封来自 OpenAI 的邮件时间显示已注册天数。
+
 ## 0.1.18-l1（2026-09-02）
 
 - Dashboard 的“删除封禁账号”按钮仅在 Mailbox 已安装并处于可用状态且存在可删除账号时显示，并且只纳入同时满足 `reauthorize` 和 Mailbox 已标记收到 OpenAI `account deactivated` 邮件的账号；未安装或未激活 Mailbox 时按钮隐藏，不会仅凭重新授权状态删除账号。

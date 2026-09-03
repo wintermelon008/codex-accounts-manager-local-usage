@@ -12,6 +12,7 @@ import { getErrorMessage } from "../core/errors";
 import { getBalanceQuotaCapability, type BalanceQuotaCapability } from "../application/accounts/balanceScheduler";
 import { getQuotaIssueKind } from "../utils/quotaIssue";
 import type { AccountsRepository } from "../storage";
+import { SessionHub, type SessionKind, type SessionListFilter, type SessionRegistration, type SessionStatus } from "../sessions";
 import { normalizeLocalImportAccounts } from "./localImportProtocol";
 import type { LocalUsageAnalyticsService } from "../services/localUsageAnalytics";
 import type { DashboardLocalUsageDayModelViewModel, DashboardLocalUsageTokenTotals } from "../domain/dashboard/types";
@@ -131,6 +132,7 @@ export type ManagerControlJob = {
 export type ManagerControlServerOptions = {
   repo: Pick<AccountsRepository, "listAccounts">;
   usage: Pick<LocalUsageAnalyticsService, "getSnapshots">;
+  sessionHub?: SessionHub;
   refreshQuotas: (accountIds?: readonly string[]) => Promise<ManagerControlRefreshSummary>;
   enqueueImport: (accounts: readonly SharedCodexAccountJson[]) => Promise<{ id: string; accountCount: number }>;
   getImportStatus: (jobId: string) => Promise<ManagerControlImportStatus>;
@@ -187,6 +189,7 @@ export class ManagerControlServer {
     } catch (error) {
       this.server = undefined;
       this.token = "";
+      server.close(() => undefined);
       throw error;
     }
 
@@ -236,6 +239,74 @@ export class ManagerControlServer {
 
     if (url.pathname === `${CONTROL_API_PREFIX}/usage/today` && request.method === "GET") {
       sendJson(response, 200, await this.readUsageToday());
+      return;
+    }
+
+    if (url.pathname === `${CONTROL_API_PREFIX}/sessions` && request.method === "GET") {
+      if (!this.options.sessionHub) {
+        sendJson(response, 503, { error: "session hub unavailable" });
+        return;
+      }
+      sendJson(response, 200, {
+        generatedAt: Date.now(),
+        sessions: await this.options.sessionHub.list(parseSessionListFilter(url.searchParams))
+      });
+      return;
+    }
+
+    if (url.pathname === `${CONTROL_API_PREFIX}/sessions` && request.method === "POST") {
+      if (!this.options.sessionHub) {
+        sendJson(response, 503, { error: "session hub unavailable" });
+        return;
+      }
+      let body: unknown;
+      try {
+        body = await readJsonBody(request);
+      } catch {
+        sendJson(response, 400, { error: "session registration must be valid JSON and no larger than 16 KB" });
+        return;
+      }
+      const registration = parseSessionRegistration(body);
+      if (!registration) {
+        sendJson(response, 400, { error: "invalid session registration" });
+        return;
+      }
+      sendJson(response, 201, await this.options.sessionHub.register(registration));
+      return;
+    }
+
+    if (url.pathname === `${CONTROL_API_PREFIX}/sessions/locate` && request.method === "GET") {
+      if (!this.options.sessionHub) {
+        sendJson(response, 503, { error: "session hub unavailable" });
+        return;
+      }
+      const value = url.searchParams.get("value")?.trim();
+      if (!value) {
+        sendJson(response, 400, { error: "value is required" });
+        return;
+      }
+      const session = await this.options.sessionHub.locate(value);
+      if (!session) {
+        sendJson(response, 404, { error: "session not found" });
+        return;
+      }
+      sendJson(response, 200, session);
+      return;
+    }
+
+    const sessionMatch = new RegExp(`^${CONTROL_API_PREFIX}/sessions/([^/]+)$`, "u").exec(url.pathname);
+    if (request.method === "GET" && sessionMatch?.[1]) {
+      if (!this.options.sessionHub) {
+        sendJson(response, 503, { error: "session hub unavailable" });
+        return;
+      }
+      const conversationId = decodeURIComponent(sessionMatch[1]);
+      const session = await this.options.sessionHub.get(conversationId);
+      if (!session) {
+        sendJson(response, 404, { error: "session not found" });
+        return;
+      }
+      sendJson(response, 200, session);
       return;
     }
 
@@ -554,6 +625,61 @@ function parseAccountIds(body: unknown): readonly string[] | undefined | "invali
     (value): value is string => typeof value === "string" && value.trim().length > 0
   );
   return accountIds.length === rawAccountIds.length ? accountIds : "invalid";
+}
+
+function parseSessionListFilter(params: URLSearchParams): SessionListFilter {
+  const kind = optionalText(params.get("kind"));
+  const status = optionalText(params.get("status"));
+  return {
+    project: optionalText(params.get("project")),
+    goalId: optionalText(params.get("goalId")),
+    runId: optionalText(params.get("runId")),
+    query: optionalText(params.get("query")),
+    kind: isSessionKind(kind) ? kind : undefined,
+    status: isSessionStatus(status) ? status : undefined
+  };
+}
+
+function parseSessionRegistration(value: unknown): SessionRegistration | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const kind = optionalText(value["kind"]);
+  const status = optionalText(value["status"]);
+  const externalRefs = value["externalRefs"];
+  if ((kind && !isSessionKind(kind)) || (status && !isSessionStatus(status))) {
+    return undefined;
+  }
+  if (
+    externalRefs !== undefined &&
+    (!Array.isArray(externalRefs) || externalRefs.some((item) => typeof item !== "string"))
+  ) {
+    return undefined;
+  }
+  return {
+    conversationId: optionalText(value["conversationId"]),
+    kind: isSessionKind(kind) ? kind : undefined,
+    project: optionalText(value["project"]),
+    goalId: optionalText(value["goalId"]),
+    runId: optionalText(value["runId"]),
+    nativeThreadId: optionalText(value["nativeThreadId"]),
+    title: optionalText(value["title"]),
+    status: isSessionStatus(status) ? status : undefined,
+    artifactLocator: optionalText(value["artifactLocator"]),
+    externalRefs: externalRefs as string[] | undefined
+  };
+}
+
+function isSessionKind(value: string | undefined): value is SessionKind {
+  return value === "ordinary" || value === "supergoal" || value === "loop-goal";
+}
+
+function isSessionStatus(value: string | undefined): value is SessionStatus {
+  return value === "active" || value === "idle" || value === "completed" || value === "blocked" || value === "unknown";
+}
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 async function readJsonBody(request: IncomingMessage, maxBytes = MAX_REQUEST_BYTES): Promise<unknown> {

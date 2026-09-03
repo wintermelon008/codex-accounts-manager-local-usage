@@ -95,6 +95,7 @@ npm --prefix integrations/sub2api-importer run package
 - [飞书私聊 M+/S+ 导入机器人](docs/integrations/feishu-private-import.md)
 - [多来源 BugTeam 账号集成](docs/integrations/bugteam.md)
 - [核心与可选组件的独立交付、停用和迁移](docs/integrations/README.md)
+- [Vserver 会话中心基础结构](docs/SESSION_HUB.md)
 - [核心本地文本导入收件箱](docs/LOCAL_IMPORT_INBOX.md)
 - [变更日志](docs/CHANGELOG.md)
 

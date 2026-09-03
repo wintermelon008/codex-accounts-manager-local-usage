@@ -132,6 +132,7 @@ type TokenCacheEntry = {
 };
 
 export type TokenChangeListener = (accountIds?: readonly string[]) => void;
+export type AccountChangeListener = (accountIds?: readonly string[]) => void;
 
 export type TokenRefreshStatusUpdate = {
   tokenRefreshLastAttemptAt?: number;
@@ -151,6 +152,7 @@ export class AccountsRepository {
   /** getTokens 内存缓存，减少 SecretStore/Keychain 重复读取 */
   private readonly tokenCache = new Map<string, TokenCacheEntry>();
   private readonly tokenChangeListeners = new Set<TokenChangeListener>();
+  private readonly accountChangeListeners = new Set<AccountChangeListener>();
 
   /** 防止重复释放 */
   private disposed = false;
@@ -193,6 +195,16 @@ export class AccountsRepository {
     };
   }
 
+  /** 订阅账号目录变化。监听器只收到账号 ID，不接触 token 内容。 */
+  onDidChangeAccounts(listener: AccountChangeListener): vscode.Disposable {
+    this.accountChangeListeners.add(listener);
+    return {
+      dispose: (): void => {
+        this.accountChangeListeners.delete(listener);
+      }
+    };
+  }
+
   private notifyTokensChanged(accountIds?: readonly string[]): void {
     const normalizedIds =
       accountIds === undefined ? undefined : [...new Set(accountIds.filter((accountId) => accountId?.trim()))];
@@ -205,6 +217,23 @@ export class AccountsRepository {
         listener(normalizedIds);
       } catch (error) {
         console.warn("[codexAccounts] token change listener failed:", error);
+      }
+    }
+
+  }
+
+  private notifyAccountsChanged(accountIds?: readonly string[]): void {
+    const normalizedIds =
+      accountIds === undefined ? undefined : [...new Set(accountIds.filter((accountId) => accountId?.trim()))];
+    if (normalizedIds?.length === 0) {
+      return;
+    }
+
+    for (const listener of [...this.accountChangeListeners]) {
+      try {
+        listener(normalizedIds);
+      } catch (error) {
+        console.warn("[codexAccounts] account change listener failed:", error);
       }
     }
   }
@@ -366,6 +395,7 @@ export class AccountsRepository {
     }
 
     this.notifyTokensChanged();
+    this.notifyAccountsChanged();
 
     return {
       source: "backup",
@@ -488,6 +518,9 @@ export class AccountsRepository {
         cachedAt: Date.now(),
         mirrorRevision: await getAideckCodexAccountRevision(accountId)
       });
+      if (!storedTokens || shouldSyncTokensFromAuthFile(storedTokens, mergedTokens)) {
+        this.notifyAccountsChanged([accountId]);
+      }
 
       return mergedTokens;
     } catch (cause) {
@@ -515,6 +548,7 @@ export class AccountsRepository {
       });
     }
 
+    const hadAuthQuotaError = getQuotaIssueKind(account.quotaError) === "auth";
     const effectiveTokens = {
       ...tokens,
       accountId: tokens.accountId ?? account.accountId
@@ -551,6 +585,9 @@ export class AccountsRepository {
 
     if (shouldWriteIndex) {
       this.writeIndex(index);
+    }
+    if (options.notifyTokenChange !== false || (hadAuthQuotaError && shouldWriteIndex)) {
+      this.notifyAccountsChanged([accountId]);
     }
 
     return account;
@@ -863,6 +900,7 @@ export class AccountsRepository {
     }
 
     this.notifyTokensChanged([id]);
+    this.notifyAccountsChanged([id]);
 
     return account;
   }
@@ -1024,6 +1062,7 @@ export class AccountsRepository {
         }
       }
       this.notifyTokensChanged([account.id]);
+      this.notifyAccountsChanged([account.id]);
       imported.push({ ...account });
     }
 
@@ -1134,6 +1173,7 @@ export class AccountsRepository {
     }
     this.writeIndex(index);
     this.notifyTokensChanged([accountId]);
+    this.notifyAccountsChanged([accountId]);
   }
 
   /**
@@ -1366,6 +1406,7 @@ export class AccountsRepository {
       });
     }
 
+    const previousQuotaIssueKind = getQuotaIssueKind(account.quotaError);
     const now = Date.now();
     const effectivePlanType = applyQuotaUpdate({
       account,
@@ -1427,6 +1468,9 @@ export class AccountsRepository {
     }
 
     this.writeIndex(index);
+    if (previousQuotaIssueKind !== getQuotaIssueKind(account.quotaError) || (storedTokens && nextStoredTokens)) {
+      this.notifyAccountsChanged([accountId]);
+    }
 
     return account;
   }
@@ -1439,6 +1483,8 @@ export class AccountsRepository {
       return;
     }
 
+    const previousError = account.tokenRefreshLastError;
+    const previousErrorKind = account.tokenRefreshLastErrorKind;
     let changed = false;
     if ("tokenRefreshLastAttemptAt" in update && account.tokenRefreshLastAttemptAt !== update.tokenRefreshLastAttemptAt) {
       account.tokenRefreshLastAttemptAt = update.tokenRefreshLastAttemptAt;
@@ -1471,6 +1517,9 @@ export class AccountsRepository {
     if (changed) {
       account.updatedAt = Date.now();
       this.writeIndex(index);
+      if (previousError !== account.tokenRefreshLastError || previousErrorKind !== account.tokenRefreshLastErrorKind) {
+        this.notifyAccountsChanged([accountId]);
+      }
     }
   }
 
@@ -1490,6 +1539,7 @@ export class AccountsRepository {
       ? buildAccountStorageId(claims.email, claims.accountId, claims.organizationId)
       : undefined;
     let changed = syncActiveAccountState(index, derivedId);
+    let accountDirectoryChangedId: string | undefined;
     if (derivedId && previousActiveId !== derivedId) {
       reconcileStatusBarSelections(index, derivedId, previousActiveId);
       changed = true;
@@ -1513,6 +1563,7 @@ export class AccountsRepository {
           await mirrorAideckCurrentAccount(derivedId);
           clearQuotaCacheForAccount(derivedId);
           this.notifyTokensChanged([derivedId]);
+          accountDirectoryChangedId = derivedId;
 
           if (nextTokens.accountId && nextTokens.accountId !== account.accountId) {
             account.accountId = nextTokens.accountId;
@@ -1531,6 +1582,9 @@ export class AccountsRepository {
 
     if (changed) {
       this.writeIndex(index);
+    }
+    if (accountDirectoryChangedId) {
+      this.notifyAccountsChanged([accountDirectoryChangedId]);
     }
   }
 

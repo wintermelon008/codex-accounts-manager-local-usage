@@ -37,6 +37,7 @@ export class ExtensionSettingsStore {
       codexAppRestartEnabled: config.get<boolean>("codexAppRestartEnabled", false),
       codexAppRestartMode: config.get<"auto" | "manual">("codexAppRestartMode") ?? "manual",
       backgroundTokenRefreshEnabled: config.get<boolean>("backgroundTokenRefreshEnabled", true),
+      forceFastModeEnabled: config.get<boolean>("forceFastModeEnabled", false),
       autoRefreshMinutes: normalizeAutoRefreshMinutes(config.get<number>("autoRefreshMinutes", 0)),
       autoSwitchEnabled: config.get<boolean>("autoSwitchEnabled", false),
       hotSwitchEnabled: config.get<boolean>("hotSwitchEnabled", false),
@@ -261,6 +262,12 @@ export function isBackgroundTokenRefreshEnabled(): boolean {
   return getCodexAccountsConfiguration().get<boolean>("backgroundTokenRefreshEnabled", true);
 }
 
+export function isForceFastModeEnabled(
+  config: ReadableCodexAccountsConfiguration = getCodexAccountsConfiguration()
+): boolean {
+  return config.get<boolean>("forceFastModeEnabled", false);
+}
+
 export function isHourlyQuotaControlEnabled(): boolean {
   return getCodexAccountsConfiguration().get<boolean>("hourlyQuotaControlEnabled", false);
 }
@@ -274,13 +281,9 @@ export function isLocalImportInboxEnabled(): boolean {
   return getCodexAccountsConfiguration().get<boolean>("localImportInboxEnabled", false);
 }
 
-/**
- * The assistant control surface is opt-in and always binds to loopback. The
- * bearer token is supplied through the Manager process environment rather than
- * persisted in VS Code settings.
- */
+/** The Manager control surface is enabled by default. */
 export function isExternalControlEnabled(): boolean {
-  return getCodexAccountsConfiguration().get<boolean>("externalControlEnabled", false);
+  return getCodexAccountsConfiguration().get<boolean>("externalControlEnabled", true);
 }
 
 export function getExternalControlPort(): number {

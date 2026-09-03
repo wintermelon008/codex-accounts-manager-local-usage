@@ -34,6 +34,45 @@ test("activation loads local state, registers a generic Manager card, and does n
   integration.dispose();
 });
 
+test("Manager account directory changes refresh the open Mailbox panel", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let registration;
+  let notifyManagerChange;
+  let managedAccounts = [
+    { accountId: "account-1", email: "current@example.com", requiresReauthorization: false }
+  ];
+  const api = {
+    onDidChange(listener) {
+      notifyManagerChange = listener;
+      return { dispose() {} };
+    },
+    registerDashboardIntegration(value) {
+      registration = value;
+      return { dispose() {} };
+    },
+    async getManagedAccountDirectory() {
+      return managedAccounts;
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  await registration.runAction("open");
+
+  assert.equal(
+    vscode.panels[0].webview.messages.at(-1).state.managedAccounts[0].requiresReauthorization,
+    false
+  );
+  managedAccounts = [
+    { accountId: "account-1", email: "current@example.com", requiresReauthorization: true }
+  ];
+  notifyManagerChange();
+  await waitFor(() => vscode.panels[0].webview.messages.some(
+    (message) => message.type === "state" && message.state.managedAccounts[0]?.requiresReauthorization === true
+  ));
+  integration.dispose();
+});
+
 test("registration assistant is a separate Dashboard entry and shares the mailbox state", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -413,6 +452,7 @@ test("registration assistant deletes a mailbox directly and clears all registrat
   integration.registrationManager.createSession({ email: "another@example.com", password: "manual-password" });
   await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "registrationCleanupAll" });
   assert.equal(integration.registrationManager.getAllSessions().length, 0);
+  assert.equal((await integration.getPanelState()).registrationSessions.length, 0);
   assert.equal(
     vscode.panels[0].webview.messages.some((message) => message.type === "toast" && message.action === "registrationCleanupAll" && /已删除 2 条注册记录/u.test(message.message || "")),
     true
@@ -590,61 +630,6 @@ test("selected mailbox ids support a parallel batch query and batch delete", asy
 
   await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "batchDelete", mailboxIds: ids });
   assert.equal(integration.pool.listMetadata().length, 0);
-  integration.dispose();
-});
-
-test("queries only mailboxes linked to reauthorization-required Codex accounts", async () => {
-  const vscode = createVscode();
-  const context = createContext();
-  let registration;
-  const queried = [];
-  const provider = {
-    apiVersion: 1,
-    id: "mock",
-    displayName: "Mock provider",
-    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
-    importSchema: { label: "Mock row", placeholder: "address|credential" },
-    parseImport(input) {
-      return {
-        entries: String(input).split("\n").filter(Boolean).map((line) => ({
-          address: line.split("|")[0],
-          credentials: { credential: line.split("|")[1] }
-        })),
-        failed: []
-      };
-    },
-    async query(account) {
-      queried.push(account.address);
-      return { ok: true, providerId: "mock", address: account.address, messages: [], codes: [] };
-    }
-  };
-  const api = {
-    registerDashboardIntegration(value) {
-      registration = value;
-      return { dispose() {} };
-    },
-    async getManagedAccountDirectory() {
-      return [
-        { accountId: "codex-reauthorize", email: "reauthorize@example.com", requiresReauthorization: true },
-        { accountId: "codex-healthy", email: "healthy@example.com", requiresReauthorization: false },
-        { accountId: "codex-missing-mailbox", email: "missing@example.com", requiresReauthorization: true }
-      ];
-    }
-  };
-  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
-  await integration.initialize();
-  await registration.runAction("open");
-  await vscode.panels[0].webview.emit({
-    type: "mailbox:action",
-    action: "import",
-    providerId: "mock",
-    input: "reauthorize@example.com|credential\nhealthy@example.com|credential"
-  });
-
-  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "queryReauthorizationMailboxes" });
-  await waitFor(() => integration.coordinator.isActive() === false && queried.length === 1);
-
-  assert.deepEqual(queried, ["reauthorize@example.com"]);
   integration.dispose();
 });
 
