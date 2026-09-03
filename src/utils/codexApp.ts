@@ -24,8 +24,6 @@ const WINDOWS_APP_CANDIDATES = [
 const LINUX_APP_CANDIDATES = [
   "/usr/bin/codex",
   "/usr/local/bin/codex",
-  "/opt/Codex/codex",
-  "/opt/OpenAI Codex/codex",
   path.join(os.homedir(), ".local", "bin", "codex")
 ];
 

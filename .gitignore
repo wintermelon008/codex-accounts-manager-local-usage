@@ -2,6 +2,7 @@ node_modules
 out
 coverage
 *.vsix
+.zsh_history
 .claude
 .vscode
 .vscode-server
