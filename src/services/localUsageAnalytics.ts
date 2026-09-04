@@ -25,6 +25,7 @@ export const ACCOUNT_TOKEN_USAGE_RETENTION_DAYS = 31;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CACHE_FILE_NAME = "local-usage-analytics-v9.json";
+const ARCHIVED_SESSIONS_DIRECTORY_NAME = "archived_sessions";
 export const ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME = "account-token-usage-v4.json";
 export const ACCOUNT_USAGE_ATTRIBUTION_DIRECTORY_NAME = "account-usage-attribution";
 export const LOCAL_USAGE_SCAN_LEASE_FILE_NAME = `${CACHE_FILE_NAME}.scan-lease`;
@@ -526,7 +527,8 @@ async function scanLocalUsageSessionsInternal(
   const empty = createEmptySnapshot("unavailable", input.periodDays, input.timeZone, input.now, shortPeriodDays);
   const accountUsageWindows = new Map<string, Map<string, AccountTokenUsageWindow>>();
   const tracksAccountUsage = attribution.recordCount > 0;
-  if (!(await isDirectory(input.sessionsPath))) {
+  const sessionRoots = getSessionRoots(input.sessionsPath);
+  if (!(await hasDirectory(sessionRoots))) {
     return {
       localUsage: withRefreshWindow(empty, input.now, input.timeZone),
       accountTokenUsage: createAccountTokenUsageSnapshot(
@@ -566,7 +568,7 @@ async function scanLocalUsageSessionsInternal(
     ) +
       1) *
       DAY_MS;
-  const files = await findJsonlFiles(input.sessionsPath, oldestRelevantMtime);
+  const files = await findJsonlFiles(sessionRoots, oldestRelevantMtime);
   for (const file of files) {
     let currentModel = UNKNOWN_MODEL;
     let fileHasLocalUsage = false;
@@ -900,6 +902,15 @@ export function findAccountTokenUsageWindow(
 function defaultSessionsPath(): string {
   const codexHome = process.env["CODEX_HOME"]?.trim() || path.join(os.homedir(), ".codex");
   return path.join(codexHome, "sessions");
+}
+
+function getSessionRoots(sessionsPath: string): string[] {
+  const sessionsRoot = path.resolve(sessionsPath);
+  const parent = path.dirname(sessionsRoot);
+  const siblingName =
+    path.basename(sessionsRoot) === ARCHIVED_SESSIONS_DIRECTORY_NAME ? "sessions" : ARCHIVED_SESSIONS_DIRECTORY_NAME;
+  const archivedRoot = path.join(parent, siblingName);
+  return [...new Set([sessionsRoot, archivedRoot])];
 }
 
 function createEmptySnapshot(
@@ -1948,13 +1959,15 @@ function daysBetweenDateKeys(start: string, end: string): number {
   return Math.max(0, Math.round((endAt - startAt) / DAY_MS));
 }
 
-async function findJsonlFiles(root: string, oldestRelevantMtime: number): Promise<string[]> {
-  const files: string[] = [];
-  await visit(root, files, oldestRelevantMtime);
-  return files;
+async function findJsonlFiles(roots: readonly string[], oldestRelevantMtime: number): Promise<string[]> {
+  const filesByName = new Map<string, string>();
+  for (const root of roots) {
+    await visit(root, filesByName, oldestRelevantMtime);
+  }
+  return [...filesByName.values()];
 }
 
-async function visit(directory: string, files: string[], oldestRelevantMtime: number): Promise<void> {
+async function visit(directory: string, filesByName: Map<string, string>, oldestRelevantMtime: number): Promise<void> {
   let entries;
   try {
     entries = await fs.readdir(directory, { withFileTypes: true });
@@ -1968,11 +1981,16 @@ async function visit(directory: string, files: string[], oldestRelevantMtime: nu
   for (const entry of entries) {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      await visit(fullPath, files, oldestRelevantMtime);
+      await visit(fullPath, filesByName, oldestRelevantMtime);
     } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
       try {
         if ((await fs.stat(fullPath)).mtimeMs >= oldestRelevantMtime) {
-          files.push(fullPath);
+          // Rollout filenames contain a UUID and remain stable when Codex
+          // moves a session between the active and archived roots. Keep one
+          // copy if a move briefly leaves both paths visible.
+          if (!filesByName.has(entry.name)) {
+            filesByName.set(entry.name, fullPath);
+          }
         }
       } catch (error) {
         if (!isErrorCode(error, "ENOENT")) {
@@ -1992,6 +2010,11 @@ async function isDirectory(target: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+async function hasDirectory(targets: readonly string[]): Promise<boolean> {
+  const results = await Promise.all(targets.map((target) => isDirectory(target)));
+  return results.some(Boolean);
 }
 
 function parseCache(raw: string): LocalUsageCache | undefined {
