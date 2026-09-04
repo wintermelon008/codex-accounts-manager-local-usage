@@ -11,6 +11,7 @@ import {
   SettingsDiscreteSlider,
   SettingsLanguageBlock,
   SettingsPathBlock,
+  SettingsProxyBlock,
   SettingsSegmentBlock,
   SettingsThemeBlock,
   SettingsThresholdBlock,
@@ -87,6 +88,11 @@ export function SettingsOverlay(props: {
               props.onPatchSettings({ displayLanguage: value });
               props.onSendSetting("displayLanguage", value);
             }}
+          />
+          <SettingsProxyBlock
+            copy={props.copy}
+            settings={props.settings}
+            onChange={(value) => patchAndSend("proxyAddress", value)}
           />
           {props.integrationSettings.map((setting) => (
             <SettingsToggleBlock

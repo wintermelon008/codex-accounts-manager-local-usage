@@ -6,7 +6,7 @@
 
 该组件拥有自己的邮箱池、元数据、详情缓存和秘密命名空间。现在以扩展宿主服务器的 `globalStorageUri` 为共享权威，邮箱状态、详情和凭据分别写入扩展目录下受限的 `0600` 文件；旧版客户端 `globalState/SecretStorage` 数据会按设备标识一次性合并迁移。注册助手只持久化不含密码、手机号、验证码和 OAuth token 的会话摘要。这里的共享范围是“同一远程 VS Code 扩展宿主服务器”，不同服务器之间仍需额外的中心服务或手动迁移。
 
-Manager 仅通过现有 `registerDashboardIntegration` API 渲染一个轻量入口卡片，并可选提供脱敏的账号邮箱目录、账号健康状态、账号删除、无界面 OAuth 导入能力和已标记为收到 OpenAI `account deactivated` 邮件的邮箱地址；Mailbox 不读取 Manager 账号 token、不读取 Sub2API SecretStorage，也不把邮件正文或邮箱凭据带入核心公共 API。邮箱列表和当前选中邮箱详情由扩展自有 Webview Panel 提供。
+Manager 仅通过现有 `registerDashboardIntegration` API 渲染一个轻量入口卡片，并可选提供脱敏的账号邮箱目录、账号健康状态、账号删除、无界面 OAuth 导入能力和已标记为收到 OpenAI `account deactivated` 邮件的邮箱地址；Mailbox 不读取 Manager 账号 token、不读取 Sub2API SecretStorage，也不把邮件正文或邮箱凭据带入核心公共 API。邮箱列表和当前选中邮箱详情由扩展自有 Webview Panel 提供；从 Dashboard 打开时面板进入当前主编辑器组，与 Dashboard 使用同一标签栏。
 
 因此新设备可以只安装 Manager；未安装 Mailbox VSIX 时，核心账号管理、额度刷新、Sub2API 和无感切号路径不应该因为邮箱组件缺失而改变。
 

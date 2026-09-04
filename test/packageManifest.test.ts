@@ -65,6 +65,28 @@ describe("extension manifest configuration", () => {
     );
   });
 
+  it("declares configurable proxy choices with a non-overriding default", () => {
+    const manifestPath = path.resolve(__dirname, "../package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      contributes?: {
+        configuration?: {
+          properties?: Record<string, { type?: string; default?: unknown; items?: { type?: string } }>;
+        };
+      };
+    };
+    const properties = manifest.contributes?.configuration?.properties;
+
+    expect(properties?.["codexAccounts.proxyAddresses"]).toMatchObject({
+      type: "array",
+      default: [""]
+    });
+    expect(properties?.["codexAccounts.proxyAddresses"]?.items).toMatchObject({ type: "string" });
+    expect(properties?.["codexAccounts.proxyAddress"]).toMatchObject({
+      type: "string",
+      default: ""
+    });
+  });
+
   it("keeps the local import inbox opt-in by default", () => {
     const manifestPath = path.resolve(__dirname, "../package.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {

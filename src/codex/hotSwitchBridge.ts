@@ -84,6 +84,20 @@ export type GatewayRuntimeStatus = {
   totalTokens?: number;
 };
 
+/**
+ * Ephemeral provider details for a same-host Codex client. The adapter port
+ * and bearer belong to the resident shim and are refreshed whenever the
+ * app-server is restarted; callers must not persist them.
+ */
+export type CodexExecProviderConfig = {
+  baseUrl: string;
+  token: string;
+  model: string;
+  route: "gateway" | "chatgpt";
+  ready: boolean;
+  instanceId?: string;
+};
+
 export type HotSwitchIdentity = {
   accountType: string | null;
   email: string | null;
@@ -299,6 +313,10 @@ export class CodexHotSwitchBridge {
 
   async getGatewayStatus(): Promise<GatewayRuntimeStatus> {
     return this.request<GatewayRuntimeStatus>("gateway/status", {}, REQUEST_TIMEOUT_MS);
+  }
+
+  async getCodexExecProviderConfig(): Promise<CodexExecProviderConfig> {
+    return this.request<CodexExecProviderConfig>("runtime/codex/provider-config", {}, REQUEST_TIMEOUT_MS);
   }
 
   async switchAccount(params: HotSwitchAccountParams): Promise<HotSwitchAccountResult> {

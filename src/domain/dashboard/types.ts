@@ -51,6 +51,7 @@ export type DashboardSettingKey =
   | "quotaGreenThreshold"
   | "quotaYellowThreshold"
   | "debugNetwork"
+  | "proxyAddress"
   | "displayLanguage";
 
 export interface DashboardSettings {
@@ -89,6 +90,8 @@ export interface DashboardSettings {
   quotaGreenThreshold: number;
   quotaYellowThreshold: number;
   debugNetwork: boolean;
+  proxyAddress: string;
+  proxyAddresses: string[];
   displayLanguage: DashboardLanguageOption;
 }
 
@@ -259,6 +262,10 @@ export interface DashboardCopy {
   detailsBtn: string;
   removeBtn: string;
   settingsTitle: string;
+  proxyTitle: string;
+  proxySub: string;
+  proxyDefault: string;
+  proxyNote: string;
   addAccountModalTitle: string;
   shareTokenModalTitle: string;
   oauthTab: string;

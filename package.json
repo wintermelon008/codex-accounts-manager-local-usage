@@ -72,6 +72,21 @@
           "default": "auto",
           "markdownDescription": "Language used by Codex Accounts Manager. `auto` follows the current VS Code display language. Dashboard, details, and core notifications use localized copy when available and fall back to English for any missing edge-case strings."
         },
+        "codexAccounts.proxyAddresses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ""
+          ],
+          "markdownDescription": "Addresses offered by the Manager Dashboard proxy selector. Each item is the value after `HTTPS_PROXY=` and must be an absolute `http://` or `https://` proxy URL. Keep an empty item to preserve the process or Codex `.env` setting; no device-specific address is built in."
+        },
+        "codexAccounts.proxyAddress": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Selected HTTPS proxy address for Manager requests. The empty value does not override the existing process or Codex `.env` setting; choose an entry from `codexAccounts.proxyAddresses`."
+        },
         "codexAccounts.localUsageDefaultRange": {
           "type": "string",
           "enum": [

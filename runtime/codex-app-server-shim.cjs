@@ -18,6 +18,9 @@ const REFRESH_REQUEST_TIMEOUT_MS = 30_000;
 const ACCOUNT_IDENTITY_SETTLE_TIMEOUT_MS = 5_000;
 const ACCOUNT_IDENTITY_POLL_INTERVAL_MS = 100;
 const ACCOUNT_LOGIN_COMPLETION_TIMEOUT_MS = 30_000;
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
+const SHUTDOWN_PROJECTION_SETTLE_MS = 250;
+const SHUTDOWN_POLL_INTERVAL_MS = 25;
 const RECOVERY_CONTEXT_KEY = "codex-account-manager/recovery";
 const CONFIG_PATH = path.join(__dirname, "codex-app-server-shim.json");
 const MAX_TERMINAL_TURN_IDS = 2_048;
@@ -89,6 +92,9 @@ let childReady = false;
 let initializeResponseReceived = false;
 let initializedNotificationReceived = false;
 let childExited = false;
+let shutdownRequested = false;
+let shutdownSignal;
+let shutdownPromise;
 let anonymousActiveTurnCount = 0;
 let switching = false;
 let goalPreparationCount = 0;
@@ -112,6 +118,7 @@ let controlSequence = 0;
 let latestControlSocket;
 let controlServer;
 let socketPath;
+let controlSocketIdentity;
 const deferredOfficialLines = [];
 const pendingInternalRequests = new Map();
 const pendingChildModelListRequests = new Map();
@@ -141,9 +148,7 @@ void startRuntime();
 
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => {
-    if (!childExited && child) {
-      child.kill(signal);
-    }
+    requestShutdown(signal);
   });
 }
 
@@ -177,7 +182,7 @@ async function startRuntime() {
     child.stderr.pipe(process.stderr);
 
     consumeLines(process.stdin, handleOfficialLine, () => {
-      child.stdin.end();
+      requestShutdown("SIGTERM");
     });
     consumeLines(child.stdout, handleCodexLine, () => {
       process.stdout.end();
@@ -194,11 +199,109 @@ async function startRuntime() {
       rejectPendingRequests(new Error("Codex app-server exited"));
       closeControlServer();
       closeGatewayAdapter();
+      if (shutdownRequested) {
+        process.stdin.pause();
+        if (typeof process.stdin.unref === "function") {
+          process.stdin.unref();
+        }
+      }
       process.exitCode = typeof code === "number" ? code : signal ? 1 : 0;
     });
+
+    beginShutdownIfRequested();
   } catch (error) {
     closeGatewayAdapter();
     failStartup(`Unable to start the Codex runtime: ${safeErrorMessage(error)}`);
+  }
+}
+
+function requestShutdown(signal) {
+  if (childExited) {
+    return;
+  }
+  shutdownRequested = true;
+  shutdownSignal ||= signal;
+  beginShutdownIfRequested();
+}
+
+function beginShutdownIfRequested() {
+  if (!shutdownRequested || !child || childExited || shutdownPromise) {
+    return;
+  }
+  shutdownPromise = gracefullyStopChild(shutdownSignal || "SIGTERM").catch((error) => {
+    safeLog(`graceful Codex shutdown failed: ${safeErrorMessage(error)}`);
+    if (!childExited && child) {
+      child.kill(shutdownSignal || "SIGTERM");
+    }
+  });
+}
+
+async function gracefullyStopChild(signal) {
+  clearAllCapacityRecoveryThreads();
+  deferredOfficialLines.length = 0;
+  const hadActiveTurns = getActiveTurnCount() > 0;
+  await drainActiveTurnsBeforeShutdown();
+  if (hadActiveTurns && !childExited) {
+    await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_PROJECTION_SETTLE_MS));
+  }
+  if (!childExited && child) {
+    child.kill(signal);
+  }
+}
+
+async function drainActiveTurnsBeforeShutdown() {
+  const deadline = Date.now() + SHUTDOWN_DRAIN_TIMEOUT_MS;
+  const attemptedTurnIds = new Set();
+
+  while (!childExited && getActiveTurnCount() > 0 && Date.now() < deadline) {
+    const activeEntries = [...activeTurns.entries()].filter(
+      ([turnId, threadId]) =>
+        !attemptedTurnIds.has(turnId) && typeof threadId === "string" && threadId.length > 0
+    );
+    if (activeEntries.length > 0) {
+      await Promise.all(
+        activeEntries.map(async ([turnId, threadId]) => {
+          attemptedTurnIds.add(turnId);
+          await interruptTurnBeforeShutdown(turnId, threadId, Math.max(1, deadline - Date.now()));
+        })
+      );
+      continue;
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(SHUTDOWN_POLL_INTERVAL_MS, remaining)));
+  }
+
+  if (!childExited && getActiveTurnCount() > 0) {
+    safeLog(`timed out draining ${getActiveTurnCount()} active Codex turn(s) before shutdown`);
+  }
+}
+
+async function interruptTurnBeforeShutdown(turnId, threadId, timeoutMs) {
+  try {
+    await sendInternalRequest(
+      "turn/interrupt",
+      { threadId, turnId },
+      { timeoutMs: Math.max(1, Math.min(INTERNAL_REQUEST_TIMEOUT_MS, timeoutMs)) }
+    );
+  } catch (error) {
+    const replacementTurnId = readReplacementActiveTurnId(error);
+    if (replacementTurnId && replacementTurnId !== turnId) {
+      activeTurns.delete(turnId);
+      rememberActiveTurn(replacementTurnId, threadId);
+      return;
+    }
+    if (isAlreadyInactiveTurnError(error)) {
+      if (activeTurns.get(turnId) === threadId) {
+        activeTurns.delete(turnId);
+      }
+      rememberTerminalTurnId(turnId);
+      return;
+    }
+    safeLog(`failed to interrupt turn before shutdown: ${safeErrorMessage(error)}`);
   }
 }
 
@@ -206,6 +309,11 @@ function handleOfficialLine(line) {
   let message = parseJson(line);
   if (!message) {
     writeChildLine(line);
+    return;
+  }
+
+  if (shutdownRequested && isShutdownBlockedMethod(message.method)) {
+    rejectShutdownRequest(message);
     return;
   }
 
@@ -262,6 +370,29 @@ function handleOfficialLine(line) {
   }
 
   writeChildLine(line);
+}
+
+function isShutdownBlockedMethod(method) {
+  return (
+    isWorkStartMethod(method) ||
+    method === "thread/resume" ||
+    method === "turn/steer" ||
+    isGoalMutationMethod(method)
+  );
+}
+
+function rejectShutdownRequest(message) {
+  if (Object.prototype.hasOwnProperty.call(message, "id")) {
+    writeOfficialLine(
+      JSON.stringify({
+        id: message.id,
+        error: {
+          code: -32000,
+          message: "Codex app-server is shutting down"
+        }
+      })
+    );
+  }
 }
 
 function applyFastModeToRequest(message) {
@@ -580,6 +711,7 @@ function startControlServer() {
       } catch {
         // Best effort on filesystems that do not expose POSIX modes.
       }
+      controlSocketIdentity = readSocketIdentity(socketPath);
     }
   });
 }
@@ -688,6 +820,15 @@ function handleControlLine(socket, line) {
 
   if (message.method === "gateway/status") {
     sendControlResult(socket, message.id, getGatewayAdapterStatus());
+    return;
+  }
+
+  if (message.method === "runtime/codex/provider-config") {
+    try {
+      sendControlResult(socket, message.id, getCodexExecProviderConfig());
+    } catch (error) {
+      sendControlError(socket, message.id, safeErrorMessage(error));
+    }
     return;
   }
 
@@ -1456,12 +1597,26 @@ async function handleAuthRefreshRequest(message) {
 function sendInternalRequest(method, params, options = {}) {
   const id = `${INTERNAL_ID_PREFIX}:${++internalSequence}`;
   return new Promise((resolve, reject) => {
+    const timeoutMs =
+      typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+        ? options.timeoutMs
+        : INTERNAL_REQUEST_TIMEOUT_MS;
     const timer = setTimeout(() => {
       pendingInternalRequests.delete(requestIdKey(id));
       reject(new Error(`${method} timed out`));
-    }, INTERNAL_REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
     pendingInternalRequests.set(requestIdKey(id), { resolve, reject, timer, ...options });
-    writeChildMessage(applyFastModeToRequest({ id, method, params }));
+    try {
+      if (!writeChildMessage(applyFastModeToRequest({ id, method, params }))) {
+        pendingInternalRequests.delete(requestIdKey(id));
+        clearTimeout(timer);
+        reject(new Error("Codex app-server stdin is closed"));
+      }
+    } catch (error) {
+      pendingInternalRequests.delete(requestIdKey(id));
+      clearTimeout(timer);
+      reject(error);
+    }
   });
 }
 
@@ -1743,13 +1898,15 @@ function writeSocketMessage(socket, message) {
 }
 
 function writeChildMessage(message) {
-  writeChildLine(JSON.stringify(message));
+  return writeChildLine(JSON.stringify(message));
 }
 
 function writeChildLine(line) {
-  if (!child.stdin.destroyed) {
-    child.stdin.write(`${line}\n`);
+  if (!child || child.stdin.destroyed || child.stdin.writableEnded) {
+    return false;
   }
+  child.stdin.write(`${line}\n`);
+  return true;
 }
 
 function writeOfficialLine(line) {
@@ -1789,12 +1946,29 @@ function closeControlServer() {
     controlServer.close();
   }
   if (socketPath && process.platform !== "win32") {
-    try {
-      fs.unlinkSync(socketPath);
-    } catch {
-      // The socket may already have been removed by the host.
+    const currentIdentity = readSocketIdentity(socketPath);
+    if (sameSocketIdentity(controlSocketIdentity, currentIdentity)) {
+      try {
+        fs.unlinkSync(socketPath);
+      } catch {
+        // The socket may already have been removed by the host.
+      }
     }
   }
+  controlSocketIdentity = undefined;
+}
+
+function readSocketIdentity(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    return { dev: stat.dev, ino: stat.ino };
+  } catch {
+    return undefined;
+  }
+}
+
+function sameSocketIdentity(left, right) {
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
 }
 
 function rejectPendingRequests(error) {
@@ -3098,6 +3272,23 @@ function getGatewayAdapterStatus() {
     cachedInputTokens: gatewayAdapter.cachedInputTokens,
     reasoningTokens: gatewayAdapter.reasoningTokens,
     totalTokens: gatewayAdapter.totalTokens
+  };
+}
+
+function getCodexExecProviderConfig() {
+  if (!gatewayAdapter || !gatewayConfig || !gatewayAdapter.baseUrl) {
+    throw new Error("The Manager Codex adapter is not available");
+  }
+  return {
+    baseUrl: gatewayAdapter.baseUrl,
+    token: gatewayAdapter.token,
+    model: gatewayConfig.model,
+    route: gatewayAdapter.route,
+    ready:
+      gatewayAdapter.route === "gateway"
+        ? typeof gatewayAdapter.apiKey === "string" && gatewayAdapter.apiKey.length > 0
+        : typeof gatewayAdapter.chatgptAccessToken === "string" && gatewayAdapter.chatgptAccessToken.length > 0,
+    instanceId: gatewayAdapter.instanceId
   };
 }
 

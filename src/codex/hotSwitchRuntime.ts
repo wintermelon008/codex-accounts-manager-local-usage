@@ -18,6 +18,7 @@ import {
 } from "../presentation/workbench/windowRuntimeAccount";
 import {
   CodexHotSwitchBridge,
+  CodexExecProviderConfig,
   HotSwitchAccountResult,
   HotSwitchIdentity,
   HotSwitchLongTurnPolicy,
@@ -227,6 +228,31 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       };
     }
     return this.bridge.getGatewayStatus();
+  }
+
+  /**
+   * Return the resident Manager/Codex adapter route for a same-host client.
+   * The port and bearer are intentionally ephemeral and are never persisted.
+   */
+  async getCodexExecProviderConfig(): Promise<CodexExecProviderConfig> {
+    if (!this.bridge) {
+      throw new Error("Codex hot-switch runtime is not ready");
+    }
+    let provider = await this.bridge.getCodexExecProviderConfig();
+    if (!provider.ready && provider.route === "chatgpt") {
+      const result = await this.switchGatewayRoute("chatgpt", undefined, {
+        gracePeriodMs: 0,
+        longTurnPolicy: "defer"
+      });
+      if (result.status !== "switched") {
+        throw new Error("Manager Codex ChatGPT route is not ready");
+      }
+      provider = await this.bridge.getCodexExecProviderConfig();
+    }
+    if (!provider.ready) {
+      throw new Error("Manager Codex provider route is not ready");
+    }
+    return provider;
   }
 
   async disable(): Promise<HotSwitchSetupResult> {

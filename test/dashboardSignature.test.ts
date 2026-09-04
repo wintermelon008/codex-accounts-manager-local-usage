@@ -22,6 +22,8 @@ function createState(overrides?: {
       dashboardTheme: "dark",
       localUsageDefaultRange: "7d",
       localUsageEnabledRanges: ["7d"],
+      proxyAddress: "",
+      proxyAddresses: [""],
       localUsageShowEquivalentPrice: true,
       displayLanguage: "zh",
       autoRefreshMinutes: 0,
@@ -340,6 +342,28 @@ describe("buildDashboardStateSignature", () => {
     };
 
     expect(buildDashboardStateSignature(disabled)).not.toBe(buildDashboardStateSignature(base));
+  });
+
+  it("changes when the selected proxy or proxy choices change", () => {
+    const base = createState();
+    const selected = {
+      ...base,
+      settings: {
+        ...base.settings,
+        proxyAddress: "http://proxy-a:7890",
+        proxyAddresses: ["", "http://proxy-a:7890"]
+      }
+    };
+    const choicesChanged = {
+      ...base,
+      settings: {
+        ...base.settings,
+        proxyAddresses: ["", "http://proxy-b:7890"]
+      }
+    };
+
+    expect(buildDashboardStateSignature(selected)).not.toBe(buildDashboardStateSignature(base));
+    expect(buildDashboardStateSignature(choicesChanged)).not.toBe(buildDashboardStateSignature(base));
   });
 
   it("changes when the current quota-window token counter changes or resets", () => {

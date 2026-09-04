@@ -229,10 +229,7 @@ function resolveDashboardAccountPlanFilter(planType: string | undefined): Dashbo
   return normalized.includes("free") ? "free" : undefined;
 }
 
-/**
- * Finds non-hidden accounts whose reported weekly window is at or below the bulk-hide threshold.
- * The caller supplies the current display scope, so group filters remain respected.
- */
+/** Finds all non-hidden accounts whose reported weekly window is at or below the bulk-hide threshold. */
 export function getLowWeeklyQuotaAccountIds(
   accounts: DashboardAccountViewModel[],
   threshold = LOW_WEEKLY_QUOTA_HIDE_THRESHOLD

@@ -23,6 +23,9 @@ type Message = {
     serviceTier?: string;
     modelProviders?: string[] | null;
     turnId?: string;
+    turn?: {
+      status?: string;
+    };
     goalStatus?: string;
     inputText?: string;
     recoveryMetadata?: string;
@@ -45,11 +48,17 @@ describe("CodexHotSwitchBridge", () => {
   let shim: childProcess.ChildProcessWithoutNullStreams | undefined;
   let bridge: CodexHotSwitchBridge | undefined;
 
-  afterEach(() => {
+  afterEach(async () => {
     bridge?.dispose();
     bridge = undefined;
-    shim?.kill("SIGTERM");
+    const currentShim = shim;
     shim = undefined;
+    if (!currentShim || currentShim.exitCode !== null || currentShim.signalCode !== null) {
+      return;
+    }
+    const exited = new Promise<void>((resolve) => currentShim.once("exit", () => resolve()));
+    currentShim.kill("SIGTERM");
+    await exited;
   });
 
   it("is ready when initialized arrives before the initialize response", async () => {
@@ -128,6 +137,46 @@ describe("CodexHotSwitchBridge", () => {
       attributionFailureReason: "The app-server reported a different account for usage attribution"
     });
   });
+
+  it("drains active turns before forwarding the shutdown signal to the app-server", async () => {
+    const root = path.resolve(__dirname, "..");
+    const shimPath = path.join(root, "runtime", "codex-app-server-shim.cjs");
+    const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
+    shim = childProcess.spawn(shimPath, ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: fakeCliPath
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "shutdown-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "shutdown-initialize");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "shutdown-turn", method: "turn/start", params: { threadId: "shutdown-thread", input: [] } })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "shutdown-thread");
+
+    const exited = new Promise<void>((resolve) => shim?.once("exit", () => resolve()));
+    shim.kill("SIGTERM");
+    await waitFor(() =>
+      messages.all.some(
+        (message) => message.method === "turn/completed" && message.params?.turn?.status === "interrupted"
+      )
+    );
+    await exited;
+
+    const interruptIndex = messages.all.findIndex(
+      (message) => message.method === "test/received" && message.params?.method === "turn/interrupt"
+    );
+    const completedIndex = messages.all.findIndex(
+      (message) => message.method === "turn/completed" && message.params?.turn?.status === "interrupted"
+    );
+    expect(interruptIndex).toBeGreaterThanOrEqual(0);
+    expect(completedIndex).toBeGreaterThan(interruptIndex);
+  }, 15_000);
 
   it("updates Fast mode without restarting and applies it to direct ChatGPT turns", async () => {
     const root = path.resolve(__dirname, "..");

@@ -121,6 +121,8 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.settings.quotaWarningThreshold,
     state.settings.quotaGreenThreshold,
     state.settings.quotaYellowThreshold,
+    state.settings.proxyAddress ?? "",
+    JSON.stringify(state.settings.proxyAddresses ?? []),
     state.tokenAutomation.enabled ? "1" : "0",
     state.tokenAutomation.lastCheckAt ?? "",
     state.tokenAutomation.nextCheckAt ?? "",

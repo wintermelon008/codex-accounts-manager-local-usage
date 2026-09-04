@@ -229,15 +229,15 @@ class MailboxIntegration {
       id: REGISTRATION_INTEGRATION_ID,
       title: "注册助手",
       status: this.loadError ? "error" : hasSessions ? "active" : "ready",
-      statusMessage: this.loadError ? this.loadError : "独立注册助手面板",
+      statusMessage: this.loadError ? this.loadError : "当前主编辑器组中的注册助手面板",
       topButton: {
         actionId: "open",
         label: "注册助手",
-        tooltip: "打开独立注册助手面板",
+        tooltip: "在当前主编辑器组打开注册助手",
         icon: "default"
       },
       actions: [
-        { id: "open", label: "注册助手", enabled: !this.loadError, tone: "primary", tooltip: "打开独立注册助手面板" }
+        { id: "open", label: "注册助手", enabled: !this.loadError, tone: "primary", tooltip: "在当前主编辑器组打开注册助手" }
       ]
     };
   }
@@ -247,15 +247,15 @@ class MailboxIntegration {
       id: INTEGRATION_ID,
       title: "Mailbox",
       status: this.loadError ? "error" : "ready",
-      statusMessage: this.loadError ? this.loadError : "独立邮箱面板",
+      statusMessage: this.loadError ? this.loadError : "当前主编辑器组中的 Mailbox 面板",
       topButton: {
         actionId: "open",
         label: "Mailbox",
-        tooltip: "打开独立 Mailbox 面板",
+        tooltip: "在当前主编辑器组打开 Mailbox",
         icon: "mail"
       },
       actions: [
-        { id: "open", label: "Mailbox", enabled: !this.loadError, tone: "primary", tooltip: "打开独立 Mailbox 面板" }
+        { id: "open", label: "Mailbox", enabled: !this.loadError, tone: "primary", tooltip: "在当前主编辑器组打开 Mailbox" }
       ]
     };
   }
@@ -289,7 +289,7 @@ class MailboxIntegration {
       return;
     }
     if (this.panel) {
-      this.panel.reveal(this.vscode.ViewColumn.Beside, false);
+      this.panel.reveal(this.vscode.ViewColumn.Active, false);
       await this.publishPanelState();
       return;
     }
@@ -297,7 +297,7 @@ class MailboxIntegration {
     this.panel = this.vscode.window.createWebviewPanel(
       MAILBOX_PANEL_VIEW_TYPE,
       "Mailbox",
-      { viewColumn: this.vscode.ViewColumn.Beside, preserveFocus: false },
+      { viewColumn: this.vscode.ViewColumn.Active, preserveFocus: false },
       { enableScripts: true, retainContextWhenHidden: true }
     );
     this.panel.webview.html = createMailboxPanelHtml();
@@ -314,7 +314,7 @@ class MailboxIntegration {
       return;
     }
     if (this.registrationPanel) {
-      this.registrationPanel.reveal(this.vscode.ViewColumn.Beside, false);
+      this.registrationPanel.reveal(this.vscode.ViewColumn.Active, false);
       await this.publishPanelState();
       return;
     }
@@ -322,7 +322,7 @@ class MailboxIntegration {
     this.registrationPanel = this.vscode.window.createWebviewPanel(
       REGISTRATION_PANEL_VIEW_TYPE,
       "注册助手",
-      { viewColumn: this.vscode.ViewColumn.Beside, preserveFocus: false },
+      { viewColumn: this.vscode.ViewColumn.Active, preserveFocus: false },
       { enableScripts: true, retainContextWhenHidden: true }
     );
     this.registrationPanel.webview.html = createRegistrationPanelHtml();

@@ -189,7 +189,7 @@ function App() {
   const displayedAccountPage = getDashboardAccountPage(displayedAccounts, accountsPage, accountsPageSize);
   const pageAccounts = displayedAccountPage.accounts;
   const lowWeeklyQuotaAccountIds = getLowWeeklyQuotaAccountIds(
-    pageAccounts,
+    snapshot.accounts,
     snapshot.settings.hideWeeklyQuotaThreshold
   );
   const highWeeklyQuotaHiddenAccountIds = getHighWeeklyQuotaHiddenAccountIds(
@@ -317,7 +317,7 @@ function App() {
     const topButton =
       integration.topButton ??
       (integration.id === "mailbox"
-        ? { actionId: "open", label: "Mailbox", tooltip: "打开独立 Mailbox 面板", icon: "mail" as const }
+        ? { actionId: "open", label: "Mailbox", tooltip: "在当前主编辑器组打开 Mailbox", icon: "mail" as const }
         : undefined);
     const action = topButton ? integration.actions.find((candidate) => candidate.id === topButton.actionId) : undefined;
     return action && topButton ? [{ integration, topButton, action }] : [];
@@ -1053,10 +1053,10 @@ function resolveHideLowWeeklyQuotaLabel(lang: string, count: number, threshold: 
 
 function resolveUnhideHighWeeklyQuotaLabel(lang: string, count: number, threshold: number): string {
   if (lang === "zh") {
-    return `解除隐藏周额度 ≥${threshold}%（${count}）`;
+    return `显示周额度 ≥${threshold}%（${count}）`;
   }
   if (lang === "zh-hant") {
-    return `解除隱藏週額度 ≥${threshold}%（${count}）`;
+    return `顯示週額度 ≥${threshold}%（${count}）`;
   }
   return `Show weekly ≥${threshold}% (${count})`;
 }
@@ -1156,12 +1156,12 @@ function resolveAccountControlsLabel(lang: string): string {
 
 function resolveUnlockCodexSessionLocksLabel(lang: string): string {
   if (lang === "zh") {
-    return "解锁失效 Codex 会话（不终止活跃会话）";
+    return "强制解锁 Codex 会话（终止其他窗口运行时）";
   }
   if (lang === "zh-hant") {
-    return "解除失效 Codex 會話鎖（不終止活躍會話）";
+    return "強制解除 Codex 會話鎖（終止其他視窗執行時）";
   }
-  return "Unlock stale Codex sessions (does not terminate active sessions)";
+  return "Force-unlock Codex sessions (terminate other-window runtimes)";
 }
 
 function resolveForceFastModeToggleLabel(lang: string, enabled: boolean): string {

@@ -174,7 +174,9 @@ export class AccountsWorkbench {
       sessionHub: this.sessionHub,
       refreshQuotas: (accountIds) => this.refreshQuotasForControl(accountIds),
       enqueueImport: (accounts) => enqueueLocalImportJob(accounts),
-      getImportStatus: (jobId) => readLocalImportStatus(jobId)
+      getImportStatus: (jobId) => readLocalImportStatus(jobId),
+      getCodexExecProviderConfig: () => this.hotSwitchRuntime.getCodexExecProviderConfig(),
+      switchAccount: (accountId, options) => this.switchAccountForControl(accountId, options)
     });
   }
 
@@ -436,6 +438,60 @@ export class AccountsWorkbench {
       unknownAccountIds,
       failedAccountIds
     };
+  }
+
+  private async switchAccountForControl(
+    accountId: string,
+    options: { force?: boolean; gracePeriodMs?: number; longTurnPolicy?: "defer" | "interrupt" | "interruptAndContinue" } = {}
+  ): Promise<RuntimeAccountSwitchOutcome> {
+    const account = await this.repo.getAccount(accountId);
+    if (!account) {
+      return { status: "failed", message: "The requested Manager account was not found" };
+    }
+    if (isSub2ApiAccount(account)) {
+      return { status: "failed", message: "Gateway session switching only supports ChatGPT accounts" };
+    }
+
+    const runtimeOutcome = await this.switchRuntimeAccount(
+      accountId,
+      options.force
+        ? {
+            gracePeriodMs: 0,
+            longTurnPolicy: "interruptAndContinue"
+          }
+        : {
+            gracePeriodMs: options.gracePeriodMs,
+            longTurnPolicy: options.longTurnPolicy
+          },
+      "external"
+    );
+    if (runtimeOutcome.status !== "unavailable") {
+      if (options.force && runtimeOutcome.status === "switched") {
+        await this.resetControlSwitchRecoveryState();
+      }
+      return runtimeOutcome;
+    }
+
+    const switched = await this.repo.switchAccount(accountId);
+    if (options.force) {
+      await this.resetControlSwitchRecoveryState();
+    }
+    return {
+      status: "switched",
+      accountId: switched.id,
+      email: switched.email,
+      activeTurns: 0,
+      interruptedTurns: 0,
+      continuedThreads: 0
+    };
+  }
+
+  private async resetControlSwitchRecoveryState(): Promise<void> {
+    try {
+      await this.resetSeamlessSwitchRuntime();
+    } catch (error) {
+      console.warn(`[codexAccounts] manual Gateway switch completed but recovery cache reset failed: ${getErrorMessage(error)}`);
+    }
   }
 
   private async startOAuthAccountImport(options: OAuthAccountImportOptions = {}): Promise<OAuthAccountImportResult> {

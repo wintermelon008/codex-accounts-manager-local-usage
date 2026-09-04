@@ -12,6 +12,14 @@ test("standalone registration panel provides mailbox-library selection and direc
   assert.match(html, /registrationMailboxSearch/u);
   assert.match(html, /registrationMailboxProviderFilter/u);
   assert.match(html, /registrationMailboxSort/u);
+  assert.match(html, /class="mailbox-sort-controls" role="group" aria-label="注册邮箱排序"/u);
+  assert.match(html, /id="registrationMailboxSort" class="mailbox-sort-select"/u);
+  assert.match(html, /<option value="name"/u);
+  assert.match(html, /<option value="query"/u);
+  assert.match(html, /<option value="renewal"/u);
+  assert.match(html, /<option value="gptRegistration"/u);
+  assert.match(html, /data-action="toggle-registration-mailbox-sort-direction"/u);
+  assert.doesNotMatch(html, /value="codeFirst"/u);
   assert.match(html, /registrationOnlyUnregisteredGpt/u);
   assert.match(html, /仅显示未注册 GPT/u);
   assert.match(html, /data-action="registration-select-mailbox"/u);
@@ -256,6 +264,122 @@ test("registration mailbox library shows GPT age and filters registrations at se
   assert.doesNotMatch(renderedHtml, /not-gpt@example\.com/u);
 });
 
+test("registration mailbox library sorts by each field and toggles direction with the arrow", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  let renderCount = 0;
+  let registrationRows = "";
+  const extractRegistrationRows = (value) => {
+    const marker = '<div class="registration-mailbox-list">';
+    const start = value.indexOf(marker);
+    if (start < 0) return "";
+    const bodyStart = start + marker.length;
+    const end = value.indexOf('</div></div><div class="registration-standalone-content">', bodyStart);
+    return end < 0 ? "" : value.slice(bodyStart, end);
+  };
+  const sortArrow = { textContent: "▲" };
+  const sortDirectionButton = {
+    title: "",
+    setAttribute(name, value) { this[name] = value; },
+    querySelector() { return sortArrow; }
+  };
+  const registrationMailboxList = {
+    scrollTop: 0,
+    get innerHTML() { return registrationRows; },
+    set innerHTML(value) { registrationRows = value; }
+  };
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) {
+      renderCount += 1;
+      renderedHtml = value;
+      registrationRows = extractRegistrationRows(value);
+    }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector(selector) {
+      if (selector === ".registration-mailbox-list") return registrationMailboxList;
+      if (selector === '[data-action="toggle-registration-mailbox-sort-direction"]') return sortDirectionButton;
+      return null;
+    },
+    querySelectorAll() { return []; },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [
+        { id: "mailbox:alpha", providerId: "mock", address: "alpha@example.com", displayName: "Alpha", lastQueryAt: 300, lastRenewalAt: 200, gptRegistered: true, firstOpenAiEmailAt: new Date(now - 10 * day).toISOString() },
+        { id: "mailbox:bravo", providerId: "mock", address: "bravo@example.com", displayName: "Bravo", lastQueryAt: 100, lastRenewalAt: 400, gptRegistered: true, firstOpenAiEmailAt: new Date(now - 2 * day).toISOString() },
+        { id: "mailbox:charlie", providerId: "mock", address: "charlie@example.com", displayName: "Charlie", lastQueryAt: 200, lastRenewalAt: 100, gptRegistered: true, firstOpenAiEmailAt: new Date(now - 5 * day).toISOString() },
+        { id: "mailbox:not-gpt", providerId: "mock", address: "not-gpt@example.com", displayName: "Not GPT", gptRegistered: false }
+      ],
+      providers: [{ id: "mock", displayName: "Mock", capabilities: {}, importSchema: {} }],
+      managedAccountEmails: [],
+      registrationSessions: []
+    }
+  } });
+
+  const assertOrderIn = (source, ...addresses) => {
+    let previous = -1;
+    for (const address of addresses) {
+      const index = source.indexOf(address);
+      assert.ok(index > previous, `${address} should follow the previous mailbox`);
+      previous = index;
+    }
+  };
+  const assertOrder = (...addresses) => assertOrderIn(renderedHtml, ...addresses);
+
+  assertOrder("alpha@example.com", "bravo@example.com", "charlie@example.com");
+  const renderCountBeforeSort = renderCount;
+  const change = documentListeners.get("change");
+  change({ target: { id: "registrationMailboxSort", value: "query", matches() { return false; }, closest() { return this; } } });
+  assertOrderIn(registrationRows, "bravo@example.com", "charlie@example.com", "alpha@example.com");
+  assert.equal(renderCount, renderCountBeforeSort);
+
+  const click = documentListeners.get("click");
+  click({ target: {
+    disabled: false,
+    dataset: { action: "toggle-registration-mailbox-sort-direction" },
+    closest() { return this; }
+  } });
+  assertOrderIn(registrationRows, "alpha@example.com", "charlie@example.com", "bravo@example.com");
+  assert.equal(sortArrow.textContent, "▼");
+  assert.equal(sortDirectionButton["aria-label"], "当前降序，点击切换为升序");
+
+  change({ target: { id: "registrationMailboxSort", value: "renewal", matches() { return false; }, closest() { return this; } } });
+  assertOrderIn(registrationRows, "bravo@example.com", "alpha@example.com", "charlie@example.com");
+  click({ target: {
+    disabled: false,
+    dataset: { action: "toggle-registration-mailbox-sort-direction" },
+    closest() { return this; }
+  } });
+  assertOrderIn(registrationRows, "charlie@example.com", "alpha@example.com", "bravo@example.com");
+
+  change({ target: { id: "registrationMailboxSort", value: "gptRegistration", matches() { return false; }, closest() { return this; } } });
+  assertOrderIn(registrationRows, "not-gpt@example.com", "bravo@example.com", "charlie@example.com", "alpha@example.com");
+});
+
 test("standalone registration panel preserves scroll position when selecting a mailbox", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -327,6 +451,229 @@ test("standalone registration panel preserves scroll position when selecting a m
   assert.equal(registrationStandalone.scrollTop, 487);
   assert.equal(registrationMailboxList.scrollTop, 731);
   assert.equal(messages.at(-1).action, "ready");
+});
+
+test("Mailbox provider filter refreshes rows without replacing the active controls", () => {
+  const html = createMailboxPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  let renderCount = 0;
+  let mailboxRows = "";
+  const mailboxList = {
+    scrollTop: 0,
+    get innerHTML() { return mailboxRows; },
+    set innerHTML(value) { mailboxRows = value; }
+  };
+  const mailboxCount = { textContent: "" };
+  const selectionCount = { textContent: "" };
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderCount += 1; renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector(selector) {
+      if (selector === ".mailbox-list") return mailboxList;
+      if (selector === '[data-role="mailbox-count"]') return mailboxCount;
+      if (selector === ".selection-tools > span") return selectionCount;
+      return null;
+    },
+    querySelectorAll() { return []; },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [
+        { id: "mailbox:a", providerId: "a", address: "a@example.com", displayName: "A" },
+        { id: "mailbox:b", providerId: "b", address: "b@example.com", displayName: "B" }
+      ],
+      providers: [
+        { id: "a", displayName: "Provider A", capabilities: {}, importSchema: {} },
+        { id: "b", displayName: "Provider B", capabilities: {}, importSchema: {} }
+      ],
+      operations: [],
+      codexImports: [],
+      managedAccountEmails: []
+    }
+  } });
+
+  const renderCountBeforeFilter = renderCount;
+  documentListeners.get("change")({ target: {
+    id: "mailboxProviderFilter",
+    value: "b",
+    matches() { return false; },
+    closest() { return this; }
+  } });
+
+  assert.equal(renderCount, renderCountBeforeFilter);
+  assert.match(mailboxRows, /b@example\.com/u);
+  assert.doesNotMatch(mailboxRows, /a@example\.com/u);
+  assert.equal(mailboxCount.textContent, "1/2");
+  assert.match(selectionCount.textContent, /1$/u);
+});
+
+test("registration provider filter refreshes rows without replacing the registration controls", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  let renderCount = 0;
+  let mailboxRows = "";
+  const mailboxList = {
+    scrollTop: 0,
+    get innerHTML() { return mailboxRows; },
+    set innerHTML(value) { mailboxRows = value; }
+  };
+  const mailboxCount = { textContent: "" };
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderCount += 1; renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector(selector) {
+      if (selector === ".registration-mailbox-list") return mailboxList;
+      if (selector === '[data-role="registration-mailbox-count"]') return mailboxCount;
+      return null;
+    },
+    querySelectorAll() { return []; },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [
+        { id: "mailbox:a", providerId: "a", address: "a@example.com", displayName: "A" },
+        { id: "mailbox:b", providerId: "b", address: "b@example.com", displayName: "B" }
+      ],
+      providers: [
+        { id: "a", displayName: "Provider A", capabilities: {}, importSchema: {} },
+        { id: "b", displayName: "Provider B", capabilities: {}, importSchema: {} }
+      ],
+      managedAccountEmails: [],
+      registrationSessions: []
+    }
+  } });
+
+  const renderCountBeforeFilter = renderCount;
+  documentListeners.get("change")({ target: {
+    id: "registrationMailboxProviderFilter",
+    value: "b",
+    matches() { return false; },
+    closest() { return this; }
+  } });
+
+  assert.equal(renderCount, renderCountBeforeFilter);
+  assert.match(mailboxRows, /b@example\.com/u);
+  assert.doesNotMatch(mailboxRows, /a@example\.com/u);
+  assert.equal(mailboxCount.textContent, "1/2");
+});
+
+test("provider selects update dependent form fields without rebuilding their modal", () => {
+  const html = createMailboxPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const runScenario = (action, providerSelectId, inputRole, expectedPlaceholder) => {
+    const windowListeners = new Map();
+    const documentListeners = new Map();
+    let renderedHtml = "";
+    let renderCount = 0;
+    let insertedModal = "";
+    const dependentInput = { placeholder: "" };
+    const app = {};
+    Object.defineProperty(app, "innerHTML", {
+      configurable: true,
+      get() { return renderedHtml; },
+      set(value) { renderCount += 1; renderedHtml = value; }
+    });
+    const document = {
+      activeElement: null,
+      body: { insertAdjacentHTML(_position, value) { insertedModal = value; } },
+      getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+      querySelector(selector) {
+        if (selector === '[data-role="' + inputRole + '"]') return dependentInput;
+        if (selector === ".modal-backdrop" && insertedModal) return { remove() { insertedModal = ""; } };
+        return null;
+      },
+      querySelectorAll() { return []; },
+      addEventListener(type, listener) { documentListeners.set(type, listener); }
+    };
+    const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+    vm.runInNewContext(script, {
+      window,
+      document,
+      acquireVsCodeApi: () => ({ postMessage() {} }),
+      console
+    });
+
+    windowListeners.get("message")({ data: {
+      type: "state",
+      state: {
+        mailboxes: [{ id: "mailbox:edit", providerId: "a", address: "edit@example.com", displayName: "Edit" }],
+        selectedMailboxId: "mailbox:edit",
+        providers: [
+          { id: "a", displayName: "Provider A", capabilities: {}, importSchema: { placeholder: "A format", description: "A description" } },
+          { id: "b", displayName: "Provider B", capabilities: {}, importSchema: { placeholder: expectedPlaceholder, description: "B description" } }
+        ],
+        operations: [],
+        codexImports: [],
+        managedAccountEmails: []
+      }
+    } });
+
+    const click = documentListeners.get("click");
+    click({ target: {
+      disabled: false,
+      dataset: { action, mailboxId: "mailbox:edit" },
+      closest() { return this; }
+    } });
+    assert.ok(insertedModal);
+    const renderCountBeforeChange = renderCount;
+    documentListeners.get("change")({ target: {
+      id: providerSelectId,
+      value: "b",
+      matches() { return false; },
+      closest() { return this; }
+    } });
+    assert.equal(renderCount, renderCountBeforeChange);
+    assert.equal(dependentInput.placeholder, expectedPlaceholder);
+  };
+
+  runScenario("open-import", "providerId", "import-credential-input", "B import format");
+  runScenario("edit-mailbox", "editProviderId", "edit-credential-input", "B edit format");
 });
 
 test("registration session does not render identical error and feedback twice", () => {
@@ -587,7 +934,8 @@ test("Mailbox panel fills the webview and lets the detail wheel scroll the layou
   assert.match(html, /\.layout \{ flex: 1 1 auto; display: flex; flex-direction: column;/u);
   assert.match(html, /\.layout > \.box:first-child \{ display: flex; flex-direction: column; flex: 0 0 760px; height: 760px; min-height: 760px;/u);
   assert.match(html, /\.mailbox-list \{ flex: 1; display: grid;/u);
-  assert.match(html, /最久未续期/u);
+  assert.match(html, /\.mailbox-list \{ flex: 1; display: grid; .*overscroll-behavior: auto;/u);
+  assert.match(html, /续期时间/u);
   assert.match(html, /mailbox-card-time/u);
   assert.match(html, /mailboxActivityLabel\(mailbox\)/u);
   assert.match(html, /\.mailbox-list \{ flex: 1; display: grid; .*grid-auto-rows: max-content;/u);
@@ -815,6 +1163,7 @@ test("selecting an available registration key enables phone ordering", () => {
   const windowListeners = new Map();
   const documentListeners = new Map();
   const acquireButton = { dataset: { sessionId: "session:key-select" }, disabled: true };
+  const messages = [];
   const app = { innerHTML: "" };
   const notice = { textContent: "", className: "" };
   const document = {
@@ -835,7 +1184,7 @@ test("selecting an available registration key enables phone ordering", () => {
   vm.runInNewContext(script, {
     window,
     document,
-    acquireVsCodeApi: () => ({ postMessage() {} }),
+    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
     console
   });
 
@@ -844,7 +1193,10 @@ test("selecting an available registration key enables phone ordering", () => {
     state: {
       mailboxes: [],
       providers: [],
-      phoneSources: [{ id: "liye", displayName: "LIYE", websiteUrl: "https://liye.5x20.cn" }],
+      phoneSources: [
+        { id: "liye", displayName: "LIYE", websiteUrl: "https://liye.5x20.cn" },
+        { id: "other", displayName: "Other", websiteUrl: "https://example.com" }
+      ],
       registrationKeyPool: {
         count: 7,
         available: 7,
@@ -870,6 +1222,7 @@ test("selecting an available registration key enables phone ordering", () => {
   assert.doesNotMatch(keySelectHtml, /value="key-6"/u);
   assert.match(renderedHtml, /选择器仅显示前 5 个/u);
   assert.match(renderedHtml, /等待完整手机号/u);
+  assert.match(renderedHtml, /LIYE/u);
 
   const selected = {
     id: "registrationPhoneKey-session:key-select",
@@ -879,6 +1232,22 @@ test("selecting an available registration key enables phone ordering", () => {
   };
   documentListeners.get("change")({ target: selected });
   assert.equal(acquireButton.disabled, false);
+
+  documentListeners.get("change")({ target: {
+    id: "registrationPhoneSource-session:key-select",
+    value: "other",
+    matches() { return false; },
+    closest() { return this; }
+  } });
+  assert.match(app.innerHTML, /Other/u);
+  assert.match(app.innerHTML, /https:\/\/example\.com/u);
+  documentListeners.get("click")({ target: {
+    disabled: false,
+    dataset: { action: "registration-acquire-phone", sessionId: "session:key-select" },
+    closest() { return this; }
+  } });
+  assert.equal(messages.at(-1).sourceId, "other");
+  assert.equal(messages.at(-1).keyId, "key-1");
 });
 
 test("Mailbox delete uses an in-panel confirmation before posting the delete action", () => {

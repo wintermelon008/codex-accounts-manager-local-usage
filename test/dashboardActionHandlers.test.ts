@@ -83,9 +83,10 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
-  it("clears stale Codex session locks without terminating active writers", async () => {
+  it("force-clears stale Codex session locks and reports active writers", async () => {
     clearStaleCodexSessionLocksMock.mockResolvedValueOnce({
       removedSessionIds: ["stale-session"],
+      terminatedSessionIds: ["terminated-session"],
       activeSessionIds: ["active-session"]
     });
     const showWarningMessage = vi.mocked(vscode.window.showWarningMessage);
@@ -110,7 +111,9 @@ describe("executeDashboardActionMessage", () => {
     );
 
     expect(clearStaleCodexSessionLocksMock).toHaveBeenCalledOnce();
-    expect(showWarningMessage).toHaveBeenCalledWith(expect.stringContaining("未强制终止"));
+    expect(showWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining("强制解锁 1 个由其他窗口运行时持有的会话锁")
+    );
     expect(result.status).toBe("completed");
   });
 

@@ -4,7 +4,7 @@ import {
   DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD,
   DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD
 } from "../src/domain/dashboard/types";
-import { ExtensionSettingsStore } from "../src/infrastructure/config/extensionSettings";
+import { ExtensionSettingsStore, normalizeProxyAddresses } from "../src/infrastructure/config/extensionSettings";
 import { handleDashboardSettingUpdate } from "../src/presentation/dashboard/settings";
 
 describe("handleDashboardSettingUpdate", () => {
@@ -150,6 +150,36 @@ describe("handleDashboardSettingUpdate", () => {
       vscode.ConfigurationTarget.Global
     );
     expect(update).toHaveBeenNthCalledWith(2, "localUsageEnabledRanges", ["24h"], vscode.ConfigurationTarget.Global);
+  });
+
+  it("keeps an empty proxy option and only persists configured proxy addresses", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    const values: Record<string, unknown> = {
+      proxyAddresses: ["", " http://proxy-a:7890 ", "http://proxy-a:7890", "socks5://unsupported:7890"],
+      proxyAddress: "http://proxy-a:7890"
+    };
+    const get = vi.fn((key: string, fallback: unknown) => values[key] ?? fallback);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get,
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
+    } as never);
+
+    expect(normalizeProxyAddresses(values.proxyAddresses)).toEqual(["", "http://proxy-a:7890"]);
+    expect(new ExtensionSettingsStore().getDashboardSettings()).toMatchObject({
+      proxyAddress: "http://proxy-a:7890",
+      proxyAddresses: ["", "http://proxy-a:7890"]
+    });
+    values.proxyAddress = "http://not-configured:7890";
+    expect(new ExtensionSettingsStore().getDashboardSettings().proxyAddress).toBe("");
+    values.proxyAddress = "http://proxy-a:7890";
+
+    await expect(handleDashboardSettingUpdate("proxyAddress", "http://proxy-a:7890")).resolves.toBe(true);
+    await expect(handleDashboardSettingUpdate("proxyAddress", "http://not-configured:7890")).resolves.toBe(false);
+    await expect(handleDashboardSettingUpdate("proxyAddress", "")).resolves.toBe(true);
+
+    expect(update).toHaveBeenNthCalledWith(1, "proxyAddress", "http://proxy-a:7890", vscode.ConfigurationTarget.Global);
+    expect(update).toHaveBeenNthCalledWith(2, "proxyAddress", "", vscode.ConfigurationTarget.Global);
   });
 
   it("migrates a legacy numeric range when the new range has not been explicitly configured", () => {

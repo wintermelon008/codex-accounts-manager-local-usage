@@ -1,0 +1,28 @@
+{
+  "name": "@codex-accounts/manager-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone Manager-side Gateway for browser and task/session clients.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "bin": {
+    "manager-gateway": "./src/cli.mjs"
+  },
+  "files": [
+    "src",
+    "test",
+    "README.md",
+    "package.json",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "npm test",
+    "start": "node src/cli.mjs",
+    "package:check": "npm test && npm pack --dry-run",
+    "package": "npm run package:check && npm pack --pack-destination dist"
+  }
+}

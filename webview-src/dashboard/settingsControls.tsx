@@ -48,6 +48,33 @@ export function SettingsLanguageBlock(props: {
   );
 }
 
+export function SettingsProxyBlock(props: {
+  copy: DashboardCopy;
+  settings: DashboardSettings;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div class="settings-block">
+      <div class="settings-block-head">
+        <div class="settings-block-title">{props.copy.proxyTitle}</div>
+        <div class="settings-block-sub">{props.copy.proxySub}</div>
+      </div>
+      <select
+        class="settings-select"
+        value={props.settings.proxyAddress}
+        onChange={(event) => props.onChange(event.currentTarget.value)}
+      >
+        {props.settings.proxyAddresses.map((address) => (
+          <option key={address || "proxy-default"} value={address}>
+            {address || props.copy.proxyDefault}
+          </option>
+        ))}
+      </select>
+      <div class="settings-note">{props.copy.proxyNote}</div>
+    </div>
+  );
+}
+
 export function SettingsThemeBlock(props: {
   lang: DashboardLanguage;
   settings: DashboardSettings;

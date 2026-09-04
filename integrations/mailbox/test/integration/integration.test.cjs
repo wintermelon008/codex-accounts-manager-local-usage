@@ -73,7 +73,7 @@ test("Manager account directory changes refresh the open Mailbox panel", async (
   integration.dispose();
 });
 
-test("registration assistant is a separate Dashboard entry and shares the mailbox state", async () => {
+test("registration assistant is a separate Dashboard entry in the main editor group and shares the mailbox state", async () => {
   const vscode = createVscode();
   const context = createContext();
   const registrations = [];
@@ -104,6 +104,7 @@ test("registration assistant is a separate Dashboard entry and shares the mailbo
   await registrations[0].runAction("open");
   assert.equal(vscode.panels.length, 1);
   assert.equal(vscode.panels[0].viewType, "codexAccounts.mailboxRegistration");
+  assert.equal(vscode.panels[0].column, vscode.ViewColumn.Active);
   assert.match(vscode.panels[0].webview.html, /registrationMailboxSearch/u);
 
   await integration.pool.importProvider({ provider, input: "register@example.com|credential" });
@@ -532,7 +533,7 @@ test("registration start automatically watches the matching imported mailbox and
   integration.dispose();
 });
 
-test("Manager card opens a parallel editor panel and panel messages select/query without QuickPick", async () => {
+test("Manager card opens a main-editor-group panel and panel messages select/query without QuickPick", async () => {
   const vscode = createVscode();
   const context = createContext();
   let registration;
@@ -562,7 +563,7 @@ test("Manager card opens a parallel editor panel and panel messages select/query
   await integration.initialize();
   await registration.runAction("open");
   assert.equal(vscode.panels.length, 1);
-  assert.equal(vscode.panels[0].column, vscode.ViewColumn.Beside);
+  assert.equal(vscode.panels[0].column, vscode.ViewColumn.Active);
 
   await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "import", providerId: "mock", input: "one@example.com|credential" });
   const mailboxId = integration.pool.listMetadata()[0].id;
@@ -1190,7 +1191,7 @@ function createVscode() {
   }
   const vscode = {
     EventEmitter,
-    ViewColumn: { Beside: 2 },
+    ViewColumn: { Active: 1, Beside: 2 },
     panels: [],
     clipboardWrites: [],
     env: {
