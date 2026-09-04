@@ -11,6 +11,7 @@
 | Mailbox | `integrations/mailbox` 独立 VSIX | 用户在导入时选择邮箱 provider 后，从 Mailbox 面板手动查询、启动验证码监听或人工续期 | 先停止邮箱操作，再卸载可选 VSIX；不影响 Manager 账号和 Sub2API |
 | BugTeam | `integrations/bugteam` 独立 VSIX | 用户在 BugTeam 面板保存 API Token，查看余额、1h 商品和当前发车货架；可明确选择档位购买或创建候补订单，完成后自动导入并启用符合条件的无感池账号 | 先完成或确认候补订单，在面板清除本地 Token，再卸载可选 VSIX；不会自动切换当前账号 |
 | S+ 导入器 | `sub2api-importer` tarball | 用户提供私有管理端配置后启动队列消费者；新账号按独立包策略配置代理、分组、并发与模型映射 | 停止消费者，再卸载其 Node 包；未消费任务不会被 Manager 自动处理 |
+| Manager Gateway | `manager-gateway` Node companion | Manager extension 在线时提供 Workbench task/session、并行 exec 和额度批次恢复；不持有 Workbench SQLite | 先停止浏览器客户端和 Gateway，再停止/卸载 companion；不会删除账号或 Workbench 数据库 |
 
 从源码构建全部产物：
 
@@ -22,6 +23,7 @@ npm --prefix integrations/sub2api-gateway run package
 npm --prefix integrations/mailbox run package
 npm --prefix integrations/bugteam run package
 npm --prefix integrations/sub2api-importer run package
+npm --prefix integrations/manager-gateway run package
 ```
 
 VSIX 通过 VS Code 的 **Extensions: Install from VSIX…** 安装。Node tarball 可按目标设备的 Node 包管理策略安装；安装后仍必须由用户提供私有环境配置并显式启动进程，没有自动服务注册。

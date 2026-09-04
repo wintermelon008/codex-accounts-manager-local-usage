@@ -69,6 +69,20 @@ describe("Codex proxy environment", () => {
     });
   });
 
+  it("overrides only HTTPS proxy resolution when a dashboard address is selected", () => {
+    expect(
+      resolveProxySettings(
+        { HTTP_PROXY: "http://http-proxy:8080", HTTPS_PROXY: "http://old-proxy:8080" },
+        {},
+        "http://selected-proxy:8080"
+      )
+    ).toEqual({
+      httpProxy: "http://http-proxy:8080",
+      httpsProxy: "http://selected-proxy:8080",
+      noProxy: undefined
+    });
+  });
+
   it("blocks direct requests when the configured proxy protocol is unsupported", async () => {
     const directFetch = vi.spyOn(globalThis, "fetch");
     vi.spyOn(console, "error").mockImplementation(() => undefined);

@@ -56,15 +56,15 @@ type ZonedDateTimeParts = {
 const API_RATE_CARDS: Array<{ matches: (model: string) => boolean; rates: ApiRateCard }> = [
   {
     matches: (model) => model.startsWith("gpt-5.6-terra"),
-    rates: { inputPerMillionUsd: 2.5, cachedInputPerMillionUsd: 0.25, outputPerMillionUsd: 15 }
+    rates: { inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.2, outputPerMillionUsd: 12 }
   },
   {
     matches: (model) => model.startsWith("gpt-5.6-luna"),
-    rates: { inputPerMillionUsd: 1, cachedInputPerMillionUsd: 0.1, outputPerMillionUsd: 6 }
+    rates: { inputPerMillionUsd: 0.2, cachedInputPerMillionUsd: 0.02, outputPerMillionUsd: 1.2 }
   },
   {
     matches: (model) => model === "gpt-5.6" || model.startsWith("gpt-5.6-sol"),
-    rates: { inputPerMillionUsd: 5, cachedInputPerMillionUsd: 0.5, outputPerMillionUsd: 30 }
+    rates: { inputPerMillionUsd: 4, cachedInputPerMillionUsd: 0.4, outputPerMillionUsd: 20 }
   },
   {
     matches: (model) => model === "gpt-5.5" || /^gpt-5\.5-\d{4}-\d{2}-\d{2}$/u.test(model),

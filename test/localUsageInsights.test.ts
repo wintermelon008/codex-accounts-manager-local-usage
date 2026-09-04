@@ -68,9 +68,22 @@ describe("estimateStandardApiCost", () => {
       })
     ]);
 
-    expect(price.amountUsd).toBeCloseTo(9.975, 8);
+    expect(price.amountUsd).toBeCloseTo(7.58, 8);
     expect(price.pricedTokens).toBe(2_200_000);
     expect(price.unpricedTokens).toBe(50);
+  });
+
+  it("uses the current Luna rates for a cached-heavy window", () => {
+    const price = estimateStandardApiCost([
+      modelUsage("gpt-5.6-luna", {
+        inputTokens: 53_000_000,
+        cachedInputTokens: 51_000_000,
+        outputTokens: 173_000,
+        totalTokens: 53_173_000
+      })
+    ]);
+
+    expect(price.amountUsd).toBeCloseTo(1.6276, 8);
   });
 });
 

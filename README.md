@@ -29,6 +29,21 @@
 | 可选包     | 飞书私聊 M+/S+ 导入                                                                                            | 单独安装受限的飞书私聊机器人；M+ 仍需显式打开 Manager 本地收件箱，S+ 仅在另行启动导入器后消费。                                                           |
 | 可选包     | Sub2API Gateway                                                                                                | 单独安装 Gateway VSIX；它会把下游注册为已保存账号中的虚拟账号，配置、保存密钥和刷新动作都在账号卡片内。核心 Manager 没有该供应商的 SecretStorage 访问。   |
 
+设置页的“HTTPS 代理”下拉框读取 `codexAccounts.proxyAddresses`。在 VS Code `settings.json` 中填入代理地址列表（每项填写 `HTTPS_PROXY=` 等号后面的值），再从 Dashboard 选择；例如：
+
+```json
+{
+  "codexAccounts.proxyAddresses": [
+    "",
+    "http://proxy-a.example:8080",
+    "https://proxy-b.example:8443"
+  ],
+  "codexAccounts.proxyAddress": ""
+}
+```
+
+空字符串表示不覆盖当前进程或 `CODEX_HOME/.env` 的代理配置，适合跨设备同步设置；代理地址仅用于 Manager 的 HTTPS 请求。
+
 ## 无感切号（实验性）
 
 它与上游“自动切号”分开：无感模式在同一个 Codex app-server 的安全边界上更新认证，成功后不需要 reload，现有 thread/history 保持可见。
@@ -48,6 +63,7 @@
 - [飞书私聊 M+/S+ 导入包](docs/integrations/feishu-private-import.md)：仅接收管理员一对一文本消息；M+ 写入 Manager 的显式本地收件箱，S+ 只写入独立私有队列。
 - [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；Gateway 默认隐藏已保存账号中的“手动 / Gateway”虚拟账号卡片，开启后可在卡片内显示 tracker 用量/估算价格和配置动作，但不伪造 OAuth 账号或进入任何自动账号池。
 - [多来源 BugTeam 账号集成](docs/integrations/bugteam.md)：独立 VSIX 按来源卡片维护 BugTeam 官方 API 与超级炸弹车；支持服务端候补或本地库存候补，订单完成后统一导入并启用符合额度条件的无感池账号，但不会自动切换当前账号。
+- [Manager Gateway](docs/integrations/manager-gateway.md)：独立 task/session companion，承载浏览器入口、并行 Codex exec 和额度批次恢复；Workbench 数据由独立数据服务负责；需要 Manager extension 在线。
 
 ## 安装与更新
 
@@ -80,9 +96,10 @@ npm --prefix integrations/sub2api-gateway run package
 npm --prefix integrations/mailbox run package
 npm --prefix integrations/bugteam run package
 npm --prefix integrations/sub2api-importer run package
+npm --prefix integrations/manager-gateway run package
 ```
 
-可选包不包含在核心 VSIX 中。分别进入 `integrations/feishu-private-import`、`integrations/sub2api-gateway`、`integrations/mailbox`、`integrations/bugteam` 或 `integrations/sub2api-importer` 按各自 README 构建和配置；它们不会自动复制旧服务、凭据、账号或设备路径。
+可选包不包含在核心 VSIX 中。分别进入 `integrations/feishu-private-import`、`integrations/sub2api-gateway`、`integrations/mailbox`、`integrations/bugteam`、`integrations/sub2api-importer` 或 `integrations/manager-gateway` 按各自 README 构建和配置；它们不会自动复制旧服务、凭据、账号或设备路径。
 
 ### 使用上游 Marketplace 版本
 

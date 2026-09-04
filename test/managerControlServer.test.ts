@@ -4,6 +4,7 @@ import {
   type ManagerControlImportStatus,
   type ManagerControlRefreshSummary
 } from "../src/integrations/managerControlServer";
+import type { CodexExecProviderConfig, RuntimeAccountSwitchOutcome } from "../src/codex";
 import type { SharedCodexAccountJson } from "../src/core/types";
 
 const servers: ManagerControlServer[] = [];
@@ -127,12 +128,65 @@ describe("ManagerControlServer", () => {
       ]
     ]);
   });
+
+  it("routes an external account switch through the configured callback", async () => {
+    const switches: Array<{ accountId: string; force?: boolean }> = [];
+    const server = createServer({
+      switchAccount: async (accountId, options) => {
+        switches.push({ accountId, force: options?.force });
+        return {
+          status: "switched",
+          accountId,
+          email: "two@example.com",
+          activeTurns: 0,
+          interruptedTurns: options?.force ? 2 : 0,
+          continuedThreads: options?.force ? 2 : 0
+        } satisfies RuntimeAccountSwitchOutcome;
+      }
+    });
+    const address = await server.start(0, "control-secret");
+    servers.push(server);
+
+    const response = await fetch(`http://${address.host}:${address.port}/api/manager/accounts/switch`, {
+      method: "POST",
+      headers: { authorization: "Bearer control-secret", "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "account-2", force: true })
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "switched", accountId: "account-2", continuedThreads: 2 });
+    expect(switches).toEqual([{ accountId: "account-2", force: true }]);
+  });
+
+  it("returns ephemeral Codex adapter details to the same-host Gateway", async () => {
+    const provider = {
+      baseUrl: "http://127.0.0.1:39001/v1",
+      token: "ephemeral-adapter-token",
+      model: "gpt-test",
+      route: "chatgpt" as const,
+      ready: true,
+      instanceId: "runtime-instance"
+    } satisfies CodexExecProviderConfig;
+    const server = createServer({ getCodexExecProviderConfig: async () => provider });
+    const address = await server.start(0, "control-secret");
+    servers.push(server);
+
+    const response = await fetch(`http://${address.host}:${address.port}/api/manager/codex/provider-config`, {
+      headers: { authorization: "Bearer control-secret" }
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(provider);
+  });
 });
 
 function createServer(
   overrides: {
     refreshQuotas?: (accountIds?: readonly string[]) => Promise<ManagerControlRefreshSummary>;
     enqueueImport?: (accounts: readonly SharedCodexAccountJson[]) => Promise<{ id: string; accountCount: number }>;
+    switchAccount?: (
+      accountId: string,
+      options?: { force?: boolean; gracePeriodMs?: number; longTurnPolicy?: "defer" | "interrupt" | "interruptAndContinue" }
+    ) => Promise<RuntimeAccountSwitchOutcome>;
+    getCodexExecProviderConfig?: () => Promise<CodexExecProviderConfig>;
   } = {}
 ): ManagerControlServer {
   const usage = {
@@ -246,6 +300,8 @@ function createServer(
     enqueueImport:
       overrides.enqueueImport ??
       (async (accounts) => ({ id: "22222222-2222-4222-8222-222222222222", accountCount: accounts.length })),
-    getImportStatus: async () => importStatus
+    getImportStatus: async () => importStatus,
+    switchAccount: overrides.switchAccount,
+    getCodexExecProviderConfig: overrides.getCodexExecProviderConfig
   });
 }

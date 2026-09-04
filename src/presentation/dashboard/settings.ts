@@ -10,11 +10,13 @@ import {
   normalizeHotSwitchLongTurnPolicy,
   normalizeLocalUsageRange,
   normalizeLocalUsageRanges,
+  normalizeProxyAddresses,
   normalizeSeamlessQuotaBandSize,
   normalizeSeamlessSwitchThreshold,
   isValidWeeklyQuotaThreshold,
   resolveWeeklyQuotaThresholds
 } from "../../infrastructure/config/extensionSettings";
+import { isSupportedProxyUrl } from "../../infrastructure/config/proxyEnvironment";
 import { isDashboardLanguageOption } from "../../localization/languages";
 import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchState";
 
@@ -143,6 +145,17 @@ export async function handleDashboardSettingUpdate(
         updated = true;
       }
       break;
+    case "proxyAddress": {
+      if (typeof value === "string") {
+        const normalized = value.trim();
+        const options = normalizeProxyAddresses(config.get<unknown>("proxyAddresses", [""]));
+        if ((normalized === "" || isSupportedProxyUrl(normalized)) && options.includes(normalized)) {
+          await updateDashboardConfiguration(config, key, normalized);
+          updated = true;
+        }
+      }
+      break;
+    }
     default:
       return false;
   }

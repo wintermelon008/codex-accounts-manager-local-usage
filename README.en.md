@@ -29,6 +29,21 @@ This table applies only to local builds from this repository.
 | Optional package       | Feishu private-chat M+/S+ import                                                                                                                                           | Install the restricted private-chat bot separately. M+ still requires the explicit Manager inbox setting; S+ is consumed only by a separately started importer.                                                                                     |
 | Optional package       | Sub2API Gateway                                                                                                                                                            | Install the standalone Gateway VSIX; it registers the downstream as a saved manual-only virtual account whose card owns configuration, key storage, refresh, usage, and estimated price. Core Manager never imports provider-side accounts or keys. |
 
+The Settings overlay's **HTTPS Proxy** selector reads `codexAccounts.proxyAddresses`. Add proxy addresses to VS Code `settings.json` (each item is the value after `HTTPS_PROXY=`), then choose one from the Dashboard. For example:
+
+```json
+{
+  "codexAccounts.proxyAddresses": [
+    "",
+    "http://proxy-a.example:8080",
+    "https://proxy-b.example:8443"
+  ],
+  "codexAccounts.proxyAddress": ""
+}
+```
+
+An empty string leaves the process or `CODEX_HOME/.env` proxy unchanged, which keeps synchronized settings portable across devices. The selector applies only to Manager HTTPS requests.
+
 ## Experimental seamless switching
 
 This is separate from upstream Auto Switch. It updates authentication at a safe boundary inside the same Codex app-server; successful switches do not require a reload and existing threads/history remain available.

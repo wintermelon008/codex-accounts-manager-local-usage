@@ -32,4 +32,4 @@ npm run session-hub -- register \
 
 Goal 产物继续保存在既定的 `melon-codex` 目录；registry 只保存会话定位信息。Feishu 只登记外部引用，不维护第二份 transcript。
 
-Dashboard 顶部的“解锁失效 Codex 会话”按钮只清理当前没有进程持有 `FLOCK` 的 UUID 会话锁。仍被活跃 Codex writer 占用的锁会保留并在提示中报告，不会为了恢复界面强制终止进程；网络断开后应先等待旧 Remote Extension Host 退出，或显式结束确认过的旧 Codex 进程后再重试。
+Dashboard 顶部的“强制解锁 Codex 会话”按钮会先清理当前没有进程持有 `FLOCK` 的 UUID 会话锁，再定位持锁进程。属于其它 VS Code 窗口、且命令行确认为 Codex `app-server` 的持锁进程会被终止后重试解锁；当前窗口进程树、无法确认类型或无法终止的持锁进程会保留并在提示中报告。

@@ -23,6 +23,7 @@ describe("Codex session locks", () => {
 
     await expect(clearStaleCodexSessionLocks(codexHome)).resolves.toEqual({
       removedSessionIds: ["01a06256-dab8-7dc3-aa3e-4a20a2ada949"],
+      terminatedSessionIds: [],
       activeSessionIds: []
     });
     await expect(access(staleLock)).rejects.toThrow();
@@ -44,7 +45,73 @@ describe("Codex session locks", () => {
       await waitForFile(readyPath);
       await expect(clearStaleCodexSessionLocks(codexHome)).resolves.toEqual({
         removedSessionIds: [],
+        terminatedSessionIds: [],
         activeSessionIds: ["01a061dd-2043-7f30-b991-2dccb4feb7cd"]
+      });
+      await expect(access(lockPath)).resolves.toBeUndefined();
+    } finally {
+      if (writer.exitCode === null) {
+        writer.kill("SIGTERM");
+        await once(writer, "exit");
+      }
+    }
+  });
+
+  it("terminates a Codex app-server from another window and removes its lock", async () => {
+    const codexHome = await createCodexHome();
+    const lockDirectory = path.join(codexHome, "thread-writer-locks");
+    const lockPath = path.join(lockDirectory, "01a0641a-6b80-7de8-9f9a-1f5a69ea7c21.lock");
+    const readyPath = path.join(codexHome, "writer-ready");
+    await writeFile(lockPath, "");
+
+    const writer = spawn(
+      "bash",
+      [
+        "-c",
+        `exec 9>${shellQuote(lockPath)}; flock --exclusive 9; touch ${shellQuote(readyPath)}; exec -a 'codex app-server' sleep 30`
+      ],
+      { stdio: "ignore" }
+    );
+    try {
+      await waitForFile(readyPath);
+      await expect(
+        clearStaleCodexSessionLocks(codexHome, { currentWindowProcessIds: new Set([process.pid]) })
+      ).resolves.toEqual({
+        removedSessionIds: [],
+        terminatedSessionIds: ["01a0641a-6b80-7de8-9f9a-1f5a69ea7c21"],
+        activeSessionIds: []
+      });
+      await expect(access(lockPath)).rejects.toThrow();
+      await waitForExit(writer);
+    } finally {
+      if (writer.exitCode === null && writer.signalCode === null) {
+        writer.kill("SIGKILL");
+        await once(writer, "exit");
+      }
+    }
+  });
+
+  it("preserves a Codex app-server descended from the current window", async () => {
+    const codexHome = await createCodexHome();
+    const lockDirectory = path.join(codexHome, "thread-writer-locks");
+    const lockPath = path.join(lockDirectory, "01a0641b-6b80-7de8-9f9a-1f5a69ea7c21.lock");
+    const readyPath = path.join(codexHome, "writer-ready");
+    await writeFile(lockPath, "");
+
+    const writer = spawn(
+      "bash",
+      [
+        "-c",
+        `exec 9>${shellQuote(lockPath)}; flock --exclusive 9; touch ${shellQuote(readyPath)}; exec -a 'codex app-server' sleep 30`
+      ],
+      { stdio: "ignore" }
+    );
+    try {
+      await waitForFile(readyPath);
+      await expect(clearStaleCodexSessionLocks(codexHome)).resolves.toEqual({
+        removedSessionIds: [],
+        terminatedSessionIds: [],
+        activeSessionIds: ["01a0641b-6b80-7de8-9f9a-1f5a69ea7c21"]
       });
       await expect(access(lockPath)).resolves.toBeUndefined();
     } finally {
@@ -73,6 +140,23 @@ async function waitForFile(filePath: string): Promise<void> {
     }
   }
   throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+async function waitForExit(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const onExit = (): void => {
+      child.off("exit", onExit);
+      resolve();
+    };
+    child.once("exit", onExit);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      child.off("exit", onExit);
+      resolve();
+    }
+  });
 }
 
 function shellQuote(value: string): string {

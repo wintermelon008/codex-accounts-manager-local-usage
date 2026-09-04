@@ -71,6 +71,8 @@ function createState(): DashboardState {
       dashboardTheme: "dark",
       localUsageDefaultRange: "7d",
       localUsageEnabledRanges: ["24h", "7d"],
+      proxyAddress: "",
+      proxyAddresses: [""],
       localUsageShowEquivalentPrice: true,
       displayLanguage: "en",
       autoRefreshMinutes: 0,
@@ -184,7 +186,7 @@ describe("Dashboard account selection", () => {
     });
   });
 
-  it("only targets visible, non-hidden accounts whose weekly quota is at or below 3%", () => {
+  it("targets all non-hidden accounts whose weekly quota is at or below 3%", () => {
     const accounts = [
       {
         id: "below-threshold",
@@ -205,10 +207,17 @@ describe("Dashboard account selection", () => {
         id: "no-weekly-window",
         isHidden: false,
         metrics: [{ key: "weekly", label: "Weekly", percentage: 1, visible: false }]
+      },
+      {
+        id: "outside-current-page",
+        isHidden: false,
+        metrics: [{ key: "weekly", label: "Weekly", percentage: 2, visible: true }]
       }
     ] as DashboardState["accounts"];
 
-    expect(getLowWeeklyQuotaAccountIds(accounts)).toEqual(["below-threshold", "at-threshold"]);
+    const currentPage = getDashboardAccountPage(accounts, 1, 2).accounts;
+    expect(getLowWeeklyQuotaAccountIds(currentPage)).toEqual(["below-threshold", "at-threshold"]);
+    expect(getLowWeeklyQuotaAccountIds(accounts)).toEqual(["below-threshold", "at-threshold", "outside-current-page"]);
   });
 
   it("targets hidden accounts at or above 90% weekly quota across all groups", () => {

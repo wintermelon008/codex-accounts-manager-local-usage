@@ -141,6 +141,7 @@ async function runDashboardAction(
       showSessionLockCleanupResult(
         ctx.resolveLanguage(),
         result.removedSessionIds.length,
+        result.terminatedSessionIds.length,
         result.activeSessionIds.length
       );
       return undefined;
@@ -259,23 +260,28 @@ async function runDashboardAction(
   }
 }
 
-function showSessionLockCleanupResult(language: DashboardLanguage, removedCount: number, activeCount: number): void {
+function showSessionLockCleanupResult(
+  language: DashboardLanguage,
+  removedCount: number,
+  terminatedCount: number,
+  activeCount: number
+): void {
   if (activeCount > 0) {
     void vscode.window.showWarningMessage(
       language === "zh" || language === "zh-hant"
-        ? `已清理 ${removedCount} 个失效 Codex 会话锁；仍有 ${activeCount} 个会话由运行中的 Codex 占用，未强制终止。`
-        : `${removedCount} stale Codex session lock(s) cleared; ${activeCount} session(s) are still held by a running Codex process and were left untouched.`
+        ? `已清理 ${removedCount} 个失效 Codex 会话锁，并强制解锁 ${terminatedCount} 个由其他窗口运行时持有的会话锁；仍有 ${activeCount} 个会话锁被当前窗口或无法终止的进程占用。`
+        : `${removedCount} stale Codex session lock(s) cleared and ${terminatedCount} lock(s) force-unlocked after terminating other-window runtimes; ${activeCount} session lock(s) are still held by the current window or a process that could not be terminated.`
     );
     return;
   }
 
   void vscode.window.showInformationMessage(
     language === "zh" || language === "zh-hant"
-      ? removedCount > 0
-        ? `已解锁 ${removedCount} 个失效 Codex 会话。`
+      ? removedCount > 0 || terminatedCount > 0
+        ? `已解锁 ${removedCount + terminatedCount} 个 Codex 会话（其中强制终止其他窗口运行时后解锁 ${terminatedCount} 个）。`
         : "没有发现需要清理的失效 Codex 会话锁。"
-      : removedCount > 0
-        ? `${removedCount} stale Codex session(s) unlocked.`
+      : removedCount > 0 || terminatedCount > 0
+        ? `${removedCount + terminatedCount} Codex session(s) unlocked (${terminatedCount} lock(s) cleared after terminating other-window runtimes).`
         : "No stale Codex session locks were found."
   );
 }

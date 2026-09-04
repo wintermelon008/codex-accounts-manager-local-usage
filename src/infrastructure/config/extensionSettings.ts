@@ -10,8 +10,10 @@ import {
 import type { SeamlessQuotaBandSize, SeamlessSwitchThreshold } from "../../core/types";
 import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } from "../../localization/languages";
 import { normalizeQuotaColorThresholds } from "../../utils";
+import { isSupportedProxyUrl } from "./proxyEnvironment";
 
 const CODEX_ACCOUNTS_SECTION = "codexAccounts";
+const DEFAULT_PROXY_ADDRESSES = [""] as const;
 
 export interface WeeklyQuotaThresholds {
   hide: number;
@@ -24,6 +26,7 @@ type ReadableCodexAccountsConfiguration = Pick<vscode.WorkspaceConfiguration, "g
 export class ExtensionSettingsStore {
   getDashboardSettings(): DashboardSettings {
     const config = getCodexAccountsConfiguration();
+    const proxyAddresses = normalizeProxyAddresses(config.get<unknown>("proxyAddresses", DEFAULT_PROXY_ADDRESSES));
     const thresholds = normalizeQuotaColorThresholds(
       config.get<number>("quotaGreenThreshold", 60),
       config.get<number>("quotaYellowThreshold", 20)
@@ -67,6 +70,8 @@ export class ExtensionSettingsStore {
       quotaGreenThreshold: thresholds.green,
       quotaYellowThreshold: thresholds.yellow,
       debugNetwork: config.get<boolean>("debugNetwork", false),
+      proxyAddress: resolveProxyAddress(config, proxyAddresses),
+      proxyAddresses,
       displayLanguage: config.get<DashboardLanguageOption>("displayLanguage", "auto")
     };
   }
@@ -83,6 +88,42 @@ export class ExtensionSettingsStore {
       }
     });
   }
+}
+
+export function getDashboardProxyAddresses(
+  config: ReadableCodexAccountsConfiguration = getCodexAccountsConfiguration()
+): string[] {
+  return normalizeProxyAddresses(config.get<unknown>("proxyAddresses", DEFAULT_PROXY_ADDRESSES));
+}
+
+export function getDashboardProxyAddress(
+  config: ReadableCodexAccountsConfiguration = getCodexAccountsConfiguration()
+): string {
+  return resolveProxyAddress(config, getDashboardProxyAddresses(config));
+}
+
+export function normalizeProxyAddress(value: unknown): string {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized === "" || isSupportedProxyUrl(normalized) ? normalized : "";
+}
+
+export function normalizeProxyAddresses(value: unknown): string[] {
+  const configured = Array.isArray(value) ? value : [];
+  const unique = new Set<string>([""]);
+
+  for (const item of configured) {
+    const normalized = normalizeProxyAddress(item);
+    if (normalized) {
+      unique.add(normalized);
+    }
+  }
+
+  return [...unique];
+}
+
+function resolveProxyAddress(config: ReadableCodexAccountsConfiguration, proxyAddresses: readonly string[]): string {
+  const selected = normalizeProxyAddress(config.get<unknown>("proxyAddress", ""));
+  return proxyAddresses.includes(selected) ? selected : "";
 }
 
 export function normalizeDashboardTheme(value: string | undefined): DashboardThemeOption {

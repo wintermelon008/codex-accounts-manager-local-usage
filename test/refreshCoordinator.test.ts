@@ -252,7 +252,7 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
       listAccounts: vi
         .fn()
         .mockResolvedValue([{ id: "a", email: "a@example.invalid", isActive: true, createdAt: 1, updatedAt: 1 }]),
-      tryAcquireSchedulerLease: vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce({ release })
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValueOnce({ release })
     };
     const registration = registerAutoRefreshScheduler({
       context: { subscriptions: [] } as never,
@@ -305,7 +305,7 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     });
 
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(vscode.commands.executeCommand).toHaveBeenCalledOnce();
 
       await vi.advanceTimersByTimeAsync(SCHEDULER_LEASE_RENEW_INTERVAL_MS);

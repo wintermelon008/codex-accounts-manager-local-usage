@@ -12,6 +12,7 @@ import { getErrorMessage } from "../core/errors";
 import { getBalanceQuotaCapability, type BalanceQuotaCapability } from "../application/accounts/balanceScheduler";
 import { getQuotaIssueKind } from "../utils/quotaIssue";
 import type { AccountsRepository } from "../storage";
+import type { CodexExecProviderConfig, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../codex";
 import { SessionHub, type SessionKind, type SessionListFilter, type SessionRegistration, type SessionStatus } from "../sessions";
 import { normalizeLocalImportAccounts } from "./localImportProtocol";
 import type { LocalUsageAnalyticsService } from "../services/localUsageAnalytics";
@@ -129,6 +130,10 @@ export type ManagerControlJob = {
   error?: string;
 };
 
+export type ManagerControlSwitchOptions = Pick<RuntimeAccountSwitchOptions, "gracePeriodMs" | "longTurnPolicy"> & {
+  force?: boolean;
+};
+
 export type ManagerControlServerOptions = {
   repo: Pick<AccountsRepository, "listAccounts">;
   usage: Pick<LocalUsageAnalyticsService, "getSnapshots">;
@@ -136,6 +141,11 @@ export type ManagerControlServerOptions = {
   refreshQuotas: (accountIds?: readonly string[]) => Promise<ManagerControlRefreshSummary>;
   enqueueImport: (accounts: readonly SharedCodexAccountJson[]) => Promise<{ id: string; accountCount: number }>;
   getImportStatus: (jobId: string) => Promise<ManagerControlImportStatus>;
+  switchAccount?: (
+    accountId: string,
+    options?: ManagerControlSwitchOptions
+  ) => Promise<RuntimeAccountSwitchOutcome>;
+  getCodexExecProviderConfig?: () => Promise<CodexExecProviderConfig>;
   now?: () => number;
 };
 
@@ -226,6 +236,15 @@ export class ManagerControlServer {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === `${CONTROL_API_PREFIX}/codex/provider-config`) {
+      if (!this.options.getCodexExecProviderConfig) {
+        sendJson(response, 503, { error: "Codex provider configuration is unavailable" });
+        return;
+      }
+      sendJson(response, 200, await this.options.getCodexExecProviderConfig());
+      return;
+    }
+
     if (url.pathname === `${CONTROL_API_PREFIX}/status` && request.method === "GET") {
       const [accounts, usageToday] = await Promise.all([this.readAccounts(), this.readUsageToday()]);
       sendJson(response, 200, { generatedAt: Date.now(), accounts, usageToday });
@@ -234,6 +253,41 @@ export class ManagerControlServer {
 
     if (url.pathname === `${CONTROL_API_PREFIX}/accounts` && request.method === "GET") {
       sendJson(response, 200, await this.readAccounts());
+      return;
+    }
+
+    if (url.pathname === `${CONTROL_API_PREFIX}/accounts/switch` && request.method === "POST") {
+      if (!this.options.switchAccount) {
+        sendJson(response, 503, { error: "account switching is unavailable" });
+        return;
+      }
+      let body: unknown;
+      try {
+        body = await readJsonBody(request);
+      } catch {
+        sendJson(response, 400, { error: "switch request must be valid JSON and no larger than 16 KB" });
+        return;
+      }
+      const accountId = parseAccountId(body);
+      if (!accountId) {
+        sendJson(response, 400, { error: "accountId is required" });
+        return;
+      }
+      const force = isRecord(body) && body["force"] === true;
+      const outcome = await this.options.switchAccount(accountId, {
+        force,
+        ...(force
+          ? {
+              gracePeriodMs: 0,
+              longTurnPolicy: "interruptAndContinue"
+            }
+          : {})
+      });
+      if (outcome.status === "failed") {
+        sendJson(response, 409, outcome);
+        return;
+      }
+      sendJson(response, 200, outcome);
       return;
     }
 
@@ -625,6 +679,14 @@ function parseAccountIds(body: unknown): readonly string[] | undefined | "invali
     (value): value is string => typeof value === "string" && value.trim().length > 0
   );
   return accountIds.length === rawAccountIds.length ? accountIds : "invalid";
+}
+
+function parseAccountId(body: unknown): string | undefined {
+  if (!isRecord(body)) {
+    return undefined;
+  }
+  const value = body["accountId"];
+  return typeof value === "string" && value.trim() && value.trim().length <= 256 ? value.trim() : undefined;
 }
 
 function parseSessionListFilter(params: URLSearchParams): SessionListFilter {

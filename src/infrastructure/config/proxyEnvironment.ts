@@ -30,12 +30,14 @@ export class CodexProxyConfigurationError extends Error {
  * prepares a request-local proxy dispatcher for this extension.
  *
  * Existing process environment variables take precedence, matching dotenv's
- * default non-overriding behavior.
+ * default non-overriding behavior. A selected Dashboard address can override
+ * only HTTPS_PROXY for Manager requests; an empty value leaves this resolution
+ * unchanged.
  */
-export async function initializeCodexProxyEnvironment(): Promise<boolean> {
+export async function initializeCodexProxyEnvironment(httpsProxyOverride?: string): Promise<boolean> {
   try {
     const fileEnvironment = await readProxyEnvironmentFile(path.join(getCodexHome(), ".env"));
-    return configureCodexProxyEnvironment(resolveProxySettings(process.env, fileEnvironment));
+    return configureCodexProxyEnvironment(resolveProxySettings(process.env, fileEnvironment, httpsProxyOverride));
   } catch (error) {
     return rejectProxyConfiguration(error);
   }
@@ -91,7 +93,8 @@ export async function readProxyEnvironmentFile(filePath: string): Promise<Record
 
 export function resolveProxySettings(
   processEnvironment: NodeJS.ProcessEnv,
-  fileEnvironment: Readonly<Record<string, string>>
+  fileEnvironment: Readonly<Record<string, string>>,
+  httpsProxyOverride?: string
 ): ProxySettings {
   const getEntry = (key: (typeof PROXY_ENV_KEYS)[number]): EnvironmentEntry => {
     const processEntry = readEnvironmentEntry(processEnvironment, key);
@@ -104,7 +107,7 @@ export function resolveProxySettings(
 
   return {
     httpProxy: httpProxy.value ?? allProxy.value,
-    httpsProxy: httpsProxy.value ?? allProxy.value,
+    httpsProxy: normalizeValue(httpsProxyOverride) ?? httpsProxy.value ?? allProxy.value,
     noProxy: getEntry("NO_PROXY").value
   };
 }
@@ -200,6 +203,15 @@ function validateProxyUrl(label: string, value: string | undefined): void {
     throw new CodexProxyConfigurationError(
       `${label} uses the unsupported ${protocol || "unknown"} protocol. Only http:// and https:// proxy URLs are supported.`
     );
+  }
+}
+
+export function isSupportedProxyUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return Boolean(parsed.hostname) && (parsed.protocol === "http:" || parsed.protocol === "https:");
+  } catch {
+    return false;
   }
 }
 

@@ -339,13 +339,6 @@ export function registerAutoRefreshScheduler(params: {
       },
       minutes * 60 * 1000
     );
-    void params.repo.listAccounts().then((accounts) => {
-      if (
-        shouldRunAccountScheduler(getAutomaticQuotaRefreshAccountIds(accounts, getCodexAccountsConfiguration()).length)
-      ) {
-        void runAutoRefresh();
-      }
-    });
   };
 
   applySchedule();
