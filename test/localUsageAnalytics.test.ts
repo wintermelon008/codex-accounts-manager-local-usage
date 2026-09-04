@@ -98,6 +98,62 @@ describe("scanLocalUsageSessions", () => {
     ]);
   });
 
+  it("includes archived sibling sessions and de-duplicates a session visible in both roots", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const archivedPath = path.join(root, "archived_sessions");
+    await writeSession(sessionsPath, "2026/07/14/active.jsonl", [
+      { type: "turn_context", payload: { model: "active-model" } },
+      tokenCountEvent("2026-07-14T01:00:00.000Z", 10)
+    ]);
+    await writeSession(archivedPath, "2026/07/14/archived.jsonl", [
+      { type: "turn_context", payload: { model: "archived-model" } },
+      tokenCountEvent("2026-07-14T02:00:00.000Z", 20)
+    ]);
+    const duplicate = [
+      { type: "turn_context", payload: { model: "duplicate-model" } },
+      tokenCountEvent("2026-07-14T03:00:00.000Z", 30)
+    ];
+    await writeSession(sessionsPath, "2026/07/14/duplicate.jsonl", duplicate);
+    await writeSession(archivedPath, "2026/07/14/duplicate.jsonl", duplicate);
+
+    const result = await scanLocalUsageSessions({
+      sessionsPath,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.sourceFileCount).toBe(3);
+    expect(result.eventCount).toBe(3);
+    expect(result.total.totalTokens).toBe(60);
+    expect(result.byModel).toEqual([
+      expect.objectContaining({ model: "duplicate-model", totalTokens: 30 }),
+      expect.objectContaining({ model: "archived-model", totalTokens: 20 }),
+      expect.objectContaining({ model: "active-model", totalTokens: 10 })
+    ]);
+  });
+
+  it("scans archived sessions when the active sessions root is absent", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    await writeSession(path.join(root, "archived_sessions"), "2026/07/14/archived-only.jsonl", [
+      { type: "turn_context", payload: { model: "archived-model" } },
+      tokenCountEvent("2026-07-14T01:00:00.000Z", 20)
+    ]);
+
+    const result = await scanLocalUsageSessions({
+      sessionsPath,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.sourceFileCount).toBe(1);
+    expect(result.eventCount).toBe(1);
+    expect(result.total.totalTokens).toBe(20);
+  });
+
   it("assigns recent usage to local three-hour boundaries and preserves model buckets", async () => {
     const root = await createTempDirectory();
     const sessionsPath = path.join(root, "sessions");
