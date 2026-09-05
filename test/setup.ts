@@ -9,6 +9,9 @@ vi.mock("vscode", () => ({
     openExternal: vi.fn(async () => true),
     asExternalUri: vi.fn(async (uri: unknown) => uri)
   },
+  extensions: {
+    getExtension: vi.fn()
+  },
   Uri: {
     parse: vi.fn((value: string) => ({ toString: () => value }))
   },

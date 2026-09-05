@@ -697,10 +697,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         let runtimeStatusChecked = false;
         if (isOpenAiCodexExtensionActive()) {
           try {
-            runtimeStatusChecked = true;
             const status = await candidateBridge.getStatus();
+            runtimeStatusChecked = true;
             requiresReload =
-              !status.ready ||
               status.runtimeProtocolVersion !== RUNTIME_PROTOCOL_VERSION ||
               status.httpTransportForced !== true ||
               status.gatewayConfigured !== Boolean(gatewayState) ||
@@ -709,7 +708,10 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
               status.gatewayBaseUrl !== gateway?.baseUrl ||
               status.gatewayModel !== gateway?.model;
           } catch {
-            requiresReload = true;
+            // The official extension may be active before its app-server is
+            // started. Keep the bridge lazy so the first later request can
+            // connect to the shim; the remote overlay itself already tells us
+            // whether a reload is needed.
           }
         }
         if (requiresReload) {

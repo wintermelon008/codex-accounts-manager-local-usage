@@ -5,6 +5,10 @@
 - Dashboard 顶部的 Codex 会话锁解锁改为强制模式：会终止非当前 VS Code 窗口且持有对应 `FLOCK` 的 Codex `app-server`，再释放其会话锁；当前窗口和无法确认的进程不会被终止。
 - Mailbox 注册助手邮箱库新增“仅 GPT 注册 ≥ 7 天”筛选；已注册标签按第一封来自 OpenAI 的邮件时间显示已注册天数。
 
+## 0.1.18-l2（2026-09-05）
+
+- 修复新版 Codex 扩展延迟启动 `app-server` 时，无感切号 runtime bridge 被误判为需要 reload，导致 Vserver 每次 reload 都重复弹出安装提示；runtime 未启动或尚未 ready 时现在保留惰性 bridge，只有首次安装或明确协议不兼容才要求 reload。
+
 ## 0.1.18-l1（2026-09-02）
 
 - Dashboard 的“删除封禁账号”按钮仅在 Mailbox 已安装并处于可用状态且存在可删除账号时显示，并且只纳入同时满足 `reauthorize` 和 Mailbox 已标记收到 OpenAI `account deactivated` 邮件的账号；未安装或未激活 Mailbox 时按钮隐藏，不会仅凭重新授权状态删除账号。

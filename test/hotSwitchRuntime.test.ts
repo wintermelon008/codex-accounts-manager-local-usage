@@ -1,3 +1,6 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readAuthFile, writeAuthFile } from "../src/codex/authFile";
@@ -8,7 +11,8 @@ import {
   selectManagedAccountForRefresh,
   selectManagedAccountForUsageAttribution
 } from "../src/codex/hotSwitchRuntime";
-import { HotSwitchOperationUncertainError } from "../src/codex/hotSwitchBridge";
+import { CodexHotSwitchBridge, HotSwitchOperationUncertainError } from "../src/codex/hotSwitchBridge";
+import { installRemoteCliOverlay } from "../src/codex/remoteCliOverlay";
 import {
   clearCurrentWindowRuntimeAccountIfMatches,
   getCurrentWindowRuntimeAccountId,
@@ -580,6 +584,106 @@ describe("Codex hot-switch runtime setup", () => {
     expect(getCurrentWindowRuntimeAccountId()).toBe("local-a");
     expect(clearCurrentWindowRuntimeAccountIfMatches("local-a")).toBe(true);
     expect(getCurrentWindowRuntimeAccountId()).toBeUndefined();
+  });
+
+  it("does not request another reload while a remote app-server is unavailable or starting", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "codex-accounts-runtime-"));
+    const extensionRoot = path.join(directory, "openai-extension");
+    const globalStoragePath = path.join(directory, "global-storage");
+    const runtimeDirectory = path.join(globalStoragePath, "hot-switch-runtime");
+    const platform = process.platform === "darwin" ? "macos" : "linux";
+    const architecture = process.arch === "arm64" ? "aarch64" : "x86_64";
+    const cliPath = path.join(extensionRoot, "bin", `${platform}-${architecture}`, "codex");
+    const launcherPath = path.join(runtimeDirectory, "codex-app-server-shim");
+    const configuration = vi.mocked(vscode.workspace.getConfiguration);
+    const previousConfiguration = configuration.getMockImplementation();
+    const environment = vscode.env as unknown as { remoteName?: string };
+    const previousRemoteName = environment.remoteName;
+    const vscodeModule = vscode as unknown as {
+      extensions?: { getExtension: (id: string) => { extensionPath: string; isActive: boolean } | undefined };
+    };
+    const previousExtensions = vscodeModule.extensions;
+    let runtime: CodexHotSwitchRuntime | undefined;
+
+    try {
+      await fs.mkdir(path.dirname(cliPath), { recursive: true });
+      await fs.mkdir(runtimeDirectory, { recursive: true });
+      await fs.writeFile(cliPath, "official-codex-binary", "utf8");
+      await fs.writeFile(launcherPath, "manager-launcher", "utf8");
+      await installRemoteCliOverlay(cliPath, launcherPath);
+
+      const enabledConfiguration = {
+        get: (key: string, defaultValue?: unknown) => (key === "hotSwitchEnabled" ? true : defaultValue),
+        update: vi.fn(),
+        inspect: vi.fn()
+      } as unknown as vscode.WorkspaceConfiguration;
+      const chatgptConfiguration = {
+        get: (_key: string, defaultValue?: unknown) => defaultValue,
+        update: vi.fn()
+      } as unknown as vscode.WorkspaceConfiguration;
+      configuration.mockImplementation((section) =>
+        section === "codexAccounts" ? enabledConfiguration : chatgptConfiguration
+      );
+      environment.remoteName = "ssh-remote";
+      vscodeModule.extensions = {
+        getExtension: vi.fn(() => ({ extensionPath: extensionRoot, isActive: true }))
+      };
+
+      const getStatus = vi
+        .spyOn(CodexHotSwitchBridge.prototype, "getStatus")
+        .mockRejectedValueOnce(new Error("Codex hot-switch runtime is not available"))
+        .mockResolvedValueOnce({
+          runtimeProtocolVersion: 13,
+          ready: false,
+          httpTransportForced: true,
+          gatewayConfigured: false,
+          gatewayActive: false,
+          gatewayAutoFallbackEnabled: false
+        } as never);
+      vi.spyOn(CodexHotSwitchBridge.prototype, "getIdentity").mockRejectedValue(
+        new Error("Codex hot-switch runtime is not available")
+      );
+      vi.spyOn(CodexHotSwitchBridge.prototype, "configureFastMode").mockResolvedValue({ enabled: true });
+
+      runtime = new CodexHotSwitchRuntime(
+        {
+          globalStorageUri: { fsPath: globalStoragePath },
+          asAbsolutePath: (relativePath: string) => path.resolve(process.cwd(), relativePath),
+          globalState: { get: vi.fn(), update: vi.fn(async () => undefined) }
+        } as unknown as vscode.ExtensionContext,
+        { listAccounts: vi.fn(async () => []) } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+      );
+
+      await expect(runtime.initialize()).resolves.toMatchObject({
+        enabled: true,
+        configured: true,
+        requiresReload: false
+      });
+      await expect(runtime.initialize()).resolves.toMatchObject({
+        enabled: true,
+        configured: true,
+        requiresReload: false
+      });
+      expect(getStatus).toHaveBeenCalledTimes(2);
+      expect((runtime as unknown as { bridge?: unknown }).bridge).toBeDefined();
+    } finally {
+      runtime?.dispose();
+      await fs.rm(directory, { recursive: true, force: true });
+      if (previousConfiguration) {
+        configuration.mockImplementation(previousConfiguration);
+      }
+      if (previousRemoteName === undefined) {
+        delete environment.remoteName;
+      } else {
+        environment.remoteName = previousRemoteName;
+      }
+      vscodeModule.extensions = previousExtensions;
+      vi.restoreAllMocks();
+    }
   });
 
   it("fails closed when hot switching is enabled but the runtime bridge is not ready", async () => {
