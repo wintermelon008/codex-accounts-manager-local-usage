@@ -41,7 +41,7 @@ export type LocalUsageRangeViewModel = {
 
 type ApiRateCard = {
   inputPerMillionUsd: number;
-  cachedInputPerMillionUsd: number;
+  cachedInputPerMillionUsd?: number;
   outputPerMillionUsd: number;
 };
 
@@ -53,7 +53,22 @@ type ZonedDateTimeParts = {
   hour: number;
 };
 
+// Standard processing, short-context rates from https://developers.openai.com/api/docs/pricing.
+// Local session usage does not retain the service tier or context length, so estimates use this baseline.
+//
+// The pricing page also contains modality- and time-based products (Realtime/audio,
+// image, video, transcription, web search, containers, and storage). Those cannot
+// be calculated from this collector's aggregate input/cached/output token counters;
+// adding their token prices here would report a false amount for audio or image usage.
 const API_RATE_CARDS: Array<{ matches: (model: string) => boolean; rates: ApiRateCard }> = [
+  {
+    matches: (model) => model === "gpt-6" || model.startsWith("gpt-6-astra"),
+    rates: { inputPerMillionUsd: 10, cachedInputPerMillionUsd: 1, outputPerMillionUsd: 50 }
+  },
+  {
+    matches: (model) => model === "gpt-5.6" || model.startsWith("gpt-5.6-sol") || model === "gpt-daybreak-blue-latest",
+    rates: { inputPerMillionUsd: 4, cachedInputPerMillionUsd: 0.4, outputPerMillionUsd: 20 }
+  },
   {
     matches: (model) => model.startsWith("gpt-5.6-terra"),
     rates: { inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.2, outputPerMillionUsd: 12 }
@@ -63,12 +78,169 @@ const API_RATE_CARDS: Array<{ matches: (model: string) => boolean; rates: ApiRat
     rates: { inputPerMillionUsd: 0.2, cachedInputPerMillionUsd: 0.02, outputPerMillionUsd: 1.2 }
   },
   {
-    matches: (model) => model === "gpt-5.6" || model.startsWith("gpt-5.6-sol"),
-    rates: { inputPerMillionUsd: 4, cachedInputPerMillionUsd: 0.4, outputPerMillionUsd: 20 }
+    matches: (model) => model.startsWith("gpt-5.6-cyber") || model === "gpt-daybreak-red-latest",
+    rates: { inputPerMillionUsd: 12.5, cachedInputPerMillionUsd: 1.25, outputPerMillionUsd: 75 }
   },
   {
+    matches: (model) => model === "gpt-5.5-cyber",
+    rates: { inputPerMillionUsd: 12.5, cachedInputPerMillionUsd: 1.25, outputPerMillionUsd: 75 }
+  },
+  {
+    matches: (model) => model === "gpt-5.5-pro",
+    rates: { inputPerMillionUsd: 30, outputPerMillionUsd: 180 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-5.4-mini"),
+    rates: { inputPerMillionUsd: 0.75, cachedInputPerMillionUsd: 0.075, outputPerMillionUsd: 4.5 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-5.4-nano"),
+    rates: { inputPerMillionUsd: 0.2, cachedInputPerMillionUsd: 0.02, outputPerMillionUsd: 1.25 }
+  },
+  {
+    matches: (model) => model === "gpt-5.4-pro",
+    rates: { inputPerMillionUsd: 30, outputPerMillionUsd: 180 }
+  },
+  {
+    matches: (model) => model === "gpt-5.4",
+    rates: { inputPerMillionUsd: 2.5, cachedInputPerMillionUsd: 0.25, outputPerMillionUsd: 15 }
+  },
+  {
+    // Keep pricing for historical Codex sessions recorded under the legacy model name.
     matches: (model) => model === "gpt-5.5" || /^gpt-5\.5-\d{4}-\d{2}-\d{2}$/u.test(model),
     rates: { inputPerMillionUsd: 5, cachedInputPerMillionUsd: 0.5, outputPerMillionUsd: 30 }
+  },
+  {
+    matches: (model) => model === "gpt-5.3-codex",
+    rates: { inputPerMillionUsd: 1.75, cachedInputPerMillionUsd: 0.175, outputPerMillionUsd: 14 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-5.2-pro"),
+    rates: { inputPerMillionUsd: 21, outputPerMillionUsd: 168 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-5.2"),
+    rates: { inputPerMillionUsd: 1.75, cachedInputPerMillionUsd: 0.175, outputPerMillionUsd: 14 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-5.1"),
+    rates: { inputPerMillionUsd: 1.25, cachedInputPerMillionUsd: 0.125, outputPerMillionUsd: 10 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-5-pro"),
+    rates: { inputPerMillionUsd: 15, outputPerMillionUsd: 120 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-5-mini"),
+    rates: { inputPerMillionUsd: 0.25, cachedInputPerMillionUsd: 0.025, outputPerMillionUsd: 2 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-5-nano"),
+    rates: { inputPerMillionUsd: 0.05, cachedInputPerMillionUsd: 0.005, outputPerMillionUsd: 0.4 }
+  },
+  {
+    matches: (model) => model === "gpt-5" || model.startsWith("gpt-5-"),
+    rates: { inputPerMillionUsd: 1.25, cachedInputPerMillionUsd: 0.125, outputPerMillionUsd: 10 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-4.1-mini"),
+    rates: { inputPerMillionUsd: 0.4, cachedInputPerMillionUsd: 0.1, outputPerMillionUsd: 1.6 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-4.1-nano"),
+    rates: { inputPerMillionUsd: 0.1, cachedInputPerMillionUsd: 0.025, outputPerMillionUsd: 0.4 }
+  },
+  {
+    matches: (model) => model.startsWith("gpt-4.1"),
+    rates: { inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.5, outputPerMillionUsd: 8 }
+  },
+  {
+    matches: (model) => model === "gpt-4o-2024-05-13",
+    rates: { inputPerMillionUsd: 5, outputPerMillionUsd: 15 }
+  },
+  {
+    matches: (model) => model === "gpt-4o-mini",
+    rates: { inputPerMillionUsd: 0.15, cachedInputPerMillionUsd: 0.075, outputPerMillionUsd: 0.6 }
+  },
+  {
+    matches: (model) => model === "gpt-4o",
+    rates: { inputPerMillionUsd: 2.5, cachedInputPerMillionUsd: 1.25, outputPerMillionUsd: 10 }
+  },
+  {
+    matches: (model) => model === "gpt-4-turbo-2024-04-09",
+    rates: { inputPerMillionUsd: 10, outputPerMillionUsd: 30 }
+  },
+  {
+    matches: (model) => model === "gpt-4-0613",
+    rates: { inputPerMillionUsd: 30, outputPerMillionUsd: 60 }
+  },
+  {
+    matches: (model) => model === "o4-mini",
+    rates: { inputPerMillionUsd: 1.1, cachedInputPerMillionUsd: 0.275, outputPerMillionUsd: 4.4 }
+  },
+  {
+    matches: (model) => model === "o3-pro",
+    rates: { inputPerMillionUsd: 20, outputPerMillionUsd: 80 }
+  },
+  {
+    matches: (model) => model === "o3-mini",
+    rates: { inputPerMillionUsd: 1.1, cachedInputPerMillionUsd: 0.55, outputPerMillionUsd: 4.4 }
+  },
+  {
+    matches: (model) => model === "o3",
+    rates: { inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.5, outputPerMillionUsd: 8 }
+  },
+  {
+    matches: (model) => model === "o1-pro",
+    rates: { inputPerMillionUsd: 150, outputPerMillionUsd: 600 }
+  },
+  {
+    matches: (model) => model === "o1",
+    rates: { inputPerMillionUsd: 15, cachedInputPerMillionUsd: 7.5, outputPerMillionUsd: 60 }
+  },
+  {
+    matches: (model) => model === "gpt-3.5-turbo-instruct",
+    rates: { inputPerMillionUsd: 1.5, outputPerMillionUsd: 2 }
+  },
+  {
+    matches: (model) => model === "gpt-3.5-turbo-1106",
+    rates: { inputPerMillionUsd: 1, outputPerMillionUsd: 2 }
+  },
+  {
+    matches: (model) => model === "gpt-3.5-turbo" || model === "gpt-3.5-turbo-0125",
+    rates: { inputPerMillionUsd: 0.5, outputPerMillionUsd: 1.5 }
+  },
+  {
+    matches: (model) => model === "davinci-002",
+    rates: { inputPerMillionUsd: 2, outputPerMillionUsd: 2 }
+  },
+  {
+    matches: (model) => model === "babbage-002",
+    rates: { inputPerMillionUsd: 0.4, outputPerMillionUsd: 0.4 }
+  },
+  {
+    matches: (model) => model === "chat-latest",
+    rates: { inputPerMillionUsd: 5, cachedInputPerMillionUsd: 0.5, outputPerMillionUsd: 30 }
+  },
+  {
+    matches: (model) => model === "gpt-5-search-api",
+    rates: { inputPerMillionUsd: 1.25, cachedInputPerMillionUsd: 0.125, outputPerMillionUsd: 10 }
+  },
+  {
+    matches: (model) => model === "text-embedding-3-small",
+    rates: { inputPerMillionUsd: 0.02, outputPerMillionUsd: 0 }
+  },
+  {
+    matches: (model) => model === "text-embedding-3-large",
+    rates: { inputPerMillionUsd: 0.13, outputPerMillionUsd: 0 }
+  },
+  {
+    matches: (model) => model === "text-embedding-ada-002",
+    rates: { inputPerMillionUsd: 0.1, outputPerMillionUsd: 0 }
+  },
+  {
+    matches: (model) => model === "omni-moderation-latest",
+    rates: { inputPerMillionUsd: 0, outputPerMillionUsd: 0 }
   }
 ];
 
@@ -115,9 +287,10 @@ export function estimateStandardApiCost(
 
     const cachedInputTokens = Math.min(usage.inputTokens, usage.cachedInputTokens);
     const uncachedInputTokens = Math.max(0, usage.inputTokens - cachedInputTokens);
+    const cachedInputRate = rates.cachedInputPerMillionUsd ?? rates.inputPerMillionUsd;
     amountUsd +=
       (uncachedInputTokens / 1_000_000) * rates.inputPerMillionUsd +
-      (cachedInputTokens / 1_000_000) * rates.cachedInputPerMillionUsd +
+      (cachedInputTokens / 1_000_000) * cachedInputRate +
       (usage.outputTokens / 1_000_000) * rates.outputPerMillionUsd;
     pricedTokens += usage.totalTokens;
   }
