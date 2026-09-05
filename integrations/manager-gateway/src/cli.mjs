@@ -60,6 +60,8 @@ function printHelp() {
   MANAGER_GATEWAY_CODEX_BINARY      Codex executable，默认 codex
   MANAGER_GATEWAY_CODEX_HOME        Codex Home
   MANAGER_GATEWAY_PROJECT_ROOT      develop 模式项目根目录
+  WORKBENCH_DATA_URL                Workbench 数据服务地址，默认 http://127.0.0.1:43119
+  WORKBENCH_DATA_TOKEN              Workbench 数据服务令牌（可选）
   MANAGER_GATEWAY_RESEARCH_BASE_URL research 模式 OpenAI-compatible 地址
   MANAGER_GATEWAY_RESEARCH_API_KEY  research provider key
   MANAGER_GATEWAY_MAX_SESSIONS      并行 session 上限，默认 4

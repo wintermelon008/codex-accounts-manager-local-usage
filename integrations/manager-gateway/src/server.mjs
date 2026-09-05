@@ -72,6 +72,30 @@ async function handleRequest(request, response, { sessions, config }) {
     }, config);
     return;
   }
+  if (request.method === "GET" && url.pathname === "/v1/manager/accounts") {
+    if (typeof sessions.manager?.getAccounts !== "function") {
+      sendJson(response, 503, { error: "Manager account directory is unavailable" }, config);
+      return;
+    }
+    try {
+      sendJson(response, 200, await sessions.manager.getAccounts(), config);
+    } catch (error) {
+      sendJson(response, 503, { error: error instanceof Error ? error.message : String(error) }, config);
+    }
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/v1/manager/status") {
+    if (typeof sessions.manager?.getStatus !== "function") {
+      sendJson(response, 503, { error: "Manager status is unavailable" }, config);
+      return;
+    }
+    try {
+      sendJson(response, 200, await sessions.manager.getStatus(), config);
+    } catch (error) {
+      sendJson(response, 503, { error: error instanceof Error ? error.message : String(error) }, config);
+    }
+    return;
+  }
   if (request.method === "GET" && url.pathname === "/v1/recovery") {
     sendJson(response, 200, sessions.getRecoveryStatus(), config);
     return;

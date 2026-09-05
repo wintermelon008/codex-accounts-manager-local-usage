@@ -27,10 +27,13 @@ export class SessionCancelledError extends GatewayProviderError {
 }
 
 export function createProvider(config, options = {}) {
+  const workbenchDataUrl = config.workbenchDataUrl ?? process.env.WORKBENCH_DATA_URL ?? DEFAULT_WORKBENCH_DATA_URL;
+  const workbenchDataToken = config.workbenchDataToken ?? process.env.WORKBENCH_DATA_TOKEN;
   const codex = createCodexProvider(
     config.codex,
     options.manager,
-    config.workbenchDataUrl ?? process.env.WORKBENCH_DATA_URL ?? DEFAULT_WORKBENCH_DATA_URL
+    workbenchDataUrl,
+    workbenchDataToken
   );
   const research = config.research.baseUrl
     ? createOpenAiCompatibleProvider(config.research)
@@ -45,7 +48,7 @@ export function createProvider(config, options = {}) {
   };
 }
 
-function createCodexProvider(config, manager, workbenchDataUrl) {
+function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataToken) {
   return {
     async run({ session, emit, signal }) {
       const root = session.workspace?.cwd ?? config.projectRoot;
@@ -84,6 +87,9 @@ function createCodexProvider(config, manager, workbenchDataUrl) {
         ...process.env,
         WORKBENCH_DATA_URL: workbenchDataUrl || DEFAULT_WORKBENCH_DATA_URL
       };
+      if (workbenchDataToken) {
+        environment.WORKBENCH_DATA_TOKEN = workbenchDataToken;
+      }
       if (config.home) {
         environment.CODEX_HOME = config.home;
       }
@@ -194,6 +200,8 @@ function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, emit, signal 
     let threadId;
     let quotaDetected = false;
     let settled = false;
+    let turnCompleted = false;
+    let postTurnGrace;
 
     const finish = (callback, value) => {
       if (settled) {
@@ -201,8 +209,36 @@ function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, emit, signal 
       }
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(postTurnGrace);
       signal?.removeEventListener("abort", abort);
       callback(value);
+    };
+    const terminateChild = () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+      }
+    };
+    const settleCompletedTurn = () => {
+      if (!turnCompleted || settled) {
+        return;
+      }
+      if (quotaDetected) {
+        finish(reject, new QuotaExhaustionError("Codex quota exhausted", { threadId }));
+        terminateChild();
+        return;
+      }
+      const complete = () => {
+        finish(resolve, { threadId, text: finalResponse });
+        terminateChild();
+      };
+      // Codex normally emits item.completed before turn.completed. Keep a
+      // short grace period for clients that flush the final agent message
+      // immediately after the turn event, then terminate the lingering exec.
+      if (finalResponse) {
+        complete();
+      } else if (!postTurnGrace) {
+        postTurnGrace = setTimeout(complete, 250);
+      }
     };
     const abort = () => {
       child.kill("SIGTERM");
@@ -245,6 +281,10 @@ function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, emit, signal 
       }
       quotaDetected ||= isQuotaEvent(event);
       emit({ type: "codex.event", event });
+      if (event.type === "turn.completed") {
+        turnCompleted = true;
+      }
+      settleCompletedTurn();
     });
 
     child.once("close", (exitCode, signalName) => {
@@ -392,7 +432,7 @@ function workbenchInstructions() {
   return [
     "如果当前项目是 Research Workbench，请先阅读仓库根目录 AGENTS.md 和 macos/AGENTS.md。",
     "Workbench 数据由独立的数据服务持有，不由 Manager Gateway 持有；不要直接打开或修改 SQLite 文件。",
-    "查询或写入 Workbench 记录、日程和其它数据时，使用环境变量 WORKBENCH_DATA_URL（未注入时默认 http://127.0.0.1:43119）提供的 /api/workbench/* HTTP API；写入后重新查询验证。",
+    "查询或写入 Workbench 记录、日程和其它数据时，使用环境变量 WORKBENCH_DATA_URL（未注入时默认 http://127.0.0.1:43119）提供的 /api/workbench/* HTTP API；若注入 WORKBENCH_DATA_TOKEN，则以 Bearer 令牌请求且绝不回显令牌；写入后重新查询验证。",
     "当前 Gateway 是单用户受控服务，Codex exec 已获准使用宿主机完整访问权限；因此可以直接访问本机回环数据服务、检查进程/端口和调用必要的本机服务命令。",
     "只有用户明确要求时才写入或删除数据；日期使用 YYYY-MM-DD，时间使用 HH:mm。"
   ].join("\n");

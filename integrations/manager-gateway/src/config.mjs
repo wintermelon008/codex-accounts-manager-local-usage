@@ -43,6 +43,9 @@ export function loadConfig(env = process.env) {
       projectRoot: optional(env.MANAGER_GATEWAY_PROJECT_ROOT),
       timeoutSeconds: parseBoundedInteger(env.MANAGER_GATEWAY_CODEX_TIMEOUT_SECONDS, 1_800, 10, 86_400)
     },
+    workbenchDataUrl: optional(env.MANAGER_GATEWAY_WORKBENCH_DATA_URL) ?? optional(env.WORKBENCH_DATA_URL),
+    workbenchDataToken:
+      optional(env.MANAGER_GATEWAY_WORKBENCH_DATA_TOKEN) ?? optional(env.WORKBENCH_DATA_TOKEN),
     research: {
       baseUrl: optional(env.MANAGER_GATEWAY_RESEARCH_BASE_URL)
         ? normalizeBaseUrl(env.MANAGER_GATEWAY_RESEARCH_BASE_URL, "MANAGER_GATEWAY_RESEARCH_BASE_URL")

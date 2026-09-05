@@ -133,6 +133,36 @@ describe("manager gateway HTTP API", () => {
     assert.deepEqual(switches, [{ accountId: "account-b", options: { force: true } }]);
   });
 
+  it("exposes read-only Manager status and account summaries to Gateway clients", async () => {
+    const sessions = new GatewaySessionManager({
+      provider: { async run() { return { text: "ok" }; } },
+      manager: {
+        async getAccounts() {
+          return { accounts: [{ id: "account-a", email: "a@example.com", isActive: true }] };
+        },
+        async getStatus() {
+          return { ok: true, activeAccountId: "account-a" };
+        }
+      }
+    });
+    const config = { server: { host: "127.0.0.1", port: 0, token: "gateway-secret", corsOrigin: "*" } };
+    const server = createGatewayServer({ sessions, config });
+    servers.push(server);
+    const address = await listen(server, config.server.host, 0);
+    const baseUrl = `http://${address.host}:${address.port}`;
+    const headers = { authorization: "Bearer gateway-secret" };
+
+    const accounts = await fetch(`${baseUrl}/v1/manager/accounts`, { headers });
+    assert.equal(accounts.status, 200);
+    assert.deepEqual(await accounts.json(), {
+      accounts: [{ id: "account-a", email: "a@example.com", isActive: true }]
+    });
+
+    const status = await fetch(`${baseUrl}/v1/manager/status`, { headers });
+    assert.equal(status.status, 200);
+    assert.deepEqual(await status.json(), { ok: true, activeAccountId: "account-a" });
+  });
+
   it("reports unavailable optional capabilities instead of advertising them unconditionally", async () => {
     const sessions = new GatewaySessionManager({
       provider: { async run() { return { text: "unused" }; } }

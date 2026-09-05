@@ -92,6 +92,21 @@ describe("manager gateway Codex provider", () => {
     assert.equal(result.text, "fake-response-1");
   });
 
+  it("passes an authenticated Workbench data service token to Codex", async () => {
+    const harness = await createHarness("success");
+    harness.config.workbenchDataUrl = "http://127.0.0.1:43119";
+    harness.config.workbenchDataToken = "workbench-data-token";
+    const provider = createProvider(harness.config);
+
+    await provider.run({
+      session: sessionFor(harness.root, { message: "read Workbench data" }),
+      emit() {}
+    });
+    const [{ workbenchDataUrl, workbenchDataToken }] = await readInvocations(harness.logPath);
+    assert.equal(workbenchDataUrl, "http://127.0.0.1:43119");
+    assert.equal(workbenchDataToken, "workbench-data-token");
+  });
+
   it("does not treat normal rate-limit metadata or response text as quota exhaustion", async () => {
     const harness = await createHarness("success-with-quota-words");
     const provider = createProvider(harness.config);
@@ -102,6 +117,20 @@ describe("manager gateway Codex provider", () => {
     });
 
     assert.equal(result.text, "The quota limit is still available.");
+  });
+
+  it("returns when the Codex turn completes even if exec keeps stdin open", async () => {
+    const harness = await createHarness("turn-completed-stays-open");
+    const provider = createProvider(harness.config);
+    const startedAt = Date.now();
+
+    const result = await provider.run({
+      session: sessionFor(harness.root, { message: "finish and remain open" }),
+      emit() {}
+    });
+
+    assert.ok(Date.now() - startedAt < 2_000);
+    assert.equal(result.text, "completed-before-process-exit");
   });
 
   it("keeps host access on resume without unsupported color or sandbox flags", async () => {
@@ -244,7 +273,7 @@ const argv = process.argv.slice(2);
 const logPath = "argv.jsonl";
 const previous = existsSync(logPath) ? readFileSync(logPath, "utf8").trim() : "";
 const callNumber = previous ? previous.split("\\n").length + 1 : 1;
-appendFileSync(logPath, JSON.stringify({ argv, adapterToken: process.env.CODEX_ACCOUNTS_GATEWAY_ADAPTER_TOKEN, workbenchDataUrl: process.env.WORKBENCH_DATA_URL }) + "\\n");
+appendFileSync(logPath, JSON.stringify({ argv, adapterToken: process.env.CODEX_ACCOUNTS_GATEWAY_ADAPTER_TOKEN, workbenchDataUrl: process.env.WORKBENCH_DATA_URL, workbenchDataToken: process.env.WORKBENCH_DATA_TOKEN }) + "\\n");
 
 if (${JSON.stringify(behavior)} === "resume-failure" && callNumber === 1 && argv[1] === "resume") {
   process.stderr.write("thread not found\\n");
@@ -265,6 +294,11 @@ if (${JSON.stringify(behavior)} === "resume-failure" && callNumber === 1 && argv
     type: "item.completed",
     item: { type: "agent_message", text: "The quota limit is still available." }
   }) + "\\n");
+} else if (${JSON.stringify(behavior)} === "turn-completed-stays-open") {
+  process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "open-thread" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "completed-before-process-exit" } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }) + "\\n");
+  setInterval(() => {}, 60_000);
 } else {
   process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread-" + callNumber }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "fake-response-" + callNumber } }) + "\\n");

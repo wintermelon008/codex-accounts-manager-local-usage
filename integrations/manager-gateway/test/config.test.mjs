@@ -34,6 +34,15 @@ describe("manager gateway config", () => {
     assert.equal(config.manager.token, "shared-control-token");
   });
 
+  it("passes the Workbench data service URL and token through configuration", () => {
+    const config = loadConfig({
+      WORKBENCH_DATA_URL: "http://127.0.0.1:43119",
+      WORKBENCH_DATA_TOKEN: "workbench-data-token"
+    });
+    assert.equal(config.workbenchDataUrl, "http://127.0.0.1:43119");
+    assert.equal(config.workbenchDataToken, "workbench-data-token");
+  });
+
   it("rejects a relative Codex home to keep Manager and Gateway auth aligned", () => {
     assert.throws(
       () => loadConfig({ MANAGER_GATEWAY_CODEX_HOME: "./codex-home" }),
