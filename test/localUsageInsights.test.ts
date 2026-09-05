@@ -60,6 +60,12 @@ describe("estimateStandardApiCost", () => {
         outputTokens: 100_000,
         totalTokens: 1_100_000
       }),
+      modelUsage("gpt-5.3-codex", {
+        inputTokens: 1_000_000,
+        cachedInputTokens: 200_000,
+        outputTokens: 100_000,
+        totalTokens: 1_100_000
+      }),
       modelUsage("unknown", {
         inputTokens: 40,
         cachedInputTokens: 0,
@@ -68,8 +74,8 @@ describe("estimateStandardApiCost", () => {
       })
     ]);
 
-    expect(price.amountUsd).toBeCloseTo(7.58, 8);
-    expect(price.pricedTokens).toBe(2_200_000);
+    expect(price.amountUsd).toBeCloseTo(10.415, 8);
+    expect(price.pricedTokens).toBe(3_300_000);
     expect(price.unpricedTokens).toBe(50);
   });
 
@@ -84,6 +90,105 @@ describe("estimateStandardApiCost", () => {
     ]);
 
     expect(price.amountUsd).toBeCloseTo(1.6276, 8);
+  });
+
+  it("covers the current flagship and legacy model rows", () => {
+    const price = estimateStandardApiCost([
+      modelUsage("gpt-6", { inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000 }),
+      modelUsage("gpt-5.4-mini", { inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000 }),
+      modelUsage("gpt-5.5", { inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000 }),
+      modelUsage("gpt-5.2-pro", { inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000 }),
+      modelUsage("gpt-4.1", { inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000 }),
+      modelUsage("o3-pro", { inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000 })
+    ]);
+
+    expect(price.amountUsd).toBeCloseTo(399.25, 8);
+    expect(price.pricedTokens).toBe(12_000_000);
+    expect(price.unpricedTokens).toBe(0);
+  });
+
+  it("covers the remaining standard and specialized token-priced rows", () => {
+    const rows = [
+      "gpt-5.5-pro",
+      "gpt-5.4",
+      "gpt-5.4-pro",
+      "gpt-5.5-cyber",
+      "gpt-5-search-api",
+      "text-embedding-3-small",
+      "text-embedding-3-large",
+      "text-embedding-ada-002",
+      "omni-moderation-latest"
+    ].map((model) =>
+      modelUsage(model, {
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        totalTokens: 2_000_000
+      })
+    );
+
+    const price = estimateStandardApiCost(rows);
+
+    expect(price.amountUsd).toBeCloseTo(536.5, 8);
+    expect(price.pricedTokens).toBe(18_000_000);
+    expect(price.unpricedTokens).toBe(0);
+  });
+
+  it("covers every standard token-only model listed on the pricing page", () => {
+    const models = [
+      "gpt-6-astra",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.5-pro",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.4-nano",
+      "gpt-5.4-pro",
+      "gpt-5.2",
+      "gpt-5.2-pro",
+      "gpt-5.1",
+      "gpt-5",
+      "gpt-5-mini",
+      "gpt-5-nano",
+      "gpt-5-pro",
+      "gpt-4.1",
+      "gpt-4.1-mini",
+      "gpt-4.1-nano",
+      "gpt-4o",
+      "gpt-4o-2024-05-13",
+      "gpt-4o-mini",
+      "o1",
+      "o1-pro",
+      "o3-pro",
+      "o3",
+      "o4-mini",
+      "o3-mini",
+      "gpt-4-turbo-2024-04-09",
+      "gpt-4-0613",
+      "gpt-3.5-turbo",
+      "gpt-3.5-turbo-0125",
+      "gpt-3.5-turbo-1106",
+      "gpt-3.5-turbo-instruct",
+      "davinci-002",
+      "babbage-002",
+      "gpt-5.6-cyber",
+      "gpt-5.5-cyber",
+      "chat-latest",
+      "gpt-5.3-codex",
+      "gpt-5-search-api",
+      "text-embedding-3-small",
+      "text-embedding-3-large",
+      "text-embedding-ada-002",
+      "omni-moderation-latest"
+    ];
+
+    const price = estimateStandardApiCost(
+      models.map((model) => modelUsage(model, { inputTokens: 1_000_000, totalTokens: 1_000_000 }))
+    );
+
+    expect(price.pricedTokens).toBe(models.length * 1_000_000);
+    expect(price.unpricedTokens).toBe(0);
   });
 });
 
