@@ -36,7 +36,6 @@ const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
 const HOT_SWITCH_GRACE_SECONDS = "hotSwitchGraceSeconds";
 const HOT_SWITCH_LONG_TURN_POLICY = "hotSwitchLongTurnPolicy";
 const OPENAI_EXTENSION_ID = "openai.chatgpt";
-const PREVIOUS_CLI_SETTING_KEY = "hotSwitch.previousCliExecutable";
 const TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
 const RUNTIME_DIRECTORY = "hot-switch-runtime";
 const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
@@ -253,49 +252,6 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("Manager Codex provider route is not ready");
     }
     return provider;
-  }
-
-  async disable(): Promise<HotSwitchSetupResult> {
-    try {
-      await getCodexAccountsConfiguration().update(HOT_SWITCH_ENABLED, false, vscode.ConfigurationTarget.Global);
-      await this.setGatewayRuntimeState(undefined);
-      this.bridge?.dispose();
-      this.bridge = undefined;
-      const runtimeLauncherPath = path.join(
-        this.context.globalStorageUri.fsPath,
-        RUNTIME_DIRECTORY,
-        SHIM_LAUNCHER_FILE
-      );
-      let requiresReload = false;
-      if (isRemoteExtensionHost()) {
-        const cliPath = await resolveOpenAiCodexCliPath();
-        requiresReload = await restoreRemoteCliOverlay(cliPath, runtimeLauncherPath);
-      } else {
-        const chatgptConfig = vscode.workspace.getConfiguration("chatgpt");
-        const runtimeShimPath = path.join(this.context.globalStorageUri.fsPath, RUNTIME_DIRECTORY, SHIM_FILE);
-        const currentCliPath = chatgptConfig.get<string | null>("cliExecutable", null);
-        const previousCliPath = this.context.globalState.get<string | null>(PREVIOUS_CLI_SETTING_KEY);
-        const currentlyUsesRuntime = currentCliPath === runtimeLauncherPath || currentCliPath === runtimeShimPath;
-        if (currentlyUsesRuntime) {
-          const restoredCliPath = previousCliPath === undefined ? null : previousCliPath;
-          await chatgptConfig.update("cliExecutable", restoredCliPath, vscode.ConfigurationTarget.Global);
-          requiresReload = true;
-        }
-      }
-      await this.context.globalState.update(PREVIOUS_CLI_SETTING_KEY, undefined);
-      return {
-        enabled: false,
-        configured: false,
-        requiresReload
-      };
-    } catch (error) {
-      return {
-        enabled: false,
-        configured: false,
-        requiresReload: false,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
   }
 
   async getStatus(): Promise<HotSwitchStatus> {
@@ -623,7 +579,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
   }
 
   private async configureRuntime(): Promise<HotSwitchSetupResult> {
-    let installedRemoteOverlay: { cliPath: string; launcherPath: string } | undefined;
+    let installedCliOverlay: { cliPath: string; launcherPath: string } | undefined;
     try {
       if (process.platform === "win32") {
         throw new Error("Experimental Codex account hot switch is not yet supported on Windows");
@@ -643,19 +599,15 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       await fs.copyFile(shimSource, shimDestination);
       await fs.chmod(shimDestination, 0o700);
       await writePosixLauncher(launcherDestination, process.execPath, shimDestination);
-      const configuredCliPath = vscode.workspace.getConfiguration("chatgpt").get<string | null>("cliExecutable", null);
-      if (isRemoteExtensionHost() && configuredCliPath?.trim()) {
-        throw new Error(
-          "Remove chatgpt.cliExecutable from every local VS Code User Settings JSON before enabling seamless switching on a remote host"
-        );
+      // The official extension resolves its bundled CLI independently on each
+      // host. Overlay that path on both local and remote hosts so a shared
+      // application-level chatgpt.cliExecutable setting cannot redirect a
+      // remote extension host to a local filesystem path.
+      const cliOverlay = await installRemoteCliOverlay(cliPath, launcherDestination);
+      if (cliOverlay.installed) {
+        installedCliOverlay = cliOverlay;
       }
-      const remoteOverlay = isRemoteExtensionHost()
-        ? await installRemoteCliOverlay(cliPath, launcherDestination)
-        : undefined;
-      if (remoteOverlay?.installed) {
-        installedRemoteOverlay = remoteOverlay;
-      }
-      const realCliPath = remoteOverlay?.realCliPath ?? cliPath;
+      const realCliPath = cliOverlay.realCliPath;
       await writeJsonAtomically(
         shimConfigDestination,
         {
@@ -668,17 +620,16 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         0o600
       );
 
-      let requiresReload = false;
-      if (isRemoteExtensionHost()) {
-        requiresReload = remoteOverlay?.installed === true;
-      } else {
+      let requiresReload = cliOverlay.installed;
+      if (!isRemoteExtensionHost()) {
         const chatgptConfig = vscode.workspace.getConfiguration("chatgpt");
         const currentCliPath = chatgptConfig.get<string | null>("cliExecutable", null);
-        if (currentCliPath !== launcherDestination) {
-          if (this.context.globalState.get<string | null>(PREVIOUS_CLI_SETTING_KEY) === undefined) {
-            await this.context.globalState.update(PREVIOUS_CLI_SETTING_KEY, currentCliPath);
-          }
-          await chatgptConfig.update("cliExecutable", launcherDestination, vscode.ConfigurationTarget.Global);
+        const legacyRuntimeShimPath = path.join(runtimeDirectory, SHIM_FILE);
+        if (currentCliPath === launcherDestination || currentCliPath === legacyRuntimeShimPath) {
+          // Migrate the old local-only implementation. Once the bundled CLI
+          // overlay is in place, the official extension must use its default
+          // host-local path again.
+          await chatgptConfig.update("cliExecutable", undefined, vscode.ConfigurationTarget.Global);
           requiresReload = true;
         }
       }
@@ -736,8 +687,8 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         shimPath: launcherDestination
       };
     } catch (error) {
-      if (installedRemoteOverlay) {
-        await restoreRemoteCliOverlay(installedRemoteOverlay.cliPath, installedRemoteOverlay.launcherPath).catch(
+      if (installedCliOverlay) {
+        await restoreRemoteCliOverlay(installedCliOverlay.cliPath, installedCliOverlay.launcherPath).catch(
           () => undefined
         );
       }

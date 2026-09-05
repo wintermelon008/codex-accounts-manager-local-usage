@@ -58,26 +58,6 @@ export class AccountsCommandService {
     void vscode.window.showInformationMessage("The Codex seamless-switch runtime is installed.");
   }
 
-  async disableHotSwitch(): Promise<void> {
-    const result = await this.hotSwitchRuntime.disable();
-    if (result.error) {
-      void vscode.window.showErrorMessage(`Unable to remove the Codex seamless-switch runtime: ${result.error}`);
-      return;
-    }
-    if (result.requiresReload) {
-      const choice = await vscode.window.showInformationMessage(
-        "The Codex seamless-switch runtime is removed. Reload this window once to restore the standard Codex runtime.",
-        "Reload once",
-        "Later"
-      );
-      if (choice === "Reload once") {
-        await vscode.commands.executeCommand("workbench.action.reloadWindow");
-      }
-      return;
-    }
-    void vscode.window.showInformationMessage("The Codex seamless-switch runtime is removed.");
-  }
-
   async addAccount(): Promise<void> {
     const copy = getCommandCopy();
     try {

@@ -121,7 +121,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(settings.slice(autoSwitchHiddenStack, seamlessBoundary)).not.toContain("seamlessSwitchQuotaBandsEnabled");
     expect(settings).not.toContain("seamlessSwitchQuotaBandsEnabled");
     expect(settings).not.toContain("seamlessSwitchQuotaBandSize");
-    expect(settings).toContain("安装或移除请使用命令面板");
+    expect(settings).toContain("下方开关只控制无感切号行为");
     expect(settings).not.toContain('patchAndSend("hotSwitchEnabled"');
   });
 

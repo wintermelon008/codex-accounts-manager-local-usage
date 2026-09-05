@@ -185,8 +185,8 @@ describe("extension manifest configuration", () => {
       default: false
     });
     expect(commandIds).toContain("codexAccounts.enableHotSwitch");
-    expect(commandIds).toContain("codexAccounts.disableHotSwitch");
+    expect(commandIds).not.toContain("codexAccounts.disableHotSwitch");
     expect(commandTitles).toContain("Codex Accounts: Install Experimental Seamless Runtime");
-    expect(commandTitles).toContain("Codex Accounts: Remove Experimental Seamless Runtime");
+    expect(commandTitles).not.toContain("Codex Accounts: Remove Experimental Seamless Runtime");
   });
 });

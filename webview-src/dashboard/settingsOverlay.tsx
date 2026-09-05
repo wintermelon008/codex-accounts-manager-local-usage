@@ -397,10 +397,10 @@ export function SettingsOverlay(props: {
                 }
                 note={
                   props.lang === "zh"
-                    ? `${props.settings.hotSwitchEnabled ? "Runtime 已安装。" : "Runtime 未安装，切号会安全跳过。"} 安装或移除请使用命令面板。`
+                    ? `${props.settings.hotSwitchEnabled ? "Runtime 已安装。" : "Runtime 未安装，切号会安全跳过。"} 下方开关只控制无感切号行为。`
                     : props.lang === "zh-hant"
-                      ? `${props.settings.hotSwitchEnabled ? "Runtime 已安裝。" : "Runtime 未安裝，切換會安全略過。"} 安裝或移除請使用命令面板。`
-                      : `${props.settings.hotSwitchEnabled ? "Runtime installed." : "Runtime not installed; switching fails closed."} Use the Command Palette to install or remove it.`
+                      ? `${props.settings.hotSwitchEnabled ? "Runtime 已安裝。" : "Runtime 未安裝，切換會安全略過。"} 下方開關只控制無感切換行為。`
+                      : `${props.settings.hotSwitchEnabled ? "Runtime installed." : "Runtime not installed; switching fails closed."} The toggle below controls seamless-switch behavior only.`
                 }
                 options={[
                   {
