@@ -1183,6 +1183,56 @@ test("registration phone keys are claimed for取号, consumed on SMS, and releas
   integration.dispose();
 });
 
+test("5SIM registration uses its own API Token and never claims the LIYE Key pool", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  const sessionId = integration.registrationManager.createSession({ email: "fivesim@example.com", password: "password" });
+  let acquired;
+  integration.registrationManager.acquirePhoneNumber = async (_id, credential, options) => {
+    acquired = { credential, options };
+    return { phase: "polling", running: true };
+  };
+
+  await integration.saveFiveSimToken("five-sim-secret-token");
+  await integration.acquireRegistrationPhone(sessionId, {
+    sourceId: "fivesim",
+    country: "england",
+    operator: "any"
+  });
+
+  assert.equal(acquired.credential, "five-sim-secret-token");
+  assert.deepEqual(acquired.options, { sourceId: "fivesim", country: "england", operator: "any", product: "openai" });
+  assert.equal(integration.registrationPhoneKeyClaims.has(sessionId), false);
+  assert.deepEqual((await integration.getPanelState()).registrationFiveSimToken, { configured: true, masked: "five…oken" });
+  integration.dispose();
+});
+
+test("registration panel publishes the cached daily exchange rate after opening", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  let ensureCalls = 0;
+  const exchangeRateStore = {
+    async ensureCurrent() {
+      ensureCalls += 1;
+      return { version: 1, base: "USD", quote: "CNY", rate: 6.8, date: "2026-09-06", rateDate: "2026-09-06", fetchedAt: Date.now(), source: "test" };
+    },
+    async get() {
+      return { version: 1, base: "USD", quote: "CNY", rate: 6.8, date: "2026-09-06", rateDate: "2026-09-06", fetchedAt: Date.now(), source: "test" };
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { exchangeRateStore });
+  await integration.initialize();
+  await integration.openRegistrationPanel();
+
+  assert.equal(ensureCalls, 1);
+  assert.equal(vscode.panels[0].webview.messages.at(-1).state.registrationFiveSimExchangeRate.rate, 6.8);
+  integration.dispose();
+});
+
 function createVscode() {
   class EventEmitter {
     constructor() { this.listeners = new Set(); this.event = (listener) => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; }; }

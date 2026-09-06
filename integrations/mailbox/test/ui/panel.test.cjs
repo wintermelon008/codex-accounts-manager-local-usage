@@ -40,11 +40,75 @@ test("standalone registration panel provides mailbox-library selection and direc
   assert.match(html, /hasManagedCodexEmail/u);
   assert.match(html, /选择邮箱只会填入地址，不会自动开始注册/u);
   assert.match(html, /不会自动填写或提交/u);
+  assert.match(html, /data-action="registration-copy-registration-email"/u);
   assert.match(html, /copyText\(email, "邮箱已复制"\)/u);
   assert.match(html, /send\("copyText"/u);
   assert.doesNotMatch(html, /navigator\.clipboard/u);
   assert.match(html, /document\.addEventListener\("keydown"/u);
   assert.match(html, /document\.addEventListener\("keyup"/u);
+});
+
+test("registration rerenders preserve the focused input caret", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  let renderedHtml = "";
+  let activeInput = null;
+  let restoredSelection;
+  const input = {
+    id: "phoneInput:session:caret",
+    selectionStart: 4,
+    selectionEnd: 4,
+    disabled: false,
+    focus() { this.focused = true; },
+    setSelectionRange(start, end) { restoredSelection = [start, end]; }
+  };
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    get activeElement() { return activeInput; },
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) {
+      if (id === "app") return app;
+      if (id === input.id) return input;
+      return id === "notice" ? {} : null;
+    },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  const state = {
+    mailboxes: [],
+    providers: [],
+    registrationSessions: [{
+      id: "session:caret",
+      email: "caret@example.com",
+      mode: "oauth",
+      state: "awaiting_phone_input",
+      phoneOrder: { phase: "idle", running: false },
+      emailCode: { phase: "idle" }
+    }]
+  };
+  windowListeners.get("message")({ data: { type: "state", state } });
+  activeInput = input;
+  windowListeners.get("message")({ data: { type: "state", state } });
+
+  assert.equal(input.focused, true);
+  assert.deepEqual(restoredSelection, [4, 4]);
 });
 
 test("new registration sessions are rendered above older sessions", () => {
@@ -1248,6 +1312,178 @@ test("selecting an available registration key enables phone ordering", () => {
   } });
   assert.equal(messages.at(-1).sourceId, "other");
   assert.equal(messages.at(-1).keyId, "key-1");
+});
+
+test("changing the registration phone source toggles its panels without rebuilding the form", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  let renderCount = 0;
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; renderCount += 1; }
+  });
+  const acquireButton = { dataset: { sessionId: "session:source-partial" }, disabled: true };
+  const liyePanel = { dataset: { registrationPhoneSourcePanel: "liye" }, hidden: false };
+  const fiveSimPanel = { dataset: { registrationPhoneSourcePanel: "fivesim" }, hidden: true };
+  const sourceRoot = {
+    dataset: { registrationPhoneSourceRoot: "session:source-partial" },
+    querySelectorAll(selector) {
+      return selector === "[data-registration-phone-source-panel]" ? [liyePanel, fiveSimPanel] : [];
+    }
+  };
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      if (selector === "[data-registration-phone-source-root]") return [sourceRoot];
+      if (selector === '[data-action="registration-acquire-phone"]') return [acquireButton];
+      return [];
+    },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [],
+      providers: [],
+      phoneSources: [
+        { id: "liye", displayName: "LIYE", credentialType: "key" },
+        { id: "fivesim", displayName: "5SIM", credentialType: "api-token" }
+      ],
+      registrationFiveSimToken: { configured: true, masked: "five…oken" },
+      registrationKeyPool: { count: 0, available: 0, inUse: 0, keys: [] },
+      registrationSessions: [{
+        id: "session:source-partial",
+        email: "source@example.com",
+        mode: "manual-browser",
+        state: "awaiting_phone_input",
+        phoneOrder: { phase: "idle", running: false, card: { source: "liye" }, catalog: [] },
+        emailCode: { phase: "idle" }
+      }]
+    }
+  } });
+  const beforeChange = renderCount;
+
+  documentListeners.get("change")({ target: {
+    id: "registrationPhoneSource-session:source-partial",
+    value: "fivesim",
+    matches() { return false; },
+    closest() { return this; }
+  } });
+
+  assert.equal(renderCount, beforeChange);
+  assert.equal(liyePanel.hidden, true);
+  assert.equal(fiveSimPanel.hidden, false);
+});
+
+test("5SIM registration panel shows balance, price-sorted offers and independent filters", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [],
+      providers: [],
+      phoneSources: [
+        { id: "liye", displayName: "LIYE", credentialType: "key" },
+        { id: "fivesim", displayName: "5SIM", credentialType: "api-token", websiteUrl: "https://5sim.net" }
+      ],
+      registrationFiveSimToken: { configured: true, masked: "five…oken" },
+      registrationFiveSimExchangeRate: { rate: 6.8, date: "2026-09-06", stale: false },
+      registrationKeyPool: { count: 0, available: 0, inUse: 0, keys: [] },
+      registrationSessions: [{
+        id: "session:fivesim",
+        email: "five@example.com",
+        mode: "manual-browser",
+        state: "awaiting_manual_registration",
+        phoneOrder: {
+          phase: "idle",
+          running: false,
+          card: { source: "fivesim", balance: 12.5, frozenBalance: 0.25, rating: 96, updatedAt: Date.now() },
+          selection: { country: "england", operator: "any", product: "openai" },
+          catalog: [
+            { country: "usa", countryName: "USA", prefix: "+1", operator: "any", count: 4, successRate: 97, price: 0.08, product: "openai" },
+            { country: "england", countryName: "England", prefix: "+44", operator: "virtual66", count: 444383, successRate: 59.38, price: 0.09, product: "openai" },
+            { country: "england", countryName: "England", prefix: "+44", operator: "virtual60", count: 41831, successRate: 20.79, price: 0.0609, product: "openai" },
+            { country: "england", countryName: "England", prefix: "+44", operator: "virtual58", count: 689, successRate: 25.88, price: 0.08, product: "openai" },
+            { country: "england", countryName: "England", prefix: "+44", operator: "lowrate", count: 10, successRate: 0.5, price: 0.01, product: "openai" },
+            { country: "england", countryName: "England", prefix: "+44", operator: "zeronumber", count: 10, successRate: 0, price: 0.015, product: "openai" },
+            { country: "england", countryName: "England", prefix: "+44", operator: "zeropercent", count: 10, successRate: "0%", price: 0.02, product: "openai" },
+            { country: "england", countryName: "England", prefix: "+44", operator: "zerorate", count: 10, rate: 0, price: 0.025, product: "openai" },
+            { country: "england", countryName: "England", prefix: "+44", operator: "missingrate", count: 10, price: 0.03, product: "openai" }
+          ]
+        },
+        emailCode: { phase: "idle" }
+      }]
+    }
+  } });
+
+  assert.match(renderedHtml, /当前余额/u);
+  assert.match(renderedHtml, /\$12\.50/u);
+  assert.match(renderedHtml, /registrationFiveSimPriceMax-session:fivesim/u);
+  assert.match(renderedHtml, /registrationFiveSimSuccessMin-session:fivesim/u);
+  assert.match(renderedHtml, /最高价格/u);
+  assert.match(renderedHtml, /最低成功率/u);
+  assert.match(renderedHtml, /value="0\.1"/u);
+  assert.match(renderedHtml, /\$0\.0609\(¥0\.43\)/u);
+  assert.match(renderedHtml, /含 2\.9% 手续费/u);
+  assert.match(renderedHtml, /最低价条目：virtual60/u);
+  assert.match(renderedHtml, /接码率最高/u);
+  assert.match(renderedHtml, /最低价/u);
+  assert.match(renderedHtml, /\$0\.0609/u);
+  assert.match(renderedHtml, /virtual66/u);
+  assert.match(renderedHtml, /registration-fivesim-country-list/u);
+  assert.match(renderedHtml, /registration-fivesim-operator-list/u);
+  assert.doesNotMatch(renderedHtml, /lowrate/u);
+  assert.doesNotMatch(renderedHtml, /zeronumber/u);
+  assert.doesNotMatch(renderedHtml, /zeropercent/u);
+  assert.doesNotMatch(renderedHtml, /zerorate/u);
+  assert.doesNotMatch(renderedHtml, /missingrate/u);
+  assert.ok(renderedHtml.indexOf("England") < renderedHtml.indexOf("USA"));
+  assert.match(renderedHtml, /data-registration-phone-source-panel="liye" hidden/u);
+  assert.match(renderedHtml, /data-registration-phone-source-panel="fivesim"/u);
 });
 
 test("Mailbox delete uses an in-panel confirmation before posting the delete action", () => {

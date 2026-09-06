@@ -12,6 +12,7 @@ const crypto = require("node:crypto");
 const { chromium } = require("playwright");
 const { isDisplayLaunchError, prepareBrowserEnvironment } = require("./browser-mode.cjs");
 const { LIYEPhoneOrderSession } = require("./liye-phone-order.cjs");
+const { FiveSimPhoneOrderSession } = require("./fivesim-phone-order.cjs");
 const { createEmailCodeState } = require("./registration-email-code.cjs");
 
 const REGISTER_URL = "https://chatgpt.com/auth/login";
@@ -672,9 +673,25 @@ class RegistrationSession {
     }
   }
 
-  async acquirePhoneNumber(cardCode, { sourceId = "liye", cardKeyId = "", cardMasked = "" } = {}) {
+  async acquirePhoneNumber(credential, { sourceId = "liye", cardKeyId = "", cardMasked = "", country = "", operator = "any", product = "openai" } = {}) {
     if (this.phoneOrder?.state?.running) {
       throw new Error("当前会话已有取号任务正在运行");
+    }
+    if (String(sourceId).trim().toLowerCase() === "fivesim") {
+      if (!(this.phoneOrder instanceof FiveSimPhoneOrderSession)) {
+        await this.phoneOrder?.dispose?.();
+        this.phoneOrder = new FiveSimPhoneOrderSession({
+          sourceId,
+          onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
+          onLog: (level, msg) => this.log(level, msg)
+        });
+      }
+      const phoneOrder = await this.phoneOrder.start(credential, { country, operator, product });
+      this.onStateChange({ sessionId: this.id, phoneOrder });
+      return phoneOrder;
+    }
+    if (!(this.phoneOrder instanceof LIYEPhoneOrderSession)) {
+      await this.phoneOrder?.dispose?.();
     }
     this.phoneOrder = new LIYEPhoneOrderSession({
       sourceId,
@@ -684,6 +701,26 @@ class RegistrationSession {
       onLog: (level, msg) => this.log(level, msg),
     });
     const phoneOrder = await this.phoneOrder.start(cardCode);
+    this.onStateChange({ sessionId: this.id, phoneOrder });
+    return phoneOrder;
+  }
+
+  async refreshPhoneInfo(credential, { sourceId = "fivesim", country = "", operator = "any", product = "openai" } = {}) {
+    if (String(sourceId).trim().toLowerCase() !== "fivesim") {
+      throw new Error("当前接码来源不支持账户信息刷新");
+    }
+    if (this.phoneOrder?.state?.running) {
+      throw new Error("当前会话已有取号任务正在运行");
+    }
+    if (!(this.phoneOrder instanceof FiveSimPhoneOrderSession)) {
+      await this.phoneOrder?.dispose?.();
+      this.phoneOrder = new FiveSimPhoneOrderSession({
+        sourceId,
+        onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
+        onLog: (level, msg) => this.log(level, msg)
+      });
+    }
+    const phoneOrder = await this.phoneOrder.refreshInfo(credential, { country, operator, product });
     this.onStateChange({ sessionId: this.id, phoneOrder });
     return phoneOrder;
   }
@@ -969,6 +1006,7 @@ class RegistrationSession {
     if (this.phoneOrder?.state?.running) {
       await this.phoneOrder.cancelNumber().catch(() => this.phoneOrder.dispose());
     }
+    await this.phoneOrder?.dispose?.();
     await this._closeBrowser();
     this.setState(STATES.CANCELLED, {
       feedback: this.mode === "oauth" ? "注册并导入 Codex 流程已取消" : "注册流程已取消",

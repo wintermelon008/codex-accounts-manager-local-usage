@@ -91,6 +91,11 @@ class RegistrationManager extends EventEmitter {
     return session.acquirePhoneNumber(cardCode, options);
   }
 
+  async refreshPhoneInfo(sessionId, credential, options = {}) {
+    const session = this._get(sessionId);
+    return session.refreshPhoneInfo(credential, options);
+  }
+
   async confirmPhoneNumber(sessionId) {
     const session = this._get(sessionId);
     return session.confirmPhoneNumber();

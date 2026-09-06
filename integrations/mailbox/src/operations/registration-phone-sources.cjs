@@ -5,7 +5,15 @@ const REGISTRATION_PHONE_SOURCES = Object.freeze([
     id: "liye",
     displayName: "LIYE",
     websiteUrl: "https://liye.5x20.cn",
-    service: "chatai"
+    service: "chatai",
+    credentialType: "key"
+  }),
+  Object.freeze({
+    id: "fivesim",
+    displayName: "5SIM",
+    websiteUrl: "https://5sim.net",
+    service: "openai",
+    credentialType: "api-token"
   })
 ]);
 

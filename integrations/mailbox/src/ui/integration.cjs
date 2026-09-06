@@ -23,6 +23,11 @@ const {
   RegistrationKeyPool
 } = require("../operations/registration-key-pool.cjs");
 const {
+  createLocalFiveSimTokenStore,
+  FiveSimTokenStore
+} = require("../operations/fivesim-token-store.cjs");
+const { RegistrationExchangeRateStore } = require("../operations/registration-exchange-rate.cjs");
+const {
   getRegistrationPhoneSource,
   listRegistrationPhoneSources
 } = require("../operations/registration-phone-sources.cjs");
@@ -43,7 +48,7 @@ const REGISTRATION_CLIPBOARD_MESSAGES = {
 };
 
 class MailboxIntegration {
-  constructor(vscode, context, api, { providers } = {}) {
+  constructor(vscode, context, api, { providers, exchangeRateStore, exchangeRateFetch } = {}) {
     this.vscode = vscode;
     this.context = context;
     this.api = api;
@@ -107,6 +112,18 @@ class MailboxIntegration {
       secretStore: serverRegistrationKeyStore || context.secrets,
       backupStore: serverRegistrationKeyStore ? context.secrets : undefined
     });
+    const serverFiveSimTokenStore = createLocalFiveSimTokenStore(context.globalStorageUri);
+    this.fiveSimTokenStore = new FiveSimTokenStore({
+      secretStore: serverFiveSimTokenStore || context.secrets,
+      backupStore: serverFiveSimTokenStore ? context.secrets : undefined
+    });
+    this.registrationExchangeRateStore = exchangeRateStore || (context.globalStorageUri?.fsPath
+      ? new RegistrationExchangeRateStore({
+        metadataStore: this.sharedMailboxStores.metadataStore,
+        fetchImpl: exchangeRateFetch
+      })
+      : undefined);
+    this.registrationExchangeRateState = undefined;
     this.registrationPhoneKeyClaims = new Map();
     this.registrationManager.on("stateChange", (event) => {
       // GPT-only is a browser handoff. Once the external page is actually
@@ -313,8 +330,11 @@ class MailboxIntegration {
     if (this.disposed) {
       return;
     }
+    const exchangeRateRefresh = this.ensureRegistrationExchangeRate();
     if (this.registrationPanel) {
       this.registrationPanel.reveal(this.vscode.ViewColumn.Active, false);
+      await this.publishPanelState();
+      await exchangeRateRefresh;
       await this.publishPanelState();
       return;
     }
@@ -330,6 +350,8 @@ class MailboxIntegration {
       this.registrationPanel.webview.onDidReceiveMessage((message) => this.handlePanelMessage(message)),
       this.registrationPanel.onDidDispose(() => this.closeRegistrationPanel())
     );
+    await this.publishPanelState();
+    await exchangeRateRefresh;
     await this.publishPanelState();
     this.publish();
   }
@@ -455,7 +477,23 @@ class MailboxIntegration {
           await this.acquireRegistrationPhone(message.sessionId, {
             sourceId: message.sourceId,
             keyId: message.keyId,
-            cardCode: message.cardCode
+            cardCode: message.cardCode,
+            country: message.country,
+            operator: message.operator,
+            product: message.product
+          });
+          return;
+        case "registrationSaveFiveSimToken":
+          await this.saveFiveSimToken(message.token);
+          return;
+        case "registrationClearFiveSimToken":
+          await this.clearFiveSimToken();
+          return;
+        case "registrationRefreshFiveSim":
+          await this.refreshRegistrationFiveSim(message.sessionId, {
+            country: message.country,
+            operator: message.operator,
+            product: message.product
           });
           return;
         case "registrationConfirmPhone":
@@ -1094,6 +1132,19 @@ class MailboxIntegration {
     if (!source) {
       throw new Error("请选择有效的接码平台来源");
     }
+    if (source.id === "fivesim") {
+      const token = await this.fiveSimTokenStore.get();
+      if (!token) throw new Error("请先保存 5SIM API Token");
+      const result = await this.registrationManager.acquirePhoneNumber(id, token, {
+        sourceId: source.id,
+        country: typeof selection?.country === "string" ? selection.country.trim() : "",
+        operator: typeof selection?.operator === "string" ? selection.operator.trim() : "any",
+        product: typeof selection?.product === "string" ? selection.product.trim() : source.service
+      });
+      if (result?.phase === "error") throw new Error(result.error || "5SIM 取号失败");
+      await this.publishPanelState();
+      return;
+    }
     if (legacyCardCode) {
       const result = await this.registrationManager.acquirePhoneNumber(id, legacyCardCode, { sourceId });
       if (result?.phase === "error") throw new Error(result.error || "取号失败");
@@ -1119,6 +1170,42 @@ class MailboxIntegration {
       await this.releaseRegistrationPhoneKey(id);
       throw error;
     }
+  }
+
+  async saveFiveSimToken(value) {
+    const result = await this.fiveSimTokenStore.set(value);
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationSaveFiveSimToken",
+      message: `5SIM API Token 已保存（${result.masked}）`
+    });
+    await this.publishPanelState();
+  }
+
+  async clearFiveSimToken() {
+    await this.fiveSimTokenStore.clear();
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationClearFiveSimToken",
+      message: "5SIM API Token 已清除"
+    });
+    await this.publishPanelState();
+  }
+
+  async refreshRegistrationFiveSim(sessionId, selection = {}) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    const token = await this.fiveSimTokenStore.get();
+    if (!token) throw new Error("请先保存 5SIM API Token");
+    const result = await this.registrationManager.refreshPhoneInfo(id, token, {
+      sourceId: "fivesim",
+      country: typeof selection?.country === "string" ? selection.country.trim() : "",
+      operator: typeof selection?.operator === "string" ? selection.operator.trim() : "any",
+      product: typeof selection?.product === "string" ? selection.product.trim() : "openai"
+    });
+    if (result?.phase === "error") throw new Error(result.error || "5SIM 信息刷新失败");
+    await this.publishPanelState();
   }
 
   async confirmRegistrationPhone(sessionId) {
@@ -1607,6 +1694,8 @@ class MailboxIntegration {
     const detail = selectedMailbox ? await this.pool.getDetail(selectedMailbox.id) : undefined;
     const codexImportState = await this.getCodexImportState();
     const registrationKeyPool = await this.getRegistrationKeyPoolState();
+    const registrationFiveSimToken = await this.getRegistrationFiveSimTokenState();
+    const registrationFiveSimExchangeRate = await this.getRegistrationExchangeRateState();
     return {
       mailboxes: mailboxes.map(toPanelMailbox),
       selectedMailboxId: selectedMailbox?.id,
@@ -1623,6 +1712,8 @@ class MailboxIntegration {
       managedAccountRemovalAvailable: codexImportState.removalAvailable,
       phoneSources: listRegistrationPhoneSources(),
       registrationKeyPool,
+      registrationFiveSimToken,
+      registrationFiveSimExchangeRate,
       registrationSessions: this.registrationManager.getAllSessions().map((session) =>
         this.registrationManager.getSessionState(session.id)
       )
@@ -1635,6 +1726,33 @@ class MailboxIntegration {
       .catch(() => undefined)
       .then(() => this.registrationSessionStore.save(records));
     await this.registrationSessionsPersistence;
+  }
+
+  async ensureRegistrationExchangeRate() {
+    if (!this.registrationExchangeRateStore) return;
+    try {
+      this.registrationExchangeRateState = await this.registrationExchangeRateStore.ensureCurrent();
+    } catch {
+      // A failed quote lookup must not prevent the registration panel from opening.
+    }
+  }
+
+  async getRegistrationExchangeRateState() {
+    const cached = this.registrationExchangeRateState || (this.registrationExchangeRateStore
+      ? await this.registrationExchangeRateStore.get().catch(() => undefined)
+      : undefined);
+    return cached || {
+      version: 1,
+      base: "USD",
+      quote: "CNY",
+      rate: null,
+      date: "",
+      rateDate: "",
+      fetchedAt: 0,
+      source: "",
+      stale: false,
+      error: ""
+    };
   }
 
   async withRegistrationSessionsOperation(operation) {
@@ -1656,6 +1774,14 @@ class MailboxIntegration {
       return await this.registrationKeyPool.snapshot();
     } catch {
       return { count: 0, available: 0, inUse: 0, keys: [], error: "接码平台 Key 池不可用" };
+    }
+  }
+
+  async getRegistrationFiveSimTokenState() {
+    try {
+      return await this.fiveSimTokenStore.snapshot();
+    } catch {
+      return { configured: false, masked: "", error: "5SIM API Token 存储不可用" };
     }
   }
 
