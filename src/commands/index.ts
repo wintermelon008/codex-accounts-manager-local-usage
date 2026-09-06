@@ -29,7 +29,6 @@ export function registerCommands(
   context.subscriptions.push(
     vscode.commands.registerCommand("codexAccounts.addAccount", () => service.addAccount()),
     vscode.commands.registerCommand("codexAccounts.enableHotSwitch", () => service.enableHotSwitch()),
-    vscode.commands.registerCommand("codexAccounts.disableHotSwitch", () => service.disableHotSwitch()),
     vscode.commands.registerCommand("codexAccounts.importCurrentAuth", () => service.importCurrentAuth()),
     vscode.commands.registerCommand("codexAccounts.reauthorizeAccount", (item?: CodexAccountRecord) =>
       service.reauthorizeAccount(item)

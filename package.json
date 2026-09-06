@@ -163,12 +163,12 @@
         "codexAccounts.hotSwitchEnabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Technical installation flag for the experimental seamless-switch runtime. Use the Install/Remove Experimental Seamless Runtime commands so the local CLI shim and original executable are managed safely. Initial setup requires one reload; Remote environments receive a generated local User setting instead of a hard-coded path. The installed runtime uses HTTP streaming to prevent an existing thread from reusing an old account's authenticated WebSocket. The user-facing behavior switch is `codexAccounts.seamlessSwitchEnabled`."
+          "markdownDescription": "Technical installation marker for the experimental seamless-switch runtime. The runtime is kept installed on each host; use `codexAccounts.seamlessSwitchEnabled` to control seamless switching behavior. The runtime uses HTTP streaming to prevent an existing thread from reusing an old account's authenticated WebSocket."
         },
         "codexAccounts.seamlessSwitchEnabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Route account changes through the installed no-reload runtime and enable seamless quota-band scheduling. When enabled without a ready runtime, account changes fail closed. When disabled, account changes use the original persisted-account and reload workflow. This does not uninstall the runtime or restore its underlying HTTP transport; use the Remove command for a complete rollback."
+          "markdownDescription": "Route account changes through the installed no-reload runtime and enable seamless quota-band scheduling. When enabled without a ready runtime, account changes fail closed. When disabled, account changes use the original persisted-account and reload workflow. This does not uninstall or remove the runtime."
         },
         "codexAccounts.hotSwitchGraceSeconds": {
           "type": "number",
@@ -359,10 +359,6 @@
       {
         "command": "codexAccounts.enableHotSwitch",
         "title": "Codex Accounts: Install Experimental Seamless Runtime"
-      },
-      {
-        "command": "codexAccounts.disableHotSwitch",
-        "title": "Codex Accounts: Remove Experimental Seamless Runtime"
       },
       {
         "command": "codexAccounts.importCurrentAuth",

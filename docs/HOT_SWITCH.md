@@ -51,7 +51,7 @@ Codex 会把创建会话时的 provider ID 写入本地 thread 元数据，官�
 
 代价是失去 Responses WebSocket 的跨 turn 复用，可能增加少量建连延迟和连接开销。它只影响通过已安装无感 runtime 启动的 app-server，不会启动常驻 HTTP 调度服务，也不会把 token 发给 Manager 之外的本地服务。
 
-Dashboard 中关闭`无感切号（实验性）`会立即恢复 Manager 原有的账号写入、reload 提示和官方自动切号逻辑，但不会在运行中重启 app-server，因此底层 HTTP transport 会保留。若要连底层 transport 一并恢复为官方默认值，请运行 Remove Experimental Seamless Runtime，并按提示 reload 一次。
+Dashboard 中关闭`无感切号（实验性）`会立即恢复 Manager 原有的账号写入、reload 提示和官方自动切号逻辑，但不会在运行中重启 app-server，因此底层 HTTP transport 会保留；runtime overlay 继续保留。
 
 ## 与可选 Gateway 集成的关系
 
@@ -64,8 +64,8 @@ Gateway 是安装后才注册的可选传输，并以一个 `accountKind: "sub2a
 1. 导入至少两个属于你且允许使用的 ChatGPT/Codex 账号，并刷新全部配额。
 2. 从命令面板运行 `Codex Accounts: Install Experimental Seamless Runtime`：
    - 普通本地窗口会自动配置启动路径，并提示 reload 一次。
-   - Remote-SSH、WSL 和 Dev Container 中，manager 会把远端官方 Codex CLI 重命名为同目录的可回滚备份，并把原路径替换为指向 runtime launcher 的符号链接；reload 一次后生效。它不会写入 `chatgpt.cliExecutable`。
-   - `chatgpt.cliExecutable` 是官方扩展的 application 级开发设置，不能由 Remote Settings 覆盖，并会优先于远端 shim 链接。启用远端 runtime 前，必须从每台连接设备的本地 User Settings 和远端 Remote Settings 中删除该键；否则 manager 会拒绝安装，避免出现跨设备启动失败或假成功。
+   - 本地、Remote-SSH、WSL 和 Dev Container 都会把各自主机上的官方 Codex CLI 重命名为同目录的可回滚备份，并把原路径替换为指向该主机 runtime launcher 的符号链接；reload 一次后生效。这样不会把本地 CLI 路径带到远端。
+   - 旧版本写入的 `chatgpt.cliExecutable` 会在本地 runtime overlay 准备好后自动清理；之后官方扩展会恢复使用各主机自己的 bundled CLI 路径。
 3. 打开账号 Dashboard，使用每张账号卡片左下角的开关，将至少两个账号加入无感切号池。也可勾选多个账号后使用“设为无感切号池”或“移出无感切号池”批量操作；同一选择框还可批量“隐藏账号”/“解除隐藏”以及设置 `A/B/C` 分组或移出分组。右上角 `A/B/C` 按钮是无感候选范围筛选；未分组且未隐藏账号不会被筛掉。隐藏会立即移出池并禁止切换到该账号，解除隐藏会重新加入池。
 4. 在 Dashboard 设置中开启：
    - 配额自动刷新，启用非零账号切换阈值建议 `1` 分钟；它只刷新未隐藏、已启用分组的第 `1` 页（最多 `50` 个账号），因此需自动调度的账号应通过隐藏/分组整理到该范围；
@@ -95,7 +95,7 @@ Gateway 是安装后才注册的可选传输，并以一个 `accountKind: "sub2a
 
 若要启用你当前测试的普通会话无人值守续接，把 `hotSwitchLongTurnPolicy` 改为 `"interruptAndContinue"`。它会在 60 秒后中断旧 turn，完成切号后在同一 thread 自动发送一次带恢复上下文的 `Continue`；这不是同一 turn 的精确恢复。
 
-不要只手工修改 `codexAccounts.hotSwitchEnabled` 来安装或卸载 runtime；安装和移除都使用命令面板命令，以便管理 runtime、备份与恢复官方 CLI。日常临时关闭无感行为只需关闭 Dashboard 的`无感切号（实验性）`总开关，无需 reload。发布说明不应要求 Remote 用户填写固定绝对路径，也不应要求保留 `chatgpt.cliExecutable`。
+不要手工修改 `codexAccounts.hotSwitchEnabled`；它只是 runtime 是否已安装的技术标记。runtime 会保留在本地和远端，日常临时关闭无感行为只需关闭 Dashboard 的`无感切号（实验性）`总开关，无需 reload。发布说明不应要求 Remote 用户填写固定绝对路径，也不应要求保留 `chatgpt.cliExecutable`。
 
 ## 分档与选号规则
 
@@ -181,7 +181,7 @@ Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储
 
 只想临时恢复原有切号逻辑时，关闭 Dashboard 的`无感切号（实验性）`总开关即可；runtime 继续作为透明代理运行，下一次切号会走原有账号写入和 reload 提示。
 
-若要完整卸载 runtime，从命令面板运行 `Codex Accounts: Remove Experimental Seamless Runtime`。普通本地窗口会自动恢复安装前的 `chatgpt.cliExecutable`；Remote 环境只会在当前 CLI 链接仍指向 manager launcher 时恢复同目录备份的官方二进制，绝不覆盖其他工具建立的链接。按提示 reload 一次，即可回到官方标准启动路径。官方 Codex 扩展升级后会使用新安装目录；若无感切号仍启用，manager 会为新目录重新准备 runtime 并再次请求一次 reload。完整卸载也会恢复官方“当前 provider”历史过滤；无感 provider 下的会话仍保存在本地，可通过重新安装 runtime 或 `codex resume --all --include-non-interactive` 访问，本功能不会在卸载时批量改写历史元数据。
+如果只想临时恢复原有切号逻辑，关闭 Dashboard 的`无感切号（实验性）`总开关即可；runtime overlay 继续保留，下一次切号会走原有账号写入和 reload 提示。官方 Codex 扩展升级后，manager 会在新的各主机 CLI 路径上重新准备 overlay，并按需请求一次 reload。
 
 ## 开发验证
 
