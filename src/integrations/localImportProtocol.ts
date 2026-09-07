@@ -2,7 +2,7 @@ import type { SharedCodexAccountJson } from "../core/types";
 
 const MAX_ACCOUNTS_PER_JOB = 50;
 
-/** Normalize provider output while dropping unsupported/raw fields. */
+/** Normalize provider output while retaining safe OAuth account metadata. */
 export function normalizeLocalImportAccounts(input: unknown): SharedCodexAccountJson[] {
   if (!Array.isArray(input) || input.length === 0 || input.length > MAX_ACCOUNTS_PER_JOB) {
     throw new Error(`local import accepts 1-${MAX_ACCOUNTS_PER_JOB} accounts`);
@@ -30,14 +30,22 @@ function normalizeLocalImportAccount(value: unknown, index: number): SharedCodex
   const userId = optionalString(record["user_id"]);
   const planType = optionalString(record["plan_type"]);
   const organizationId = optionalString(record["organization_id"]);
+  const accountName = optionalString(record["account_name"]);
+  const accountStructure = optionalString(record["account_structure"]);
+  const addedVia = optionalString(record["added_via"]);
+  const subscriptionActiveUntil = optionalScalar(record["subscription_active_until"]);
   const refreshToken = optionalString(tokens["refresh_token"]);
   return {
     email,
-    auth_mode: "oauth",
+    auth_mode: "chatgpt",
     ...(accountId ? { account_id: accountId } : {}),
     ...(userId ? { user_id: userId } : {}),
     ...(planType ? { plan_type: planType } : {}),
     ...(organizationId ? { organization_id: organizationId } : {}),
+    ...(accountName ? { account_name: accountName } : {}),
+    ...(accountStructure ? { account_structure: accountStructure } : {}),
+    ...(addedVia ? { added_via: addedVia } : {}),
+    ...(subscriptionActiveUntil !== undefined ? { subscription_active_until: subscriptionActiveUntil } : {}),
     tokens: {
       id_token: idToken,
       access_token: accessToken,
@@ -49,4 +57,11 @@ function normalizeLocalImportAccount(value: unknown, index: number): SharedCodex
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalScalar(value: unknown): string | number | undefined {
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

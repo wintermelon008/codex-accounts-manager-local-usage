@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Dashboard 将 refresh token 失效与 access token 失效分开显示；Mailbox、Manager Control 和其他重新授权依赖仍统一识别两类状态。
 - Dashboard 顶部的 Codex 会话锁解锁改为强制模式：会终止非当前 VS Code 窗口且持有对应 `FLOCK` 的 Codex `app-server`，再释放其会话锁；当前窗口和无法确认的进程不会被终止。
 - Mailbox 注册助手邮箱库新增“仅 GPT 注册 ≥ 7 天”筛选；已注册标签按第一封来自 OpenAI 的邮件时间显示已注册天数。
 

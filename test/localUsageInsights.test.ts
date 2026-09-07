@@ -107,6 +107,21 @@ describe("estimateStandardApiCost", () => {
     expect(price.unpricedTokens).toBe(0);
   });
 
+  it("charges the official gpt-6-astra model name with cached input at the reduced rate", () => {
+    const price = estimateStandardApiCost([
+      modelUsage("gpt-6-astra", {
+        inputTokens: 1_000_000,
+        cachedInputTokens: 500_000,
+        outputTokens: 1_000_000,
+        totalTokens: 2_000_000
+      })
+    ]);
+
+    expect(price.amountUsd).toBeCloseTo(55.5, 8);
+    expect(price.pricedTokens).toBe(2_000_000);
+    expect(price.unpricedTokens).toBe(0);
+  });
+
   it("covers the remaining standard and specialized token-priced rows", () => {
     const rows = [
       "gpt-5.5-pro",

@@ -5,6 +5,7 @@ import { createProvider } from "./providers.mjs";
 import { GatewaySessionManager } from "./session-manager.mjs";
 import { createGatewayServer, listen } from "./server.mjs";
 import { WorktreeManager } from "./worktree-manager.mjs";
+import { GatewayUsageLedger } from "./usage.mjs";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   printHelp();
@@ -21,16 +22,19 @@ async function start() {
         timeoutMs: config.manager.timeoutMs
       })
     : undefined;
+  const usage = new GatewayUsageLedger({ stateDir: config.server.stateDir });
+  await usage.init();
   const sessions = new GatewaySessionManager({
     provider: createProvider(config, { manager }),
     manager,
+    usage,
     workspaces: new WorktreeManager({
       projectRoot: config.codex.projectRoot,
       stateDir: config.server.stateDir
     }),
     maxSessions: config.maxSessions
   });
-  const server = createGatewayServer({ sessions, config });
+  const server = createGatewayServer({ sessions, config, usage });
   const address = await listen(server, config.server.host, config.server.port);
   console.log(`[manager-gateway] listening on ${address.host}:${address.port}`);
 
@@ -59,6 +63,7 @@ function printHelp() {
   MANAGER_CONTROL_TOKEN             Manager 控制令牌
   MANAGER_GATEWAY_CODEX_BINARY      Codex executable，默认 codex
   MANAGER_GATEWAY_CODEX_HOME        Codex Home
+  MANAGER_GATEWAY_CODEX_MODEL       usage 归属提示，不改变 Codex 实际模型
   MANAGER_GATEWAY_PROJECT_ROOT      develop 模式项目根目录
   WORKBENCH_DATA_URL                Workbench 数据服务地址，默认 http://127.0.0.1:43119
   WORKBENCH_DATA_TOKEN              Workbench 数据服务令牌（可选）

@@ -96,10 +96,19 @@ describe("accountsIndex helpers", () => {
 });
 
 describe("batch shared account export", () => {
-  it("keeps the selected-account export in the minimal card-compatible shape", () => {
+  it("keeps full ChatGPT Auth metadata in the selected-account export", () => {
     const account: CodexAccountRecord = {
       id: "codex_demo_1",
       email: "user@example.com",
+      authMode: "chatgpt",
+      accountKind: "chatgpt",
+      quotaMode: "chatgpt",
+      userId: "user-1",
+      planType: "plus",
+      accountId: "workspace-id",
+      organizationId: "org-1",
+      accountName: "Personal",
+      accountStructure: "personal",
       createdAt: 1_730_000_000_000,
       updatedAt: 1_730_000_000_000
     };
@@ -113,11 +122,25 @@ describe("batch shared account export", () => {
     expect(toBatchSharedAccountJson(account, tokens)).toEqual({
       id: "codex_demo_1",
       email: "user@example.com",
+      auth_mode: "chatgpt",
+      user_id: "user-1",
+      plan_type: "plus",
+      subscription_active_until: null,
+      account_id: "workspace-id",
+      organization_id: "org-1",
+      account_name: "Personal",
+      account_structure: "personal",
+      added_via: null,
+      added_at: 1_730_000_000,
       tokens: {
         id_token: "id-token",
         access_token: "access-token",
-        refresh_token: "refresh-token"
+        refresh_token: "refresh-token",
+        account_id: "workspace-id"
       },
+      quota: null,
+      quota_error: null,
+      tags: null,
       created_at: 1_730_000_000,
       last_used: 1_730_000_000
     });
@@ -335,6 +358,9 @@ describe("sharedAccounts helpers", () => {
     });
 
     expect(restored.subscriptionActiveUntil).toBe("1900000000");
+    expect(restored.authMode).toBe("chatgpt");
+    expect(restored.accountKind).toBe("chatgpt");
+    expect(restored.quotaMode).toBe("chatgpt");
   });
 });
 
@@ -356,6 +382,23 @@ describe("accountMetadata helpers", () => {
     });
 
     expect(draft.showInStatusBar).toBe(false);
+  });
+
+  it("classifies token-backed drafts as ChatGPT Auth accounts", () => {
+    const draft = buildAccountRecordDraft({
+      storageId: "oauth-account",
+      claims: { email: "oauth@example.com", planType: "plus" },
+      tokens: {},
+      existingAccounts: [],
+      forceActive: false,
+      now: 10
+    });
+
+    expect(draft).toMatchObject({
+      authMode: "chatgpt",
+      accountKind: "chatgpt",
+      quotaMode: "chatgpt"
+    });
   });
 
   it("preserves status popup selection for existing accounts", () => {

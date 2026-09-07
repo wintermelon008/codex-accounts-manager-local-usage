@@ -17,6 +17,8 @@ export function renderHealthPill(account: DashboardAccountViewModel) {
       return null;
     case "expiring":
       return <span class="pill warning">{account.healthLabel}</span>;
+    case "refresh_token_invalid":
+    case "access_token_invalid":
     case "reauthorize":
     case "disabled":
     case "refresh_failed":

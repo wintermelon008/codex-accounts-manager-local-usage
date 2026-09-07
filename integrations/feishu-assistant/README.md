@@ -2,7 +2,7 @@
 
 这是一个全新的、独立运行的飞书机器人，使用飞书官方 Node SDK 的长连接接收 `im.message.receive_v1` 事件。它与 `feishu-private-import` 使用不同的进程和飞书 App，不共享事件入口，也不会自动读取旧机器人配置。
 
-当前版本通过 Manager 的本地回环控制接口提供：
+当前版本通过 Manager 的本地回环控制接口和可选的 Manager Gateway 提供：
 
 - 查看账号数量、健康状态、额度窗口、无感池资格和今日 Token 用量；
 - 查看今日按模型用量；
@@ -11,6 +11,7 @@
 - 检查 Manager 控制接口健康状况；
 - 分析 HTTPS 商品页，按条件筛选有库存的最低价商品，并保存网页使用步骤；
 - 在支付适配器确认成功后，为显式配置的网站执行器提供已保存流程。
+- 配置 `FEISHU_GATEWAY_URL` 后，普通管理员私聊通过 Manager Gateway 创建或继续 AI session，并读取同一 Gateway 的 token 用量。
 
 机器人只接受管理员的一对一私聊。消息中不会接受或回显账号令牌；账号导入仍使用 Manager 已有的本地受限收件箱协议。
 
@@ -20,9 +21,9 @@
 
 把管理员的 `open_id` 放入 `FEISHU_ADMIN_OPEN_IDS`。不要把 App Secret、Manager 控制令牌或其他私密配置写入仓库。
 
-## 2. 配置 Manager
+## 2. 配置 Manager（可选）
 
-在启动 VS Code / Manager 的环境中设置一个仅本机使用的随机控制令牌，并显式打开外部控制接口：
+如果需要账号查询、额度刷新、导入状态或账号切换，在启动 VS Code / Manager 的环境中设置一个仅本机使用的随机控制令牌，并显式打开外部控制接口：
 
 ```dotenv
 CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN=<local-private-token>
@@ -37,7 +38,7 @@ CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN=<local-private-token>
 }
 ```
 
-接口只绑定 `127.0.0.1`，所有请求必须携带同一个 Bearer 令牌。默认地址为 `http://127.0.0.1:43117`；如果修改端口，机器人配置中的 `MANAGER_CONTROL_URL` 也要同步修改。缺少令牌时，Manager 不会启动该接口。
+接口只绑定 `127.0.0.1`，所有请求必须携带同一个 Bearer 令牌。默认地址为 `http://127.0.0.1:43117`；如果修改端口，机器人配置中的 `MANAGER_CONTROL_URL` 也要同步修改。缺少令牌时，Manager 不会启动该接口；飞书仍可通过下方的 Gateway 配置提供 AI session 和 token 用量。
 
 启用外部控制后，Manager 会同时启动受限的本地导入收件箱，以消费支付适配器提交的已规范化 OAuth 导入任务；不需要再单独打开 `codexAccounts.localImportInboxEnabled`。如果只使用旧的独立收件箱机器人而不启用外部控制，则仍需单独打开该设置。
 
@@ -51,9 +52,17 @@ FEISHU_APP_SECRET=<new-feishu-app-secret>
 FEISHU_ADMIN_OPEN_IDS=<admin-open-id-1,admin-open-id-2>
 
 MANAGER_CONTROL_URL=http://127.0.0.1:43117
+# 可选：账号、额度刷新、导入和切换操作；没有 Manager 接口时可省略
 MANAGER_CONTROL_TOKEN=<same-local-private-token>
 # 可选，范围 1000–120000，默认 10000
 MANAGER_CONTROL_TIMEOUT_MS=10000
+
+# 可选：普通私聊、Workbench 共用 session 和 Gateway token 用量
+FEISHU_GATEWAY_URL=http://127.0.0.1:43118
+# Gateway 非回环监听时填写其 MANAGER_GATEWAY_TOKEN
+FEISHU_GATEWAY_TOKEN=<gateway-token>
+# 可选，默认 10000；Gateway session 查询轮询间隔（毫秒）
+FEISHU_GATEWAY_POLL_INTERVAL_MS=10000
 
 # 可选：配置后才启用“购买/支付”命令
 FEISHU_ASSISTANT_PAYMENT_PROVIDER_MODULE=/absolute/path/to/payment-provider.mjs
@@ -80,6 +89,8 @@ FEISHU_ASSISTANT_WEB_MODEL=gpt-5.6
 npm install
 npm start
 ```
+
+`MANAGER_CONTROL_TOKEN` 和 `FEISHU_GATEWAY_URL` 至少配置一个。只有 Gateway 时，`用量` 优先读取 Gateway 的独立 ledger；`刷新额度`、`导入状态` 等需要 Manager control 的命令会返回未接入提示。Gateway 会记录 Codex/OpenAI-compatible provider 返回的最终 token usage，保存按日、按模型的 token 数，不保存 prompt、响应正文或凭据。
 
 也可以将 `templates/feishu-assistant.service.template` 复制为用户级服务模板，在目标设备上填入 `PRIVATE_ENV_FILE`、`NODE_BIN` 和 `PACKAGE_ROOT`。该模板不会推断或复制已有服务配置。
 

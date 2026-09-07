@@ -173,6 +173,20 @@ export function EyeOffIcon() {
   );
 }
 
+export function InvalidAccountsIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M5 5l14 14M19 5 5 19"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.9"
+        stroke-linecap="round"
+      />
+    </svg>
+  );
+}
+
 export function UnlockIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">

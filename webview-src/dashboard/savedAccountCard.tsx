@@ -9,7 +9,7 @@ import type {
   DashboardState
 } from "../../src/domain/dashboard/types";
 import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCountdown";
-import { getSensitiveDisplayValue, renderTagList } from "./helpers";
+import { getSensitiveDisplayValue, isAccountReauthorizationRequired, renderTagList } from "./helpers";
 import {
   CopyIcon,
   SuccessIcon,
@@ -40,6 +40,8 @@ export function SavedAccountCard(props: {
   refreshPending: boolean;
   copyImportJsonPending: boolean;
   copyImportJsonSucceeded: boolean;
+  accountNameCopyPending: boolean;
+  accountNameCopySucceeded: boolean;
   quotaCountdownStartPending: boolean;
   removePending: boolean;
   poolTogglePending: boolean;
@@ -54,6 +56,7 @@ export function SavedAccountCard(props: {
       | "reauthorize"
       | "refresh"
       | "copyAccountImportJson"
+      | "copyText"
       | "startQuotaCountdown"
       | "remove"
       | "toggleBalancePool"
@@ -87,11 +90,11 @@ export function SavedAccountCard(props: {
         : props.lang === "zh-hant"
           ? "加入無感切換池"
           : "Add to seamless-switch pool";
-  const showReauthorizeButton = !virtual && account.healthKind === "reauthorize" && !account.dismissedHealth;
+  const showReauthorizeButton = !virtual && isAccountReauthorizationRequired(account.healthKind) && !account.dismissedHealth;
   const [flipped, setFlipped] = useState(false);
   const hasErrorHealth =
     !account.dismissedHealth &&
-    (account.healthKind === "reauthorize" ||
+    (isAccountReauthorizationRequired(account.healthKind) ||
       account.healthKind === "disabled" ||
       account.healthKind === "refresh_failed" ||
       account.healthKind === "quota");
@@ -419,7 +422,18 @@ export function SavedAccountCard(props: {
                 {renderTagList(account.tags) ?? <span class="tag-pill muted">{resolveNoTags(props.lang)}</span>}
               </div>
             </div>
-            <div class="saved-back-hint">{resolveBackHint(props.lang)}</div>
+            <div class="saved-back-footer" onClick={stopFlip}>
+              <div class="saved-back-hint">{resolveBackHint(props.lang)}</div>
+              <ActionButton
+                class="saved-back-copy-action"
+                icon={props.accountNameCopySucceeded ? <SuccessIcon /> : <CopyIcon />}
+                iconOnly
+                label={props.accountNameCopySucceeded ? copy.copySuccess : resolveAccountNameCopyLabel(props.lang)}
+                pending={props.accountNameCopyPending}
+                disabled={props.busy}
+                onClick={() => onAction("copyText", account.id, { text: account.email })}
+              />
+            </div>
           </div>
         </section>
       </div>
@@ -490,6 +504,16 @@ function resolveBackHint(lang: DashboardState["lang"]): string {
     default:
       return "Click anywhere to return to quota monitor";
   }
+}
+
+function resolveAccountNameCopyLabel(lang: DashboardState["lang"]): string {
+  if (lang === "zh") {
+    return "复制账号名称";
+  }
+  if (lang === "zh-hant") {
+    return "複製帳號名稱";
+  }
+  return "Copy account name";
 }
 
 function CardDetailRow(props: { label: string; value: string; title?: string; color?: string }) {

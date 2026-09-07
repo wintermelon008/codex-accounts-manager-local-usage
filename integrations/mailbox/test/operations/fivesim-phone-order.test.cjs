@@ -58,8 +58,12 @@ test("5SIM client reads balance and flattens country/operator offers", async () 
     }
   ]);
   assert.equal(requests[0].options.headers.authorization, "Bearer five-sim-secret-token");
+  assert.match(requests[0].options.headers["cache-control"], /no-cache/u);
   assert.equal(requests[1].options.headers.authorization, undefined);
   assert.match(requests[1].query, /product=openai/u);
+  assert.match(requests[1].query, /(?:\?|&)_[^=]*=/u);
+  assert.equal(requests[2].path, "/v1/guest/countries");
+  assert.match(requests[2].query, /(?:\?|&)_[^=]*=/u);
   assert.equal(normalizeSuccessRate("98.5%"), 98.5);
   assert.equal(normalizeSuccessRate(0.5), 0.5);
   assert.equal(catalog.some((offer) => offer.operator === "lowrate"), false);

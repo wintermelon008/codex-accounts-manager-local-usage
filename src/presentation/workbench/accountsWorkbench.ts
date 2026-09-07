@@ -21,6 +21,7 @@ import { registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
 import { isSub2ApiAccount, type SharedCodexAccountJson } from "../../core/types";
 import { resolveAccountHealth } from "../../application/accounts/health";
+import { isAccountReauthorizationRequired } from "../../domain/accountHealth";
 import { getErrorMessage } from "../../core/errors";
 import {
   importSharedAccountsIntoBalancePool,
@@ -130,7 +131,7 @@ export class AccountsWorkbench {
             directory[index] = {
               accountId: account.id,
               email: account.email,
-              requiresReauthorization: resolveAccountHealth(account, tokens, automation).kind === "reauthorize"
+              requiresReauthorization: isAccountReauthorizationRequired(resolveAccountHealth(account, tokens, automation).kind)
             };
           });
           return directory.filter((entry): entry is {

@@ -34,6 +34,7 @@ describe("ManagerControlServer", () => {
     };
 
     expect(body.accounts.counts).toMatchObject({ total: 2, poolEligible: 1 });
+    expect(body.accounts.accounts[0]).toMatchObject({ health: "auth" });
     expect(body.accounts.accounts[0]).not.toHaveProperty("rawData");
     expect(body.usageToday).toMatchObject({ date: "2026-08-18", total: { totalTokens: 42 } });
     expect(body.usageToday.byModel).toMatchObject([{ date: "2026-08-18", model: "gpt-test", totalTokens: 42 }]);
@@ -122,7 +123,7 @@ describe("ManagerControlServer", () => {
       [
         {
           email: "paid@example.com",
-          auth_mode: "oauth",
+          auth_mode: "chatgpt",
           tokens: { id_token: "id-token", access_token: "access-token", refresh_token: "refresh-token" }
         }
       ]
@@ -259,6 +260,8 @@ function createServer(
             isActive: true,
             isHidden: false,
             balancePoolEnabled: true,
+            tokenRefreshLastErrorKind: "reauthorize",
+            tokenRefreshLastError: "Token refresh failed (401): refresh token already used",
             lastQuotaAt: Date.now(),
             quotaSummary: {
               hourlyPercentage: 90,

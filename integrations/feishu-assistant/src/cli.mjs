@@ -2,6 +2,7 @@
 import { loadConfig } from "./config.mjs";
 import { createFeishuAssistant } from "./feishuBot.mjs";
 import { createManagerClient } from "./managerClient.mjs";
+import { createGatewayClient } from "./gatewayClient.mjs";
 import { loadPaymentProvider } from "./paymentProviderLoader.mjs";
 import { createPaymentStore } from "./paymentStore.mjs";
 import { createPaymentWorkflow } from "./paymentWorkflow.mjs";
@@ -11,7 +12,8 @@ import { createWebWorkflowStore } from "./webWorkflowStore.mjs";
 import { createWebWorkflowService } from "./webWorkflowService.mjs";
 
 const config = loadConfig();
-const manager = createManagerClient(config.manager);
+const manager = config.manager.token ? createManagerClient(config.manager) : undefined;
+const gateway = config.gateway ? createGatewayClient(config.gateway) : undefined;
 const webAnalyzer = config.web.openAiApiKey
   ? createOpenAIPageAnalyzer({
       apiKey: config.web.openAiApiKey,
@@ -42,6 +44,7 @@ const bot = createFeishuAssistant({
   appSecret: config.feishu.appSecret,
   adminOpenIds: config.feishu.adminOpenIds,
   manager,
+  gateway,
   paymentWorkflow,
   webWorkflow
 });

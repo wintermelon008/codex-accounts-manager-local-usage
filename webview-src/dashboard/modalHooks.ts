@@ -30,6 +30,9 @@ export function useDashboardModals(params: {
         if (message.action === "copyAccountImportJson" && message.status === "completed" && message.accountId) {
           feedback.showCopyFeedback(`account-import-json:${message.accountId}`);
         }
+        if (message.action === "copyText" && message.status === "completed" && message.accountId) {
+          feedback.showCopyFeedback(`account-name:${message.accountId}`);
+        }
         if (
           message.action === "hideAccounts" &&
           message.status === "completed" &&

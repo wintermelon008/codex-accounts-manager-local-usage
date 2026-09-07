@@ -25,6 +25,7 @@ import {
   getHighWeeklyQuotaHiddenAccountIds,
   getLowWeeklyQuotaAccountIds,
   getBlockedAccountIds,
+  isDashboardAccountInvalid,
   isMailboxIntegrationActive,
   parsePercentageInput
 } from "../webview-src/dashboard/helpers";
@@ -270,12 +271,14 @@ describe("Dashboard account selection", () => {
   it("only targets reauthorized real accounts with a Mailbox deactivation notice", () => {
     const accounts = [
       { id: "eligible", accountKind: "chatgpt", healthKind: "reauthorize", mailboxDeactivated: true },
+      { id: "refresh-token", accountKind: "chatgpt", healthKind: "refresh_token_invalid", mailboxDeactivated: true },
+      { id: "access-token", accountKind: "chatgpt", healthKind: "access_token_invalid", mailboxDeactivated: true },
       { id: "missing-notice", accountKind: "chatgpt", healthKind: "reauthorize", mailboxDeactivated: false },
       { id: "refresh-failed", accountKind: "chatgpt", healthKind: "refresh_failed", mailboxDeactivated: true },
       { id: "virtual", accountKind: "sub2api", healthKind: "reauthorize", mailboxDeactivated: true }
     ] as DashboardState["accounts"];
 
-    expect(getBlockedAccountIds(accounts)).toEqual(["eligible"]);
+    expect(getBlockedAccountIds(accounts)).toEqual(["eligible", "refresh-token", "access-token"]);
   });
 
   it("exposes blocked-account removal only while Mailbox is registered and usable", () => {
@@ -382,6 +385,26 @@ describe("Dashboard account selection", () => {
     expect(
       getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, false).map((account) => account.id)
     ).toEqual(["free-a", "plus-a", "team-a"]);
+  });
+
+  it("filters the account panel to currently invalid accounts without including dismissed health issues", () => {
+    const dashboardState = createState();
+    dashboardState.accounts = [
+      { id: "healthy", healthKind: "healthy", dismissedHealth: false, isHidden: false },
+      { id: "reauthorize", healthKind: "reauthorize", dismissedHealth: false, isHidden: false },
+      { id: "refresh-failed", healthKind: "refresh_failed", dismissedHealth: false, isHidden: false },
+      { id: "dismissed", healthKind: "disabled", dismissedHealth: true, isHidden: false },
+      { id: "hidden-invalid", healthKind: "quota", dismissedHealth: false, isHidden: true }
+    ] as DashboardState["accounts"];
+
+    expect(isDashboardAccountInvalid(dashboardState.accounts[0])).toBe(false);
+    expect(isDashboardAccountInvalid(dashboardState.accounts[1])).toBe(true);
+    expect(isDashboardAccountInvalid(dashboardState.accounts[3])).toBe(false);
+    expect(
+      getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, false, [], true).map(
+        (account) => account.id
+      )
+    ).toEqual(["reauthorize", "refresh-failed"]);
   });
 
   it("clears only selections that leave the selected plan scope", () => {

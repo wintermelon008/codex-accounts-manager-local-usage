@@ -7,6 +7,7 @@ export function toSharedAccountJson(account: CodexAccountRecord, tokens: CodexTo
   return {
     id: account.id,
     email: account.email,
+    auth_mode: "chatgpt",
     user_id: account.userId,
     plan_type: account.planType,
     subscription_active_until: account.subscriptionActiveUntil ?? null,
@@ -36,19 +37,9 @@ export function toSharedAccountJson(account: CodexAccountRecord, tokens: CodexTo
   };
 }
 
-/** Minimal array entry used by the dashboard's batch export action. */
+/** Full account entry used by the Dashboard's batch export action. */
 export function toBatchSharedAccountJson(account: CodexAccountRecord, tokens: CodexTokens): SharedCodexAccountJson {
-  return {
-    id: account.id,
-    email: account.email,
-    tokens: {
-      id_token: tokens.idToken,
-      access_token: tokens.accessToken,
-      refresh_token: tokens.refreshToken
-    },
-    created_at: Math.floor(account.createdAt / 1000),
-    last_used: Math.floor(account.updatedAt / 1000)
-  };
+  return toSharedAccountJson(account, tokens);
 }
 
 export function previewSharedEntry(entry: SharedCodexAccountJson): { storageId?: string; email?: string } {

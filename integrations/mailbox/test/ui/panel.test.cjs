@@ -455,16 +455,32 @@ test("standalone registration panel preserves scroll position when selecting a m
   let renderedHtml = "";
   let registrationStandalone;
   let registrationMailboxList;
+  let registrationCountryList;
+  let registrationOperatorList;
+  const resetScrollNodes = () => {
+    registrationStandalone = { scrollTop: 0, scrollLeft: 0 };
+    registrationMailboxList = { scrollTop: 0, scrollLeft: 0 };
+    registrationCountryList = {
+      scrollTop: 0,
+      scrollLeft: 0,
+      dataset: { scrollPreserve: "registration-fivesim-country-list-session:fivesim" }
+    };
+    registrationOperatorList = {
+      scrollTop: 0,
+      scrollLeft: 0,
+      dataset: { scrollPreserve: "registration-fivesim-operator-list-session:fivesim" }
+    };
+  };
   const app = {};
   Object.defineProperty(app, "innerHTML", {
     configurable: true,
     get() { return renderedHtml; },
     set(value) {
       renderedHtml = value;
-      registrationStandalone = { scrollTop: 0 };
-      registrationMailboxList = { scrollTop: 0 };
+      resetScrollNodes();
     }
   });
+  resetScrollNodes();
   const notice = {};
   const document = {
     activeElement: null,
@@ -477,7 +493,11 @@ test("standalone registration panel preserves scroll position when selecting a m
       if (selector === ".registration-mailbox-list") return registrationMailboxList;
       return null;
     },
-    querySelectorAll() { return []; },
+    querySelectorAll(selector) {
+      if (selector === ".registration-fivesim-country-list") return [registrationCountryList];
+      if (selector === ".registration-fivesim-operator-list") return [registrationOperatorList];
+      return [];
+    },
     addEventListener(type, listener) { documentListeners.set(type, listener); }
   };
   const window = {
@@ -506,6 +526,10 @@ test("standalone registration panel preserves scroll position when selecting a m
   stateListener({ data: { type: "state", state } });
   registrationStandalone.scrollTop = 487;
   registrationMailboxList.scrollTop = 731;
+  registrationCountryList.scrollTop = 113;
+  registrationCountryList.scrollLeft = 7;
+  registrationOperatorList.scrollTop = 257;
+  registrationOperatorList.scrollLeft = 11;
   documentListeners.get("click")({ target: {
     disabled: false,
     dataset: { action: "registration-select-mailbox", mailboxId: "mailbox:second" },
@@ -514,6 +538,10 @@ test("standalone registration panel preserves scroll position when selecting a m
 
   assert.equal(registrationStandalone.scrollTop, 487);
   assert.equal(registrationMailboxList.scrollTop, 731);
+  assert.equal(registrationCountryList.scrollTop, 113);
+  assert.equal(registrationCountryList.scrollLeft, 7);
+  assert.equal(registrationOperatorList.scrollTop, 257);
+  assert.equal(registrationOperatorList.scrollLeft, 11);
   assert.equal(messages.at(-1).action, "ready");
 });
 
@@ -1475,6 +1503,10 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   assert.match(renderedHtml, /\$0\.0609/u);
   assert.match(renderedHtml, /virtual66/u);
   assert.match(renderedHtml, /registration-fivesim-country-list/u);
+  assert.match(renderedHtml, /data-scroll-preserve="registration-fivesim-country-list-session:fivesim"/u);
+  assert.match(renderedHtml, /data-scroll-preserve="registration-fivesim-operator-list-session:fivesim"/u);
+  assert.match(html, /\.registration-fivesim-country-list \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u);
+  assert.match(html, /\.registration-fivesim-country-list \{ grid-template-columns: 1fr; \}/u);
   assert.match(renderedHtml, /registration-fivesim-operator-list/u);
   assert.doesNotMatch(renderedHtml, /lowrate/u);
   assert.doesNotMatch(renderedHtml, /zeronumber/u);

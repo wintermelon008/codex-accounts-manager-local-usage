@@ -32,6 +32,24 @@ describe("Feishu assistant config", () => {
     assert.equal(config.web.model, "gpt-test");
   });
 
+  it("accepts Gateway-only deployment when the Manager control interface is absent", () => {
+    const config = loadConfig({
+      FEISHU_APP_ID: "app",
+      FEISHU_APP_SECRET: "secret",
+      FEISHU_ADMIN_OPEN_IDS: "admin-1",
+      FEISHU_GATEWAY_URL: "http://127.0.0.1:43118/",
+      FEISHU_GATEWAY_TOKEN: "gateway-token"
+    });
+
+    assert.equal(config.manager.token, undefined);
+    assert.deepEqual(config.gateway, {
+      baseUrl: "http://127.0.0.1:43118",
+      token: "gateway-token",
+      timeoutMs: 10_000,
+      pollIntervalMs: 10_000
+    });
+  });
+
   it("parses comma-separated values without empty entries", () => {
     assert.deepEqual(parseList("a,, b, a"), ["a", "b"]);
   });

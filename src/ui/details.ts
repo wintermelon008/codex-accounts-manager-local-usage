@@ -779,6 +779,10 @@ function renderHealthBadge(
       return `<span class="pill ok">${escapeHtml(copy.tokenAutomationHealthy)}</span>`;
     case "expiring":
       return `<span class="pill warning">${escapeHtml(copy.tokenAutomationExpiring)}</span>`;
+    case "refresh_token_invalid":
+      return `<span class="pill error">${escapeHtml(copy.tokenAutomationRefreshTokenInvalid)}</span>`;
+    case "access_token_invalid":
+      return `<span class="pill error">${escapeHtml(copy.tokenAutomationAccessTokenInvalid)}</span>`;
     case "reauthorize":
       return `<span class="pill error">${escapeHtml(copy.tokenAutomationReauthorize)}</span>`;
     case "refresh_failed":

@@ -25,14 +25,20 @@ class FiveSimClient {
     this.onLog = typeof onLog === "function" ? onLog : () => {};
   }
 
-  async request(method, path, { auth = true, query } = {}) {
+  async request(method, path, { auth = true, query, cacheBust = false } = {}) {
     if (auth && !this.token) throw new FiveSimOrderError("缺少 5SIM API Token", { code: "MISSING_TOKEN" });
     const url = new URL(`${this.baseUrl}${path}`);
-    for (const [key, value] of Object.entries(query || {})) {
+    const requestQuery = { ...(query || {}) };
+    if (cacheBust) requestQuery._ = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    for (const [key, value] of Object.entries(requestQuery)) {
       if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
     }
     const requestUrl = url.toString();
     const headers = { accept: "application/json" };
+    if (cacheBust) {
+      headers["cache-control"] = "no-cache, no-store, max-age=0";
+      headers.pragma = "no-cache";
+    }
     if (auth) headers.authorization = `Bearer ${this.token}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -68,7 +74,7 @@ class FiveSimClient {
   }
 
   async profile() {
-    const payload = await this.request("GET", "/user/profile");
+    const payload = await this.request("GET", "/user/profile", { cacheBust: true });
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw new FiveSimOrderError(responseMessage(payload) || "5SIM 未返回账户资料");
     }
@@ -76,7 +82,7 @@ class FiveSimClient {
   }
 
   async countries() {
-    const payload = await this.request("GET", "/guest/countries", { auth: false });
+    const payload = await this.request("GET", "/guest/countries", { auth: false, cacheBust: true });
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw new FiveSimOrderError(responseMessage(payload) || "5SIM 未返回国家列表");
     }
@@ -86,7 +92,8 @@ class FiveSimClient {
   async prices(product = DEFAULT_PRODUCT) {
     const payload = await this.request("GET", "/guest/prices", {
       auth: false,
-      query: { product: text(product).toLowerCase() || DEFAULT_PRODUCT }
+      query: { product: text(product).toLowerCase() || DEFAULT_PRODUCT },
+      cacheBust: true
     });
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw new FiveSimOrderError(responseMessage(payload) || "5SIM 未返回价格列表");
@@ -224,6 +231,15 @@ class FiveSimPhoneOrderSession {
   async refreshInfo(token, { country = "", operator = "any", product = this.service } = {}) {
     if (this.state.running) throw new FiveSimOrderError("当前会话已有取号任务正在运行");
     this.setClient(token);
+    this.state.catalog = [];
+    this.state.selection = { country: "", operator: "any", product: text(product).toLowerCase() || this.service };
+    this.state.card = {
+      ...this.state.card,
+      balance: null,
+      frozenBalance: null,
+      rating: null,
+      updatedAt: 0
+    };
     this.state.phase = "logging_in";
     this.state.message = "正在查询 5SIM 余额与可选号区…";
     this.state.error = "";

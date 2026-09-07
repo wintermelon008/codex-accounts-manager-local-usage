@@ -45,7 +45,7 @@ describe("Codex auth mode compatibility", () => {
     expect(authFile.tokens.access_token).toBe("access-token");
   });
 
-  it("omits auth_mode when exporting shared accounts", () => {
+  it("exports shared OAuth accounts as ChatGPT Auth", () => {
     const account: CodexAccountRecord = {
       id: "account",
       email: "dev@example.com",
@@ -55,6 +55,6 @@ describe("Codex auth mode compatibility", () => {
 
     const shared = toSharedAccountJson(account, createTokens());
 
-    expect(shared.auth_mode).toBeUndefined();
+    expect(shared.auth_mode).toBe("chatgpt");
   });
 });

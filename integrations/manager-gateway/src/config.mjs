@@ -41,6 +41,9 @@ export function loadConfig(env = process.env) {
       binary: optional(env.MANAGER_GATEWAY_CODEX_BINARY) ?? "codex",
       home: codexHome,
       projectRoot: optional(env.MANAGER_GATEWAY_PROJECT_ROOT),
+      // Accounting-only hint for devices where Manager cannot expose the
+      // resident provider route. It never changes the Codex CLI model.
+      model: optional(env.MANAGER_GATEWAY_CODEX_MODEL),
       timeoutSeconds: parseBoundedInteger(env.MANAGER_GATEWAY_CODEX_TIMEOUT_SECONDS, 1_800, 10, 86_400)
     },
     workbenchDataUrl: optional(env.MANAGER_GATEWAY_WORKBENCH_DATA_URL) ?? optional(env.WORKBENCH_DATA_URL),

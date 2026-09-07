@@ -9,7 +9,10 @@ import {
   type DashboardSettings,
   type DashboardState
 } from "../../src/domain/dashboard/types";
+import { isAccountReauthorizationRequired } from "../../src/domain/accountHealth";
 import { formatResetRelativeTime } from "../../src/utils/resetTime";
+
+export { isAccountReauthorizationRequired } from "../../src/domain/accountHealth";
 
 type SensitiveKind = "email" | "id" | "name";
 
@@ -58,21 +61,37 @@ export function getDashboardAccountPage<T>(
 
 /**
  * Returns the account set currently exposed by the Dashboard's hidden, group,
- * and optional plan filters. Pagination deliberately does not participate so
- * batch selection can remain useful across pages within the same visible scope.
+ * plan, and optional health filters. Pagination deliberately does not
+ * participate so batch selection can remain useful across pages within the
+ * same visible scope.
  */
 export function getDashboardVisibleAccounts(
   accounts: readonly DashboardAccountViewModel[],
   settings: DashboardSettings,
   showHiddenAccounts: boolean,
-  selectedPlanFilters: readonly DashboardAccountPlanFilter[] = []
+  selectedPlanFilters: readonly DashboardAccountPlanFilter[] = [],
+  showInvalidAccounts = false
 ): DashboardAccountViewModel[] {
   const selectedPlans = new Set<DashboardAccountPlanFilter>(selectedPlanFilters);
   return accounts.filter(
     (account) =>
       isAccountInVisibleGroup(account, settings) &&
       (showHiddenAccounts || !account.isHidden) &&
-      isAccountInSelectedPlan(account, selectedPlans)
+      isAccountInSelectedPlan(account, selectedPlans) &&
+      (!showInvalidAccounts || isDashboardAccountInvalid(account))
+  );
+}
+
+/** Returns whether the Dashboard currently considers an account invalid. */
+export function isDashboardAccountInvalid(
+  account: Pick<DashboardAccountViewModel, "healthKind" | "dismissedHealth">
+): boolean {
+  return (
+    !account.dismissedHealth &&
+    (isAccountReauthorizationRequired(account.healthKind) ||
+      account.healthKind === "refresh_failed" ||
+      account.healthKind === "disabled" ||
+      account.healthKind === "quota")
   );
 }
 
@@ -169,7 +188,7 @@ function compareOptionalNumbers(left: number | undefined, right: number | undefi
 export function getBlockedAccountIds(accounts: readonly DashboardAccountViewModel[]): string[] {
   return accounts.flatMap((account) =>
     account.accountKind !== "sub2api" &&
-    account.healthKind === "reauthorize" &&
+    isAccountReauthorizationRequired(account.healthKind) &&
     account.mailboxDeactivated === true
       ? [account.id]
       : []

@@ -3,9 +3,9 @@ import http from "node:http";
 const MAX_BODY_BYTES = 1_000_000;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "quota_exhausted"]);
 
-export function createGatewayServer({ sessions, config }) {
+export function createGatewayServer({ sessions, config, usage }) {
   return http.createServer((request, response) => {
-    void handleRequest(request, response, { sessions, config }).catch((error) => {
+    void handleRequest(request, response, { sessions, config, usage }).catch((error) => {
       if (!response.headersSent) {
         sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }, config);
       } else if (!response.destroyed) {
@@ -36,7 +36,7 @@ export function listen(server, host, port) {
   });
 }
 
-async function handleRequest(request, response, { sessions, config }) {
+async function handleRequest(request, response, { sessions, config, usage }) {
   const url = new URL(request.url ?? "/", `http://${config.server.host}`);
   applyCors(response, config);
   if (request.method === "OPTIONS") {
@@ -59,7 +59,7 @@ async function handleRequest(request, response, { sessions, config }) {
     const developWorktree = typeof sessions.hasWorktreeSupport === "function"
       ? sessions.hasWorktreeSupport()
       : false;
-    sendJson(response, 200, {
+    const capabilities = {
       api: "v1",
       modes: ["research", "develop"],
       sessionEvents: true,
@@ -69,7 +69,15 @@ async function handleRequest(request, response, { sessions, config }) {
       recoveryStatus: true,
       developWorktree,
       maxSessions: sessions.maxSessions
-    }, config);
+    };
+    if (typeof usage?.snapshot === "function") {
+      capabilities.tokenUsage = true;
+    }
+    sendJson(response, 200, capabilities, config);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/v1/usage/today") {
+    sendJson(response, 200, usage?.snapshot?.() ?? unavailableUsage(), config);
     return;
   }
   if (request.method === "GET" && url.pathname === "/v1/manager/accounts") {
@@ -225,6 +233,24 @@ async function handleRequest(request, response, { sessions, config }) {
     return;
   }
   sendJson(response, 405, { error: "method not allowed" }, config);
+}
+
+function unavailableUsage() {
+  return {
+    status: "unavailable",
+    date: undefined,
+    timeZone: undefined,
+    calculatedAt: undefined,
+    eventCount: 0,
+    total: {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+      totalTokens: 0
+    },
+    byModel: []
+  };
 }
 
 function streamEvents(request, response, sessions, id, config) {

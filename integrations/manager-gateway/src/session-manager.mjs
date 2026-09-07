@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { QuotaExhaustionError, SessionCancelledError } from "./providers.mjs";
+import { normalizeTokenUsage } from "./usage.mjs";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "quota_exhausted"]);
 const MAX_EVENTS = 512;
@@ -14,10 +15,11 @@ export class GatewaySessionManager {
   #automaticSwitchInFlight;
   #eventSequence = 0;
 
-  constructor({ provider, manager, workspaces, maxSessions = 4, now = () => Date.now(), idFactory = randomUUID }) {
+  constructor({ provider, manager, workspaces, usage, maxSessions = 4, now = () => Date.now(), idFactory = randomUUID }) {
     this.provider = provider;
     this.manager = manager;
     this.workspaces = workspaces;
+    this.usage = usage;
     this.maxSessions = maxSessions;
     this.now = now;
     this.idFactory = idFactory;
@@ -423,6 +425,8 @@ export class GatewaySessionManager {
         signal: session.controller.signal,
         emit: (event) => this.#emit(session, event)
       });
+      const usage = normalizeTokenUsage(result?.usage);
+      await this.#recordUsage(usage);
       if (session.interjectionRequested) {
         await this.#refreshWorkspace(session);
         this.#queueInterjection(session, turn);
@@ -436,7 +440,8 @@ export class GatewaySessionManager {
       await this.#refreshWorkspace(session);
       session.result = {
         text: typeof result?.text === "string" ? result.text : undefined,
-        threadId: typeof result?.threadId === "string" ? result.threadId : undefined
+        threadId: typeof result?.threadId === "string" ? result.threadId : undefined,
+        ...(usage ? { usage } : {})
       };
       if (turn) {
         turn.status = "completed";
@@ -450,6 +455,7 @@ export class GatewaySessionManager {
       session.resumeThreadId = undefined;
       this.#finish(session, "completed");
     } catch (error) {
+      await this.#recordUsage(normalizeTokenUsage(error?.usage));
       if (session.interjectionRequested) {
         await this.#refreshWorkspace(session);
         this.#queueInterjection(session, turn);
@@ -533,6 +539,18 @@ export class GatewaySessionManager {
         type: "session.workspace_error",
         message: error instanceof Error ? error.message : String(error)
       });
+    }
+  }
+
+  async #recordUsage(usage) {
+    if (!usage || typeof this.usage?.record !== "function") {
+      return;
+    }
+    try {
+      await this.usage.record(usage);
+    } catch {
+      // Usage accounting is observational and must not change the provider
+      // result or make a completed session fail.
     }
   }
 

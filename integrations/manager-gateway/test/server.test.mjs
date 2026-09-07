@@ -163,6 +163,53 @@ describe("manager gateway HTTP API", () => {
     assert.deepEqual(await status.json(), { ok: true, activeAccountId: "account-a" });
   });
 
+  it("exposes Gateway-owned token usage even without Manager control APIs", async () => {
+    const sessions = new GatewaySessionManager({
+      provider: { async run() { return { text: "unused" }; } }
+    });
+    const usage = {
+      snapshot() {
+        return {
+          status: "ready",
+          date: "2026-09-05",
+          timeZone: "Asia/Shanghai",
+          calculatedAt: 1_757_059_200_000,
+          eventCount: 1,
+          total: {
+            inputTokens: 12,
+            cachedInputTokens: 3,
+            outputTokens: 4,
+            reasoningOutputTokens: 1,
+            totalTokens: 16
+          },
+          byModel: [{
+            model: "gpt-6-astra",
+            inputTokens: 12,
+            cachedInputTokens: 3,
+            outputTokens: 4,
+            reasoningOutputTokens: 1,
+            totalTokens: 16
+          }]
+        };
+      }
+    };
+    const config = {
+      server: { host: "127.0.0.1", port: 0, token: "gateway-secret", corsOrigin: "*" }
+    };
+    const server = createGatewayServer({ sessions, config, usage });
+    servers.push(server);
+    const address = await listen(server, config.server.host, 0);
+    const baseUrl = `http://${address.host}:${address.port}`;
+    const headers = { authorization: "Bearer gateway-secret" };
+
+    const response = await fetch(`${baseUrl}/v1/usage/today`, { headers });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), usage.snapshot());
+
+    const capabilities = await fetch(`${baseUrl}/v1/capabilities`, { headers });
+    assert.equal((await capabilities.json()).tokenUsage, true);
+  });
+
   it("reports unavailable optional capabilities instead of advertising them unconditionally", async () => {
     const sessions = new GatewaySessionManager({
       provider: { async run() { return { text: "unused" }; } }

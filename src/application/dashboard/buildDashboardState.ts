@@ -164,6 +164,7 @@ function mapAccount(
   const subscription = virtual
     ? { text: "", title: "" }
     : resolveSubscriptionDisplay(account, viewState?.tokens, copy, lang);
+  const authMode = virtual ? undefined : account.authMode === "oauth" ? "chatgpt" : account.authMode ?? "chatgpt";
   const resetCreditsAvailable = virtual ? undefined : account.quotaSummary?.resetCreditsAvailable;
   const resetCreditsNextExpiresAt = virtual ? undefined : account.quotaSummary?.resetCreditsNextExpiresAt;
   if ((resetCreditsAvailable ?? 0) > 0 && resetCreditsNextExpiresAt == null) {
@@ -184,7 +185,7 @@ function mapAccount(
     providerActive: account.providerActive,
     displayName: virtual ? "Sub2API Gateway" : account.accountName?.trim() ?? account.email,
     email: account.email,
-    authMode: virtual ? undefined : account.authMode ?? "chatgpt",
+    authMode,
     accountName: account.accountName,
     tags: [...(account.tags ?? [])],
     authProviderLabel: virtual ? "Gateway" : formatAuthProvider(account.authProvider, lang),
@@ -384,6 +385,10 @@ function formatHealthLabel(kind: DashboardAccountViewModel["healthKind"], copy: 
       return copy.tokenAutomationExpiring;
     case "refresh_failed":
       return copy.tokenAutomationRefreshFailed;
+    case "refresh_token_invalid":
+      return copy.tokenAutomationRefreshTokenInvalid;
+    case "access_token_invalid":
+      return copy.tokenAutomationAccessTokenInvalid;
     case "reauthorize":
       return copy.tokenAutomationReauthorize;
     case "disabled":
@@ -613,6 +618,8 @@ function formatAddMethod(value: string | undefined, lang: DashboardState["lang"]
 
 function getHealthPriority(health: ReturnType<typeof resolveAccountHealth>): number {
   switch (health.kind) {
+    case "refresh_token_invalid":
+    case "access_token_invalid":
     case "reauthorize":
       return 5;
     case "disabled":

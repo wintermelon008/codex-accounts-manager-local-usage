@@ -569,6 +569,64 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   padding: 9px 12px;
   font-size: 11px;
 }
+.saved-accounts-header-actions > .account-fast-mode-toggle {
+  min-height: 24px;
+  height: 24px;
+  justify-content: center;
+}
+.saved-accounts-header-actions > .account-sort-controls {
+  gap: 3px;
+  padding: 2px;
+  border-radius: 8px;
+}
+.saved-accounts-header-actions .account-sort-select {
+  min-height: 18px;
+  padding: 0 18px 0 6px;
+  border-radius: 6px;
+}
+.saved-accounts-header-actions .account-sort-direction {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+}
+.saved-accounts-header-actions .account-sort-arrow {
+  margin-left: 2px;
+  font-size: 8px;
+}
+.saved-accounts-header-actions > .account-group-filters,
+.saved-accounts-header-actions > .account-plan-filters {
+  gap: 3px;
+  padding: 2px;
+  border-radius: 8px;
+}
+.saved-accounts-header-actions .account-group-filter,
+.saved-accounts-header-actions .account-plan-filter {
+  height: 18px;
+  border-radius: 6px;
+  font-size: 10px;
+}
+.saved-accounts-header-actions .account-group-filter {
+  width: 18px;
+}
+.saved-accounts-header-actions .account-plan-filter {
+  min-width: 26px;
+  padding: 0 5px;
+}
+.saved-accounts-header-actions > .settings-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.saved-accounts-header-actions > .toolbar-btn {
+  min-height: 24px;
+  padding: 4px 9px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
 .mailbox-open-btn {
   color: var(--text-primary);
   border-color: var(--border-accent);
@@ -2136,15 +2194,29 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
   font-size: 11px;
   font-weight: 800;
 }
-.saved-back-hint {
+.saved-back-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   margin-top: auto;
   padding-top: 6px;
+}
+.saved-back-hint {
+  min-width: 0;
+  flex: 1 1 auto;
   text-align: center;
   color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.saved-back-footer .saved-back-copy-action.action-btn.icon-only {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
 }
 .saved-refresh {
   padding: 0 10px 8px;
@@ -2378,6 +2450,13 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
   height: 30px;
   padding: 0;
   border-radius: 10px;
+}
+.saved-accounts-header-actions > .settings-btn.action-btn.icon-only {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  box-sizing: border-box;
 }
 .action-btn.icon-only .button-face {
   gap: 0;

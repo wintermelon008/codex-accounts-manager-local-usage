@@ -91,6 +91,7 @@ export function createFeishuAssistant(options) {
     const result = await handleAssistantEvent(event, {
       adminOpenIds: options.adminOpenIds,
       manager: options.manager,
+      gateway: options.gateway,
       paymentWorkflow: options.paymentWorkflow,
       webWorkflow: options.webWorkflow
     });

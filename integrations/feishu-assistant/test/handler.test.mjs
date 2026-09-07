@@ -70,6 +70,52 @@ describe("Feishu assistant handler", () => {
     assert.doesNotMatch(result.reply, /access_token|refresh_token|id_token|secret/u);
   });
 
+  it("routes ordinary private messages through the optional Gateway", async () => {
+    let received;
+    const result = await handleAssistantEvent(event("p2p", "admin-open-id", "请总结今天的研究记录"), {
+      adminOpenIds,
+      gateway: {
+        async sendMessage(chatId, message) {
+          received = { chatId, message };
+          return "Gateway 已完成总结";
+        }
+      }
+    });
+
+    assert.deepEqual(received, { chatId: "chat-id", message: "请总结今天的研究记录" });
+    assert.deepEqual(result, { handled: true, reply: "Gateway 已完成总结" });
+  });
+
+  it("does not fabricate an account inventory in Gateway-only status", async () => {
+    const result = await handleAssistantEvent(event("p2p", "admin-open-id", "状态"), {
+      adminOpenIds,
+      gateway: {
+        async getStatus() {
+          return {
+            gatewayCapabilities: {
+              modes: ["research", "develop"],
+              sessionEvents: true,
+              tokenUsage: true
+            },
+            usageToday: {
+              source: "gateway",
+              date: "2026-09-05",
+              timeZone: "Asia/Shanghai",
+              total: { totalTokens: 16, inputTokens: 12, cachedInputTokens: 3, outputTokens: 4, reasoningOutputTokens: 1 },
+              eventCount: 1,
+              status: "ready",
+              byModel: [{ model: "gpt-6-astra", totalTokens: 16 }]
+            }
+          };
+        }
+      }
+    });
+
+    assert.match(result.reply, /Manager Gateway 状态/u);
+    assert.match(result.reply, /gpt-6-astra/u);
+    assert.doesNotMatch(result.reply, /账号：0/u);
+  });
+
   it("returns a refresh job for asynchronous follow-up", async () => {
     const result = await handleAssistantEvent(event("p2p", "admin-open-id", "刷新额度 account-1"), {
       adminOpenIds,

@@ -2,8 +2,9 @@ import { isTokenExpired } from "../../utils/jwt";
 import { CodexAccountRecord, CodexTokens, isSub2ApiAccount } from "../../core/types";
 import { getQuotaIssueKind } from "../../utils/quotaIssue";
 import type { AccountAutomationState, TokenAutomationSnapshot } from "../../presentation/workbench/tokenAutomationState";
+import type { AccountHealthKind } from "../../domain/accountHealth";
 
-export type AccountHealthKind = "healthy" | "expiring" | "refresh_failed" | "reauthorize" | "disabled" | "quota";
+export type { AccountHealthKind } from "../../domain/accountHealth";
 
 export type AccountHealthInfo = {
   kind: AccountHealthKind;
@@ -30,11 +31,19 @@ export function resolveAccountHealth(
   }
 
   const automationError = automationState?.lastError;
-  if (quotaIssueKind === "auth" || automationState?.errorKind === "reauthorize" || isAuthLikeMessage(automationError)) {
+  if (quotaIssueKind === "auth") {
     return {
-      kind: "reauthorize",
-      issueKey: buildIssueKey("reauthorize", account.quotaError?.code, account.quotaError?.message, automationError),
-      message: automationError ?? account.quotaError?.message
+      kind: "access_token_invalid",
+      issueKey: buildIssueKey("access_token_invalid", account.quotaError?.code, account.quotaError?.message),
+      message: account.quotaError?.message
+    };
+  }
+
+  if (automationState?.errorKind === "reauthorize" || isAuthLikeMessage(automationError)) {
+    return {
+      kind: "refresh_token_invalid",
+      issueKey: buildIssueKey("refresh_token_invalid", automationError),
+      message: automationError
     };
   }
 
@@ -54,7 +63,15 @@ export function resolveAccountHealth(
     };
   }
 
-  if (!tokens?.idToken || !tokens.accessToken) {
+  if (!tokens?.accessToken) {
+    return {
+      kind: "access_token_invalid",
+      issueKey: "access_token_invalid:credentials_missing",
+      message: "Codex access token is missing"
+    };
+  }
+
+  if (!tokens.idToken) {
     return {
       kind: "reauthorize",
       issueKey: "reauthorize:credentials_missing",

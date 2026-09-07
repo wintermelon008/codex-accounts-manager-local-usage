@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CodexAccountRecord } from "../src/core/types";
+import { isAccountReauthorizationRequired } from "../src/domain/accountHealth";
 import { resolveAccountHealth } from "../src/application/accounts/health";
 
 describe("account health", () => {
@@ -24,12 +25,36 @@ describe("account health", () => {
     });
 
     expect(health).toMatchObject({
-      kind: "reauthorize",
+      kind: "refresh_token_invalid",
       message: "Token refresh failed (401)"
     });
   });
 
-  it("marks accounts without usable OAuth credentials for reauthorization", () => {
+  it("distinguishes an access-token rejection from a refresh-token failure", () => {
+    const health = resolveAccountHealth(
+      {
+        id: "account-access-token",
+        email: "access@example.com",
+        isActive: false,
+        quotaError: { code: "unauthorized", message: "API returned 401", timestamp: 100 },
+        createdAt: 1,
+        updatedAt: 100
+      },
+      { idToken: "id-token", accessToken: "access-token", refreshToken: "refresh-token" },
+      { enabled: true, intervalMs: 300_000, skewSeconds: 300, accounts: {} }
+    );
+
+    expect(health).toMatchObject({ kind: "access_token_invalid", message: "API returned 401" });
+  });
+
+  it("keeps all credential failures visible to reauthorization-dependent integrations", () => {
+    expect(isAccountReauthorizationRequired("reauthorize")).toBe(true);
+    expect(isAccountReauthorizationRequired("refresh_token_invalid")).toBe(true);
+    expect(isAccountReauthorizationRequired("access_token_invalid")).toBe(true);
+    expect(isAccountReauthorizationRequired("refresh_failed")).toBe(false);
+  });
+
+  it("marks accounts without an access token as access-token invalid", () => {
     const account: CodexAccountRecord = {
       id: "account-2",
       email: "missing@example.com",
@@ -46,9 +71,9 @@ describe("account health", () => {
     });
 
     expect(health).toEqual({
-      kind: "reauthorize",
-      issueKey: "reauthorize:credentials_missing",
-      message: "Codex OAuth credentials are missing"
+      kind: "access_token_invalid",
+      issueKey: "access_token_invalid:credentials_missing",
+      message: "Codex access token is missing"
     });
   });
 });

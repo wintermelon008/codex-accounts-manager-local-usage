@@ -83,6 +83,24 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).toContain('sendAction("refreshLocalUsage")');
     expect(main).toContain('id="forceFastModeToggle"');
     expect(main).toContain('sendSetting("forceFastModeEnabled", enabled)');
+    const fastToggleIndex = main.indexOf('id="forceFastModeToggle"');
+    const sortControlsIndex = main.indexOf('class="account-sort-controls"');
+    const groupFiltersIndex = main.indexOf('class="account-group-filters"', sortControlsIndex);
+    expect(fastToggleIndex).toBeGreaterThan(-1);
+    expect(sortControlsIndex).toBeGreaterThan(-1);
+    expect(groupFiltersIndex).toBeGreaterThan(sortControlsIndex);
+    expect(fastToggleIndex).toBeLessThan(sortControlsIndex);
+    expect(main.slice(sortControlsIndex, groupFiltersIndex)).not.toContain("forceFastModeToggle");
+    const compactHeaderStylesStart = stylesheet.indexOf(
+      ".saved-accounts-header-actions > .account-fast-mode-toggle"
+    );
+    const compactHeaderStylesEnd = stylesheet.indexOf(".mailbox-open-btn", compactHeaderStylesStart);
+    const compactHeaderStyles = stylesheet.slice(compactHeaderStylesStart, compactHeaderStylesEnd);
+    expect(compactHeaderStyles).toContain("height: 24px");
+    expect(compactHeaderStyles).toContain("min-height: 24px");
+    expect(compactHeaderStyles).toContain("min-height: 18px");
+    expect(compactHeaderStyles).toContain("height: 18px");
+    expect(compactHeaderStyles).toContain("min-height: 24px;");
     expect(main).not.toContain("账号排序");
   });
 
@@ -289,8 +307,15 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(card).toContain("copyImportJsonSucceeded");
     expect(card).toContain("<CopyIcon />");
     expect(card).toContain("<SuccessIcon />");
+    expect(card).toContain('class="saved-back-footer"');
+    expect(card).toContain('class="saved-back-copy-action"');
+    expect(card).toContain('onAction("copyText", account.id, { text: account.email })');
+    expect(card).toContain("accountNameCopyPending");
+    expect(card).toContain("accountNameCopySucceeded");
     expect(main).toContain('isActionPending("copyAccountImportJson", account.id)');
+    expect(main).toContain('isActionPending("copyText", account.id)');
     expect(modalHooks).toContain("feedback.showCopyFeedback(`account-import-json:${message.accountId}`)");
+    expect(modalHooks).toContain("feedback.showCopyFeedback(`account-name:${message.accountId}`)");
   });
 
   it("supports hiding selected accounts and filtering them from the saved-account grid", () => {
@@ -308,6 +333,12 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).toContain('sendAction("hideAccounts"');
     expect(main).toContain('sendAction("unhideAccounts"');
     expect(main).toContain("hiddenAccountsToggleButton");
+    expect(main).toContain("invalidAccountsToggleButton");
+    expect(main).toContain("<InvalidAccountsIcon />");
+    expect(main).toContain("disabled={invalidAccountCount === 0 && !showInvalidAccounts}");
+    expect(main.indexOf('id="invalidAccountsToggleButton"')).toBeGreaterThan(
+      main.indexOf('id="hiddenAccountsToggleButton"')
+    );
     expect(main).toContain("pageAccounts.map");
     expect(card).toContain("is-hidden-account");
     expect(card).toContain("已隐藏");

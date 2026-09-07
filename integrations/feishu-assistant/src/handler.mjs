@@ -20,33 +20,63 @@ export async function handleAssistantEvent(event, options) {
   }
 
   const command = parseAssistantCommand(text);
+  if (command?.action === "unknown" && typeof options.gateway?.sendMessage === "function") {
+    try {
+      return {
+        handled: true,
+        reply: await options.gateway.sendMessage(message?.chat_id, text)
+      };
+    } catch (error) {
+      return { handled: true, reply: `操纵助手\n${safeErrorMessage(error)}` };
+    }
+  }
   if (!command || command.action === "help" || command.action === "unknown") {
     return {
       handled: true,
-      reply: assistantHelp(Boolean(options.paymentWorkflow), Boolean(options.webWorkflow))
+      reply: assistantHelp(
+        Boolean(options.paymentWorkflow),
+        Boolean(options.webWorkflow),
+        typeof options.gateway?.sendMessage === "function"
+      )
     };
   }
   if (command.action === "invalid") {
     return {
       handled: true,
-      reply: `操纵助手\n${command.message}\n\n${assistantHelp(Boolean(options.paymentWorkflow), Boolean(options.webWorkflow))}`
+      reply: `操纵助手\n${command.message}\n\n${assistantHelp(
+        Boolean(options.paymentWorkflow),
+        Boolean(options.webWorkflow),
+        typeof options.gateway?.sendMessage === "function"
+      )}`
     };
   }
 
   try {
     if (command.action === "health") {
-      const health = await options.manager.getHealth();
+      const health = await firstAvailable(
+        [options.manager?.getHealth, options.gateway?.getHealth],
+        "Manager 和 Gateway 健康接口都不可用。"
+      );
       return { handled: true, reply: formatHealth(health) };
     }
     if (command.action === "status") {
-      const status = await options.manager.getStatus();
+      const status = await firstAvailable(
+        [options.manager?.getStatus, options.gateway?.getStatus],
+        "Manager 和 Gateway 状态接口都不可用。"
+      );
       return { handled: true, reply: formatStatus(status) };
     }
     if (command.action === "usage") {
-      const usage = await options.manager.getUsageToday();
+      const usage = await firstAvailable(
+        [options.gateway?.getUsageToday, options.manager?.getUsageToday],
+        "Manager 和 Gateway 用量接口都不可用。"
+      );
       return { handled: true, reply: formatUsage(usage) };
     }
     if (command.action === "refresh") {
+      if (typeof options.manager?.refreshQuotas !== "function") {
+        throw new Error("当前设备未接入 Manager 控制接口，不能刷新额度。 ");
+      }
       const job = await options.manager.refreshQuotas(command.accountIds);
       return {
         handled: true,
@@ -103,6 +133,9 @@ export async function handleAssistantEvent(event, options) {
       };
     }
     if (command.action === "import-status") {
+      if (typeof options.manager?.getImportStatus !== "function") {
+        throw new Error("当前设备未接入 Manager 控制接口，不能查询导入任务。 ");
+      }
       const status = await options.manager.getImportStatus(command.jobId);
       return { handled: true, reply: formatImportStatus(status) };
     }
@@ -111,8 +144,30 @@ export async function handleAssistantEvent(event, options) {
   }
   return {
     handled: true,
-    reply: assistantHelp(Boolean(options.paymentWorkflow), Boolean(options.webWorkflow))
+    reply: assistantHelp(
+      Boolean(options.paymentWorkflow),
+      Boolean(options.webWorkflow),
+      typeof options.gateway?.sendMessage === "function"
+    )
   };
+}
+
+async function firstAvailable(candidates, unavailableMessage) {
+  let lastError;
+  for (const candidate of candidates) {
+    if (typeof candidate !== "function") {
+      continue;
+    }
+    try {
+      return await candidate();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+  throw new Error(unavailableMessage);
 }
 
 export function extractTextContent(content) {
@@ -134,12 +189,25 @@ export function senderOpenIdFrom(sender) {
 
 export function formatHealth(health) {
   if (health?.ok === true) {
-    return `Manager 控制接口正常\n服务：${health.service ?? "codex-accounts-manager"}`;
+    const service = health.service ?? "codex-accounts-manager";
+    return `${service === "codex-accounts-manager-gateway" ? "Manager Gateway" : "Manager 控制接口"}正常\n服务：${service}`;
   }
   return "Manager 控制接口返回了异常状态。";
 }
 
 export function formatStatus(status) {
+  if (status?.gatewayCapabilities) {
+    const capabilities = status.gatewayCapabilities;
+    const modes = Array.isArray(capabilities.modes) ? capabilities.modes.join("、") : "未知";
+    return [
+      "Manager Gateway 状态",
+      `AI session：${capabilities.sessionEvents === true ? "可用" : "不可用"}`,
+      `模式：${modes}`,
+      `Token 用量：${capabilities.tokenUsage === true ? "可用" : "不可用"}`,
+      "",
+      formatUsage(status.usageToday)
+    ].join("\n");
+  }
   const counts = status?.accounts?.counts ?? {};
   const accounts = Array.isArray(status?.accounts?.accounts) ? status.accounts.accounts : [];
   const lines = [
@@ -169,6 +237,7 @@ export function formatUsage(usage) {
   const total = usage.total ?? {};
   const lines = [
     "今日 Token 用量",
+    ...(usage.source === "gateway" ? ["来源：Manager Gateway"] : []),
     `日期：${usage.date || "未知"}（${usage.timeZone || "本地时区"}）`,
     `总量：${formatInteger(total.totalTokens)} tokens`,
     `输入：${formatInteger(total.inputTokens)}，缓存输入：${formatInteger(total.cachedInputTokens)}，输出：${formatInteger(total.outputTokens)}，推理输出：${formatInteger(total.reasoningOutputTokens)}`,
@@ -255,7 +324,7 @@ export function formatPaymentStatus(order) {
   return lines.join("\n");
 }
 
-export function assistantHelp(paymentConfigured = false, webWorkflowConfigured = false) {
+export function assistantHelp(paymentConfigured = false, webWorkflowConfigured = false, gatewayConfigured = false) {
   const paymentHelp = paymentConfigured
     ? "购买 <商品编号>：创建支付订单并发送二维码；支付确认后才会执行后续导入。\n支付状态：查询当前支付订单。\n"
     : "支付/购买流程暂未配置具体第三方支付平台适配器。\n";
@@ -264,11 +333,12 @@ export function assistantHelp(paymentConfigured = false, webWorkflowConfigured =
     : "网页分析流程暂未配置。\n";
   return (
     "Manager 操纵助手\n" +
+    (gatewayConfigured ? "发送普通文字：通过 Manager Gateway 创建或继续 AI 会话。\n" : "") +
     "账号 / 状态：查看账号、健康、额度池和今日用量。\n" +
     "用量：查看今日 Token 使用。\n" +
     "刷新额度 [账号 ID ...]：刷新全部或指定账号额度。\n" +
     "导入状态 <任务编号>：查询本地导入任务。\n" +
-    "健康：检查 Manager 控制接口。\n" +
+    "健康：检查 Manager/Gateway 接口。\n" +
     paymentHelp +
     webHelp
   );

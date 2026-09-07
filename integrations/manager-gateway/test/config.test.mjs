@@ -21,6 +21,7 @@ describe("manager gateway config", () => {
       apiKey: undefined,
       model: "local-test"
     });
+    assert.equal(config.codex.model, undefined);
     assert.equal(config.maxSessions, 3);
     assert.equal(isLoopbackHost(config.server.host), true);
   });
@@ -41,6 +42,11 @@ describe("manager gateway config", () => {
     });
     assert.equal(config.workbenchDataUrl, "http://127.0.0.1:43119");
     assert.equal(config.workbenchDataToken, "workbench-data-token");
+  });
+
+  it("accepts an accounting-only Codex model hint for no-interface devices", () => {
+    const config = loadConfig({ MANAGER_GATEWAY_CODEX_MODEL: "gpt-6-astra" });
+    assert.equal(config.codex.model, "gpt-6-astra");
   });
 
   it("rejects a relative Codex home to keep Manager and Gateway auth aligned", () => {

@@ -82,6 +82,39 @@ describe("Feishu long-connection adapter", () => {
     assert.equal(closed, true);
   });
 
+  it("forwards ordinary private messages to the configured Gateway", async () => {
+    const sent = [];
+    let received;
+    const bot = createFeishuAssistant({
+      appId: "app-placeholder",
+      appSecret: "secret-placeholder",
+      adminOpenIds: new Set(["admin-open-id"]),
+      manager: undefined,
+      gateway: {
+        async sendMessage(chatId, message) {
+          received = { chatId, message };
+          return "来自 Gateway 的回复";
+        }
+      },
+      client: { im: { v1: { message: { create: async (request) => sent.push(request) } } } },
+      wsClient: { start: async () => undefined, close: () => undefined }
+    });
+
+    const result = await bot.processMessage({
+      message: {
+        message_id: "message-gateway",
+        chat_type: "p2p",
+        chat_id: "chat-gateway",
+        content: JSON.stringify({ text: "请通过 Gateway 处理" })
+      },
+      sender: { sender_id: { open_id: "admin-open-id" } }
+    });
+
+    assert.deepEqual(received, { chatId: "chat-gateway", message: "请通过 Gateway 处理" });
+    assert.equal(result.sent, true);
+    assert.equal(JSON.parse(sent[0].data.content).text, "来自 Gateway 的回复");
+  });
+
   it("uploads and sends the payment QR after the order text", async () => {
     const sent = [];
     let uploaded;

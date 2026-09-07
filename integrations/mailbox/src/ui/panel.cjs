@@ -222,7 +222,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-fivesim-offer-value.price { color: var(--accent); font-family: var(--vscode-editor-font-family); }
     .registration-fivesim-section { display: grid; gap: 6px; margin-top: 10px; }
     .registration-fivesim-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; font-weight: 650; }
-    .registration-fivesim-country-list { display: grid; gap: 5px; max-height: 220px; overflow: auto; }
+    .registration-fivesim-country-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; gap: 5px; max-height: 220px; overflow: auto; }
     .registration-fivesim-country { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 9px; text-align: left; }
     .registration-fivesim-country.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
     .registration-fivesim-country-main, .registration-fivesim-country-price { min-width: 0; display: grid; gap: 2px; }
@@ -285,6 +285,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       .registration-fivesim-operator-card { grid-template-columns: minmax(0, 1fr) auto; padding-inline: 8px; }
       .registration-standalone { padding-inline: 0; }
       .registration-mailbox-list { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .registration-fivesim-country-list { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -812,6 +815,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             selectionDirection: document.activeElement.selectionDirection
           }
           : null;
+        const panelScrollPositions = capturePanelScrollPositions();
         const mailboxScrollTop = mailboxList?.scrollTop || 0;
         const layoutScrollTop = layout?.scrollTop || 0;
         const contentScrollTop = content?.scrollTop || 0;
@@ -825,6 +829,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         if (importOpen) document.body.insertAdjacentHTML("beforeend", renderImportModal());
         if (editOpenMailboxId) document.body.insertAdjacentHTML("beforeend", renderEditModal());
         if (deleteConfirm) document.body.insertAdjacentHTML("beforeend", renderDeleteConfirmModal());
+        restorePanelScrollPositions(panelScrollPositions);
         const nextMailboxList = document.querySelector(".mailbox-list");
         const nextLayout = document.querySelector(".layout");
         const nextContent = document.querySelector(".content");
@@ -1246,6 +1251,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const source = sources.find((item) => item.id === storedSourceId) || sources[0];
         registrationPhoneSourceSelections[session.id] = source.id;
         const isFiveSim = source.id === "fivesim";
+        const refreshingFiveSim = isFiveSim && phase === "logging_in";
         const keyPool = state.registrationKeyPool || { keys: [], available: 0, inUse: 0, count: 0 };
         const keys = Array.isArray(keyPool.keys) ? keyPool.keys : [];
         const availableKeys = keys.filter((key) => key.status === "available");
@@ -1374,10 +1380,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '<div class="field-note">' + (fiveSimToken.configured ? '当前 Token：' + esc(fiveSimToken.masked || "已配置") : '尚未配置 5SIM API Token') + '。Token 单独保存，不进入 LIYE Key 池。</div>' +
           '<div class="field-note">' + esc(formatFiveSimExchangeRateNote(fiveSimExchangeRate)) + '</div>' +
           '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>当前余额</label><strong>' + esc(formatFiveSimPrice(fiveSimAccount.balance)) + '</strong></div><div class="registration-fivesim-account-item"><label>冻结余额</label><strong>' + esc(formatFiveSimPrice(fiveSimAccount.frozenBalance)) + '</strong></div><div class="registration-fivesim-account-item"><label>账号评分</label><strong>' + esc(Number.isFinite(Number(fiveSimAccount.rating)) ? String(fiveSimAccount.rating) : "平台未提供") + '</strong></div></div>' +
-          '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-fivesim" data-session-id="' + esc(session.id) + '"' + (active || terminal || !fiveSimToken.configured ? " disabled" : "") + '>刷新余额与地区</button>' + (fiveSimAccount.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(fiveSimAccount.updatedAt)) + '</span>' : '') + '</div>' +
+          '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-fivesim" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingFiveSim || !fiveSimToken.configured ? " disabled" : "") + '>刷新余额与地区</button>' + (fiveSimAccount.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(fiveSimAccount.updatedAt)) + '</span>' : '') + '</div>' +
           '<div class="registration-fivesim-offer-tools"><div class="field"><label for="registrationFiveSimPriceMax-' + esc(session.id) + '">最高价格</label><input id="registrationFiveSimPriceMax-' + esc(session.id) + '" type="text" inputmode="decimal" value="' + esc(fiveSimPriceMax) + '" placeholder="不限"' + configDisabled + '></div><div class="field"><label for="registrationFiveSimSuccessMin-' + esc(session.id) + '">最低成功率 (%)</label><input id="registrationFiveSimSuccessMin-' + esc(session.id) + '" type="text" inputmode="decimal" value="' + esc(fiveSimSuccessMin) + '" placeholder="不限"' + configDisabled + '></div></div>' +
-          '<div class="registration-fivesim-section"><div class="registration-fivesim-section-title"><span>选择地区</span><span>按内部最低价递增</span></div><div class="registration-fivesim-country-list" aria-label="5SIM 地区列表">' + fiveSimCountryRows + '</div></div>' +
-          '<div class="registration-fivesim-section"><div class="registration-fivesim-section-title"><span>' + (selectedFiveSimCountryGroup ? '选择运营商 · ' + esc(selectedFiveSimCountryGroup.minOffer.countryName || selectedFiveSimCountry) : '选择运营商') + '</span><span>推荐项优先</span></div><div class="registration-fivesim-operator-list" aria-label="5SIM 运营商列表">' + fiveSimOperatorRows + '</div></div>' +
+          '<div class="registration-fivesim-section"><div class="registration-fivesim-section-title"><span>选择地区</span><span>按内部最低价递增</span></div><div class="registration-fivesim-country-list" data-scroll-preserve="registration-fivesim-country-list-' + esc(session.id) + '" aria-label="5SIM 地区列表">' + fiveSimCountryRows + '</div></div>' +
+          '<div class="registration-fivesim-section"><div class="registration-fivesim-section-title"><span>' + (selectedFiveSimCountryGroup ? '选择运营商 · ' + esc(selectedFiveSimCountryGroup.minOffer.countryName || selectedFiveSimCountry) : '选择运营商') + '</span><span>推荐项优先</span></div><div class="registration-fivesim-operator-list" data-scroll-preserve="registration-fivesim-operator-list-' + esc(session.id) + '" aria-label="5SIM 运营商列表">' + fiveSimOperatorRows + '</div></div>' +
         '</div>';
         const sourcePanel = (sourceId, content, hidden) => '<div data-registration-phone-source-panel="' + sourceId + '"' + (hidden ? ' hidden' : '') + '>' + content + '</div>';
         const liyeKeyField = '<div class="field"><label for="registrationPhoneKey-' + esc(session.id) + '">选择 Key（SecretStorage）</label><select id="registrationPhoneKey-' + esc(session.id) + '"' + configDisabled + '><option value="">请选择 Key</option>' + keyOptions + '</select>' + keyVisibilityNote + '</div>';
@@ -1815,6 +1821,55 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         };
         restore();
         if (typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(restore);
+      }
+
+      const SCROLLABLE_PANEL_SELECTORS = [
+        ".layout",
+        ".mailbox-list",
+        ".content",
+        ".registration-standalone",
+        ".registration-mailbox-list",
+        ".registration-fivesim-offers",
+        ".registration-fivesim-country-list",
+        ".registration-fivesim-operator-list",
+        ".modal"
+      ];
+
+      function scrollPositionKey(element, selector, index) {
+        const explicitKey = element?.dataset?.scrollPreserve || element?.getAttribute?.("data-scroll-preserve");
+        return String(explicitKey || selector + "#" + index);
+      }
+
+      function capturePanelScrollPositions() {
+        const positions = new Map();
+        if (typeof document.querySelectorAll !== "function") return positions;
+        for (const selector of SCROLLABLE_PANEL_SELECTORS) {
+          const elements = document.querySelectorAll(selector);
+          for (let index = 0; index < elements.length; index += 1) {
+            const element = elements[index];
+            const scrollTop = Number(element?.scrollTop);
+            const scrollLeft = Number(element?.scrollLeft);
+            positions.set(scrollPositionKey(element, selector, index), {
+              scrollTop: Number.isFinite(scrollTop) ? scrollTop : 0,
+              scrollLeft: Number.isFinite(scrollLeft) ? scrollLeft : 0
+            });
+          }
+        }
+        return positions;
+      }
+
+      function restorePanelScrollPositions(positions) {
+        if (!positions || typeof document.querySelectorAll !== "function") return;
+        for (const selector of SCROLLABLE_PANEL_SELECTORS) {
+          const elements = document.querySelectorAll(selector);
+          for (let index = 0; index < elements.length; index += 1) {
+            const element = elements[index];
+            const position = positions.get(scrollPositionKey(element, selector, index));
+            if (!position) continue;
+            element.scrollTop = position.scrollTop;
+            element.scrollLeft = position.scrollLeft;
+          }
+        }
       }
 
       function updateRegistrationCountdowns() {

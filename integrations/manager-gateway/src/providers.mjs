@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
+import { normalizeTokenUsage } from "./usage.mjs";
 
 const DEFAULT_WORKBENCH_DATA_URL = "http://127.0.0.1:43119";
 
@@ -55,9 +56,7 @@ function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataTok
       if (!root) {
         throw new GatewayProviderError("开发模式未配置 MANAGER_GATEWAY_PROJECT_ROOT", "project_unconfigured");
       }
-      const runtimeProvider = typeof manager?.getCodexExecProviderConfig === "function"
-        ? normalizeCodexExecProviderConfig(await manager.getCodexExecProviderConfig())
-        : undefined;
+      const runtimeProvider = await resolveRuntimeProvider(manager, emit);
       const providerArgs = runtimeProvider ? buildRuntimeProviderArgs(runtimeProvider) : [];
       const commonArgs = [
         "--json",
@@ -103,6 +102,7 @@ function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataTok
           cwd: root,
           env: environment,
           timeoutSeconds: config.timeoutSeconds,
+          modelHint: runtimeProvider?.route === "gateway" ? runtimeProvider.model : config.model,
           emit,
           signal
         });
@@ -117,12 +117,42 @@ function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataTok
           cwd: root,
           env: environment,
           timeoutSeconds: config.timeoutSeconds,
+          modelHint: runtimeProvider?.route === "gateway" ? runtimeProvider.model : config.model,
           emit,
           signal
         });
       }
     }
   };
+}
+
+async function resolveRuntimeProvider(manager, emit) {
+  if (typeof manager?.getCodexExecProviderConfig !== "function") {
+    return undefined;
+  }
+  try {
+    return normalizeCodexExecProviderConfig(await manager.getCodexExecProviderConfig());
+  } catch (error) {
+    if (!canUseSharedCodexCliFallback(error)) {
+      throw error;
+    }
+    // The Manager's resident hot-switch adapter is optional for the ordinary
+    // ChatGPT route. The Gateway process already shares the same CODEX_HOME
+    // and executable, so a missing adapter must not make an otherwise usable
+    // Codex CLI session fail before it starts.
+    emit?.({
+      type: "provider.runtime_fallback",
+      message: "Manager Codex adapter unavailable; using the shared Codex CLI credentials"
+    });
+    return undefined;
+  }
+}
+
+function canUseSharedCodexCliFallback(error) {
+  if (error?.code === "manager_provider_unavailable") {
+    return true;
+  }
+  return typeof error?.statusCode === "number" && error.statusCode >= 500 && error.statusCode <= 599;
 }
 
 function normalizeCodexExecProviderConfig(value) {
@@ -192,7 +222,7 @@ function buildSemanticResumePrompt(session) {
   ].join("\n\n");
 }
 
-function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, emit, signal }) {
+function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, modelHint, emit, signal }) {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
@@ -202,6 +232,7 @@ function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, emit, signal 
     let settled = false;
     let turnCompleted = false;
     let postTurnGrace;
+    let usage;
 
     const finish = (callback, value) => {
       if (settled) {
@@ -223,12 +254,12 @@ function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, emit, signal 
         return;
       }
       if (quotaDetected) {
-        finish(reject, new QuotaExhaustionError("Codex quota exhausted", { threadId }));
+        finish(reject, new QuotaExhaustionError("Codex quota exhausted", { threadId, usage }));
         terminateChild();
         return;
       }
       const complete = () => {
-        finish(resolve, { threadId, text: finalResponse });
+        finish(resolve, { threadId, text: finalResponse, usage });
         terminateChild();
       };
       // Codex normally emits item.completed before turn.completed. Keep a
@@ -279,6 +310,9 @@ function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, emit, signal 
       if (event.type === "item.completed" && event.item?.type === "agent_message") {
         finalResponse = typeof event.item.text === "string" ? event.item.text : finalResponse;
       }
+      if (event.type === "turn.completed") {
+        usage = normalizeTokenUsage(event.usage ?? event.response?.usage, event.model ?? modelHint) ?? usage;
+      }
       quotaDetected ||= isQuotaEvent(event);
       emit({ type: "codex.event", event });
       if (event.type === "turn.completed") {
@@ -294,7 +328,7 @@ function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, emit, signal 
         return;
       }
       if (quotaDetected) {
-        finish(reject, new QuotaExhaustionError("Codex quota exhausted", { threadId }));
+        finish(reject, new QuotaExhaustionError("Codex quota exhausted", { threadId, usage }));
         return;
       }
       if (exitCode !== 0) {
@@ -308,7 +342,7 @@ function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, emit, signal 
         );
         return;
       }
-      finish(resolve, { threadId, text: finalResponse });
+      finish(resolve, { threadId, text: finalResponse, usage });
     });
 
     const timeout = setTimeout(() => {
@@ -337,6 +371,7 @@ function createOpenAiCompatibleProvider(config) {
         body: JSON.stringify({
           model: config.model,
           stream: true,
+          stream_options: { include_usage: true },
           messages: buildResearchMessages(session)
         })
       });
@@ -348,43 +383,49 @@ function createOpenAiCompatibleProvider(config) {
         const body = await response.json();
         const text = extractAssistantText(body);
         emit({ type: "provider.completed", text });
-        return { text };
+        return { text, usage: normalizeTokenUsage(body?.usage, config.model) };
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       let text = "";
+      let usage;
+      const processLine = (line) => {
+        if (!line.startsWith("data:")) {
+          return;
+        }
+        const raw = line.slice("data:".length).trim();
+        if (raw === "[DONE]") {
+          return;
+        }
+        let event;
+        try {
+          event = JSON.parse(raw);
+        } catch {
+          return;
+        }
+        usage = normalizeTokenUsage(event?.usage ?? event?.response?.usage, config.model) ?? usage;
+        const delta = textContent(event.choices?.[0]?.delta?.content);
+        if (delta) {
+          text += delta;
+          emit({ type: "provider.delta", text: delta });
+        }
+      };
       while (true) {
         const { done, value } = await reader.read();
         buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
         const lines = buffer.split(/\r?\n/u);
         buffer = lines.pop() ?? "";
         for (const line of lines) {
-          if (!line.startsWith("data:")) {
-            continue;
-          }
-          const raw = line.slice("data:".length).trim();
-          if (raw === "[DONE]") {
-            continue;
-          }
-          let event;
-          try {
-            event = JSON.parse(raw);
-          } catch {
-            continue;
-          }
-          const delta = textContent(event.choices?.[0]?.delta?.content);
-          if (delta) {
-            text += delta;
-            emit({ type: "provider.delta", text: delta });
-          }
+          processLine(line);
         }
         if (done) {
+          processLine(buffer);
           break;
         }
       }
       emit({ type: "provider.completed", text });
-      return { text };
+      return { text, usage };
     }
   };
 }

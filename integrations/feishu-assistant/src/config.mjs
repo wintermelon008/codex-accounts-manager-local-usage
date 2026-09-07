@@ -5,19 +5,31 @@ const DEFAULT_PAYMENT_POLL_INTERVAL_MS = 10_000;
 export function loadConfig(env = process.env) {
   const appId = required(env.FEISHU_APP_ID, "FEISHU_APP_ID");
   const appSecret = required(env.FEISHU_APP_SECRET, "FEISHU_APP_SECRET");
-  const managerControlToken = required(env.MANAGER_CONTROL_TOKEN, "MANAGER_CONTROL_TOKEN");
+  const managerControlToken = optional(env.MANAGER_CONTROL_TOKEN);
+  const gatewayUrl = optional(env.FEISHU_GATEWAY_URL);
   const adminOpenIds = parseList(env.FEISHU_ADMIN_OPEN_IDS);
   if (adminOpenIds.length === 0) {
     throw new Error("FEISHU_ADMIN_OPEN_IDS 必须至少包含一个管理员 open_id。 ");
+  }
+  if (!managerControlToken && !gatewayUrl) {
+    throw new Error("MANAGER_CONTROL_TOKEN 或 FEISHU_GATEWAY_URL 至少配置一个。 ");
   }
 
   return {
     feishu: { appId, appSecret, adminOpenIds: new Set(adminOpenIds) },
     manager: {
-      baseUrl: normalizeBaseUrl(env.MANAGER_CONTROL_URL ?? DEFAULT_MANAGER_CONTROL_URL),
+      baseUrl: normalizeBaseUrl(env.MANAGER_CONTROL_URL ?? DEFAULT_MANAGER_CONTROL_URL, "MANAGER_CONTROL_URL"),
       token: managerControlToken,
       timeoutMs: parseTimeout(env.MANAGER_CONTROL_TIMEOUT_MS)
     },
+    gateway: gatewayUrl
+      ? {
+          baseUrl: normalizeBaseUrl(gatewayUrl, "FEISHU_GATEWAY_URL"),
+          token: optional(env.FEISHU_GATEWAY_TOKEN),
+          timeoutMs: parseTimeout(env.FEISHU_GATEWAY_TIMEOUT_MS),
+          pollIntervalMs: parsePollInterval(env.FEISHU_GATEWAY_POLL_INTERVAL_MS)
+        }
+      : undefined,
     payment: {
       providerModule: optional(env.FEISHU_ASSISTANT_PAYMENT_PROVIDER_MODULE),
       statePath: optional(env.FEISHU_ASSISTANT_PAYMENT_STATE_PATH),
@@ -54,7 +66,7 @@ function required(value, name) {
   return value.trim();
 }
 
-function normalizeBaseUrl(value) {
+function normalizeBaseUrl(value, name) {
   if (typeof value !== "string" || !value.trim()) {
     return DEFAULT_MANAGER_CONTROL_URL;
   }
@@ -62,10 +74,16 @@ function normalizeBaseUrl(value) {
   try {
     url = new URL(value.trim());
   } catch {
-    throw new Error("MANAGER_CONTROL_URL 必须是有效的 http(s) URL。 ");
+    throw new Error(`${name} 必须是有效的 http(s) URL。 `);
   }
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
-    throw new Error("MANAGER_CONTROL_URL 只支持不带账号密码的 http(s) URL。 ");
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(`${name} 只支持不带凭据、查询参数或 hash 的 http(s) URL。 `);
   }
   return url.toString().replace(/\/+$/u, "");
 }

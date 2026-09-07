@@ -25,9 +25,9 @@ provider 合约至少包含：
 
 当 Manager 暴露可选 OAuth 能力时，未与账号池邮箱地址匹配的邮箱会显示“Codex 导入”。点击后 Mailbox 只传递邮箱地址作为匹配条件和剪贴板便利文本，Manager 直接复用 OAuth 授权流程并打开系统浏览器，不打开 Dashboard 添加账号弹窗；授权邮箱不匹配时不会写入账号池。未安装或未更新 Manager 时，该按钮自动隐藏，邮箱查询功能仍可独立使用。
 
-查询结果中如果出现来自 `openai.com`（含子域名）且主题/正文包含英文 `account deactivated` 或中文“访问权限已停用/账户已停用”等封禁提示的邮件，Mailbox 会为该邮箱保留封禁标记；首次加载时也会从已保存的本地详情回填该标记，不访问 provider。列表会显示命中数量，并提供“删除封禁账号”批量按钮；执行删除前会重新读取对应邮箱的保存详情，只有确实包含该邮件、邮箱地址匹配真实 Manager 账号且账号状态为 `reauthorize` 的条目才会纳入。单邮箱详情仍显示“删除邮箱与 Codex 账号”；确认后先清理 Mailbox 私有数据，再调用 Manager 删除真实 Codex 账号，Sub2API 虚拟账号不会进入该操作。Mailbox 与 Manager 存储不能组成跨扩展原子事务，第二步失败时会报告哪一侧已完成。
+查询结果中如果出现来自 `openai.com`（含子域名）且主题/正文包含英文 `account deactivated` 或中文“访问权限已停用/账户已停用”等封禁提示的邮件，Mailbox 会为该邮箱保留封禁标记；首次加载时也会从已保存的本地详情回填该标记，不访问 provider。列表会显示命中数量，并提供“删除封禁账号”批量按钮；执行删除前会重新读取对应邮箱的保存详情，只有确实包含该邮件、邮箱地址匹配真实 Manager 账号且 Manager 标记该账号需要重新授权（包括 refresh token 或 access token 失效）时才会纳入。单邮箱详情仍显示“删除邮箱与 Codex 账号”；确认后先清理 Mailbox 私有数据，再调用 Manager 删除真实 Codex 账号，Sub2API 虚拟账号不会进入该操作。Mailbox 与 Manager 存储不能组成跨扩展原子事务，第二步失败时会报告哪一侧已完成。
 
-Manager Dashboard 的“删除封禁账号”按钮仅在 Mailbox 已安装并处于 `ready/active` 状态且存在可删除账号时显示，并使用同一份 Mailbox 地址标记：只有账号状态为 `reauthorize` 且同邮箱已被 Mailbox 标记为收到该封禁邮件时，才会进入删除列表。未安装或未激活 Mailbox 时按钮隐藏，也不会把仅仅需要重新授权的账号加入该列表。
+Manager Dashboard 的“删除封禁账号”按钮仅在 Mailbox 已安装并处于 `ready/active` 状态且存在可删除账号时显示，并使用同一份 Mailbox 地址标记：只有账号被 Manager 标记为需要重新授权（包括 refresh token 或 access token 失效）且同邮箱已被 Mailbox 标记为收到该封禁邮件时，才会进入删除列表。未安装或未激活 Mailbox 时按钮隐藏，也不会把仅仅需要重新授权的账号加入该列表。
 
 OAuth 导入会带一个仅用于取消控制的不透明操作 ID。用户按下当前邮箱的“停止”按钮时，Mailbox 调用 Manager 的可选取消能力，终止本地回调等待并立即释放界面状态；删除邮箱时，如果注册助手存在同邮箱的活动 OAuth 注册会话，也会先自动取消该会话。查询、验证码监听和续期仍可独立运行。Remote-SSH 下 Manager 会在打开浏览器前通过 VS Code `asExternalUri()` 建立远端 `localhost:1455` 的回调转发；本机转发端口可以是 `1457` 等其他端口，授权请求和 token exchange 仍使用 OpenAI 已登记的固定回调地址，手动回调也接受 loopback 转发端口。若多个 SSH 窗口同时占用同一本机转发端口，仍需关闭重复转发后重试。旧版 Manager 未提供取消入口时不会执行这一步，Mailbox 查询功能仍保持可用。
 

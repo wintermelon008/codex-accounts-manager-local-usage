@@ -8,6 +8,7 @@ import type {
   SeamlessQuotaBandSize,
   SeamlessSwitchThreshold
 } from "../../core/types";
+import type { AccountHealthKind } from "../accountHealth";
 
 /** Default number of account cards shown on the Dashboard's first page. */
 export const DASHBOARD_ACCOUNTS_PAGE_SIZE = 10;
@@ -151,6 +152,8 @@ export interface DashboardCopy {
   tokenAutomationHealthy: string;
   tokenAutomationExpiring: string;
   tokenAutomationRefreshFailed: string;
+  tokenAutomationRefreshTokenInvalid: string;
+  tokenAutomationAccessTokenInvalid: string;
   tokenAutomationReauthorize: string;
   tokenAutomationDisabled: string;
   tokenAutomationQuota: string;
@@ -452,7 +455,7 @@ export interface DashboardAccountViewModel {
   statusToggleTitle: string;
   hasQuota402: boolean;
   quotaIssueKind?: "disabled" | "auth" | "quota";
-  healthKind: "healthy" | "expiring" | "refresh_failed" | "reauthorize" | "disabled" | "quota";
+  healthKind: AccountHealthKind;
   /** True only when the optional Mailbox integration marked this email as deactivated. */
   mailboxDeactivated?: boolean;
   healthLabel: string;

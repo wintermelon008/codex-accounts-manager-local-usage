@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -65,6 +66,177 @@ describe("manager gateway Codex provider", () => {
     });
     const [{ argv }] = await readInvocations(harness.logPath);
     assert.ok(valuesFor(argv, "--config").includes('model="gpt-test"'));
+  });
+
+  it("falls back to the shared Codex CLI when the optional Manager adapter is unavailable", async () => {
+    const harness = await createHarness("success");
+    const events = [];
+    const error = Object.assign(new Error("manager control request failed（HTTP 500）"), { statusCode: 500 });
+    const provider = createProvider(harness.config, {
+      manager: {
+        async getCodexExecProviderConfig() {
+          throw error;
+        }
+      }
+    });
+
+    await provider.run({
+      session: sessionFor(harness.root, { message: "use the shared ChatGPT route" }),
+      emit(event) {
+        events.push(event);
+      }
+    });
+    const [{ argv, adapterToken }] = await readInvocations(harness.logPath);
+
+    assert.deepEqual(valuesFor(argv, "--config"), [
+      'approval_policy="never"',
+      'web_search="disabled"'
+    ]);
+    assert.equal(adapterToken, undefined);
+    assert.deepEqual(events[0], {
+      type: "provider.runtime_fallback",
+      message: "Manager Codex adapter unavailable; using the shared Codex CLI credentials"
+    });
+  });
+
+  it("returns final Codex token usage with the configured Gateway model", async () => {
+    const harness = await createHarness("success-with-usage");
+    const provider = createProvider(harness.config, {
+      manager: {
+        async getCodexExecProviderConfig() {
+          return {
+            baseUrl: "http://127.0.0.1:39001/v1",
+            token: "adapter-token",
+            model: "gpt-6-astra",
+            route: "gateway",
+            ready: true,
+            instanceId: "runtime-a"
+          };
+        }
+      }
+    });
+
+    const result = await provider.run({
+      session: sessionFor(harness.root, { message: "count this turn" }),
+      emit() {}
+    });
+
+    assert.deepEqual(result.usage, {
+      model: "gpt-6-astra",
+      inputTokens: 12,
+      cachedInputTokens: 3,
+      outputTokens: 4,
+      reasoningOutputTokens: 1,
+      totalTokens: 16
+    });
+  });
+
+  it("uses the accounting-only model hint when the Manager provider interface is absent", async () => {
+    const harness = await createHarness("success-with-usage");
+    const provider = createProvider({
+      ...harness.config,
+      codex: { ...harness.config.codex, model: "gpt-6-astra" }
+    });
+
+    const result = await provider.run({
+      session: sessionFor(harness.root, { message: "count without Manager control" }),
+      emit() {}
+    });
+
+    assert.equal(result.usage.model, "gpt-6-astra");
+  });
+
+  it("returns usage from an OpenAI-compatible research provider", async () => {
+    const harness = await createHarness("success");
+    let requestBody;
+    let authorization;
+    const server = http.createServer((request, response) => {
+      authorization = request.headers.authorization;
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requestBody = JSON.parse(body);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          choices: [{ message: { content: "research response" } }],
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 6,
+            total_tokens: 16,
+            prompt_tokens_details: { cached_tokens: 2 },
+            completion_tokens_details: { reasoning_tokens: 3 }
+          }
+        }));
+      });
+    });
+    await listenHttpServer(server);
+    try {
+      const address = server.address();
+      const provider = createProvider({
+        ...harness.config,
+        research: {
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          apiKey: "research-key",
+          model: "gpt-6-astra"
+        }
+      });
+
+      const result = await provider.run({
+        session: sessionFor(harness.root, { mode: "research", message: "research with usage" }),
+        emit() {}
+      });
+
+      assert.equal(result.text, "research response");
+      assert.deepEqual(result.usage, {
+        model: "gpt-6-astra",
+        inputTokens: 10,
+        cachedInputTokens: 2,
+        outputTokens: 6,
+        reasoningOutputTokens: 3,
+        totalTokens: 16
+      });
+      assert.equal(authorization, "Bearer research-key");
+      assert.equal(requestBody.model, "gpt-6-astra");
+      assert.deepEqual(requestBody.stream_options, { include_usage: true });
+    } finally {
+      await closeHttpServer(server);
+    }
+  });
+
+  it("captures usage from a terminal OpenAI-compatible SSE chunk", async () => {
+    const harness = await createHarness("success");
+    const server = http.createServer((request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "streamed" } }] })}\n\n`);
+      response.end(`data: ${JSON.stringify({
+        choices: [{ delta: {} }],
+        usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 }
+      })}`);
+    });
+    await listenHttpServer(server);
+    try {
+      const address = server.address();
+      const provider = createProvider({
+        ...harness.config,
+        research: {
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          model: "gpt-6-astra"
+        }
+      });
+      const result = await provider.run({
+        session: sessionFor(harness.root, { mode: "research", message: "stream with usage" }),
+        emit() {}
+      });
+
+      assert.equal(result.text, "streamed");
+      assert.equal(result.usage.totalTokens, 10);
+      assert.equal(result.usage.model, "gpt-6-astra");
+    } finally {
+      await closeHttpServer(server);
+    }
   });
 
   it("runs a fresh exec with host access so it can reach the Workbench data service", async () => {
@@ -255,6 +427,17 @@ async function readInvocations(logPath) {
     .map((line) => JSON.parse(line));
 }
 
+function listenHttpServer(server) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+}
+
+function closeHttpServer(server) {
+  return new Promise((resolve) => server.close(resolve));
+}
+
 function valuesFor(argv, flag) {
   return argv.flatMap((argument, index) => argument === flag ? [argv[index + 1]] : []);
 }
@@ -282,7 +465,7 @@ if (${JSON.stringify(behavior)} === "resume-failure" && callNumber === 1 && argv
   process.stdout.write(JSON.stringify({ type: "error", message: "usage limit reached" }) + "\\n");
   process.stderr.write("usage limit reached\\n");
   process.exitCode = 1;
-} else if (${JSON.stringify(behavior)} === "success-with-quota-words") {
+  } else if (${JSON.stringify(behavior)} === "success-with-quota-words") {
   process.stderr.write("rate limit telemetry is available\\n");
   process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread-" + callNumber }) + "\\n");
   process.stdout.write(JSON.stringify({
@@ -290,11 +473,27 @@ if (${JSON.stringify(behavior)} === "resume-failure" && callNumber === 1 && argv
     usage: { input_tokens: 12, output_tokens: 3 },
     rate_limits: { primary: { used_percent: 7, window_minutes: 300 } }
   }) + "\\n");
-  process.stdout.write(JSON.stringify({
-    type: "item.completed",
-    item: { type: "agent_message", text: "The quota limit is still available." }
-  }) + "\\n");
-} else if (${JSON.stringify(behavior)} === "turn-completed-stays-open") {
+    process.stdout.write(JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "The quota limit is still available." }
+    }) + "\\n");
+  } else if (${JSON.stringify(behavior)} === "success-with-usage") {
+    process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "usage-thread" }) + "\\n");
+    process.stdout.write(JSON.stringify({
+      type: "turn.completed",
+      usage: {
+        input_tokens: 12,
+        output_tokens: 4,
+        total_tokens: 16,
+        input_tokens_details: { cached_tokens: 3 },
+        output_tokens_details: { reasoning_tokens: 1 }
+      }
+    }) + "\\n");
+    process.stdout.write(JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "usage recorded" }
+    }) + "\\n");
+  } else if (${JSON.stringify(behavior)} === "turn-completed-stays-open") {
   process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "open-thread" }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "completed-before-process-exit" } }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }) + "\\n");

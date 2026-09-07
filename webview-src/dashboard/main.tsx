@@ -20,6 +20,7 @@ import {
   getLowWeeklyQuotaAccountIds,
   getDashboardVisibleAccounts,
   getBlockedAccountIds,
+  isDashboardAccountInvalid,
   isMailboxIntegrationActive,
   normalizeThresholds,
   resolveLockMinutes,
@@ -37,6 +38,7 @@ import {
   GitHubIcon,
   GlobeIcon,
   InfoIcon,
+  InvalidAccountsIcon,
   MailIcon,
   UnlockIcon
 } from "./icons";
@@ -74,6 +76,7 @@ function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
+  const [showInvalidAccounts, setShowInvalidAccounts] = useState(false);
   const [selectedPlanFilters, setSelectedPlanFilters] = useState<DashboardAccountPlanFilter[]>([]);
   const [accountSort, setAccountSort] = useState<DashboardAccountSort>({
     key: "createdAt",
@@ -96,10 +99,11 @@ function App() {
       snapshot.accounts,
       snapshot.settings,
       showHiddenAccounts,
-      selectedPlanFilters
+      selectedPlanFilters,
+      showInvalidAccounts
     );
     return sortDashboardAccountsForDisplay(visibleAccounts, accountSort);
-  }, [accountSort, selectedPlanFilters, showHiddenAccounts, snapshot]);
+  }, [accountSort, selectedPlanFilters, showHiddenAccounts, showInvalidAccounts, snapshot]);
   const modals = useDashboardModals({
     dispatch,
     sendAction,
@@ -135,6 +139,7 @@ function App() {
     selectedPlanFilters,
     accountSort,
     showHiddenAccounts,
+    showInvalidAccounts,
     snapshot?.settings.seamlessSwitchGroupAVisible,
     snapshot?.settings.seamlessSwitchGroupBVisible,
     snapshot?.settings.seamlessSwitchGroupCVisible
@@ -322,15 +327,13 @@ function App() {
     const action = topButton ? integration.actions.find((candidate) => candidate.id === topButton.actionId) : undefined;
     return action && topButton ? [{ integration, topButton, action }] : [];
   });
-  const invalidAccountCount = snapshot.accounts.filter(
-    (account) =>
-      !account.dismissedHealth &&
-      (account.healthKind === "reauthorize" ||
-        account.healthKind === "refresh_failed" ||
-        account.healthKind === "disabled" ||
-        account.healthKind === "quota")
-  ).length;
+  const invalidAccountCount = snapshot.accounts.filter(isDashboardAccountInvalid).length;
   const validAccountCount = snapshot.accounts.length - invalidAccountCount;
+  const invalidAccountsToggleLabel = resolveInvalidAccountsToggleLabel(
+    snapshot.lang,
+    showInvalidAccounts,
+    invalidAccountCount
+  );
 
   const handleShareTokens = (): void => {
     if (!selectedCount) {
@@ -566,29 +569,29 @@ function App() {
                 <div class="header-sub">{snapshot.copy.savedAccountsSub}</div>
               </div>
               <div class="saved-accounts-header-actions">
+                <button
+                  id="forceFastModeToggle"
+                  class={`account-fast-mode-toggle ${snapshot.settings.forceFastModeEnabled ? "is-active" : ""}`}
+                  type="button"
+                  role="switch"
+                  aria-checked={snapshot.settings.forceFastModeEnabled}
+                  aria-label={resolveForceFastModeToggleLabel(
+                    snapshot.lang,
+                    snapshot.settings.forceFastModeEnabled
+                  )}
+                  title={resolveForceFastModeToggleLabel(snapshot.lang, snapshot.settings.forceFastModeEnabled)}
+                  onClick={() => handleForceFastModeToggle(!snapshot.settings.forceFastModeEnabled)}
+                >
+                  <span class="account-fast-mode-label">Fast</span>
+                  <span class="account-fast-mode-track" aria-hidden="true">
+                    <span class="account-fast-mode-thumb" />
+                  </span>
+                </button>
                 <div
                   class="account-sort-controls"
                   role="group"
                   aria-label={resolveAccountControlsLabel(snapshot.lang)}
                 >
-                  <button
-                    id="forceFastModeToggle"
-                    class={`account-fast-mode-toggle ${snapshot.settings.forceFastModeEnabled ? "is-active" : ""}`}
-                    type="button"
-                    role="switch"
-                    aria-checked={snapshot.settings.forceFastModeEnabled}
-                    aria-label={resolveForceFastModeToggleLabel(
-                      snapshot.lang,
-                      snapshot.settings.forceFastModeEnabled
-                    )}
-                    title={resolveForceFastModeToggleLabel(snapshot.lang, snapshot.settings.forceFastModeEnabled)}
-                    onClick={() => handleForceFastModeToggle(!snapshot.settings.forceFastModeEnabled)}
-                  >
-                    <span class="account-fast-mode-label">Fast</span>
-                    <span class="account-fast-mode-track" aria-hidden="true">
-                      <span class="account-fast-mode-thumb" />
-                    </span>
-                  </button>
                   <select
                     id="account-sort-select"
                     class="account-sort-select"
@@ -677,6 +680,28 @@ function App() {
                   </span>
                   <span class="button-tip" aria-hidden="true">
                     {hiddenAccountsToggleLabel}
+                  </span>
+                </button>
+                <button
+                  id="invalidAccountsToggleButton"
+                  class={`settings-btn action-btn icon-only ${showInvalidAccounts ? "is-active" : ""}`}
+                  type="button"
+                  title={invalidAccountsToggleLabel}
+                  aria-label={invalidAccountsToggleLabel}
+                  aria-pressed={showInvalidAccounts}
+                  disabled={invalidAccountCount === 0 && !showInvalidAccounts}
+                  onClick={() => {
+                    setAccountsPage(1);
+                    setShowInvalidAccounts((visible) => !visible);
+                  }}
+                >
+                  <span class="button-face">
+                    <span class="button-icon">
+                      <InvalidAccountsIcon />
+                    </span>
+                  </span>
+                  <span class="button-tip" aria-hidden="true">
+                    {invalidAccountsToggleLabel}
                   </span>
                 </button>
                 <ActionButton
@@ -786,6 +811,8 @@ function App() {
                   refreshPending={isActionPending("refresh", account.id)}
                   copyImportJsonPending={isActionPending("copyAccountImportJson", account.id)}
                   copyImportJsonSucceeded={modals.copyFeedbackKey === `account-import-json:${account.id}`}
+                  accountNameCopyPending={isActionPending("copyText", account.id)}
+                  accountNameCopySucceeded={modals.copyFeedbackKey === `account-name:${account.id}`}
                   quotaCountdownStartPending={isActionPending("startQuotaCountdown", account.id)}
                   removePending={isActionPending("remove", account.id)}
                   poolTogglePending={isActionPending("toggleBalancePool", account.id)}
@@ -879,7 +906,9 @@ function App() {
             ) : null}
             {displayedAccounts.length === 0 ? (
               <div class="saved-accounts-hidden-empty">
-                {selectedPlanFilters.length > 0
+                {showInvalidAccounts
+                  ? resolveInvalidAccountsEmptyLabel(snapshot.lang)
+                  : selectedPlanFilters.length > 0
                   ? resolveAccountPlanFilterEmptyLabel(snapshot.lang)
                   : hiddenAccountCount > 0 && !showHiddenAccounts
                     ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
@@ -1039,6 +1068,26 @@ function resolveHiddenAccountsEmptyLabel(lang: string): string {
     return "所有帳號均已隱藏。使用右上角眼睛按鈕顯示它們。";
   }
   return "All accounts are hidden. Use the eye button above to show them.";
+}
+
+function resolveInvalidAccountsToggleLabel(lang: string, visible: boolean, count: number): string {
+  if (lang === "zh") {
+    return visible ? `取消失效筛选（${count}）` : `仅显示失效账号（${count}）`;
+  }
+  if (lang === "zh-hant") {
+    return visible ? `取消失效篩選（${count}）` : `僅顯示失效帳號（${count}）`;
+  }
+  return visible ? `Clear invalid-account filter (${count})` : `Show invalid accounts only (${count})`;
+}
+
+function resolveInvalidAccountsEmptyLabel(lang: string): string {
+  if (lang === "zh") {
+    return "没有符合当前分组、套餐和失效筛选的账号。";
+  }
+  if (lang === "zh-hant") {
+    return "沒有符合目前分組、方案與失效篩選的帳號。";
+  }
+  return "No accounts match the current group, plan, and invalid-account filters.";
 }
 
 function resolveHideLowWeeklyQuotaLabel(lang: string, count: number, threshold: number): string {

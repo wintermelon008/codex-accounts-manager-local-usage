@@ -133,7 +133,7 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
         ...existing,
         id: account.id,
         email: account.email.trim().toLowerCase(),
-        auth_mode: readString(existing["auth_mode"]) ?? "",
+        auth_mode: account.authMode ?? "chatgpt",
         user_id: account.userId ?? readString(existing["user_id"]) ?? "",
         // The Aideck mirror is a compatibility layer, not an authority for workspace-scoped metadata.
         // Preserve existing workspace metadata while accepting demonstrably newer quota snapshots.

@@ -65,6 +65,11 @@ export function createSharedImportIssue(
 }
 
 export function applySharedAccountEntry(account: CodexAccountRecord, entry: SharedCodexAccountJson): void {
+  // Every accepted shared entry contains OAuth tokens, so normalize legacy
+  // `oauth` labels to the ChatGPT Auth meaning used by Codex.
+  account.authMode = "chatgpt";
+  account.accountKind = "chatgpt";
+  account.quotaMode = "chatgpt";
   account.userId = sanitizeOptionalValue(entry.user_id) ?? account.userId;
   account.planType = sanitizeOptionalValue(entry.plan_type) ?? account.planType;
   account.subscriptionActiveUntil = sanitizeOptionalValue(entry.subscription_active_until) ?? account.subscriptionActiveUntil;
