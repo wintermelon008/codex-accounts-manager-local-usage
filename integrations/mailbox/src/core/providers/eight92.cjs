@@ -6,7 +6,8 @@ const { normalizeMessages } = require("../messages.cjs");
 const { createMailboxProvider } = require("../provider.cjs");
 
 const EIGHT92_PROVIDER_ID = "8t92";
-const EIGHT92_BASE_URL = "https://8t92.cc";
+const EIGHT92_BASE_URL = "https://email.nloop.cc";
+const EIGHT92_QUERY_PATH = "/api/outlook/query";
 const DEFAULT_MAX_MESSAGES = 10;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EIGHT92_DELIMITER = "----";
@@ -24,15 +25,14 @@ class Eight92Provider {
   asProvider() {
     return createMailboxProvider({
       id: EIGHT92_PROVIDER_ID,
-      displayName: "8t92",
-      capabilities: { history: "recent", maxMessages: DEFAULT_MAX_MESSAGES, manualRenewal: true },
+      displayName: "8t92 / NLoop",
+      capabilities: { history: "recent", maxMessages: DEFAULT_MAX_MESSAGES, manualRenewal: false },
       importSchema: {
-        label: "来源凭据",
-        description: "每行一个邮箱；凭据仅保存在 Mailbox 私有存储中。"
+        label: "Outlook 来源凭据",
+        description: "每行一个 Outlook 邮箱；凭据仅保存在 Mailbox 私有存储中。"
       },
       parseImport: (input) => parseEight92Import(input),
-      query: (account, options) => this.query(account, options),
-      renew: (account, options) => this.renew(account, options)
+      query: (account, options) => this.query(account, options)
     });
   }
 
@@ -43,109 +43,30 @@ class Eight92Provider {
     }
 
     try {
-      const data = await this.postJson("/api/fetch-mails", {
-        lines: serializeEight92Account(account.value),
-        options: {
-          tokenKind: "refresh_token",
-          redirectUri: "",
-          folderScope: "inbox",
-          maxMessages: normalizeMaxMessages(maxMessages),
-          bodyContent: "html",
-          includeBody: true,
-          includeHeaders: true
-        }
+      const data = await this.postJson(EIGHT92_QUERY_PATH, {
+        email: account.value.address,
+        password: account.value.credentials.password,
+        client_id: account.value.credentials.clientId,
+        refresh_token: account.value.credentials.refreshToken,
+        mailbox: "INBOX",
+        mode: "all",
+        top: normalizeMaxMessages(maxMessages)
       }, { signal });
-      const result = pickAccountResult(data, account.value.address);
-      if (!result?.ok) {
-        return failedResult(account.value, toRemoteError(result?.errors ?? data?.errors, "token"));
+      if (data?.ok !== true || !Array.isArray(data?.mails)) {
+        return failedResult(account.value, mapNloopError(data));
       }
 
-      const messages = normalizeMessages(result.messages ?? result.items);
+      const messages = normalizeMessages(data.mails);
       return {
         ok: true,
         providerId: EIGHT92_PROVIDER_ID,
         address: account.value.address,
         messages,
         codes: [...new Set(messages.flatMap((message) => message.codes))],
-        fetchedAt: new Date().toISOString()
+        fetchedAt: typeof data.fetchedAt === "string" ? data.fetchedAt : new Date().toISOString()
       };
     } catch (error) {
       return failedResult(account.value, toSafeError(error));
-    }
-  }
-
-  async renew(input, { signal } = {}) {
-    const account = normalizeInput(input);
-    if (!account.ok) {
-      return invalidResult(EIGHT92_PROVIDER_ID, account.error, "renewal");
-    }
-
-    try {
-      const data = await this.postJson("/api/refresh-tokens", {
-        lines: serializeEight92Account(account.value)
-      }, { signal });
-      const result = pickAccountResult(data, account.value.address);
-      if (!result?.ok) {
-        return {
-          ...failedResult(account.value, toRemoteError(result?.errors ?? data?.errors, "refresh")),
-          operation: "renewal"
-        };
-      }
-
-      if (result.refreshTokenChanged !== true) {
-        return {
-          ok: true,
-          providerId: EIGHT92_PROVIDER_ID,
-          operation: "renewal",
-          address: account.value.address,
-          status: "unchanged",
-          account: account.value,
-          warnings: sanitizeWarnings(result.warnings)
-        };
-      }
-
-      const updatedLine = findUpdatedLine(data, result, account.value.address);
-      let updatedAccount;
-      try {
-        updatedAccount = parseEight92Line(updatedLine);
-      } catch {
-        return {
-          ...failedResult(account.value, {
-            stage: "refresh",
-            code: "invalid_updated_credentials",
-            message: "Provider returned invalid updated mailbox credentials",
-            retryable: false
-          }),
-          operation: "renewal"
-        };
-      }
-
-      if (
-        updatedAccount.address.toLowerCase() !== account.value.address.toLowerCase() ||
-        updatedAccount.credentials.refreshToken === account.value.credentials.refreshToken
-      ) {
-        return {
-          ...failedResult(account.value, {
-            stage: "refresh",
-            code: "credentials_not_changed",
-            message: "Provider did not return different mailbox credentials",
-            retryable: false
-          }),
-          operation: "renewal"
-        };
-      }
-
-      return {
-        ok: true,
-        providerId: EIGHT92_PROVIDER_ID,
-        operation: "renewal",
-        address: account.value.address,
-        status: "updated",
-        account: updatedAccount,
-        warnings: sanitizeWarnings(result.warnings)
-      };
-    } catch (error) {
-      return { ...failedResult(account.value, toSafeError(error)), operation: "renewal" };
     }
   }
 
@@ -242,43 +163,9 @@ function normalizeInput(input) {
   }
 }
 
-function serializeEight92Account(account) {
-  const normalized = normalizeInput(account);
-  if (!normalized.ok) {
-    throw new Error(normalized.error.message);
-  }
-  const { address, credentials } = normalized.value;
-  return [address, credentials.password, credentials.clientId, credentials.refreshToken].join(EIGHT92_DELIMITER);
-}
-
-function pickAccountResult(data, address) {
-  const results = Array.isArray(data?.results) ? data.results : [];
-  const exact = results.find((result) => {
-    const candidate = result?.address ?? result?.email;
-    return typeof candidate === "string" && candidate.toLowerCase() === address.toLowerCase();
-  });
-  return exact ?? (results.length === 1 ? results[0] : undefined);
-}
-
-function findUpdatedLine(data, result, address) {
-  if (typeof result?.updatedLine === "string") {
-    return result.updatedLine;
-  }
-  if (typeof result?.updated_line === "string") {
-    return result.updated_line;
-  }
-  const lines = Array.isArray(data?.updatedLines) ? data.updatedLines : [];
-  return lines.find((line) => typeof line === "string" && line.toLowerCase().startsWith(`${address.toLowerCase()}${EIGHT92_DELIMITER}`));
-}
-
-function sanitizeWarnings(warnings) {
-  if (!Array.isArray(warnings)) {
-    return [];
-  }
-  return warnings
-    .map((warning) => (typeof warning === "string" ? warning : warning?.message))
-    .filter((warning) => typeof warning === "string")
-    .map((warning) => warning.slice(0, 160));
+function mapNloopError(data) {
+  const message = typeof data?.error === "string" ? data.error : "NLoop 邮箱服务返回了无效响应";
+  return toRemoteError([{ stage: "provider", code: "nloop_query_failed", message }], "provider");
 }
 
 function failedResult(account, error) {

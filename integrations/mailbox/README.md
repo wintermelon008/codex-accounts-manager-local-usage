@@ -1,6 +1,6 @@
 # Codex Accounts Mailbox
 
-这是一个可选的 VS Code 扩展，为 Codex Accounts Manager 提供通用 Mailbox 查询、验证码人工监听和人工凭据续期入口。当前内置 `8t92`、`boya` 与 `cdns` 三个 provider，provider 名称同时作为来源标识。
+这是一个可选的 VS Code 扩展，为 Codex Accounts Manager 提供通用 Mailbox 查询、验证码人工监听和人工凭据续期入口。当前内置 `8t92 / NLoop`、`boya` 与 `cdns` 三个 provider，provider 名称同时作为来源标识。
 
 它是独立组件：邮箱池元数据、详情和凭据只由本扩展管理，并以扩展宿主服务器的 `globalStorageUri` 为共享权威，分别写入 `0600` 的邮箱状态文件和秘密文件；旧版 VS Code `globalState/SecretStorage` 数据会按设备标识一次性合并迁移。Manager 核心账号库、Sub2API 配置和其他 provider 不会被读取。Manager 只通过已有的 Dashboard integration API 显示一个轻量入口卡片，邮箱列表和当前选中邮箱详情由本扩展自己的 Webview 面板渲染；从 Dashboard 打开时使用当前主编辑器组，不再强制分裂到 `Beside` 侧栏。
 
@@ -24,6 +24,16 @@
 - 邮箱列表支持勾选、全选当前筛选结果、批量查询、批量验证码监听、批量停止和批量删除；批量操作仍按邮箱独立记录成功/失败。
 - provider 可以声明只提供最近一封邮件，或提供有限的最近邮件列表；UI 会按声明显示能力，不假设所有来源都有完整历史。
 - provider 可以声明人工续期能力。只有返回明确的新凭据且凭据实际写入成功时才回写该邮箱并刷新上次续期时间；未变化和失败都会保留原凭据及原续期时间。
+
+## 内置 8t92 / NLoop 来源
+
+`8t92` 的内部 provider ID 保持不变，以兼容已有邮箱记录；查询改为调用 `https://email.nloop.cc/api/outlook/query`。每行导入格式仍为：
+
+```text
+邮箱----密码----Client ID----Refresh Token
+```
+
+该来源目前只提供 Outlook 邮件查询，不提供公开的 Refresh Token 续期接口，因此 Mailbox 面板中的人工续期按钮会保持禁用。
 
 注册助手的手机号来源目前包括 `LIYE` 和 `5SIM`。LIYE 继续使用独立的接码卡密池；5SIM 使用单独保存的 API Token，不进入 LIYE Key 池。5SIM 面板通过账户资料显示余额/冻结余额/评分，并从公开价格接口加载 OpenAI 可选号区、运营商、库存、成功率和价格；地区列表默认按可用内部条目的最低价格递增，默认最高价格为 `0.1`，还可设置最低成功率筛选，成功率低于 1% 或平台未提供成功率的条目会自动剔除。价格同时显示美元原价和人民币估算；人民币按每天首次打开注册助手时保存的 USD/CNY 汇率并额外乘以 `1.029`（2.9% 手续费）计算。缓存只保留一个当天记录，下一天成功查询后覆盖。Token 只保存在扩展宿主的私有存储中，面板和日志只显示脱敏值。
 

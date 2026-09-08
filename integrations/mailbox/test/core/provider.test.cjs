@@ -17,8 +17,9 @@ const account = {
 test("provider exposes generic capabilities and parses its own import format", () => {
   const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
   assert.equal(provider.id, "8t92");
+  assert.equal(provider.displayName, "8t92 / NLoop");
   assert.equal(provider.capabilities.history, "recent");
-  assert.equal(provider.capabilities.manualRenewal, true);
+  assert.equal(provider.capabilities.manualRenewal, false);
   assert.deepEqual(provider.parseImport("person@example.com----password----client-id----refresh-token"), {
     entries: [{
       address: "person@example.com",
@@ -36,16 +37,18 @@ test("query sends the provider contract and normalizes messages with complete se
       requests.push({ url, options, body: JSON.parse(options.body) });
       return response({
         ok: true,
-        results: [{
-          email: account.address,
-          ok: true,
-          messages: [{
-            id: "message-id",
-            subject: "Your verification code is 123456",
-            from: { emailAddress: { address: "sender@example.com" } },
-            receivedDateTime: "2026-08-13T01:00:00.000Z",
-            body: { content: "Use 123456 to continue", contentType: "html" }
-          }]
+        provider: "graph",
+        mailbox: "INBOX",
+        mode: "all",
+        fallbackMode: "",
+        count: 1,
+        fetchedAt: "2026-08-13T01:00:01.000Z",
+        mails: [{
+          id: "message-id",
+          subject: "Your verification code is 123456",
+          from: { emailAddress: { address: "sender@example.com" } },
+          receivedDateTime: "2026-08-13T01:00:00.000Z",
+          body: { content: "Use 123456 to continue", contentType: "html" }
         }]
       });
     }
@@ -53,16 +56,15 @@ test("query sends the provider contract and normalizes messages with complete se
 
   const result = await provider.query(account, { maxMessages: 80 });
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, "https://8t92.example.invalid/api/fetch-mails");
-  assert.equal(requests[0].body.lines, "person@example.com----password----client-id----old-refresh-token");
-  assert.deepEqual(requests[0].body.options, {
-    tokenKind: "refresh_token",
-    redirectUri: "",
-    folderScope: "inbox",
-    maxMessages: 50,
-    bodyContent: "html",
-    includeBody: true,
-    includeHeaders: true
+  assert.equal(requests[0].url, "https://8t92.example.invalid/api/outlook/query");
+  assert.deepEqual(requests[0].body, {
+    email: "person@example.com",
+    password: "password",
+    client_id: "client-id",
+    refresh_token: "old-refresh-token",
+    mailbox: "INBOX",
+    mode: "all",
+    top: 50
   });
   assert.equal(result.ok, true);
   assert.deepEqual(result.codes, ["123456"]);
@@ -72,64 +74,23 @@ test("query sends the provider contract and normalizes messages with complete se
   assert.match(result.messages[0].id, /^[a-f0-9]{64}$/u);
 });
 
-test("query isolates provider failures and does not return upstream credential text", async () => {
+test("query isolates NLoop failures and does not return upstream credential text", async () => {
   const provider = new Eight92Provider({
     fetchImpl: async () => response({
       ok: false,
-      results: [{
-        email: account.address,
-        ok: false,
-        errors: [{ stage: "token", code: "AADSTS7000012", message: "refreshToken=super-secret-value" }]
-      }]
+      error: "refresh_token=super-secret-value"
     })
   });
 
   const result = await provider.query(account);
   assert.equal(result.ok, false);
-  assert.equal(result.error.stage, "token");
-  assert.equal(result.error.code, "AADSTS7000012");
+  assert.equal(result.error.stage, "provider");
+  assert.equal(result.error.code, "nloop_query_failed");
   assert.doesNotMatch(result.error.message, /super-secret-value/u);
   assert.equal(result.messages.length, 0);
 });
 
-test("manual renewal only returns updated credentials when the provider changes them", async () => {
-  const calls = [];
-  const provider = new Eight92Provider({
-    fetchImpl: async (url, options) => {
-      calls.push({ url, body: JSON.parse(options.body) });
-      return response({
-        ok: true,
-        updatedLines: ["person@example.com----password----client-id----new-refresh-token"],
-        results: [{
-          email: account.address,
-          ok: true,
-          refreshTokenChanged: true,
-          updatedLine: "person@example.com----password----client-id----new-refresh-token"
-        }]
-      });
-    }
-  });
-
-  const result = await provider.renew(account);
-  assert.equal(calls[0].url, "https://8t92.cc/api/refresh-tokens");
-  assert.deepEqual(calls[0].body, {
-    lines: "person@example.com----password----client-id----old-refresh-token"
-  });
-  assert.equal(result.status, "updated");
-  assert.equal(result.account.credentials.refreshToken, "new-refresh-token");
-});
-
-test("unchanged renewal preserves the original credentials and failed HTTP requests are safe", async () => {
-  const unchanged = new Eight92Provider({
-    fetchImpl: async () => response({
-      ok: true,
-      results: [{ email: account.address, ok: true, refreshTokenChanged: false }]
-    })
-  });
-  const unchangedResult = await unchanged.renew(account);
-  assert.equal(unchangedResult.status, "unchanged");
-  assert.equal(unchangedResult.account.credentials.refreshToken, account.credentials.refreshToken);
-
+test("NLoop query keeps HTTP failures safe", async () => {
   const failed = new Eight92Provider({
     fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({}) })
   });
