@@ -77,6 +77,52 @@ describe("GatewaySessionManager", () => {
     assert.equal(snapshot?.result?.text, "answer:第二问");
   });
 
+  it("recreates a discarded develop worktree before a follow-up", async () => {
+    const prepared = [];
+    const seen = [];
+    const workspaces = {
+      async prepare(session) {
+        assert.equal(session.workspace, undefined);
+        const workspace = {
+          kind: "git-worktree",
+          id: session.id,
+          cwd: `/tmp/gateway-worktree-${prepared.length + 1}`,
+          status: "open",
+          diff: ""
+        };
+        prepared.push(workspace);
+        return workspace;
+      },
+      async isUsable(workspace) {
+        return workspace.status === "open";
+      },
+      async discard(workspace) {
+        return { ...workspace, status: "discarded", diff: "" };
+      }
+    };
+    const provider = {
+      async run({ session }) {
+        seen.push({ cwd: session.workspace.cwd, resumeThreadId: session.resumeThreadId });
+        return { text: `answer:${session.message}`, threadId: "thread-1" };
+      }
+    };
+    const sessions = new GatewaySessionManager({ provider, workspaces, maxSessions: 1 });
+    const session = sessions.create({ mode: "develop", message: "第一问" });
+    await sessions.waitForTerminal(session.id);
+    await sessions.discard(session.id);
+
+    sessions.send(session.id, { message: "第二问" });
+    await sessions.waitForTerminal(session.id);
+
+    assert.equal(prepared.length, 2);
+    assert.deepEqual(seen, [
+      { cwd: "/tmp/gateway-worktree-1", resumeThreadId: undefined },
+      { cwd: "/tmp/gateway-worktree-2", resumeThreadId: "thread-1" }
+    ]);
+    assert.equal(sessions.get(session.id)?.status, "completed");
+    assert.equal(sessions.getEvents(session.id)?.some((event) => event.type === "session.workspace_recreated"), true);
+  });
+
   it("interjects a running session and resumes the same Codex thread", async () => {
     const seen = [];
     let resolveStarted;

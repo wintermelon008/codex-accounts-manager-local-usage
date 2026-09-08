@@ -407,8 +407,20 @@ export class GatewaySessionManager {
         session.accountEmail = account.email;
         session.attemptedAccountIds.add(account.id);
       }
-      if (session.mode === "develop" && this.workspaces && !session.workspace) {
-        session.workspace = await this.workspaces.prepare(session);
+      if (session.mode === "develop" && this.workspaces) {
+        const workspaceOpen = session.workspace?.status === "open";
+        const workspaceUsable = workspaceOpen && (
+          typeof this.workspaces.isUsable !== "function" || await this.workspaces.isUsable(session.workspace)
+        );
+        if (!workspaceUsable) {
+          const previousWorkspaceStatus = session.workspace?.status;
+          session.workspace = await this.workspaces.prepare({ ...session, workspace: undefined });
+          session.diff = "";
+          this.#emit(session, {
+            type: "session.workspace_recreated",
+            reason: previousWorkspaceStatus ?? "missing"
+          });
+        }
       }
       if (session.interjectionRequested || session.controller.signal.aborted) {
         await this.#refreshWorkspace(session);

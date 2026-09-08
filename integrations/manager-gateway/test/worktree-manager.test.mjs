@@ -26,6 +26,7 @@ describe("WorktreeManager", () => {
 
       const manager = new WorktreeManager({ projectRoot: root, stateDir });
       const workspace = await manager.prepare({ id: "session-1" });
+      assert.equal(await manager.isUsable(workspace), true);
       await writeFile(join(workspace.cwd, "tracked.txt"), "after\n");
       await writeFile(join(workspace.cwd, "new.txt"), "created\n");
 
@@ -35,6 +36,7 @@ describe("WorktreeManager", () => {
 
       const applied = await manager.apply(workspace);
       assert.equal(applied.status, "applied");
+      assert.equal(await manager.isUsable(applied), false);
       assert.equal(await readFile(join(root, "tracked.txt"), "utf8"), "after\n");
       assert.equal(await readFile(join(root, "new.txt"), "utf8"), "created\n");
     } finally {

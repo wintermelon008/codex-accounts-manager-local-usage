@@ -22,6 +22,18 @@ export class WorktreeManager {
     return Boolean(this.#projectRoot);
   }
 
+  async isUsable(workspace) {
+    if (!workspace || workspace.status !== "open" || !workspace.cwd) {
+      return false;
+    }
+    try {
+      await this.#git(["-C", workspace.cwd, "rev-parse", "--show-toplevel"]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async prepare(session) {
     if (session.workspace) return session.workspace;
     if (!this.#projectRoot) throw new Error("develop 模式未配置 MANAGER_GATEWAY_PROJECT_ROOT");
