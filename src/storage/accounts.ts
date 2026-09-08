@@ -61,7 +61,7 @@ import {
   tryAcquireSharedFileLease
 } from "./accountsWriteCoordinator";
 import { readAuthFile, writeAuthFile } from "../codex";
-import { needsRefresh, refreshTokens, TOKEN_REFRESH_SKEW_SECONDS } from "../auth/oauth";
+import { ensureFreshAccountTokens } from "../auth/tokenRefreshCoordinator";
 import { createKeyedMutex } from "../utils/concurrency";
 import {
   CodexAccountRecord,
@@ -468,7 +468,10 @@ export class AccountsRepository {
   /**
    * 获取账号的令牌
    */
-  async getTokens(accountId: string, options: { syncExternal?: boolean } = {}): Promise<CodexTokens | undefined> {
+  async getTokens(
+    accountId: string,
+    options: { syncExternal?: boolean; forceReload?: boolean } = {}
+  ): Promise<CodexTokens | undefined> {
     try {
       const index = await this.readIndex();
       const account = index.accounts.find((item) => item.id === accountId);
@@ -483,6 +486,7 @@ export class AccountsRepository {
       const cached = this.tokenCache.get(accountId);
       if (
         cached &&
+        !options.forceReload &&
         Date.now() - cached.cachedAt < TOKEN_CACHE_TTL_MS &&
         (!syncExternal || cached.mirrorRevision === mirrorRevision)
       ) {
@@ -1126,18 +1130,17 @@ export class AccountsRepository {
     }
 
     // 切号前按需刷新 token，避免写入过期 token 导致 codex 登录失败（对齐 cockpit switch_account_managed）
-    let effectiveTokens = {
+    let effectiveTokens: CodexTokens = {
       ...tokens,
       accountId: account.accountId ?? tokens.accountId
     };
 
-    if (tokens.refreshToken && needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
-      const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
-      effectiveTokens = {
-        ...refreshed,
-        accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
-      };
-      await this.updateTokens(accountId, effectiveTokens);
+    if (tokens.refreshToken) {
+      effectiveTokens =
+        (await ensureFreshAccountTokens(this, accountId, {
+          fallbackTokens: tokens,
+          providerAccountId: account.accountId
+        })) ?? effectiveTokens;
     }
 
     await writeAuthFile(effectiveTokens);

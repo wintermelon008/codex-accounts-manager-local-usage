@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { needsRefresh, refreshTokens } from "../auth/oauth";
+import { needsRefresh } from "../auth/oauth";
+import { ensureFreshAccountTokens, ensureFreshTokensWithLease } from "../auth/tokenRefreshCoordinator";
 import { isSub2ApiAccount, type CodexAccountRecord, type CodexTokens } from "../core/types";
 import { decodeJwtPayload, extractClaims } from "../utils/jwt";
 import {
@@ -893,17 +894,28 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       refreshToken: auth.tokens.refresh_token,
       accountId: auth.tokens.account_id
     };
-    if (needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
-      if (!tokens.refreshToken) {
-        throw new Error("The current Codex auth.json token expires too soon and has no refresh token for rollback");
+    const initialClaims = extractClaims(tokens.idToken, tokens.accessToken);
+    const coordinationKey = tokens.accountId ?? initialClaims.accountId ?? initialClaims.email ?? "current";
+    const refreshed = await ensureFreshTokensWithLease(this.repo, {
+      key: `unmanaged-auth:${coordinationKey}`,
+      fallbackTokens: tokens,
+      load: async () => {
+        const current = await readAuthFile();
+        if (!current?.tokens?.id_token || !current.tokens.access_token) {
+          return undefined;
+        }
+        return {
+          idToken: current.tokens.id_token,
+          accessToken: current.tokens.access_token,
+          refreshToken: current.tokens.refresh_token,
+          accountId: current.tokens.account_id
+        };
+      },
+      save: async (nextTokens) => {
+        await writeAuthFile(nextTokens);
       }
-      const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
-      tokens = {
-        ...refreshed,
-        accountId: refreshed.accountId ?? tokens.accountId
-      };
-      await writeAuthFile(tokens);
-    }
+    });
+    tokens = refreshed ?? tokens;
 
     const claims = extractClaims(tokens.idToken, tokens.accessToken);
     const email = claims.email?.trim();
@@ -943,16 +955,15 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
   }
 
   private async refreshAccountTokens(account: CodexAccountRecord, tokens: CodexTokens): Promise<CodexTokens> {
-    if (!tokens.refreshToken) {
-      throw new Error("The managed account token expired and has no refresh token");
-    }
-    const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
-    const effectiveTokens = {
-      ...refreshed,
-      accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
-    };
-    await this.repo.updateTokens(account.id, effectiveTokens);
-    return effectiveTokens;
+    return (
+      (await ensureFreshAccountTokens(this.repo, account.id, {
+        fallbackTokens: tokens,
+        providerAccountId: account.accountId
+      })) ?? {
+        ...tokens,
+        accountId: tokens.accountId ?? account.accountId
+      }
+    );
   }
 
   private getGatewayRuntimeState(): GatewayRuntimeState | undefined {

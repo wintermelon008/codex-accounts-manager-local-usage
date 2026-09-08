@@ -117,7 +117,7 @@ export async function refreshSingleQuota(
 
   let result: QuotaRefreshResult;
   try {
-    result = await refreshQuota(account, tokens, forceRefresh);
+    result = await refreshQuota(account, tokens, forceRefresh, repo);
   } catch (error) {
     const message = getErrorMessage(error);
     markTokenAutomationRefreshFailure(accountId, message);
@@ -195,7 +195,7 @@ export async function refreshImportedAccountQuota(
     throw createError.accountNotFound(account.email);
   }
 
-  const result = await refreshQuota(account, tokens, true);
+  const result = await refreshQuota(account, tokens, true, repo);
   const updatedAccount = await repo.updateQuota(
     accountId,
     result.quota,

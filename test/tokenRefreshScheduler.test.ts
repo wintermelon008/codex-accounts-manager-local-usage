@@ -97,7 +97,7 @@ describe("token refresh scheduler", () => {
     try {
       await registration.resync();
       vi.advanceTimersByTime(0);
-      for (let index = 0; index < 8; index += 1) {
+      for (let index = 0; index < 32; index += 1) {
         await Promise.resolve();
       }
 
@@ -136,7 +136,7 @@ describe("token refresh scheduler", () => {
     try {
       await registration.resync();
       vi.advanceTimersByTime(0);
-      for (let index = 0; index < 8; index += 1) {
+      for (let index = 0; index < 32; index += 1) {
         await Promise.resolve();
       }
 

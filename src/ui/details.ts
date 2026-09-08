@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { needsRefresh, refreshTokens } from "../auth/oauth";
+import { needsRefresh } from "../auth/oauth";
+import { ensureFreshAccountTokens } from "../auth/tokenRefreshCoordinator";
 import { CodexAccountRecord, CodexDailyUsageBreakdown, CodexDailyUsagePoint, isSub2ApiAccount } from "../core/types";
 import { resolveAccountHealth, isHealthDismissed } from "../application/accounts/health";
 import { resolveSubscriptionDisplay } from "../application/dashboard/buildDashboardState";
@@ -187,21 +188,7 @@ async function getFreshUsageTokens(
     return tokens;
   }
 
-  if (!tokens.refreshToken) {
-    return tokens;
-  }
-
-  const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
-  await repo.updateTokens(accountId, {
-    ...refreshed,
-    accountId: refreshed.accountId ?? tokens.accountId
-  });
-
-  return {
-    ...tokens,
-    ...refreshed,
-    accountId: refreshed.accountId ?? tokens.accountId
-  };
+  return (await ensureFreshAccountTokens(repo, accountId, { fallbackTokens: tokens })) ?? tokens;
 }
 
 export async function refreshDetailsPanel(): Promise<void> {

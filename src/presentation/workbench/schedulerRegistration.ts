@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { needsTokenRefresh, refreshTokens } from "../../auth/oauth";
+import { needsTokenRefresh } from "../../auth/oauth";
+import { ensureFreshAccountTokens } from "../../auth/tokenRefreshCoordinator";
 import type { CodexHotSwitchRuntime, HotSwitchIdentity, HotSwitchStatus } from "../../codex";
 import { isAutomaticAccount, type CodexAccountRecord, type TokenRefreshErrorKind } from "../../core/types";
 import { ErrorCode, getErrorMessage, sanitizeApiErrorText } from "../../core/errors";
@@ -832,10 +833,6 @@ export function registerTokenRefreshScheduler(params: {
         return;
       }
 
-      if (!tokens.refreshToken) {
-        throw new Error("Token expired and no refresh token is available");
-      }
-
       attemptAt = Date.now();
       await persistTokenRefreshStatus(account.id, {
         tokenRefreshLastAttemptAt: attemptAt,
@@ -844,7 +841,14 @@ export function registerTokenRefreshScheduler(params: {
         tokenRefreshLastErrorKind: undefined,
         tokenRefreshNextRetryAt: undefined
       });
-      const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
+      const refreshed = await ensureFreshAccountTokens(params.repo, account.id, {
+        fallbackTokens: tokens,
+        notifyTokenChange: false,
+        providerAccountId: account.accountId
+      });
+      if (!refreshed?.accessToken) {
+        throw new Error("Token expired and no refreshed access token is available");
+      }
       if (!leaseIsActive()) {
         console.warn("[codexAccounts] token refresh skipped its write after losing the shared lease");
         setRetrySchedule(account.id, Date.now() + params.checkIntervalMs);
@@ -855,7 +859,6 @@ export function registerTokenRefreshScheduler(params: {
         ...refreshed,
         accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
       };
-      await params.repo.updateTokens(account.id, effectiveTokens, { notifyTokenChange: false });
       const idTokenDueAt = getRefreshDueAt(tokens.idToken, params.skewSeconds);
       const idTokenWasDue = idTokenDueAt !== undefined && idTokenDueAt <= Date.now();
       // OAuth refresh responses are allowed to omit id_token. The access token

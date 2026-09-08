@@ -24,7 +24,7 @@ import {
   isSub2ApiAccount
 } from "../core/types";
 import { APIError, formatApiErrorMessage } from "../core/errors";
-import { needsRefresh, refreshTokens } from "../auth/oauth";
+import { ensureFreshAccountTokens, type TokenRefreshAccountRepository } from "../auth/tokenRefreshCoordinator";
 import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { QUOTA_USAGE_URL, RESET_CREDITS_CONSUME_URL, RESET_CREDITS_URL } from "../infrastructure/config/apiEndpoints";
 import { extractClaims } from "../utils/jwt";
@@ -70,7 +70,8 @@ export interface QuotaRefreshResult {
 export async function refreshQuota(
   account: CodexAccountRecord,
   tokens: CodexTokens,
-  forceRefresh = false
+  forceRefresh = false,
+  tokenRepository?: TokenRefreshAccountRepository
 ): Promise<QuotaRefreshResult> {
   if (isSub2ApiAccount(account) || account.quotaMode === "none") {
     return {};
@@ -95,12 +96,13 @@ export async function refreshQuota(
   const refreshTask = (async (): Promise<QuotaRefreshResult> => {
     let effectiveTokens = tokens;
 
-    if (needsRefresh(tokens.accessToken)) {
-      if (!tokens.refreshToken) {
-        return { error: buildError("Token expired and no refresh token is available") };
-      }
-      effectiveTokens = await refreshTokens(tokens.refreshToken, tokens.idToken);
-      effectiveTokens.accountId = effectiveTokens.accountId ?? account.accountId;
+    if (tokenRepository) {
+      effectiveTokens =
+        (await ensureFreshAccountTokens(tokenRepository, account.id, {
+          fallbackTokens: tokens,
+          notifyTokenChange: false,
+          providerAccountId: account.accountId
+        })) ?? effectiveTokens;
     }
 
     const accountId = account.accountId ?? extractClaims(effectiveTokens.idToken, effectiveTokens.accessToken).accountId;
