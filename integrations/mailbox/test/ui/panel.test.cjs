@@ -621,6 +621,64 @@ test("Mailbox provider filter refreshes rows without replacing the active contro
   assert.match(selectionCount.textContent, /1$/u);
 });
 
+test("Mailbox batch operations display progress for query, listening, and renewal", () => {
+  const html = createMailboxPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({
+    data: {
+      type: "state",
+      state: {
+        mailboxes: [
+          { id: "mailbox:query", providerId: "mock", address: "query@example.com", displayName: "Query" },
+          { id: "mailbox:wait", providerId: "mock", address: "wait@example.com", displayName: "Wait" },
+          { id: "mailbox:renewal", providerId: "mock", address: "renewal@example.com", displayName: "Renewal" }
+        ],
+        providers: [{ id: "mock", displayName: "Mock", capabilities: { manualRenewal: true }, importSchema: {} }],
+        operations: [
+          { mailboxId: "mailbox:query", kind: "query", batchId: "query-batch", progress: { completed: 3, total: 10 } },
+          { mailboxId: "mailbox:wait", kind: "wait", batchId: "wait-batch", progress: { completed: 2, total: 3 } },
+          { mailboxId: "mailbox:renewal", kind: "renewal", batchId: "renewal-batch", progress: { completed: 1, total: 4 } }
+        ]
+      }
+    }
+  });
+
+  assert.match(renderedHtml, /查询进度/u);
+  assert.match(renderedHtml, /已查询 3\/10/u);
+  assert.match(renderedHtml, /aria-valuenow="3"/u);
+  assert.match(renderedHtml, /style="width:30%"/u);
+  assert.match(renderedHtml, /监听进度/u);
+  assert.match(renderedHtml, /已监听 2\/3/u);
+  assert.match(renderedHtml, /续期进度/u);
+  assert.match(renderedHtml, /已续期 1\/4/u);
+});
+
 test("registration provider filter refreshes rows without replacing the registration controls", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -1040,6 +1098,10 @@ test("Mailbox panel fills the webview and lets the detail wheel scroll the layou
   assert.match(html, /data-action="toggle-mailbox-sort-direction"/u);
   assert.match(html, /mailbox-sort-arrow/u);
   assert.match(html, /\.mailbox-row-actions \{ display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 0 12px 8px;/u);
+  assert.match(html, /\.detail-action-row \{ flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; overflow-x: auto;/u);
+  assert.match(html, /\.detail-actions \.actions \{ flex-wrap: nowrap; \}/u);
+  assert.match(html, /<div class="detail-action-row"><div class="detail-header-actions">/u);
+  assert.match(html, /<div class="detail-actions"><div class="actions">/u);
   assert.doesNotMatch(html, /data-action="toggle-registration"/u);
   assert.doesNotMatch(html, /class="top-actions">[^<]*<button[^>]*>注册助手/u);
   assert.match(html, /\.content \{ flex: 1 1 auto; min-height: 0; overflow: visible; overscroll-behavior: auto;/u);
@@ -1048,6 +1110,13 @@ test("Mailbox panel fills the webview and lets the detail wheel scroll the layou
   assert.match(html, /\.layout > \.box:first-child \{ flex-basis: 760px; height: 760px; min-height: 760px; \}/u);
   assert.doesNotMatch(html, /height: min\(700px, calc\(100vh - 120px\)\)/u);
   assert.match(html, /message\.type === "operation-complete"/u);
+  assert.match(html, /if \(shouldClearBatchSelection\(message\)\) selectedMailboxIds\.clear\(\);/gu);
+  assert.match(html, /function shouldClearBatchSelection\(message\)/u);
+  assert.match(html, /\["query", "wait", "renewal"\]\.includes\(message\.action\)/u);
+  assert.match(html, /\["batchStop", "batchDelete", "deleteDeactivatedMailboxes"\]\.includes\(message\.action\)/u);
+  assert.match(html, /pendingBatchAction = action;\s+selectedMailboxIds\.clear\(\);\s+render\(\);\s+send\(action, \{ mailboxIds \}\);/u);
+  assert.match(html, /pendingBatchAction = "deleteDeactivatedMailboxes";\s+selectedMailboxIds\.clear\(\);/u);
+  assert.match(html, /selectedMailboxIds\.clear\(\);\s+pendingBatchAction = "batchDelete";/u);
   assert.match(html, /function requestCodexImport\(/u);
   assert.match(html, /codexImportCancellable/u);
   assert.match(html, /button:active:not\(:disabled\)/u);

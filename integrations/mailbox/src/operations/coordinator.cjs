@@ -2,13 +2,24 @@
 
 const { assertMailboxProvider } = require("../core/provider.cjs");
 
+const DEFAULT_MAX_CONCURRENT_OPERATIONS = 10;
+
 class MailboxOperationCoordinator {
-  constructor({ pool, provider, providers, now = () => Date.now(), sleep = delay, onOperationChange = () => {} }) {
+  constructor({
+    pool,
+    provider,
+    providers,
+    maxConcurrent = DEFAULT_MAX_CONCURRENT_OPERATIONS,
+    now = () => Date.now(),
+    sleep = delay,
+    onOperationChange = () => {}
+  }) {
     if (!pool || typeof pool.listAccounts !== "function") {
       throw new TypeError("Mailbox operation coordinator requires a mailbox pool");
     }
     this.pool = pool;
     this.providers = providers ?? createProviderSource(provider);
+    this.maxConcurrent = normalizePositive(maxConcurrent, DEFAULT_MAX_CONCURRENT_OPERATIONS);
     this.now = now;
     this.sleep = sleep;
     this.onOperationChange = typeof onOperationChange === "function" ? onOperationChange : () => {};
@@ -24,7 +35,12 @@ class MailboxOperationCoordinator {
     return [...this.operations.values()].map((operation) => ({
       mailboxId: operation.mailboxId,
       kind: operation.kind,
-      id: operation.id
+      id: operation.id,
+      batchId: operation.batchId,
+      progress: {
+        completed: operation.batch.completed,
+        total: operation.batch.total
+      }
     }));
   }
 
@@ -149,25 +165,68 @@ class MailboxOperationCoordinator {
       throw new Error(`Mailbox operation is already running for ${busy.address}`);
     }
 
-    const results = await Promise.all(selected.map((account) => this.runOne(operation, account, worker)));
-    return {
-      operation,
-      results,
-      stopped: results.some((result) => result.error?.code === "request_aborted")
+    const entries = new Map();
+    const batch = {
+      id: this.nextOperationId++,
+      kind: operation,
+      completed: 0,
+      total: selected.length
     };
+    for (const account of selected) {
+      const active = {
+        id: this.nextOperationId++,
+        mailboxId: account.id,
+        kind: operation,
+        batchId: batch.id,
+        batch,
+        controller: new AbortController(),
+        stopped: false,
+        started: false
+      };
+      entries.set(account.id, active);
+      this.operations.set(account.id, active);
+    }
+    this.notifyOperationChange();
+
+    try {
+      const results = await runWithConcurrency(selected, this.maxConcurrent, async (account) => {
+        const active = entries.get(account.id);
+        if (!active || active.stopped) {
+          if (active) {
+            this.completeOperation(active);
+          }
+          return withMailboxId(account, abortedResult(operation));
+        }
+        active.started = true;
+        return this.runOne(operation, account, worker, active);
+      });
+      return {
+        operation,
+        results,
+        stopped: results.some((result) => result.error?.code === "request_aborted")
+      };
+    } finally {
+      let changed = false;
+      for (const [accountId, active] of entries) {
+        if (this.operations.get(accountId) !== active) {
+          continue;
+        }
+        this.operations.delete(accountId);
+        changed = true;
+      }
+      if (changed) {
+        this.notifyOperationChange();
+      }
+    }
   }
 
-  async runOne(operation, account, worker) {
+  async runOne(operation, account, worker, active) {
     const provider = this.providers.get(account.providerId);
-    const controller = new AbortController();
-    const active = { id: this.nextOperationId++, mailboxId: account.id, kind: operation, controller };
-    this.operations.set(account.id, active);
-    this.notifyOperationChange();
     try {
       if (!provider) {
         throw new Error(`Mailbox provider '${account.providerId}' is unavailable`);
       }
-      return await worker(account, assertOperationProvider(provider), controller.signal);
+      return await worker(account, assertOperationProvider(provider), active.controller.signal);
     } catch (error) {
       const failure = {
         ok: false,
@@ -192,11 +251,20 @@ class MailboxOperationCoordinator {
       }
       return withMailboxId(account, failure);
     } finally {
+      this.completeOperation(active);
       if (this.operations.get(account.id) === active) {
         this.operations.delete(account.id);
         this.notifyOperationChange();
       }
     }
+  }
+
+  completeOperation(active) {
+    if (active.completed) {
+      return;
+    }
+    active.completed = true;
+    active.batch.completed = Math.min(active.batch.total, active.batch.completed + 1);
   }
 
   notifyOperationChange() {
@@ -252,6 +320,25 @@ function uniqueCodes(messages) {
   return [...new Set(messages.flatMap((message) => message.codes ?? []))];
 }
 
+async function runWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= items.length) {
+          return;
+        }
+        results[index] = await worker(items[index], index);
+      }
+    })
+  );
+  return results;
+}
+
 function withMailboxId(account, result) {
   return { ...result, mailboxId: account.id, address: account.address };
 }
@@ -273,6 +360,16 @@ function normalizeOperationError(error) {
     code: "operation_failed",
     message: error instanceof Error && error.message ? error.message.slice(0, 160) : "Mailbox operation failed",
     retryable: true
+  };
+}
+
+function abortedResult(operation) {
+  return {
+    ok: false,
+    operation,
+    messages: [],
+    codes: [],
+    error: { stage: "cancelled", code: "request_aborted", message: "Request cancelled", retryable: false }
   };
 }
 
