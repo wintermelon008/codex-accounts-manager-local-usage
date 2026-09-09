@@ -23,6 +23,7 @@ export function renderHealthPill(account: DashboardAccountViewModel) {
     case "disabled":
     case "refresh_failed":
       return <span class="pill error">{account.healthLabel}</span>;
+    case "refresh_unavailable":
     case "quota":
       return <span class="pill warning">{account.healthLabel}</span>;
     default:

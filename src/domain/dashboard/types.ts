@@ -152,6 +152,7 @@ export interface DashboardCopy {
   tokenAutomationHealthy: string;
   tokenAutomationExpiring: string;
   tokenAutomationRefreshFailed: string;
+  tokenAutomationRefreshUnavailable: string;
   tokenAutomationRefreshTokenInvalid: string;
   tokenAutomationAccessTokenInvalid: string;
   tokenAutomationReauthorize: string;

@@ -385,6 +385,8 @@ function formatHealthLabel(kind: DashboardAccountViewModel["healthKind"], copy: 
       return copy.tokenAutomationExpiring;
     case "refresh_failed":
       return copy.tokenAutomationRefreshFailed;
+    case "refresh_unavailable":
+      return copy.tokenAutomationRefreshUnavailable;
     case "refresh_token_invalid":
       return copy.tokenAutomationRefreshTokenInvalid;
     case "access_token_invalid":
@@ -626,6 +628,8 @@ function getHealthPriority(health: ReturnType<typeof resolveAccountHealth>): num
       return 4;
     case "refresh_failed":
       return 3;
+    case "refresh_unavailable":
+      return 2;
     case "quota":
       return 2;
     case "expiring":

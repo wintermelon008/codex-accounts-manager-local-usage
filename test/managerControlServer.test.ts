@@ -34,7 +34,8 @@ describe("ManagerControlServer", () => {
     };
 
     expect(body.accounts.counts).toMatchObject({ total: 2, poolEligible: 1 });
-    expect(body.accounts.accounts[0]).toMatchObject({ health: "auth" });
+    expect(body.accounts.accounts[0]).toMatchObject({ health: "healthy" });
+    expect(body.accounts.accounts[1]).toMatchObject({ health: "auth" });
     expect(body.accounts.accounts[0]).not.toHaveProperty("rawData");
     expect(body.usageToday).toMatchObject({ date: "2026-08-18", total: { totalTokens: 42 } });
     expect(body.usageToday.byModel).toMatchObject([{ date: "2026-08-18", model: "gpt-test", totalTokens: 42 }]);

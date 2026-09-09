@@ -774,6 +774,8 @@ function renderHealthBadge(
       return `<span class="pill error">${escapeHtml(copy.tokenAutomationReauthorize)}</span>`;
     case "refresh_failed":
       return `<span class="pill error">${escapeHtml(copy.tokenAutomationRefreshFailed)}</span>`;
+    case "refresh_unavailable":
+      return `<span class="pill warning">${escapeHtml(copy.tokenAutomationRefreshUnavailable)}</span>`;
     case "disabled":
       return `<span class="pill error">${escapeHtml(copy.tokenAutomationDisabled)}</span>`;
     case "quota":

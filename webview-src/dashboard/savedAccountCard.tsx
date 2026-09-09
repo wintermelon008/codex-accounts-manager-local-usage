@@ -98,6 +98,7 @@ export function SavedAccountCard(props: {
       account.healthKind === "disabled" ||
       account.healthKind === "refresh_failed" ||
       account.healthKind === "quota");
+  const hasWarningHealth = !account.dismissedHealth && account.healthKind === "refresh_unavailable";
   const gatewayActive = virtual && account.providerActive;
   const providerCard = virtual ? account.providerCard : undefined;
   const profileSelectionActions =
@@ -120,7 +121,8 @@ export function SavedAccountCard(props: {
     account.isHidden ? "is-hidden-account" : "",
     props.busy ? "is-busy" : "",
     props.selected ? "selected" : "",
-    hasErrorHealth ? "health-error" : ""
+    hasErrorHealth ? "health-error" : "",
+    hasWarningHealth ? "health-warning" : ""
   ]
     .filter(Boolean)
     .join(" ");

@@ -278,7 +278,7 @@ describe("Dashboard account selection", () => {
       { id: "virtual", accountKind: "sub2api", healthKind: "reauthorize", mailboxDeactivated: true }
     ] as DashboardState["accounts"];
 
-    expect(getBlockedAccountIds(accounts)).toEqual(["eligible", "refresh-token", "access-token"]);
+    expect(getBlockedAccountIds(accounts)).toEqual(["eligible", "access-token"]);
   });
 
   it("exposes blocked-account removal only while Mailbox is registered and usable", () => {

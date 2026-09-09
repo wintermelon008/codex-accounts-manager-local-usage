@@ -228,6 +228,39 @@ describe("token refresh scheduler", () => {
     }
   });
 
+  it("retries a refresh-token reuse conflict without marking reauthorization", async () => {
+    vi.useFakeTimers();
+    const account = makeAccount("account-a");
+    const tokens = makeTokens(3_600, 240);
+    const reused = Object.assign(new Error("Token refresh failed (401): refresh_token_reused"), {
+      code: "API_ERROR",
+      statusCode: 401,
+      context: { errorCode: "refresh_token_reused" }
+    });
+    refreshTokensMock.mockRejectedValue(reused);
+
+    const repo = makeRepo([account], tokens);
+    const registration = registerScheduler(repo);
+
+    try {
+      await registration.resync();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(repo.updateTokenRefreshStatus).toHaveBeenCalledWith(
+        "account-a",
+        expect.objectContaining({
+          tokenRefreshLastErrorKind: "provider_response",
+          tokenRefreshNextRetryAt: expect.any(Number)
+        })
+      );
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(refreshTokensMock).toHaveBeenCalledTimes(2);
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("retries transient refresh endpoint failures after the scheduler interval", async () => {
     vi.useFakeTimers();
     const account = makeAccount("account-a");

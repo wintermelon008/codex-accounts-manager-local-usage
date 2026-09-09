@@ -555,14 +555,10 @@ function mapAccount(account: CodexAccountRecord): ManagerControlAccount {
   const virtual = isSub2ApiAccount(account);
   const capability = virtual ? "unknown" : getBalanceQuotaCapability(account);
   const issueKind = virtual ? undefined : getQuotaIssueKind(account.quotaError);
-  const refreshTokenAuthFailure =
-    !virtual &&
-    (account.tokenRefreshLastErrorKind === "reauthorize" ||
-      /(?:token refresh|refresh token|invalid_grant)/u.test(account.tokenRefreshLastError?.toLowerCase() ?? ""));
   const health: ManagerControlHealth =
     issueKind === "disabled"
       ? "disabled"
-      : issueKind === "auth" || refreshTokenAuthFailure
+      : issueKind === "auth"
         ? "auth"
         : issueKind === "quota"
           ? "quota"
