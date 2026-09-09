@@ -25,7 +25,7 @@ class Eight92Provider {
   asProvider() {
     return createMailboxProvider({
       id: EIGHT92_PROVIDER_ID,
-      displayName: "8t92 / NLoop",
+      displayName: "tototo-outlook",
       capabilities: { history: "recent", maxMessages: DEFAULT_MAX_MESSAGES, manualRenewal: false },
       importSchema: {
         label: "Outlook 来源凭据",
@@ -164,7 +164,7 @@ function normalizeInput(input) {
 }
 
 function mapNloopError(data) {
-  const message = typeof data?.error === "string" ? data.error : "NLoop 邮箱服务返回了无效响应";
+  const message = typeof data?.error === "string" ? data.error : "tototo-outlook 邮箱服务返回了无效响应";
   return toRemoteError([{ stage: "provider", code: "nloop_query_failed", message }], "provider");
 }
 

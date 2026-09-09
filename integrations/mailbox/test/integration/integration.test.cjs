@@ -461,7 +461,7 @@ test("registration assistant deletes a mailbox directly and clears all registrat
   integration.dispose();
 });
 
-test("default integration registers the built-in 8t92, boya and cdns providers", async () => {
+test("default integration registers the built-in 8t92, boya, cdns and tototo-icloud providers", async () => {
   const vscode = createVscode();
   const context = createContext();
   const api = { registerDashboardIntegration() { return { dispose() {} }; } };
@@ -469,7 +469,8 @@ test("default integration registers the built-in 8t92, boya and cdns providers",
   await integration.initialize();
 
   const providers = await integration.getPanelState();
-  assert.deepEqual(providers.providers.map((provider) => provider.id), ["8t92", "boya", "cdns"]);
+  assert.deepEqual(providers.providers.map((provider) => provider.id), ["8t92", "boya", "cdns", "tototo-icloud"]);
+  assert.equal(providers.providers.find((provider) => provider.id === "8t92").displayName, "tototo-outlook");
   assert.equal(providers.providers.find((provider) => provider.id === "boya").displayName, "boya");
   assert.equal(providers.providers.find((provider) => provider.id === "cdns").displayName, "cdns");
   integration.dispose();

@@ -562,6 +562,7 @@ test("Mailbox provider filter refreshes rows without replacing the active contro
   };
   const mailboxCount = { textContent: "" };
   const selectionCount = { textContent: "" };
+  const messages = [];
   const app = {};
   Object.defineProperty(app, "innerHTML", {
     configurable: true,
@@ -585,7 +586,7 @@ test("Mailbox provider filter refreshes rows without replacing the active contro
   vm.runInNewContext(script, {
     window,
     document,
-    acquireVsCodeApi: () => ({ postMessage() {} }),
+    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
     console
   });
 
@@ -606,6 +607,9 @@ test("Mailbox provider filter refreshes rows without replacing the active contro
     }
   } });
 
+  assert.match(renderedHtml, /<option value="a"[^>]*>Provider A<\/option>/u);
+  assert.doesNotMatch(renderedHtml, /Provider A（a）/u);
+
   const renderCountBeforeFilter = renderCount;
   documentListeners.get("change")({ target: {
     id: "mailboxProviderFilter",
@@ -619,6 +623,20 @@ test("Mailbox provider filter refreshes rows without replacing the active contro
   assert.doesNotMatch(mailboxRows, /a@example\.com/u);
   assert.equal(mailboxCount.textContent, "1/2");
   assert.match(selectionCount.textContent, /1$/u);
+  assert.match(mailboxRows, /<span class="tag source">Provider B<\/span>/u);
+  assert.match(mailboxRows, /data-action="copy-mailbox-email" data-email="b@example\.com"/u);
+
+  documentListeners.get("click")({ target: {
+    disabled: false,
+    dataset: { action: "copy-mailbox-email", email: "b@example.com" },
+    closest() { return this; }
+  } });
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "mailbox:action",
+    action: "copyText",
+    text: "b@example.com",
+    successMessage: "邮箱已复制"
+  });
 });
 
 test("Mailbox batch operations display progress for query, listening, and renewal", () => {
@@ -737,6 +755,9 @@ test("registration provider filter refreshes rows without replacing the registra
     }
   } });
 
+  assert.match(renderedHtml, /<option value="a"[^>]*>Provider A<\/option>/u);
+  assert.doesNotMatch(renderedHtml, /Provider A（a）/u);
+
   const renderCountBeforeFilter = renderCount;
   documentListeners.get("change")({ target: {
     id: "registrationMailboxProviderFilter",
@@ -811,6 +832,7 @@ test("provider selects update dependent form fields without rebuilding their mod
       closest() { return this; }
     } });
     assert.ok(insertedModal);
+    assert.doesNotMatch(insertedModal, /Provider A（a）/u);
     const renderCountBeforeChange = renderCount;
     documentListeners.get("change")({ target: {
       id: providerSelectId,
@@ -1942,7 +1964,7 @@ test("Mailbox tags use compact semantic colors and do not expose code_found", ()
     }
   } });
 
-  assert.match(app.innerHTML, /class="tag source">mock/u);
+  assert.match(app.innerHTML, /class="tag source">Mock/u);
   assert.match(app.innerHTML, /class="tag success">Codex 已接入/u);
   assert.doesNotMatch(app.innerHTML, /GPT 已注册/u);
   assert.match(app.innerHTML, /class="tag success">验证码 123456/u);

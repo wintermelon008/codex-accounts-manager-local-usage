@@ -1,6 +1,6 @@
 # Mailbox 可选集成
 
-`integrations/mailbox` 是 Manager 的独立可选 VSIX。它定义通用 Mailbox/provider 边界，当前内置 `8t92`、`boya` 和 `cdns` provider，后续第三方只需要实现同一 provider 合约。
+`integrations/mailbox` 是 Manager 的独立可选 VSIX。它定义通用 Mailbox/provider 边界，当前内置 `tototo-outlook`、`boya`、`cdns` 和 `tototo-icloud` provider；界面使用显示名称，内部 provider ID 保持兼容，后续第三方只需要实现同一 provider 合约。
 
 ## 边界
 
@@ -56,6 +56,22 @@ Boya 的 private token 只作为 provider 凭据存入 Mailbox 私有服务器�
 查询按 CDNS 前端相同的两步协议执行：先 POST `/api/card-withdraw/public-proxy/account-sources/resolve`，用邮箱和 `public_ref` 解析来源；成功后再 POST `/api/card-withdraw/public-proxy/mail/receive`，提交邮箱、密码、接码令牌、`public_ref` 和解析得到的 `source_upstream_key`。该来源声明 `history: "latest"`、最多一封邮件且不支持续期；响应中的 `code`、`subject`、`message` 和 `received_at` 会转换为统一 Mailbox 消息模型。
 
 CDNS 的密码、接码令牌和 `public_ref` 只存入 Mailbox 私有服务器秘密文件，不会进入邮箱池公共元数据、Manager API 或测试文件。来源未匹配、凭据错误和上游异常会转换为固定安全错误，并对异常回显的凭据做脱敏。
+
+## tototo-icloud 接入
+
+`tototo-icloud` 使用 `https://ima4.52dfd.top/api/v1/mailboxes/{邮箱}/code?key=...` 查询验证码。导入时每行填写：
+
+```text
+邮箱----验证码查询 URL
+```
+
+例如：
+
+```text
+user@icloud.com----https://ima4.52dfd.top/api/v1/mailboxes/user@icloud.com/code?key=your_key
+```
+
+provider 只接受指定 HTTPS 主机和固定路径，并校验 URL 路径中的邮箱与导入地址一致。接口返回六位 `code` 时转换为统一验证码消息；`code: "no_code"` 表示当前暂无验证码，监听会继续轮询。查询 URL 和 key 只写入 Mailbox 私有服务器秘密文件，不进入公共元数据、Manager API 或日志。
 
 ## 构建和验证
 

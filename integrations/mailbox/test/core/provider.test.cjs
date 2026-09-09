@@ -17,7 +17,7 @@ const account = {
 test("provider exposes generic capabilities and parses its own import format", () => {
   const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
   assert.equal(provider.id, "8t92");
-  assert.equal(provider.displayName, "8t92 / NLoop");
+  assert.equal(provider.displayName, "tototo-outlook");
   assert.equal(provider.capabilities.history, "recent");
   assert.equal(provider.capabilities.manualRenewal, false);
   assert.deepEqual(provider.parseImport("person@example.com----password----client-id----refresh-token"), {

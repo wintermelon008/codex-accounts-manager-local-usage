@@ -1,6 +1,6 @@
 # Codex Accounts Mailbox
 
-这是一个可选的 VS Code 扩展，为 Codex Accounts Manager 提供通用 Mailbox 查询、验证码人工监听和人工凭据续期入口。当前内置 `8t92 / NLoop`、`boya` 与 `cdns` 三个 provider，provider 名称同时作为来源标识。
+这是一个可选的 VS Code 扩展，为 Codex Accounts Manager 提供通用 Mailbox 查询、验证码人工监听和人工凭据续期入口。当前内置 `tototo-outlook`、`boya`、`cdns` 与 `tototo-icloud` 四个 provider；界面使用显示名称，内部 provider ID 保持兼容。
 
 它是独立组件：邮箱池元数据、详情和凭据只由本扩展管理，并以扩展宿主服务器的 `globalStorageUri` 为共享权威，分别写入 `0600` 的邮箱状态文件和秘密文件；旧版 VS Code `globalState/SecretStorage` 数据会按设备标识一次性合并迁移。Manager 核心账号库、Sub2API 配置和其他 provider 不会被读取。Manager 只通过已有的 Dashboard integration API 显示一个轻量入口卡片，邮箱列表和当前选中邮箱详情由本扩展自己的 Webview 面板渲染；从 Dashboard 打开时使用当前主编辑器组，不再强制分裂到 `Beside` 侧栏。
 
@@ -25,9 +25,9 @@
 - provider 可以声明只提供最近一封邮件，或提供有限的最近邮件列表；UI 会按声明显示能力，不假设所有来源都有完整历史。
 - provider 可以声明人工续期能力。只有返回明确的新凭据且凭据实际写入成功时才回写该邮箱并刷新上次续期时间；未变化和失败都会保留原凭据及原续期时间。
 
-## 内置 8t92 / NLoop 来源
+## 内置 tototo-outlook 来源
 
-`8t92` 的内部 provider ID 保持不变，以兼容已有邮箱记录；查询改为调用 `https://email.nloop.cc/api/outlook/query`。每行导入格式仍为：
+`tototo-outlook` 的内部 provider ID 仍为 `8t92`，以兼容已有邮箱记录；查询改为调用 `https://email.nloop.cc/api/outlook/query`。每行导入格式仍为：
 
 ```text
 邮箱----密码----Client ID----Refresh Token
@@ -62,6 +62,22 @@ user@example.com----private_token
 ```
 
 查询时先通过 CDNS 的账号来源解析接口取得 `source_upstream_key`，再查询最近一封邮件；该来源声明 `history: "latest"`、最多一封邮件且不支持人工续期。返回的验证码、主题和提示会转换为 Mailbox 统一格式；来源未匹配、凭据错误和上游异常只显示固定安全错误，不透传第三方原始响应。
+
+## 内置 tototo-icloud 来源
+
+`tototo-icloud` 对接 `https://ima4.52dfd.top/api/v1/mailboxes/{邮箱}/code?key=...` 的验证码查询接口。每行导入格式为：
+
+```text
+邮箱----验证码查询 URL
+```
+
+例如：
+
+```text
+user@icloud.com----https://ima4.52dfd.top/api/v1/mailboxes/user@icloud.com/code?key=your_key
+```
+
+provider 只允许该 HTTPS 主机、固定接口路径，并校验 URL 路径中的邮箱与导入地址一致。接口返回 `code` 为六位数字时转换为统一验证码消息；`code: "no_code"` 是正常的空结果，验证码监听会继续轮询。查询 URL 和 key 只存入 Mailbox 私有服务器秘密文件，不进入邮箱池公共元数据、Manager API 或日志。
 
 卸载本扩展不会删除 Manager 账号。当前版本使用全新的 `Mailbox` 扩展身份和存储命名空间，不从旧的 provider 专用扩展迁移数据；若需要清理旧扩展凭据，应在卸载前通过 VS Code 的扩展存储清理能力处理。本扩展没有自动续期或后台网络任务；注册助手每天首次打开时才会查询一次汇率。
 

@@ -489,6 +489,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "delete-mailbox") requestDelete(target.dataset.mailboxId || "");
         else if (action === "delete-mailbox-and-codex") requestDeleteMailboxAndCodex(target.dataset.mailboxId || "");
         else if (action === "codex-import") requestCodexImport(target.dataset.mailboxId || state.selectedMailboxId);
+        else if (action === "copy-mailbox-email") copyText(target.dataset.email || "", "邮箱已复制");
         else if (action === "submit-query" || action === "submit-wait" || action === "submit-renewal" || action === "stop") {
           requestAction(action.replace("submit-", ""), state.selectedMailboxId);
         }
@@ -1015,7 +1016,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const managedCount = registrationMailboxView.managedCount;
         const providerOptions = (state.providers || []).map((provider) =>
           '<option value="' + esc(provider.id) + '" ' + (registrationMailboxProviderFilter === provider.id ? "selected" : "") + '>' +
-          esc(provider.displayName || provider.id) + '（' + esc(provider.id) + '）</option>'
+          esc(provider.displayName || provider.id) + '</option>'
         ).join("");
         const mailboxRows = registrationMailboxView.rows;
         const managedNote = managedCount
@@ -1503,7 +1504,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           : '<div class="empty-list">' + (allMailboxes.length ? '没有匹配的邮箱。' : '还没有邮箱。<br>点击“添加邮箱”并在导入时选择来源。') + '</div>';
         const selected = state.selected;
         const filterActive = Boolean(query || providerFilter || onlyUnlinkedCodex || onlyReauthorization || onlyOpenAiDeactivated);
-        const providerOptions = (state.providers || []).map((provider) => '<option value="' + esc(provider.id) + '" ' + (providerFilter === provider.id ? "selected" : "") + '>' + esc(provider.displayName || provider.id) + '（' + esc(provider.id) + '）</option>').join("");
+        const providerOptions = (state.providers || []).map((provider) => '<option value="' + esc(provider.id) + '" ' + (providerFilter === provider.id ? "selected" : "") + '>' + esc(provider.displayName || provider.id) + '</option>').join("");
         const deactivatedSummary = deactivatedMailboxCount > 0
           ? '<span class="tag blocked">OpenAI 封禁：' + deactivatedMailboxCount + '</span>'
           : '';
@@ -1561,6 +1562,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       }
 
       function renderMailboxRow(mailbox, index) {
+        const provider = (state.providers || []).find((item) => item.id === mailbox.providerId);
         const active = (state.operations || []).find((operation) => operation.mailboxId === mailbox.id);
         const pending = pendingActions[mailbox.id] || (pendingCodexImports[mailbox.id] ? "codexImport" : "");
         const status = active ? active.kind === "wait" ? "监听中" : active.kind === "renewal" ? "续期中" : "查询中" : mailbox.lastStatus === "code_found" ? "" : mailbox.lastStatus || "未查询";
@@ -1570,8 +1572,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const blockedTag = mailbox.openaiAccountDeactivated === true ? '<span class="tag blocked">OpenAI 封禁</span>' : '';
         return '<div class="mailbox-row-wrap ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '"><label class="mailbox-select"><input class="mailbox-checkbox" type="checkbox" value="' + esc(mailbox.id) + '" ' + (selectedMailboxIds.has(mailbox.id) ? "checked" : "") + ' aria-label="选择 ' + esc(mailbox.address) + '"></label><button class="mailbox-row ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '" data-action="select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">' +
           '<div class="row-title"><span class="row-number">' + (index + 1) + '</span><span class="address">' + esc(mailbox.displayName || mailbox.address) + '</span></div>' +
-          '<div class="row-meta"><span class="address">' + esc(mailbox.address) + '</span><span class="tag source">' + esc(mailbox.providerId) + '</span>' + statusTag + accountStatusTag +
-          (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + blockedTag + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "错误") + '</span>' : '') + '</div><div class="mailbox-card-time">' + esc(mailboxActivityLabel(mailbox)) + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
+          '<div class="row-meta"><span class="address">' + esc(mailbox.address) + '</span><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span>' + statusTag + accountStatusTag +
+          (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + blockedTag + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "错误") + '</span>' : '') + '</div><div class="mailbox-card-time">' + esc(mailboxActivityLabel(mailbox)) + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action" data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制邮箱">复制邮箱</button><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
       }
 
       function renderSelected(selected) {
@@ -1716,7 +1718,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const draft = modalFormValues.importForm || {};
         const displayName = draft.displayName?.value ?? "";
         const credentialInput = draft.input?.value ?? "";
-        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>添加邮箱</h2><form id="importForm"><div class="field"><label for="providerId">邮箱来源 / 格式</label><select id="providerId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider.id ? 'selected' : '') + '>' + esc(item.displayName) + '（' + esc(item.id) + '）</option>').join('') + '</select><div class="field-note">来源决定导入和查询协议。</div></div><div class="field"><label for="displayName">显示名称（可选）</label><input id="displayName" name="displayName" value="' + esc(displayName) + '" placeholder="可选显示名称"></div><div class="field"><label for="input">来源凭据</label><textarea id="input" name="input" data-role="import-credential-input" required placeholder="' + esc(placeholder) + '">' + esc(credentialInput) + '</textarea><div class="field-note" data-role="import-description">' + esc(description) + '</div></div><div class="modal-actions"><button type="button" data-action="close-import">取消</button><button class="primary" type="submit">导入并加入列表</button></div></form></section></div>';
+        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>添加邮箱</h2><form id="importForm"><div class="field"><label for="providerId">邮箱来源 / 格式</label><select id="providerId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider.id ? 'selected' : '') + '>' + esc(item.displayName) + '</option>').join('') + '</select><div class="field-note">来源决定导入和查询协议。</div></div><div class="field"><label for="displayName">显示名称（可选）</label><input id="displayName" name="displayName" value="' + esc(displayName) + '" placeholder="可选显示名称"></div><div class="field"><label for="input">来源凭据</label><textarea id="input" name="input" data-role="import-credential-input" required placeholder="' + esc(placeholder) + '">' + esc(credentialInput) + '</textarea><div class="field-note" data-role="import-description">' + esc(description) + '</div></div><div class="modal-actions"><button type="button" data-action="close-import">取消</button><button class="primary" type="submit">导入并加入列表</button></div></form></section></div>';
       }
 
       function renderEditModal() {
@@ -1728,7 +1730,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const draft = modalFormValues.editForm || {};
         const displayName = draft.displayName?.value ?? mailbox.displayName ?? mailbox.address;
         const credentialInput = draft.input?.value ?? "";
-        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>编辑邮箱</h2><p class="muted">' + esc(mailbox.address) + '</p><form id="editForm"><div class="field"><label for="editProviderId">邮箱来源 / 格式</label><select id="editProviderId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider?.id ? 'selected' : '') + '>' + esc(item.displayName) + '（' + esc(item.id) + '）</option>').join('') + '</select></div><div class="field"><label for="displayName">显示名称</label><input id="displayName" name="displayName" value="' + esc(displayName) + '" required></div><div class="field"><label for="input">替换来源凭据（可选）</label><textarea id="input" name="input" data-role="edit-credential-input" placeholder="留空只修改显示名称；填写时请输入：' + esc(placeholder) + '">' + esc(credentialInput) + '</textarea><div class="field-note">当前凭据不会回显。切换邮箱来源 / 格式时必须填写凭据；邮箱地址保持不变。</div></div><div class="modal-actions"><button type="button" data-action="close-edit">取消</button><button class="primary" type="submit">保存修改</button></div></form></section></div>';
+        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>编辑邮箱</h2><p class="muted">' + esc(mailbox.address) + '</p><form id="editForm"><div class="field"><label for="editProviderId">邮箱来源 / 格式</label><select id="editProviderId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider?.id ? 'selected' : '') + '>' + esc(item.displayName) + '</option>').join('') + '</select></div><div class="field"><label for="displayName">显示名称</label><input id="displayName" name="displayName" value="' + esc(displayName) + '" required></div><div class="field"><label for="input">替换来源凭据（可选）</label><textarea id="input" name="input" data-role="edit-credential-input" placeholder="留空只修改显示名称；填写时请输入：' + esc(placeholder) + '">' + esc(credentialInput) + '</textarea><div class="field-note">当前凭据不会回显。切换邮箱来源 / 格式时必须填写凭据；邮箱地址保持不变。</div></div><div class="modal-actions"><button type="button" data-action="close-edit">取消</button><button class="primary" type="submit">保存修改</button></div></form></section></div>';
       }
 
       function clearRegistrationSessionClientState(sessionId) {

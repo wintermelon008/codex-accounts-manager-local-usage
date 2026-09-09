@@ -4,6 +4,7 @@ const { createServerMailboxStores, createServerRegistrationSessionStore } = requ
 const { Eight92Provider } = require("../core/providers/eight92.cjs");
 const { BoyaProvider } = require("../core/providers/boya.cjs");
 const { CdnsProvider } = require("../core/providers/cdns.cjs");
+const { TototoIcloudProvider } = require("../core/providers/tototo-icloud.cjs");
 const { isOpenAiAccountDeactivatedMessage } = require("../core/messages.cjs");
 const { MailboxProviderRegistry } = require("../core/providers/index.cjs");
 const { MailboxPool } = require("../mailbox/storage.cjs");
@@ -56,7 +57,8 @@ class MailboxIntegration {
     this.providerInstances = providers ?? [
       new Eight92Provider().asProvider(),
       new BoyaProvider().asProvider(),
-      new CdnsProvider().asProvider()
+      new CdnsProvider().asProvider(),
+      new TototoIcloudProvider().asProvider()
     ];
     this.providers = new MailboxProviderRegistry(this.providerInstances);
     this.sharedMailboxStores = createServerMailboxStores({
