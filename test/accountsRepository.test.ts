@@ -1042,7 +1042,7 @@ describe("AccountsRepository token persistence", () => {
 
     const account = await repo.getAccount(storageId);
     expect(account?.accountName).toBe("VS Code Source");
-    expect(account?.planType).toBe("team");
+    expect(account?.planType).toBe("business");
 
     repo.dispose();
   });
@@ -1404,7 +1404,7 @@ describe("AccountsRepository token persistence", () => {
     );
     const aideckAccount = JSON.parse(await fs.readFile(aideckAccountFile, "utf8"));
     expect(aideckAccount.tokens.refresh_token).toBe("shared-refresh-token");
-    expect(aideckAccount.plan_type).toBe("team");
+    expect(aideckAccount.plan_type).toBe("business");
     expect(aideckAccount.subscription_active_until).toBe("1900000000");
     expect(aideckAccount.account_name).toBe("Aideck Team Workspace");
     expect(aideckAccount.account_structure).toBe("organization");

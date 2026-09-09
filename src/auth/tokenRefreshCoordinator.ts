@@ -33,6 +33,8 @@ type CoordinatedTokenSource = {
   load(): Promise<CodexTokens | undefined>;
   save(tokens: CodexTokens): Promise<void>;
   fallbackTokens?: CodexTokens;
+  /** Refresh a still-valid token after an authenticated endpoint rejects it. */
+  forceRefresh?: boolean;
 };
 
 const inFlightRefreshes = new Map<string, Promise<CodexTokens | undefined>>();
@@ -46,11 +48,17 @@ const inFlightRefreshes = new Map<string, Promise<CodexTokens | undefined>>();
 export function ensureFreshAccountTokens(
   repo: TokenRefreshAccountRepository,
   accountId: string,
-  options: { fallbackTokens?: CodexTokens; notifyTokenChange?: boolean; providerAccountId?: string } = {}
+  options: {
+    fallbackTokens?: CodexTokens;
+    notifyTokenChange?: boolean;
+    providerAccountId?: string;
+    forceRefresh?: boolean;
+  } = {}
 ): Promise<CodexTokens | undefined> {
   return ensureFreshTokensWithLease(repo, {
     key: `account:${accountId}`,
     fallbackTokens: options.fallbackTokens,
+    forceRefresh: options.forceRefresh,
     load: async () => {
       const current = await repo.getTokens(accountId, { forceReload: true });
       if (!current) {
@@ -107,7 +115,7 @@ async function refreshTokensWithLease(
   source: CoordinatedTokenSource
 ): Promise<CodexTokens | undefined> {
   const initial = (await source.load()) ?? source.fallbackTokens;
-  if (!initial?.accessToken || !needsTokenRefresh(initial)) {
+  if (!initial?.accessToken || (!source.forceRefresh && !needsTokenRefresh(initial))) {
     return initial;
   }
 
@@ -122,7 +130,11 @@ async function refreshTokensWithLease(
   );
   if (!lease) {
     const afterWait = (await source.load()) ?? source.fallbackTokens;
-    if (afterWait && !needsTokenRefresh(afterWait)) {
+    if (
+      afterWait &&
+      !needsTokenRefresh(afterWait) &&
+      (!source.forceRefresh || !initial || hasCredentialChanged(initial, afterWait))
+    ) {
       return afterWait;
     }
     throw new TokenRefreshCoordinationError();
@@ -130,7 +142,11 @@ async function refreshTokensWithLease(
 
   try {
     const current = (await source.load()) ?? source.fallbackTokens;
-    if (!current?.accessToken || !needsTokenRefresh(current)) {
+    const refreshedByAnotherProcess = Boolean(initial && current && hasCredentialChanged(initial, current));
+    if (
+      !current?.accessToken ||
+      (!needsTokenRefresh(current) && (!source.forceRefresh || refreshedByAnotherProcess))
+    ) {
       return current;
     }
 

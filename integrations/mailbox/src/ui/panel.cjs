@@ -134,7 +134,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .content { flex: 1 1 auto; min-height: 0; overflow: visible; overscroll-behavior: auto; padding: 16px 20px 22px; }
     .hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
     .hero-label { color: var(--muted); font-size: 12px; }
-    .code { margin-top: 3px; color: var(--accent); font-size: clamp(34px, 6vw, 62px); font-weight: 800; letter-spacing: .08em; line-height: 1.1; }
+    .code { margin-top: 3px; color: var(--accent); font-size: clamp(17px, 3vw, 31px); font-weight: 800; letter-spacing: .08em; line-height: 1.1; }
     .hero-side { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 20px 0 10px; }
     .messages { border: 1px solid var(--border); border-radius: 8px; overflow: visible; }
@@ -1613,8 +1613,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const deleteMailboxAndCodexButton = canDeleteMailboxAndCodex
           ? '<button class="danger" data-action="delete-mailbox-and-codex" data-mailbox-id="' + esc(mailbox.id) + '">删除邮箱与 Codex 账号</button>'
           : '';
+        const copyMailboxButton = '<button data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制账号">复制账号</button>';
         return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag neutral">' + capability + '</span><span class="tag neutral">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + accountStatusTag + blockedTag + mailboxError + '</div></div>' +
-          '<div class="detail-action-row"><div class="detail-header-actions">' + codexImportButton + '<button data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">编辑账号</button><button class="danger" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">删除账号</button>' + deleteMailboxAndCodexButton + '</div>' +
+          '<div class="detail-action-row"><div class="detail-header-actions">' + copyMailboxButton + codexImportButton + '<button data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">编辑账号</button><button class="danger" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">删除账号</button>' + deleteMailboxAndCodexButton + '</div>' +
           '<div class="detail-actions"><div class="actions">' +
           '<button class="' + (busyAction === "query" ? 'is-pending' : '') + '" data-action="submit-query" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "query") + '">' + actionLabel("query", "查询邮件") + '</button>' +
           '<button class="primary ' + (busyAction === "wait" ? 'is-pending' : '') + '" data-action="submit-wait" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "wait") + '">' + actionLabel("wait", "接收验证码") + '</button>' +

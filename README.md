@@ -4,13 +4,13 @@
 
 面向 VS Code 的多 Codex 账号管理扩展：导入或 OAuth 添加账号、查看配额、切换当前 `auth.json`，并提供本机用量、实验性无感切号和可选的本地集成。
 
-> 这是基于上游 `v0.1.18` 的本地 fork。本文说明的是带 `-dev` 或 `-lN` 版本号的本仓库构建；VS Code Marketplace 上的上游扩展不承诺包含下列本地功能。
+> 这是基于上游 `v0.1.19` 的本地 fork。本文说明的是 `0.1.19-dev` 开发构建与 `0.1.19-l1` 本地发布构建；VS Code Marketplace 上的上游扩展不承诺包含下列本地功能。
 
-本地版本已同步上游 `v0.1.17`/`v0.1.18` 的代理环境、状态栏 5 小时配额控制、ChatGPT 桌面应用联动、Free 月度配额展示和订阅一致性修复。
+本地版本已同步上游 `v0.1.17`–`v0.1.19` 的代理环境、状态栏配额控制、Business/Free 配额解析、认证请求重试、ChatGPT 桌面应用联动、订阅一致性修复，并保留本地 Dashboard、Mailbox、Gateway 和用量功能。
 
 ## 三分钟开始
 
-1. 安装本仓库提供或自行构建的 `-dev`/`-lN` `.vsix`。
+1. 安装本仓库提供或自行构建的 `0.1.19-dev`/`0.1.19-l1` `.vsix`。
 2. 从命令面板运行 `Codex Accounts: Add Account via OAuth`，或 `Codex Accounts: Import Current auth.json`。
 3. 运行 `Codex Accounts: Show Quota Summary`，在 Dashboard 中刷新配额、切换账号和管理备份。
 
@@ -69,7 +69,7 @@
 
 ### 使用本地版本
 
-从本仓库获得 `codex-accounts-manager-<version>.vsix`（开发版使用 `0.1.18-dev`，发布版使用 `0.1.18-l1`、`0.1.18-l2` 等），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
+从本仓库获得 `codex-accounts-manager-<version>.vsix`（开发版使用 `0.1.19-dev`，本地发布版使用 `0.1.19-l1`），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
 
 ```bash
 code --install-extension codex-accounts-manager-<version>.vsix --force

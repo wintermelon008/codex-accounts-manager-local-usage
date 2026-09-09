@@ -17,12 +17,13 @@ export function renderHealthPill(account: DashboardAccountViewModel) {
       return null;
     case "expiring":
       return <span class="pill warning">{account.healthLabel}</span>;
-    case "refresh_token_invalid":
     case "access_token_invalid":
     case "reauthorize":
     case "disabled":
-    case "refresh_failed":
       return <span class="pill error">{account.healthLabel}</span>;
+    case "refresh_failed":
+    case "refresh_token_invalid":
+    case "refresh_unavailable":
     case "quota":
       return <span class="pill warning">{account.healthLabel}</span>;
     default:

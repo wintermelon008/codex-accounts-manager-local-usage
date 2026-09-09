@@ -374,4 +374,16 @@ describe("buildDashboardStateSignature", () => {
     expect(buildDashboardStateSignature(usedMore)).not.toBe(buildDashboardStateSignature(before));
     expect(buildDashboardStateSignature(reset)).not.toBe(buildDashboardStateSignature(usedMore));
   });
+
+  it("changes when visible subscription or workspace fields change", () => {
+    const beforeState = createState();
+    const afterState = createState();
+    afterState.accounts[0] = {
+      ...afterState.accounts[0]!,
+      subscriptionText: "2026-12-31 (90d)",
+      workspaceLabel: "Workspace | Platform"
+    };
+
+    expect(buildDashboardStateSignature(afterState)).not.toBe(buildDashboardStateSignature(beforeState));
+  });
 });

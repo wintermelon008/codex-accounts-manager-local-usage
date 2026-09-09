@@ -9,7 +9,13 @@ import type {
   DashboardState
 } from "../../src/domain/dashboard/types";
 import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCountdown";
-import { getSensitiveDisplayValue, isAccountReauthorizationRequired, renderTagList } from "./helpers";
+import {
+  getAccountHealthCategory,
+  getSensitiveDisplayValue,
+  isAccountInvalid,
+  isAccountReauthorizationRequired,
+  renderTagList
+} from "./helpers";
 import {
   CopyIcon,
   SuccessIcon,
@@ -92,12 +98,9 @@ export function SavedAccountCard(props: {
           : "Add to seamless-switch pool";
   const showReauthorizeButton = !virtual && isAccountReauthorizationRequired(account.healthKind) && !account.dismissedHealth;
   const [flipped, setFlipped] = useState(false);
-  const hasErrorHealth =
-    !account.dismissedHealth &&
-    (isAccountReauthorizationRequired(account.healthKind) ||
-      account.healthKind === "disabled" ||
-      account.healthKind === "refresh_failed" ||
-      account.healthKind === "quota");
+  const hasErrorHealth = !account.dismissedHealth && isAccountInvalid(account.healthKind);
+  const hasWarningHealth =
+    !account.dismissedHealth && getAccountHealthCategory(account.healthKind) === "temporary_error";
   const gatewayActive = virtual && account.providerActive;
   const providerCard = virtual ? account.providerCard : undefined;
   const profileSelectionActions =
@@ -120,7 +123,8 @@ export function SavedAccountCard(props: {
     account.isHidden ? "is-hidden-account" : "",
     props.busy ? "is-busy" : "",
     props.selected ? "selected" : "",
-    hasErrorHealth ? "health-error" : ""
+    hasErrorHealth ? "health-error" : "",
+    hasWarningHealth ? "health-warning" : ""
   ]
     .filter(Boolean)
     .join(" ");
@@ -474,6 +478,9 @@ function resolveBackLabel(
 function resolveBackStatus(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
   if (account.accountKind === "sub2api" || account.manualOnly) {
     return account.providerActive ? "Gateway · 手动" : "Gateway · 可手动切换";
+  }
+  if (!account.dismissedHealth && isAccountInvalid(account.healthKind)) {
+    return account.healthLabel;
   }
   if (account.isActive) {
     return lang === "zh" ? "当前激活" : lang === "zh-hant" ? "目前啟用" : "Current active";

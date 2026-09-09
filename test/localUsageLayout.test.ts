@@ -69,6 +69,10 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(cards.indexOf("copy.localUsagePrice")).toBeLessThan(cards.indexOf("copy.localUsageInput"));
     expect(section).toContain("<RangeSelector");
     expect(section).toContain("formatTokenAndPrice");
+    expect(section).toContain("formatTokenMillions");
+    expect(section).toContain("minimumFractionDigits: 2");
+    expect(section).toContain("maximumFractionDigits: 2");
+    expect(section).toContain("value / 1_000_000");
     expect(section).toContain("label: row.label");
     expect(section).toContain("local-usage-title-row");
     expect(section).toContain("copy.localUsageRefreshBtn");
@@ -79,6 +83,13 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(settings).not.toContain("localUsageDefaultRangeDays");
     expect(settings).toContain("localUsageShowEquivalentPrice");
     expect(stylesheet).toContain(".local-usage-refresh-btn");
+    expect(stylesheet).toContain("grid-template-columns: repeat(5, minmax(0, 1fr));");
+    expect(stylesheet).toContain("grid-template-columns: repeat(3, minmax(0, 1fr));");
+    const mediumWindowStyles = stylesheet.slice(
+      stylesheet.indexOf("@media (max-width: 1200px)"),
+      stylesheet.indexOf("@media (max-width: 920px)")
+    );
+    expect(mediumWindowStyles).not.toContain(".local-usage-cards");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
     expect(main).toContain('sendAction("refreshLocalUsage")');
     expect(main).toContain('id="forceFastModeToggle"');

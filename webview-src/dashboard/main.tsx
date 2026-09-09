@@ -15,6 +15,7 @@ import { postMessageToHost } from "./host";
 import {
   formatSavedAccountsSummary,
   formatTemplate,
+  getAccountHealthCategory,
   getDashboardAccountPage,
   getHighWeeklyQuotaHiddenAccountIds,
   getLowWeeklyQuotaAccountIds,
@@ -328,7 +329,14 @@ function App() {
     return action && topButton ? [{ integration, topButton, action }] : [];
   });
   const invalidAccountCount = snapshot.accounts.filter(isDashboardAccountInvalid).length;
-  const validAccountCount = snapshot.accounts.length - invalidAccountCount;
+  const healthyAccountCount = snapshot.accounts.filter(
+    (account) => getAccountHealthCategory(account.healthKind) === "healthy"
+  ).length;
+  const warningAccountCount = snapshot.accounts.filter(
+    (account) =>
+      !isDashboardAccountInvalid(account) &&
+      getAccountHealthCategory(account.healthKind) !== "healthy"
+  ).length;
   const invalidAccountsToggleLabel = resolveInvalidAccountsToggleLabel(
     snapshot.lang,
     showInvalidAccounts,
@@ -561,7 +569,8 @@ function App() {
                     {formatSavedAccountsSummary(
                       snapshot.lang,
                       snapshot.accounts.length,
-                      validAccountCount,
+                      healthyAccountCount,
+                      warningAccountCount,
                       invalidAccountCount
                     )}
                   </span>

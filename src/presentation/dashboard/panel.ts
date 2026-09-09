@@ -38,6 +38,7 @@ type PublishDashboardSnapshotParams = {
   usageAnalytics?: LocalUsageAnalyticsService;
   lastPublishedStateSignature?: string;
   force?: boolean;
+  isCurrent?: () => boolean;
 };
 
 export async function publishDashboardSnapshot(params: PublishDashboardSnapshotParams): Promise<string | undefined> {
@@ -55,6 +56,9 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
     localUsage,
     accountTokenUsage
   );
+  if (params.isCurrent && !params.isCurrent()) {
+    return undefined;
+  }
   if (getDashboardAccountOrder() === undefined) {
     setDashboardAccountOrder(state.accounts.map((account) => account.id));
   }
@@ -84,6 +88,7 @@ class DashboardPanelController {
   private webviewReady = false;
   private publishTimer: NodeJS.Timeout | undefined;
   private lastPublishedStateSignature: string | undefined;
+  private publishRevision = 0;
   private usageAnalytics: LocalUsageAnalyticsService | undefined;
 
   constructor(
@@ -120,6 +125,7 @@ class DashboardPanelController {
         this.configWatcher = undefined;
         clearDashboardAccountOrder();
         this.lastPublishedStateSignature = undefined;
+        this.publishRevision += 1;
         this.panel = undefined;
         this.webviewReady = false;
       });
@@ -206,6 +212,7 @@ class DashboardPanelController {
     const logoUri = this.panel.webview
       .asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "CT_logo_transparent_square_hd.png"))
       .toString();
+    const revision = ++this.publishRevision;
     const signature = await publishDashboardSnapshot({
       repo: this.repo,
       settingsStore: this.settingsStore,
@@ -220,9 +227,10 @@ class DashboardPanelController {
       schedulePublishState: () => this.schedulePublishState(),
       usageAnalytics: this.getUsageAnalytics(),
       lastPublishedStateSignature: this.lastPublishedStateSignature,
-      force
+      force,
+      isCurrent: () => revision === this.publishRevision
     });
-    if (!signature) {
+    if (!signature || revision !== this.publishRevision) {
       return;
     }
 

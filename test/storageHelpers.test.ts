@@ -572,7 +572,7 @@ describe("accountProfileMaintenance helpers", () => {
 
     syncLoginAtFromTokens(account, tokens);
 
-    expect(effectivePlanType).toBe("team");
+    expect(effectivePlanType).toBe("business");
     expect(account.lastQuotaAt).toBe(88);
     expect(account.subscriptionActiveUntil).toBe("1800000000");
     expect(account.loginAt).toBe(1_234_000);
@@ -659,5 +659,61 @@ describe("accountProfileMaintenance helpers", () => {
 
     expect(account.quotaSummary?.resetCreditsAvailable).toBe(1);
     expect(account.quotaSummary?.resetCreditsNextExpiresAt).toBe(1_785_109_796);
+  });
+
+  it("preserves the last good quota when a refresh fails", () => {
+    const previousQuota = {
+      hourlyPercentage: 35,
+      hourlyWindowPresent: true,
+      weeklyPercentage: 70,
+      weeklyWindowPresent: true,
+      codeReviewPercentage: 0
+    };
+    const account: CodexAccountRecord = {
+      id: "a",
+      email: "team@example.com",
+      isActive: false,
+      lastQuotaAt: 50,
+      quotaSummary: previousQuota,
+      createdAt: 1,
+      updatedAt: 1
+    };
+
+    applyQuotaUpdate({
+      account,
+      quotaError: { message: "temporary failure", timestamp: 88 },
+      now: 88
+    });
+
+    expect(account.quotaSummary).toBe(previousQuota);
+    expect(account.lastQuotaAt).toBe(50);
+    expect(account.updatedAt).toBe(88);
+    expect(account.quotaError?.message).toBe("temporary failure");
+  });
+
+  it("does not let a late profile repair overwrite the plan returned by quota", () => {
+    const account: CodexAccountRecord = {
+      id: "a",
+      email: "team@example.com",
+      accountId: "acct-1",
+      planType: "business",
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1
+    };
+
+    applyRemoteProfileFromTokens({
+      account,
+      tokens: {
+        idToken: createJwt({ email: "team@example.com" }),
+        accessToken: createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } }),
+        accountId: "acct-1"
+      },
+      remoteProfile: { accountId: "acct-1", planType: "plus", accountName: "Platform" },
+      preservePlanType: true
+    });
+
+    expect(account.planType).toBe("business");
+    expect(account.accountName).toBe("Platform");
   });
 });

@@ -5,7 +5,7 @@ import {
   type ManagerControlRefreshSummary
 } from "../src/integrations/managerControlServer";
 import type { CodexExecProviderConfig, RuntimeAccountSwitchOutcome } from "../src/codex";
-import type { SharedCodexAccountJson } from "../src/core/types";
+import type { CodexAccountRecord, SharedCodexAccountJson } from "../src/core/types";
 
 const servers: ManagerControlServer[] = [];
 
@@ -29,12 +29,19 @@ describe("ManagerControlServer", () => {
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
-      accounts: { counts: { total: number; poolEligible: number }; accounts: Array<Record<string, unknown>> };
+      accounts: {
+        counts: { total: number; poolEligible: number; temporaryFailed: number };
+        accounts: Array<Record<string, unknown>>;
+      };
       usageToday: { date: string; total: { totalTokens: number }; byModel: Array<{ model: string }> };
     };
 
-    expect(body.accounts.counts).toMatchObject({ total: 2, poolEligible: 1 });
-    expect(body.accounts.accounts[0]).toMatchObject({ health: "auth" });
+    expect(body.accounts.counts).toMatchObject({ total: 3, poolEligible: 1, temporaryFailed: 1 });
+    expect(body.accounts.accounts[0]).toMatchObject({ health: "healthy" });
+    expect(body.accounts.accounts[1]).toMatchObject({ health: "auth" });
+    expect(body.accounts.accounts.find((account) => account.email === "three@example.com")).toMatchObject({
+      health: "temporary"
+    });
     expect(body.accounts.accounts[0]).not.toHaveProperty("rawData");
     expect(body.usageToday).toMatchObject({ date: "2026-08-18", total: { totalTokens: 42 } });
     expect(body.usageToday.byModel).toMatchObject([{ date: "2026-08-18", model: "gpt-test", totalTokens: 42 }]);
@@ -285,8 +292,20 @@ function createServer(
             quotaError: { code: "unauthorized", message: "401", timestamp: Date.now() },
             createdAt: Date.now(),
             updatedAt: Date.now()
+          },
+          {
+            id: "account-3",
+            email: "three@example.com",
+            accountKind: "chatgpt",
+            isActive: false,
+            isHidden: false,
+            balancePoolEnabled: false,
+            tokenRefreshLastErrorKind: "network",
+            tokenRefreshLastError: "temporary network timeout",
+            createdAt: Date.now(),
+            updatedAt: Date.now()
           }
-        ] as never;
+        ] as CodexAccountRecord[];
       }
     },
     usage,

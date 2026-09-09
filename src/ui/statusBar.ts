@@ -112,7 +112,7 @@ export function renderAccountPanel(
   const language = getLanguage();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
   const virtual = isSub2ApiAccount(account);
-  const plan = virtual ? "GATEWAY" : formatPlanType(account.planType ?? "team", language);
+  const plan = virtual ? "GATEWAY" : formatPlanType(account.planType, language);
   const markers = [
     current ? _t("account.current") : undefined,
     primary ? _t("account.primary") : undefined,
@@ -146,6 +146,16 @@ export function renderAccountPanel(
         ]
       : [])
   ];
+
+  if (!virtual && account.quotaSummary?.codeReviewWindowPresent) {
+    lines.push(
+      renderMetricRow(
+        _t("quota.review"),
+        account.quotaSummary.codeReviewPercentage,
+        account.quotaSummary.codeReviewResetTime
+      )
+    );
+  }
 
   for (const limit of virtual ? [] : account.quotaSummary?.additionalRateLimits ?? []) {
     if (showHourlyQuota && limit.hourlyWindowPresent) {

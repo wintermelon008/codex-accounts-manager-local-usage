@@ -213,7 +213,7 @@ export function formatStatus(status) {
   const lines = [
     "Manager 账号状态",
     `账号：${numberOrZero(counts.total)}（可见 ${numberOrZero(counts.visible)}，隐藏 ${numberOrZero(counts.hidden)}，活跃 ${numberOrZero(counts.active)}）`,
-    `健康：${numberOrZero(counts.healthy)} 正常，${numberOrZero(counts.authFailed)} 鉴权失败，${numberOrZero(counts.quotaLimited)} 额度受限`,
+    `健康：${numberOrZero(counts.healthy)} 正常，${numberOrZero(counts.authFailed)} 鉴权失败，${numberOrZero(counts.quotaLimited)} 额度受限，${numberOrZero(counts.temporaryFailed)} 临时异常`,
     `无感池：${numberOrZero(counts.poolEnabled)} 已启用，${numberOrZero(counts.poolEligible)} 符合资格`,
     "",
     formatUsage(status?.usageToday)
@@ -453,7 +453,9 @@ function displayText(value) {
 
 function formatAccount(account) {
   const health =
-    { healthy: "正常", auth: "鉴权失败", quota: "额度受限", disabled: "已停用" }[account?.health] ?? "未知";
+    { healthy: "正常", auth: "鉴权失败", quota: "额度受限", disabled: "已停用", temporary: "临时异常" }[
+      account?.health
+    ] ?? "未知";
   const pool = account?.balancePoolEnabled ? (account.poolEligible ? "无感池✓" : "无感池待定") : "无感池-";
   const hourly = formatWindow(account?.quota?.hourly, "小时");
   const weekly = formatWindow(account?.quota?.weekly, "周");

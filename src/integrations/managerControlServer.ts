@@ -24,7 +24,7 @@ const MAX_REQUEST_BYTES = 16 * 1024;
 const MAX_IMPORT_REQUEST_BYTES = 2 * 1024 * 1024;
 const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
-export type ManagerControlHealth = "healthy" | "auth" | "quota" | "disabled";
+export type ManagerControlHealth = "healthy" | "auth" | "quota" | "disabled" | "temporary";
 
 export type ManagerControlQuotaWindow = {
   percentage?: number;
@@ -82,6 +82,7 @@ export type ManagerControlAccountSummary = {
     healthy: number;
     authFailed: number;
     quotaLimited: number;
+    temporaryFailed: number;
     poolEnabled: number;
     poolEligible: number;
   };
@@ -462,6 +463,8 @@ export class ManagerControlServer {
           summary.authFailed += 1;
         } else if (account.health === "quota") {
           summary.quotaLimited += 1;
+        } else if (account.health === "temporary") {
+          summary.temporaryFailed += 1;
         }
         if (account.balancePoolEnabled) {
           summary.poolEnabled += 1;
@@ -479,6 +482,7 @@ export class ManagerControlServer {
         healthy: 0,
         authFailed: 0,
         quotaLimited: 0,
+        temporaryFailed: 0,
         poolEnabled: 0,
         poolEligible: 0
       }
@@ -555,18 +559,20 @@ function mapAccount(account: CodexAccountRecord): ManagerControlAccount {
   const virtual = isSub2ApiAccount(account);
   const capability = virtual ? "unknown" : getBalanceQuotaCapability(account);
   const issueKind = virtual ? undefined : getQuotaIssueKind(account.quotaError);
-  const refreshTokenAuthFailure =
+  const temporaryRefreshFailure =
     !virtual &&
-    (account.tokenRefreshLastErrorKind === "reauthorize" ||
-      /(?:token refresh|refresh token|invalid_grant)/u.test(account.tokenRefreshLastError?.toLowerCase() ?? ""));
+    account.tokenRefreshLastErrorKind !== "reauthorize" &&
+    (Boolean(account.tokenRefreshLastError) || account.tokenRefreshLastErrorKind !== undefined);
   const health: ManagerControlHealth =
     issueKind === "disabled"
       ? "disabled"
-      : issueKind === "auth" || refreshTokenAuthFailure
+      : issueKind === "auth"
         ? "auth"
         : issueKind === "quota"
           ? "quota"
-          : "healthy";
+          : temporaryRefreshFailure
+            ? "temporary"
+            : "healthy";
   return {
     id: account.id,
     email: account.email,

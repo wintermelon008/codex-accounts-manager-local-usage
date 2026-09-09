@@ -38,6 +38,7 @@ import {
 } from "../../presentation/workbench/tokenAutomationState";
 import { getCommandCopy, getLanguage, getQuotaWarningCopy, resolveLongQuotaLabel } from "../../utils";
 import { getDashboardCopy } from "../dashboard/copy";
+import { runAuthenticatedAccountRequest } from "./authenticatedAccountRequest";
 import { autoReloadWindowForAccount, handleCodexAppRestartPreference } from "./switchEffects";
 import {
   getBalanceQuotaCapability,
@@ -151,7 +152,7 @@ export async function refreshSingleQuota(
   if (!result.error && updatedAccount.quotaSummary) {
     const credTokens = result.updatedTokens ?? tokens;
     const credAccountId = updatedAccount.accountId ?? account.accountId ?? undefined;
-    void syncResetCreditsSnapshot(repo, view, accountId, updatedAccount, credTokens.accessToken, credAccountId);
+    void syncResetCreditsSnapshot(repo, view, accountId, updatedAccount, credAccountId, credTokens);
   }
   if (!result.error) {
     clearTokenAutomationError(accountId);
@@ -209,7 +210,7 @@ export async function refreshImportedAccountQuota(
   if (!result.error && updatedAccount.quotaSummary) {
     const credTokens = result.updatedTokens ?? tokens;
     const credAccountId = updatedAccount.accountId ?? account.accountId ?? undefined;
-    void syncResetCreditsSnapshot(repo, undefined, accountId, updatedAccount, credTokens.accessToken, credAccountId);
+    void syncResetCreditsSnapshot(repo, undefined, accountId, updatedAccount, credAccountId, credTokens);
   }
   if (!result.error) {
     clearTokenAutomationError(accountId);
@@ -223,11 +224,14 @@ async function syncResetCreditsSnapshot(
   view: RefreshView | undefined,
   accountId: string,
   updatedAccount: CodexAccountRecord,
-  accessToken: string,
-  remoteAccountId?: string
+  remoteAccountId: string | undefined,
+  initialTokens: Parameters<typeof runAuthenticatedAccountRequest>[3]
 ): Promise<void> {
   try {
-    const snapshot = await fetchResetCredits(accessToken, remoteAccountId);
+    const snapshot = await runAuthenticatedAccountRequest(repo, accountId, (tokens) =>
+      fetchResetCredits(tokens.accessToken, remoteAccountId),
+      initialTokens
+    );
     if (updatedAccount.quotaSummary) {
       updatedAccount.quotaSummary.resetCreditsAvailable = snapshot.availableCount;
       updatedAccount.quotaSummary.resetCreditsNextExpiresAt = snapshot.nextExpiresAt;

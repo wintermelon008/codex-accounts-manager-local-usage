@@ -9,10 +9,14 @@ import {
   type DashboardSettings,
   type DashboardState
 } from "../../src/domain/dashboard/types";
-import { isAccountReauthorizationRequired } from "../../src/domain/accountHealth";
+import { isAccountInvalid, isAccountReauthorizationRequired } from "../../src/domain/accountHealth";
 import { formatResetRelativeTime } from "../../src/utils/resetTime";
 
-export { isAccountReauthorizationRequired } from "../../src/domain/accountHealth";
+export {
+  getAccountHealthCategory,
+  isAccountInvalid,
+  isAccountReauthorizationRequired
+} from "../../src/domain/accountHealth";
 
 type SensitiveKind = "email" | "id" | "name";
 
@@ -82,17 +86,11 @@ export function getDashboardVisibleAccounts(
   );
 }
 
-/** Returns whether the Dashboard currently considers an account invalid. */
+/** Returns whether the Dashboard currently considers an account hard-invalid. */
 export function isDashboardAccountInvalid(
   account: Pick<DashboardAccountViewModel, "healthKind" | "dismissedHealth">
 ): boolean {
-  return (
-    !account.dismissedHealth &&
-    (isAccountReauthorizationRequired(account.healthKind) ||
-      account.healthKind === "refresh_failed" ||
-      account.healthKind === "disabled" ||
-      account.healthKind === "quota")
-  );
+  return !account.dismissedHealth && isAccountInvalid(account.healthKind);
 }
 
 /** Sorts the already-filtered Dashboard account list without changing persisted account order. */
@@ -394,18 +392,19 @@ export function formatTemplate(template: string, value: number | Record<string, 
 export function formatSavedAccountsSummary(
   lang: DashboardState["lang"],
   count: number,
-  validCount: number,
+  healthyCount: number,
+  warningCount: number,
   invalidCount: number
 ): string {
   switch (lang) {
     case "zh":
-      return `共 ${count} 个，有效 ${validCount}，失效 ${invalidCount}`;
+      return `共 ${count} 个，正常 ${healthyCount}，提醒 ${warningCount}，失效 ${invalidCount}`;
     case "zh-hant":
-      return `共 ${count} 個，有效 ${validCount}，失效 ${invalidCount}`;
+      return `共 ${count} 個，正常 ${healthyCount}，提醒 ${warningCount}，失效 ${invalidCount}`;
     case "ja":
-      return `合計 ${count} 件・有効 ${validCount}・無効 ${invalidCount}`;
+      return `合計 ${count} 件・正常 ${healthyCount}・注意 ${warningCount}・無効 ${invalidCount}`;
     default:
-      return `${count} total · ${validCount} valid · ${invalidCount} invalid`;
+      return `${count} total · ${healthyCount} healthy · ${warningCount} warnings · ${invalidCount} invalid`;
   }
 }
 

@@ -2,6 +2,31 @@
   "version": "1.0",
   "announcements": [
     {
+      "id": "ann-2026-09-codex-accounts-0-1-19-l1-quota-health",
+      "type": "fix",
+      "priority": 700,
+      "releaseVersion": "0.1.19-l1",
+      "title": "Codex Accounts Manager 0.1.19-l1 — quota compatibility and account health",
+      "summary": "Adds official Codex quota field compatibility, safer authenticated retries, stable Business labels, and clearer account health semantics.",
+      "content": "This local release combines upstream 0.1.19 compatibility with local account-manager fixes.\n1. Usage compatibility: parses Code Review, additional rate limits, Business spend control, and reset credits while rejecting empty or invalid quota responses.\n2. Authenticated requests: refreshes once and retries after a 401, and treats refresh-token reuse as retryable.\n3. Account health: a refresh failure no longer marks an account invalid while its current access token remains usable.\n4. Local integrations: preserves the Dashboard, Mailbox, Gateway, usage analytics, and registration workflows.",
+      "targetVersions": "*",
+      "targetLanguages": [
+        "*"
+      ],
+      "showOnce": true,
+      "popup": true,
+      "pinned": true,
+      "createdAt": "2026-09-09T00:00:00Z",
+      "expiresAt": null,
+      "locales": {
+        "zh": {
+          "title": "Codex Accounts Manager 0.1.19-l1 — 配额兼容与账号健康状态优化",
+          "summary": "补充官方 Codex 配额字段解析、认证重试、Business 标签和更准确的账号失效语义。",
+          "content": "本地版本合并上游 0.1.19 兼容性与本地账号管理修复。\n1. 配额兼容：解析 Code Review、额外速率限制、Business spend control 和 reset credits，并拒绝空对象或无效配额响应。\n2. 认证请求：401 后最多续期并重试一次，refresh token reuse 按可重试错误处理。\n3. 账号健康：当前 access token 仍可用时，续期失败不再把账号误判为失效。\n4. 本地功能：继续保留 Dashboard、Mailbox、Gateway、用量统计和注册助手。"
+        }
+      }
+    },
+    {
       "id": "ann-2026-09-codex-accounts-0-1-18-l1-dashboard-usage-mailbox",
       "type": "fix",
       "priority": 700,

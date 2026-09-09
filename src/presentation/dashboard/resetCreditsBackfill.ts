@@ -2,6 +2,7 @@ import type { DashboardAccountViewModel } from "../../domain/dashboard/types";
 import { isSub2ApiAccount } from "../../core/types";
 import { AccountsRepository } from "../../storage";
 import { fetchResetCredits } from "../../services/quota";
+import { runAuthenticatedAccountRequest } from "../../application/accounts/authenticatedAccountRequest";
 import { getErrorMessage } from "../../core/errors";
 import { logNetworkEvent } from "../../utils/debug";
 
@@ -47,18 +48,9 @@ export async function backfillMissingResetCreditExpiries(
       inflightResetCreditsBackfills.add(account.id);
       resetCreditsBackfillCooldownUntil.set(account.id, now + RESET_CREDITS_BACKFILL_COOLDOWN_MS);
       try {
-        const tokens = await repo.getTokens(account.id, { syncExternal: false });
-        if (!tokens?.accessToken) {
-          logNetworkEvent("resetCredits.backfill", {
-            accountId: account.id,
-            remoteAccountId: account.accountId,
-            step: "skipped",
-            reason: "missing-access-token"
-          });
-          return;
-        }
-
-        const snapshot = await fetchResetCredits(tokens.accessToken, account.accountId ?? undefined);
+        const snapshot = await runAuthenticatedAccountRequest(repo, account.id, (tokens) =>
+          fetchResetCredits(tokens.accessToken, account.accountId ?? undefined)
+        );
         logNetworkEvent("resetCredits.backfill", {
           accountId: account.id,
           remoteAccountId: account.accountId,

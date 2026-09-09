@@ -39,10 +39,30 @@ export function resolveAccountHealth(
     };
   }
 
-  if (automationState?.errorKind === "reauthorize" || isAuthLikeMessage(automationError)) {
+  if (!tokens?.accessToken) {
     return {
-      kind: "refresh_token_invalid",
-      issueKey: buildIssueKey("refresh_token_invalid", automationError),
+      kind: "access_token_invalid",
+      issueKey: "access_token_invalid:credentials_missing",
+      message: "Codex access token is missing"
+    };
+  }
+
+  if (isAccessTokenExpired(tokens.accessToken)) {
+    return {
+      kind: "access_token_invalid",
+      issueKey: "access_token_invalid:credentials_expired",
+      message: "Codex access token is expired"
+    };
+  }
+
+  if (automationState?.errorKind === "reauthorize") {
+    // A refresh failure does not prove that the account is unusable. The
+    // current access token may still be valid (for example after another
+    // host rotated the refresh token), so keep this as a distinct warning
+    // until an actual API/auth check rejects the access token.
+    return {
+      kind: "refresh_unavailable",
+      issueKey: buildIssueKey("refresh_unavailable", undefined, automationError),
       message: automationError
     };
   }
@@ -57,25 +77,21 @@ export function resolveAccountHealth(
 
   if (automationError) {
     return {
-      kind: "refresh_failed",
-      issueKey: buildIssueKey("refresh_failed", undefined, automationError),
+      kind: automationState?.errorKind === "network" ? "refresh_failed" : "refresh_unavailable",
+      issueKey: buildIssueKey(
+        automationState?.errorKind === "network" ? "refresh_failed" : "refresh_unavailable",
+        undefined,
+        automationError
+      ),
       message: automationError
-    };
-  }
-
-  if (!tokens?.accessToken) {
-    return {
-      kind: "access_token_invalid",
-      issueKey: "access_token_invalid:credentials_missing",
-      message: "Codex access token is missing"
     };
   }
 
   if (!tokens.idToken) {
     return {
-      kind: "reauthorize",
-      issueKey: "reauthorize:credentials_missing",
-      message: "Codex OAuth credentials are missing"
+      kind: "refresh_unavailable",
+      issueKey: "refresh_unavailable:credentials_incomplete",
+      message: "Codex OAuth id token is missing"
     };
   }
 
@@ -146,22 +162,14 @@ function hasRuntimeField(
   return state !== undefined && Object.prototype.hasOwnProperty.call(state, field);
 }
 
-function isAuthLikeMessage(message?: string): boolean {
-  if (!message) {
+function isAccessTokenExpired(token: string, skewSeconds = 0): boolean {
+  try {
+    return isTokenExpired(token, skewSeconds);
+  } catch {
+    // The provider may return a non-JWT bearer. Let the actual API check
+    // decide whether it is usable instead of crashing health resolution.
     return false;
   }
-
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("401") ||
-    normalized.includes("unauthorized") ||
-    normalized.includes("token expired") ||
-    normalized.includes("token invalid") ||
-    normalized.includes("refresh token") ||
-    normalized.includes("invalid_grant") ||
-    normalized.includes("oauth") ||
-    normalized.includes("authorization")
-  );
 }
 
 function buildIssueKey(kind: AccountHealthKind, ...parts: Array<string | undefined>): string {

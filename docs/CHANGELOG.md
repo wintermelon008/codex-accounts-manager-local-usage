@@ -6,6 +6,14 @@
 - Dashboard 顶部的 Codex 会话锁解锁改为强制模式：会终止非当前 VS Code 窗口且持有对应 `FLOCK` 的 Codex `app-server`，再释放其会话锁；当前窗口和无法确认的进程不会被终止。
 - Mailbox 注册助手邮箱库新增“仅 GPT 注册 ≥ 7 天”筛选；已注册标签按第一封来自 OpenAI 的邮件时间显示已注册天数。
 
+## 0.1.19-l1（2026-09-09）
+
+- 合并上游 0.1.19 的 Codex usage 兼容：补充 Code Review、额外速率限制、Business spend control 与 reset credits 字段解析，并拒绝空对象或无效 JSON 配额响应。
+- 账号级认证请求在 401 后最多续期并重试一次；refresh token reuse 冲突按可重试 provider 响应处理。
+- Team/Business 套餐别名统一规范化为 Business；订阅刷新按账号去重，并保护 Dashboard 不被旧快照覆盖。
+- 账号失效语义细分为硬失效、提醒和额度受限；refresh token 续期失败但当前 access token 仍可用时不再进入失效筛选。
+- 保留本地 Dashboard、Mailbox、Gateway、用量统计和 OAuth/注册助手定制；月度 Credits 数据写入持久化模型，但不恢复与本地账号卡片设计冲突的 `creditsText` 展示。
+
 ## 0.1.18-l2（2026-09-05）
 
 - 修复新版 Codex 扩展延迟启动 `app-server` 时，无感切号 runtime bridge 被误判为需要 reload，导致 Vserver 每次 reload 都重复弹出安装提示；runtime 未启动或尚未 ready 时现在保留惰性 bridge，只有首次安装或明确协议不兼容才要求 reload。
@@ -19,6 +27,7 @@
 - Mailbox 注册助手的接码 Key 池改为保存到扩展宿主服务器上的 `0600` 文件；旧版 VS Code SecretStorage 仅作为一次性迁移/恢复来源，重新进入面板或更换客户端后仍可读取同一服务器上的 Key。
 - Mailbox 邮箱池、邮箱凭据、详情和注册助手非敏感记录改为以扩展宿主服务器 `globalStorageUri` 下的受限文件为共享权威；旧客户端状态按设备标识一次性合并，密码、手机号、验证码和 OAuth token 不写入注册记录。
 - Mailbox 注册助手会自动选择第一个可用接码 Key；Key 选择器最多显示前 5 个可用 Key，其余 Key 仍保留在 Key 池维护区。
+
 - Mailbox 注册助手开始注册时自动复制邮箱；所有按钮补齐鼠标、触摸和键盘按下反馈；不完整或格式异常的手机号不会再自动复制、自动填入或手动复制。
 - 设置页移除“分档切号”入口及分档方式选择；分档调度默认关闭，后续仅可通过 config 层控制。等待时间移到“切换策略”下方，作为无感切号的子设置。
 - Dashboard 账号分页默认改为每页 `10` 个；自动配额刷新仍独立保持最多处理 `50` 个账号。切换策略与等待时间现在使用同级设置块。

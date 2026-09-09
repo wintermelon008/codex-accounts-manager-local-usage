@@ -80,6 +80,49 @@ describe("token refresh coordinator", () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it("forces a refresh for a still-valid token after an authenticated 401", async () => {
+    const oldTokens = makeTokens("old", 3_600);
+    const newTokens = makeTokens("new", 7_200);
+    let stored = oldTokens;
+    const save = vi.fn(async (tokens: CodexTokens) => {
+      stored = tokens;
+    });
+    refreshTokensMock.mockResolvedValue(newTokens);
+
+    const result = await ensureFreshTokensWithLease(makeLeaseRepo(), {
+      key: "test-force-refresh-after-401",
+      forceRefresh: true,
+      load: async () => stored,
+      save
+    });
+
+    expect(result).toEqual(newTokens);
+    expect(refreshTokensMock).toHaveBeenCalledWith(oldTokens.refreshToken, oldTokens.idToken);
+    expect(save).toHaveBeenCalledWith(newTokens);
+  });
+
+  it("adopts a changed token pair instead of forcing a second refresh", async () => {
+    const oldTokens = makeTokens("old", 3_600);
+    const newTokens = makeTokens("new", 7_200);
+    let stored = oldTokens;
+    const save = vi.fn(async () => undefined);
+    const repo = makeLeaseRepo(async () => {
+      stored = newTokens;
+      return makeLease();
+    });
+
+    const result = await ensureFreshTokensWithLease(repo, {
+      key: "test-force-refresh-adopts-external-update",
+      forceRefresh: true,
+      load: async () => stored,
+      save
+    });
+
+    expect(result).toEqual(newTokens);
+    expect(refreshTokensMock).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it("adopts a newer pair after refresh_token_reused without replaying the old token", async () => {
     const oldTokens = makeTokens("old", 1);
     const newTokens = makeTokens("new", 3_600);

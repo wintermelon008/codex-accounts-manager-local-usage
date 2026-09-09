@@ -1122,6 +1122,7 @@ test("Mailbox panel fills the webview and lets the detail wheel scroll the layou
   assert.match(html, /\.mailbox-row-actions \{ display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 0 12px 8px;/u);
   assert.match(html, /\.detail-action-row \{ flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; overflow-x: auto;/u);
   assert.match(html, /\.detail-actions \.actions \{ flex-wrap: nowrap; \}/u);
+  assert.match(html, /\.code \{ margin-top: 3px; color: var\(--accent\); font-size: clamp\(17px, 3vw, 31px\);/u);
   assert.match(html, /<div class="detail-action-row"><div class="detail-header-actions">/u);
   assert.match(html, /<div class="detail-actions"><div class="actions">/u);
   assert.doesNotMatch(html, /data-action="toggle-registration"/u);
@@ -1277,6 +1278,8 @@ test("Mailbox latest code displays its query time and received time", () => {
   assert.ok(script);
 
   const windowListeners = new Map();
+  const documentListeners = new Map();
+  const messages = [];
   const app = {};
   const document = {
     activeElement: null,
@@ -1284,13 +1287,13 @@ test("Mailbox latest code displays its query time and received time", () => {
     getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
     querySelector() { return null; },
     querySelectorAll() { return []; },
-    addEventListener() {}
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
   };
   const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
   vm.runInNewContext(script, {
     window,
     document,
-    acquireVsCodeApi: () => ({ postMessage() {} }),
+    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
     console
   });
 
@@ -1335,7 +1338,20 @@ test("Mailbox latest code displays its query time and received time", () => {
 
   assert.match(app.innerHTML, /最近一次验证码/u);
   assert.match(app.innerHTML, /验证码 208076/u);
+  assert.match(app.innerHTML, /data-action="copy-mailbox-email" data-email="code-time@example\.com" title="复制账号">复制账号<\/button>/u);
   assert.match(app.innerHTML, /查询于[^<]* · 收到于[^<]*/u);
+
+  documentListeners.get("click")({ target: {
+    disabled: false,
+    dataset: { action: "copy-mailbox-email", email: "code-time@example.com" },
+    closest() { return this; }
+  } });
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "mailbox:action",
+    action: "copyText",
+    text: "code-time@example.com",
+    successMessage: "邮箱已复制"
+  });
 });
 
 test("selecting an available registration key enables phone ordering", () => {

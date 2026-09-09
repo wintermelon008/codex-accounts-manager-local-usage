@@ -4,13 +4,13 @@
 
 A VS Code extension for managing multiple Codex accounts: add or import accounts, inspect quota, switch the active `auth.json`, and optionally use local usage analytics, experimental seamless switching, and local integrations.
 
-> This is a local fork based on upstream `v0.1.18`. This guide describes builds with `-dev` or `-lN` versions. The upstream Marketplace extension does not promise the local capabilities listed below.
+> This is a local fork based on upstream `v0.1.19`. This guide describes the `0.1.19-dev` development build and the `0.1.19-l1` local release build. The upstream Marketplace extension does not promise the local capabilities listed below.
 
-The local build includes the upstream `v0.1.17`/`v0.1.18` proxy environment, 5-hour status-bar control, ChatGPT desktop integration, Free monthly quota labels, and subscription-consistency fixes.
+The local build includes upstream `v0.1.17`–`v0.1.19` proxy, quota parsing, authenticated retry, ChatGPT desktop, and subscription-consistency fixes, while preserving the local Dashboard, Mailbox, Gateway, and usage features.
 
 ## Start in three minutes
 
-1. Install a `-dev`/`-lN` `.vsix` supplied by, or built from, this repository.
+1. Install a `0.1.19-dev`/`0.1.19-l1` `.vsix` supplied by, or built from, this repository.
 2. Run `Codex Accounts: Add Account via OAuth`, or `Codex Accounts: Import Current auth.json`.
 3. Run `Codex Accounts: Show Quota Summary` to refresh quota, switch accounts, and manage backups from the Dashboard.
 
@@ -68,7 +68,7 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 ### Use the local build
 
-Obtain `codex-accounts-manager-<version>.vsix` from this repository (`0.1.18-dev` for development, then `0.1.18-l1`, `0.1.18-l2`, and so on for distributed local releases), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
+Obtain `codex-accounts-manager-<version>.vsix` from this repository (`0.1.19-dev` for development or `0.1.19-l1` for the current local release), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
 
 ```bash
 code --install-extension codex-accounts-manager-<version>.vsix --force

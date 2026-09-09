@@ -1,4 +1,5 @@
 import type { CodexAccountRecord, CodexTokens, DecodedAuthClaims } from "../core/types";
+import { normalizePlanType } from "../utils/quotaLabels";
 
 export type RemoteAccountProfileLike = {
   email?: string;
@@ -172,7 +173,7 @@ export function buildAccountRecordDraft(params: {
     quotaMode: "chatgpt",
     userId: params.claims.userId,
     authProvider: params.claims.authProvider,
-    planType: params.remoteProfile?.planType ?? params.claims.planType,
+    planType: normalizePlanType(params.remoteProfile?.planType ?? params.claims.planType ?? params.existing?.planType),
     subscriptionActiveUntil:
       params.remoteProfile?.subscriptionActiveUntil ??
       params.claims.subscriptionActiveUntil ??
@@ -220,6 +221,7 @@ export function applyRemoteProfileToAccount(params: {
   remoteProfile?: RemoteAccountProfileLike;
   planType?: string;
   allowAccountIdRepair?: boolean;
+  preservePlanType?: boolean;
 }): boolean {
   const claimsAccountId = params.claims.accountId ?? params.account.accountId;
   if (!params.allowAccountIdRepair && !didRemoteAccountMatchClaims(params.remoteProfile, claimsAccountId)) {
@@ -236,7 +238,11 @@ export function applyRemoteProfileToAccount(params: {
 
   params.account.email = params.remoteProfile?.email ?? params.claims.email ?? params.account.email;
   params.account.userId = params.remoteProfile?.userId ?? params.claims.userId ?? params.account.userId;
-  params.account.planType = params.remoteProfile?.planType ?? params.claims.planType ?? params.account.planType;
+  params.account.planType = normalizePlanType(
+    params.preservePlanType
+      ? params.account.planType ?? params.remoteProfile?.planType ?? params.claims.planType
+      : params.remoteProfile?.planType ?? params.claims.planType ?? params.account.planType
+  );
   params.account.subscriptionActiveUntil =
     params.remoteProfile?.subscriptionActiveUntil ??
     params.claims.subscriptionActiveUntil ??

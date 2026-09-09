@@ -15,6 +15,7 @@ import { getQuotaIssueKind } from "../../utils/quotaIssue";
 import { getTokenAutomationSnapshot } from "../../presentation/workbench/tokenAutomationState";
 import { getAutoSwitchRuntimeSnapshot } from "../../presentation/workbench/autoSwitchState";
 import { getAccountAutomationState, isHealthDismissed, resolveAccountHealth } from "../accounts/health";
+import { getAccountHealthCategory, isAccountInvalid } from "../../domain/accountHealth";
 import { getActiveManagerIntegrationHost } from "../../integrations";
 import { isQuotaCountdownStartAvailable } from "../accounts/quotaCountdown";
 import { isFreePlanType, resolveLongQuotaLabel } from "../../utils/quotaLabels";
@@ -198,7 +199,15 @@ function mapAccount(
     addMethodLabel: virtual ? "Gateway | 手动" : `${formatAddMethod(account.addedVia, lang)} | ${formatAuthProvider(account.authProvider, lang)}`,
     createdAt: account.createdAt,
     addedAtLabel: formatAddedAt(account.createdAt, copy.never),
-    statusColor: virtual ? "var(--accent-blue)" : account.isActive ? "var(--accent-green)" : health.kind === "healthy" ? undefined : "#ef4444",
+    statusColor: virtual
+      ? "var(--accent-blue)"
+      : isAccountInvalid(health.kind)
+        ? "#ef4444"
+        : account.isActive
+          ? "var(--accent-green)"
+          : getAccountHealthCategory(health.kind) === "healthy"
+            ? undefined
+            : "#f59e0b",
     planTypeLabel: virtual ? "Sub2API Gateway" : formatPlanTypeWithQuota(account, lang),
     planType: virtual ? undefined : account.planType,
     userId: virtual ? undefined : account.userId,
@@ -345,6 +354,18 @@ export function buildMetrics(
     visible: quota ? Boolean(quota.weeklyWindowPresent) : true
   });
 
+  if (quota?.codeReviewWindowPresent) {
+    metrics.push({
+      key: "code-review",
+      label: copy.reviewLabel,
+      percentage: quota.codeReviewPercentage,
+      resetAt: quota.codeReviewResetTime,
+      requestsLeft: quota.codeReviewRequestsLeft,
+      requestsLimit: quota.codeReviewRequestsLimit,
+      visible: true
+    });
+  }
+
   for (const [index, limit] of quota?.additionalRateLimits?.entries() ?? []) {
     if (limit.hourlyWindowPresent) {
       metrics.push({
@@ -385,6 +406,8 @@ function formatHealthLabel(kind: DashboardAccountViewModel["healthKind"], copy: 
       return copy.tokenAutomationExpiring;
     case "refresh_failed":
       return copy.tokenAutomationRefreshFailed;
+    case "refresh_unavailable":
+      return copy.tokenAutomationRefreshUnavailable;
     case "refresh_token_invalid":
       return copy.tokenAutomationRefreshTokenInvalid;
     case "access_token_invalid":
@@ -400,13 +423,13 @@ function formatHealthLabel(kind: DashboardAccountViewModel["healthKind"], copy: 
   }
 }
 
-function resolveWorkspaceDisplay(account: CodexAccountRecord): string {
+export function resolveWorkspaceDisplay(account: CodexAccountRecord): string {
   if (!isTeamWorkspace(account)) {
     return "Personal";
   }
 
   const name = account.accountName?.trim();
-  return name ? `Team | ${name}` : "Team";
+  return name ? `Workspace | ${name}` : "Workspace";
 }
 
 function isTeamWorkspace(account: CodexAccountRecord): boolean {
@@ -618,7 +641,6 @@ function formatAddMethod(value: string | undefined, lang: DashboardState["lang"]
 
 function getHealthPriority(health: ReturnType<typeof resolveAccountHealth>): number {
   switch (health.kind) {
-    case "refresh_token_invalid":
     case "access_token_invalid":
     case "reauthorize":
       return 5;
@@ -626,6 +648,9 @@ function getHealthPriority(health: ReturnType<typeof resolveAccountHealth>): num
       return 4;
     case "refresh_failed":
       return 3;
+    case "refresh_unavailable":
+    case "refresh_token_invalid":
+      return 2;
     case "quota":
       return 2;
     case "expiring":

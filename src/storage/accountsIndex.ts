@@ -2,6 +2,7 @@ import * as fsSync from "fs";
 import { createError } from "../core/errors";
 import type { CodexAccountRecord, CodexAccountsIndex, CodexProviderRoute } from "../core/types";
 import { normalizeQuotaSummary } from "../utils/quotaWindows";
+import { normalizePlanType } from "../utils/quotaLabels";
 import { normalizeAccountTags } from "./sharedAccounts";
 
 export function markActive(index: CodexAccountsIndex, accountId: string): void {
@@ -59,6 +60,7 @@ export function cloneIndex(index: CodexAccountsIndex): CodexAccountsIndex {
     accounts: Array.isArray(index?.accounts)
       ? index.accounts.map((account) => ({
           ...account,
+          planType: normalizePlanType(account.planType),
           tags: normalizeAccountTags(account.tags),
           quotaSummary: normalizeQuotaSummary(account.quotaSummary)
         }))

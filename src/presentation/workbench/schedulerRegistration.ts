@@ -834,6 +834,12 @@ export function registerTokenRefreshScheduler(params: {
       }
       if (!needsTokenRefresh(tokens, params.skewSeconds)) {
         clearTokenAutomationError(account.id);
+        await persistTokenRefreshStatus(account.id, {
+          tokenRefreshLastError: undefined,
+          tokenRefreshLastErrorAt: undefined,
+          tokenRefreshLastErrorKind: undefined,
+          tokenRefreshNextRetryAt: undefined
+        });
         setTokenSchedule(account.id, tokens);
         return;
       }
@@ -1049,6 +1055,10 @@ function classifyTokenRefreshFailure(error: unknown): { kind: TokenRefreshErrorK
   const statusCode = typeof details.statusCode === "number" ? details.statusCode : undefined;
   const errorCode = readErrorCode(details.context) ?? readString(details.code);
   const normalized = getErrorMessage(error).toLowerCase();
+
+  if (errorCode === "refresh_token_reused" || normalized.includes("refresh_token_reused")) {
+    return { kind: "provider_response", retry: true };
+  }
 
   if (
     statusCode === 401 ||

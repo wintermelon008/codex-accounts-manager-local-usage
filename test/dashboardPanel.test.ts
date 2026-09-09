@@ -278,7 +278,7 @@ describe("Dashboard account selection", () => {
       { id: "virtual", accountKind: "sub2api", healthKind: "reauthorize", mailboxDeactivated: true }
     ] as DashboardState["accounts"];
 
-    expect(getBlockedAccountIds(accounts)).toEqual(["eligible", "refresh-token", "access-token"]);
+    expect(getBlockedAccountIds(accounts)).toEqual(["eligible", "access-token"]);
   });
 
   it("exposes blocked-account removal only while Mailbox is registered and usable", () => {
@@ -394,17 +394,22 @@ describe("Dashboard account selection", () => {
       { id: "reauthorize", healthKind: "reauthorize", dismissedHealth: false, isHidden: false },
       { id: "refresh-failed", healthKind: "refresh_failed", dismissedHealth: false, isHidden: false },
       { id: "dismissed", healthKind: "disabled", dismissedHealth: true, isHidden: false },
-      { id: "hidden-invalid", healthKind: "quota", dismissedHealth: false, isHidden: true }
+      { id: "disabled", healthKind: "disabled", dismissedHealth: false, isHidden: false },
+      { id: "quota-warning", healthKind: "quota", dismissedHealth: false, isHidden: false },
+      { id: "hidden-invalid", healthKind: "access_token_invalid", dismissedHealth: false, isHidden: true }
     ] as DashboardState["accounts"];
 
     expect(isDashboardAccountInvalid(dashboardState.accounts[0])).toBe(false);
     expect(isDashboardAccountInvalid(dashboardState.accounts[1])).toBe(true);
+    expect(isDashboardAccountInvalid(dashboardState.accounts[2])).toBe(false);
     expect(isDashboardAccountInvalid(dashboardState.accounts[3])).toBe(false);
+    expect(isDashboardAccountInvalid(dashboardState.accounts[4])).toBe(true);
+    expect(isDashboardAccountInvalid(dashboardState.accounts[5])).toBe(false);
     expect(
       getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, false, [], true).map(
         (account) => account.id
       )
-    ).toEqual(["reauthorize", "refresh-failed"]);
+    ).toEqual(["reauthorize", "disabled"]);
   });
 
   it("clears only selections that leave the selected plan scope", () => {
@@ -558,5 +563,50 @@ describe("publishDashboardSnapshot", () => {
     await Promise.resolve();
 
     expect(schedulePublishState).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops an older snapshot when a newer publish has started", async () => {
+    const olderState = createState();
+    olderState.panelTitle = "Older";
+    const newerState = createState();
+    newerState.panelTitle = "Newer";
+    let resolveOlder!: (state: DashboardState) => void;
+    buildDashboardStateMock
+      .mockImplementationOnce(() => new Promise<DashboardState>((resolve) => (resolveOlder = resolve)))
+      .mockResolvedValueOnce(newerState);
+    backfillMissingResetCreditExpiriesMock.mockResolvedValue(false);
+
+    let revision = 1;
+    const postMessage = vi.fn(async () => true);
+    const setPanelTitle = vi.fn();
+    const first = publishDashboardSnapshot({
+      repo: {} as never,
+      settingsStore: {} as never,
+      logoUri: "logo",
+      announcementsState: olderState.announcements,
+      setPanelTitle,
+      postMessage,
+      schedulePublishState: vi.fn(),
+      isCurrent: () => revision === 1
+    });
+
+    revision = 2;
+    await publishDashboardSnapshot({
+      repo: {} as never,
+      settingsStore: {} as never,
+      logoUri: "logo",
+      announcementsState: newerState.announcements,
+      setPanelTitle,
+      postMessage,
+      schedulePublishState: vi.fn(),
+      isCurrent: () => revision === 2
+    });
+    resolveOlder(olderState);
+    await first;
+
+    expect(setPanelTitle).toHaveBeenCalledTimes(1);
+    expect(setPanelTitle).toHaveBeenCalledWith("Newer");
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    expect(postMessage).toHaveBeenCalledWith({ type: "dashboard:snapshot", state: newerState });
   });
 });

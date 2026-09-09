@@ -41,7 +41,7 @@ describe("renderAccountPanel", () => {
     const teamPanel = renderAccountPanel({ ...account, planType: "chatgptteamplan" }, true, true, false);
     const plusPanel = renderAccountPanel({ ...account, planType: "chatgptplusplan" }, false, false, false);
 
-    expect(teamPanel).toContain("Team");
+    expect(teamPanel).toContain("Business");
     expect(teamPanel).not.toContain("CHATGPTTEAMPLAN");
     expect(plusPanel).toContain("Plus");
     expect(plusPanel).not.toContain("CHATGPTPLUSPLAN");

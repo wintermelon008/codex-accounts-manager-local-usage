@@ -176,7 +176,7 @@ function UsageMetric(props: {
     >
       <div class="local-usage-card-label">{props.label}</div>
       <div class="local-usage-card-value">
-        {typeof props.value === "number" ? formatNumber(props.value) : props.value}
+        {typeof props.value === "number" ? formatTokenMillions(props.value) : props.value}
       </div>
       {props.sub ? <div class="local-usage-card-sub">{props.sub}</div> : null}
     </div>
@@ -270,6 +270,13 @@ function formatTokenAndPrice(
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(Math.round(value));
+}
+
+function formatTokenMillions(value: number): string {
+  return `${new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value / 1_000_000)} M`;
 }
 
 function formatUsd(value: number): string {
