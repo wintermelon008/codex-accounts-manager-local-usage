@@ -99,7 +99,7 @@ export function resolveAccountHealth(
     automation.enabled &&
     tokens?.accessToken &&
     tokens.refreshToken &&
-    isTokenExpired(tokens.accessToken, automation.skewSeconds || 600)
+    isAccessTokenExpired(tokens.accessToken, automation.skewSeconds || 600)
   ) {
     return {
       kind: "expiring",
