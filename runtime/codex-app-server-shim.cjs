@@ -29,14 +29,32 @@ const CAPACITY_RECOVERY_MIN_DELAY_MS = 5_000;
 const CAPACITY_RECOVERY_MAX_DELAY_MS = 8_000;
 const MAX_RECENT_USAGE_LIMITED_THREADS = 2_048;
 const USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS = 6 * 60 * 60 * 1000;
-// A quota-exhaustion batch may wait for other active conversations to reach a
-// safe boundary. Keep the stopped threads available for the same bounded
-// six-hour window so the eventual switch can continue them together.
+// Keep the observation journal bounded independently from the automatic
+// recovery snapshot. Historical observations must not be replayed by an
+// unrelated account switch.
 const RECENT_USAGE_LIMITED_THREAD_TTL_MS = USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS;
+const RECENT_USAGE_LIMITED_RECOVERY_MAX_AGE_MS = readRuntimeDuration(
+  "CODEX_ACCOUNTS_RECENT_USAGE_LIMITED_RECOVERY_MAX_AGE_MS",
+  10 * 60 * 1000,
+  0,
+  USAGE_LIMIT_EXHAUSTION_MAX_WAIT_MS
+);
+const RUNTIME_OWNER_LEASE_MS = 30_000;
+const RUNTIME_OWNER_RENEW_INTERVAL_MS = 10_000;
+const RUNTIME_OWNER_ACQUIRE_WAIT_MS = readRuntimeDuration(
+  "CODEX_ACCOUNTS_RUNTIME_OWNER_ACQUIRE_WAIT_MS",
+  15_000,
+  0,
+  60_000
+);
+const RUNTIME_OWNER_RETRY_INTERVAL_MS = 250;
+const MAX_RECENT_AUTH_TOKEN_REVOKED_THREADS = 2_048;
+const AUTH_TOKEN_REVOKED_THREAD_TTL_MS = 10 * 60 * 1000;
+const AUTH_TOKEN_REVOKED_RETRY_DELAY_MS = 5_000;
 const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
-const RUNTIME_PROTOCOL_VERSION = 13;
+const RUNTIME_PROTOCOL_VERSION = 14;
 const FAST_MODE_SERVICE_TIER = "priority";
 const FAST_MODE_METHODS = new Set([
   "thread/start",
@@ -79,6 +97,9 @@ const realCliPath = process.env.CODEX_ACCOUNTS_REAL_CLI || runtimeConfig.realCli
 const forceHttpTransport = runtimeConfig.forceHttpTransport !== false;
 let forceFastMode = runtimeConfig.forceFastMode === true;
 const usageAttributionDirectory = resolveUsageAttributionDirectory(runtimeConfig);
+// The fake CLI hook is used by isolated tests; it must not contend with a
+// developer's live Codex runtime on the same machine.
+const runtimeOwnerPath = process.env.CODEX_ACCOUNTS_REAL_CLI ? undefined : resolveRuntimeOwnerPath(runtimeConfig);
 const gatewayConfig = resolveGatewayConfig(runtimeConfig);
 
 if (!realCliPath || !path.isAbsolute(realCliPath)) {
@@ -134,6 +155,7 @@ const latestWorkGenerations = new Map();
 const submittedTurnStartGenerations = new Map();
 const capacityRecoveryThreads = new Map();
 const recentUsageLimitedThreads = new Map();
+const recentAuthTokenRevokedThreads = new Map();
 const initializeRequests = new Set();
 const controlSockets = new Set();
 const lastUsageAttributionByThread = new Map();
@@ -143,6 +165,10 @@ let usageAttributionWriteFailureReported = false;
 let child;
 let gatewayAdapter;
 let startupModelRefreshNotificationSent = false;
+let runtimeOwnerToken;
+let runtimeOwnerRenewTimer;
+let runtimeOwnerRenewalInFlight = false;
+let runtimeOwnerMode = runtimeOwnerPath ? "starting" : "legacy";
 
 void startRuntime();
 
@@ -153,12 +179,22 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 }
 
 process.on("exit", () => {
+  clearAllAuthTokenRevokedThreads();
   flushUsageAttributionRecords();
   closeGatewayAdapter();
+  releaseRuntimeOwner();
 });
 
 async function startRuntime() {
   try {
+    if (process.argv.includes("app-server") && !(await acquireRuntimeOwner())) {
+      failStartup("another Manager runtime already owns this Codex home; refusing a second app-server");
+      return;
+    }
+    runtimeOwnerMode = runtimeOwnerPath && process.argv.includes("app-server") ? "owner" : "legacy";
+    if (runtimeOwnerMode === "owner") {
+      startRuntimeOwnerRenewal();
+    }
     if (gatewayConfig && process.argv.includes("app-server")) {
       gatewayAdapter = await startGatewayAdapter(gatewayConfig);
     }
@@ -196,6 +232,7 @@ async function startRuntime() {
       childExited = true;
       clearAllCapacityRecoveryThreads();
       flushUsageAttributionRecords();
+      releaseRuntimeOwner();
       rejectPendingRequests(new Error("Codex app-server exited"));
       closeControlServer();
       closeGatewayAdapter();
@@ -210,8 +247,156 @@ async function startRuntime() {
 
     beginShutdownIfRequested();
   } catch (error) {
+    releaseRuntimeOwner();
     closeGatewayAdapter();
     failStartup(`Unable to start the Codex runtime: ${safeErrorMessage(error)}`);
+  }
+}
+
+async function acquireRuntimeOwner() {
+  if (!runtimeOwnerPath) {
+    return true;
+  }
+
+  await fs.promises.mkdir(path.dirname(runtimeOwnerPath), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + RUNTIME_OWNER_ACQUIRE_WAIT_MS;
+  for (;;) {
+    let createdDirectory = false;
+    try {
+      await fs.promises.mkdir(runtimeOwnerPath, { recursive: false, mode: 0o700 });
+      createdDirectory = true;
+      const token = randomUUID();
+      await fs.promises.writeFile(
+        path.join(runtimeOwnerPath, "owner.json"),
+        JSON.stringify({ version: 1, pid: process.pid, token, expiresAt: Date.now() + RUNTIME_OWNER_LEASE_MS }),
+        { encoding: "utf8", flag: "wx", mode: 0o600 }
+      );
+      runtimeOwnerToken = token;
+      safeLog(`runtime owner acquired pid=${process.pid}`);
+      return true;
+    } catch (error) {
+      if (createdDirectory) {
+        await fs.promises.rm(runtimeOwnerPath, { recursive: true, force: true }).catch(() => undefined);
+      }
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      if (!(await reapStaleRuntimeOwner())) {
+        if (Date.now() >= deadline) {
+          return false;
+        }
+        await new Promise((resolve) => setTimeout(resolve, RUNTIME_OWNER_RETRY_INTERVAL_MS));
+      }
+    }
+  }
+}
+
+async function reapStaleRuntimeOwner() {
+  const ownerPath = path.join(runtimeOwnerPath, "owner.json");
+  let owner;
+  try {
+    owner = JSON.parse(await fs.promises.readFile(ownerPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return true;
+    }
+    try {
+      const stats = await fs.promises.stat(runtimeOwnerPath);
+      if (stats.mtimeMs + RUNTIME_OWNER_LEASE_MS > Date.now()) {
+        return false;
+      }
+    } catch (statError) {
+      return statError?.code === "ENOENT";
+    }
+    return renameStaleRuntimeOwner();
+  }
+
+  const ownerIsAlive =
+    Number.isSafeInteger(owner?.pid) && owner.pid > 0 && owner.pid !== process.pid && isProcessAlive(owner.pid);
+  const leaseIsValid = typeof owner?.expiresAt === "number" && owner.expiresAt > Date.now();
+  if (ownerIsAlive && leaseIsValid) {
+    return false;
+  }
+  return renameStaleRuntimeOwner();
+}
+
+async function renameStaleRuntimeOwner() {
+  const stalePath = `${runtimeOwnerPath}.stale.${process.pid}.${randomUUID()}`;
+  try {
+    await fs.promises.rename(runtimeOwnerPath, stalePath);
+    await fs.promises.rm(stalePath, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    return error?.code === "ENOENT";
+  }
+}
+
+function startRuntimeOwnerRenewal() {
+  if (!runtimeOwnerPath || !runtimeOwnerToken || runtimeOwnerRenewTimer) {
+    return;
+  }
+  runtimeOwnerRenewTimer = setInterval(() => {
+    void renewRuntimeOwner();
+  }, RUNTIME_OWNER_RENEW_INTERVAL_MS);
+  runtimeOwnerRenewTimer.unref?.();
+}
+
+async function renewRuntimeOwner() {
+  if (!runtimeOwnerPath || !runtimeOwnerToken || runtimeOwnerRenewalInFlight || childExited) {
+    return;
+  }
+  runtimeOwnerRenewalInFlight = true;
+  try {
+    const ownerPath = path.join(runtimeOwnerPath, "owner.json");
+    const handle = await fs.promises.open(ownerPath, "r+");
+    try {
+      const owner = JSON.parse(await handle.readFile("utf8"));
+      if (owner?.pid !== process.pid || owner?.token !== runtimeOwnerToken || owner.expiresAt <= Date.now()) {
+        throw new Error("runtime owner lease is no longer held");
+      }
+      await handle.truncate(0);
+      await handle.write(
+        JSON.stringify({ version: 1, pid: process.pid, token: runtimeOwnerToken, expiresAt: Date.now() + RUNTIME_OWNER_LEASE_MS }),
+        0,
+        "utf8"
+      );
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    safeLog(`runtime owner lease lost: ${safeErrorMessage(error)}`);
+    requestShutdown("SIGTERM");
+  } finally {
+    runtimeOwnerRenewalInFlight = false;
+  }
+}
+
+function releaseRuntimeOwner() {
+  if (runtimeOwnerRenewTimer) {
+    clearInterval(runtimeOwnerRenewTimer);
+    runtimeOwnerRenewTimer = undefined;
+  }
+  const token = runtimeOwnerToken;
+  runtimeOwnerToken = undefined;
+  if (!runtimeOwnerPath || !token) {
+    return;
+  }
+  try {
+    const owner = JSON.parse(fs.readFileSync(path.join(runtimeOwnerPath, "owner.json"), "utf8"));
+    if (owner?.pid === process.pid && owner?.token === token) {
+      fs.rmSync(runtimeOwnerPath, { recursive: true, force: true });
+    }
+  } catch {
+    // The lock may already have expired or been reclaimed by a newer owner.
+  }
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
   }
 }
 
@@ -343,6 +528,7 @@ function handleOfficialLine(line) {
     // all-conversations-exhausted decision.
     resetUsageLimitExhaustionObservation();
     clearRecentUsageLimitedThread(threadId);
+    clearAuthTokenRevokedThread(threadId);
     clearCapacityRecoveryThread(threadId, { force: true });
     const workGeneration = advanceWorkGeneration(threadId);
     if (workGeneration !== undefined && Object.prototype.hasOwnProperty.call(message, "id")) {
@@ -523,6 +709,9 @@ function handleCodexLine(line) {
       clearTimeout(pendingInternal.timer);
       if (message.error) {
         if (pendingInternal.recoveryTurn) {
+          if (isAuthTokenRevokedError(message.error)) {
+            captureAuthTokenRevokedThread(pendingInternal.threadId, pendingInternal.turnId);
+          }
           observeRecoveryTurnFailure(pendingInternal, message.error);
         }
         pendingInternal.reject(new Error(safeRpcError(message.error)));
@@ -551,6 +740,8 @@ function handleCodexLine(line) {
         } else {
           anonymousActiveTurnCount += 1;
         }
+      } else if (isAuthTokenRevokedError(message.error)) {
+        captureAuthTokenRevokedThread(submittedThreadId);
       } else if (isUsageLimitExceededError(message.error)) {
         // A rejected turn/start has no following turn/completed event. It is
         // therefore already terminal when it becomes part of an exhaustion
@@ -582,7 +773,9 @@ function handleCodexLine(line) {
     const threadId = readThreadId(message.params);
     const turnId = readNotificationTurnId(message.params);
     const workGeneration = readWorkGeneration(threadId, turnId);
-    if (isUsageLimitExceededError(message.params.error)) {
+    if (isAuthTokenRevokedError(message.params.error)) {
+      captureAuthTokenRevokedThread(threadId, turnId);
+    } else if (isUsageLimitExceededError(message.params.error)) {
       clearCapacityRecoveryThread(threadId, { force: true });
       captureUsageLimitedThread(threadId);
     } else if (isModelCapacityError(message.params.error)) {
@@ -599,10 +792,13 @@ function handleCodexLine(line) {
       rememberTerminalTurnId(turnId);
     }
     const request = pendingSwitch;
+    const authTokenRevoked = Boolean(threadId && isAuthTokenRevokedTurn(message.params));
     const usageLimitExceeded = Boolean(threadId && isUsageLimitExceededTurn(message.params));
     const modelCapacity = Boolean(threadId && isModelCapacityTurn(message.params));
     const workGeneration = readWorkGeneration(threadId, turnId);
-    if (usageLimitExceeded) {
+    if (authTokenRevoked) {
+      captureAuthTokenRevokedThread(threadId, turnId);
+    } else if (usageLimitExceeded) {
       // Remember the recovery candidate while the completed turn is still in
       // the active snapshot. Terminal classification happens after removing
       // it below, so a contradictory normal completion cancels only the batch.
@@ -630,7 +826,7 @@ function handleCodexLine(line) {
       anonymousActiveTurnCount = Math.max(0, anonymousActiveTurnCount - 1);
     }
     observeUsageLimitExhaustionTerminal(threadId, readTurnStatus(message.params), usageLimitExceeded);
-    if (!usageLimitExceeded && !modelCapacity) {
+    if (!usageLimitExceeded && !modelCapacity && !authTokenRevoked) {
       clearCapacityRecoveryThread(threadId, { turnId, workGeneration });
     }
     void drainPendingSwitch();
@@ -932,6 +1128,21 @@ function queueRuntimeSwitchRequest(socket, id, params, gatewayFallback, routeSwi
     return;
   }
 
+  const recentUsageLimitedThreadIds =
+    params.recoverRecentUsageLimitedTurns === true ? getRecoverableRecentUsageLimitedThreadIds() : new Set();
+  if (params.recoverRecentUsageLimitedTurns === true) {
+    const observedUsageLimitedThreads = getRecentUsageLimitedThreadIds().size;
+    const recoveryScope = usageLimitExhaustionBatch?.ready
+      ? "current-exhaustion-batch"
+      : recentUsageLimitedThreadIds.size > 0
+        ? "latest-within-10m"
+        : "none";
+    safeLog(
+      `account switch ${operationId} usage recovery snapshot scope=${recoveryScope} ` +
+        `eligibleThreads=${recentUsageLimitedThreadIds.size} observedThreads=${observedUsageLimitedThreads}`
+    );
+  }
+
   const request = {
     socket,
     id,
@@ -949,9 +1160,11 @@ function queueRuntimeSwitchRequest(socket, id, params, gatewayFallback, routeSwi
     pausedGoalThreadIds: new Set(),
     interruptedTurnIds: new Set(),
     interruptedTurnCount: 0,
-    recentUsageLimitedThreadIds:
-      params.recoverRecentUsageLimitedTurns === true ? getRecentUsageLimitedThreadIds() : new Set(),
+    recentUsageLimitedThreadIds,
     recentUsageLimitedGoalThreadIds: new Set(),
+    recentAuthTokenRevokedThreadIds:
+      params.recoverRecentAuthRevokedTurns === true ? getRecentAuthTokenRevokedThreadIds() : new Set(),
+    recentAuthTokenRevokedGoalThreadIds: new Set(),
     recoveryThreadIds: new Set(),
     capacityRecoveryEntries: new Map(),
     capacityRecoveryGoalThreadIds: new Set(),
@@ -1068,6 +1281,7 @@ async function drainPendingSwitch() {
     }
     const resumedPausedGoalThreadIds = await resumePausedGoals(request);
     await resumeRecentUsageLimitedGoals(request, resumedPausedGoalThreadIds);
+    await resumeRecentAuthTokenRevokedGoals(request, resumedPausedGoalThreadIds);
     const continuedThreads = await startRecoveryTurns(request);
     settleClaimedCapacityRecoveryEntries(request);
     // The recovery request above owns its captured recent threads. Once the
@@ -1157,6 +1371,7 @@ async function prepareGoalsForSwitch(request) {
     const threadIds = new Set([
       ...getActiveThreadIds(),
       ...request.recentUsageLimitedThreadIds,
+      ...request.recentAuthTokenRevokedThreadIds,
       ...request.capacityRecoveryEntries.keys()
     ]);
     for (const threadId of threadIds) {
@@ -1186,6 +1401,14 @@ async function prepareGoalsForSwitch(request) {
             request.recoveryThreadIds.add(threadId);
           }
         }
+        if (request.recentAuthTokenRevokedThreadIds.has(threadId)) {
+          if (goal?.status === "active") {
+            request.recentAuthTokenRevokedGoalThreadIds.add(threadId);
+            request.recoveryThreadIds.delete(threadId);
+          } else {
+            request.recoveryThreadIds.add(threadId);
+          }
+        }
         continue;
       }
       const pauseResult = await sendInternalRequest("thread/goal/set", { threadId, status: "paused" });
@@ -1201,6 +1424,10 @@ async function prepareGoalsForSwitch(request) {
       }
       if (request.recentUsageLimitedThreadIds.has(threadId)) {
         request.recentUsageLimitedGoalThreadIds.add(threadId);
+        request.recoveryThreadIds.delete(threadId);
+      }
+      if (request.recentAuthTokenRevokedThreadIds.has(threadId)) {
+        request.recentAuthTokenRevokedGoalThreadIds.add(threadId);
         request.recoveryThreadIds.delete(threadId);
       }
       if (request.canceled) {
@@ -1352,16 +1579,29 @@ async function startRecoveryTurns(request) {
         if (capacityEntry) {
           settleClaimedCapacityRecoveryEntry(request, threadId, capacityEntry);
         }
+        if (request.recentAuthTokenRevokedThreadIds.has(threadId)) {
+          clearAuthTokenRevokedThread(threadId);
+        }
         continue;
       }
+      const recoveryKind = request.recentUsageLimitedThreadIds.has(threadId)
+        ? "usage-limit-switch"
+        : request.recentAuthTokenRevokedThreadIds.has(threadId)
+          ? "auth-revoked-switch"
+          : "account-switch";
       const result = await startRecoveryTurn(threadId, {
         workGeneration: capacityEntry?.workGeneration,
-        capacityEntry
+        capacityEntry,
+        recoveryKind,
+        operationId: request.operationId
       });
       if (request.recentUsageLimitedThreadIds.has(threadId)) {
         recoveredUsageLimitedThreads += 1;
       }
       clearRecentUsageLimitedThread(threadId);
+      if (request.recentAuthTokenRevokedThreadIds.has(threadId)) {
+        clearAuthTokenRevokedThread(threadId);
+      }
       if (capacityEntry) {
         settleClaimedCapacityRecoveryEntry(request, threadId, capacityEntry);
       }
@@ -1380,6 +1620,10 @@ async function startRecoveryTurns(request) {
 }
 
 async function startRecoveryTurn(threadId, options = {}) {
+  safeLog(
+    `starting recovery turn kind=${options.recoveryKind || "unknown"} threadId=${threadId}` +
+      (options.operationId ? ` operationId=${options.operationId}` : "")
+  );
   const result = await sendInternalRequest(
     "turn/start",
     {
@@ -1458,6 +1702,19 @@ async function resumeRecentUsageLimitedGoals(request, resumedPausedGoalThreadIds
       request.capacityRecoveryGoalThreadIds.delete(threadId);
     }
     clearRecentUsageLimitedThread(threadId);
+  }
+}
+
+async function resumeRecentAuthTokenRevokedGoals(request, resumedPausedGoalThreadIds) {
+  for (const threadId of request.recentAuthTokenRevokedGoalThreadIds) {
+    if (!resumedPausedGoalThreadIds.has(threadId)) {
+      const resumeResult = await sendInternalRequest("thread/goal/set", { threadId, status: "active" });
+      const resumedGoal = readGoal(resumeResult);
+      if (!resumedGoal || resumedGoal.status !== "active") {
+        throw new Error("Codex did not reactivate a revoked-token goal after account switch");
+      }
+    }
+    clearAuthTokenRevokedThread(threadId);
   }
 }
 
@@ -1705,7 +1962,9 @@ function flushDeferredOfficialLines() {
 }
 
 function runtimeStatus() {
+  expireStaleUsageLimitExhaustionBatch();
   maybeFinalizeUsageLimitExhaustionBatch();
+  const recoverableRecentUsageLimitedThreads = getRecoverableRecentUsageLimitedThreadIds();
   const gatewayRoute = gatewayAdapter?.route;
   return {
     runtimeProtocolVersion: RUNTIME_PROTOCOL_VERSION,
@@ -1729,6 +1988,7 @@ function runtimeStatus() {
     capacityRecoveryThreads: capacityRecoveryThreads.size,
     capacityRecoveryWaitingThreads: countCapacityRecoveryWaitingThreads(),
     recentUsageLimitedThreads: getRecentUsageLimitedThreadIds().size,
+    recoverableRecentUsageLimitedThreads: recoverableRecentUsageLimitedThreads.size,
     usageLimitExhaustionReady: usageLimitExhaustionBatch?.ready === true,
     usageLimitExhaustionBatchId: usageLimitExhaustionBatch?.ready === true ? usageLimitExhaustionBatch.id : 0,
     observedUsageLimitFailures,
@@ -1736,6 +1996,7 @@ function runtimeStatus() {
     resumedUsageLimitedGoals,
     attributionActive: Boolean(usageAttributionAccount?.localAccountId),
     attributionFailureReason: usageAttributionFailureReason || null,
+    runtimeOwner: runtimeOwnerMode,
     shimPid: process.pid,
     appServerPid: child?.pid || null
   };
@@ -2036,6 +2297,8 @@ function isValidSwitchParams(params) {
     params.gracePeriodMs <= 300_000 &&
     (params.recoverRecentUsageLimitedTurns === undefined ||
       typeof params.recoverRecentUsageLimitedTurns === "boolean") &&
+    (params.recoverRecentAuthRevokedTurns === undefined ||
+      typeof params.recoverRecentAuthRevokedTurns === "boolean") &&
     (params.operationId === undefined || isValidSwitchOperationId(params.operationId)) &&
     (params.longTurnPolicy === "defer" ||
       params.longTurnPolicy === "interrupt" ||
@@ -2527,7 +2790,10 @@ async function runCapacityRecoveryTurn(threadId, entry) {
       clearCapacityRecoveryThread(threadId, { force: true });
       return;
     }
-    await startRecoveryTurn(threadId, { workGeneration: entry.workGeneration });
+    await startRecoveryTurn(threadId, {
+      workGeneration: entry.workGeneration,
+      recoveryKind: "model-capacity"
+    });
     if (capacityRecoveryThreads.get(threadId) === entry) {
       clearCapacityRecoveryThread(threadId, { force: true });
     }
@@ -2542,6 +2808,10 @@ async function runCapacityRecoveryTurn(threadId, entry) {
 function observeRecoveryTurnFailure(pending, error) {
   const threadId = pending.threadId;
   if (typeof threadId !== "string" || threadId.length === 0) {
+    return;
+  }
+  if (isAuthTokenRevokedError(error)) {
+    captureAuthTokenRevokedThread(threadId);
     return;
   }
   if (isUsageLimitExceededError(error)) {
@@ -2608,6 +2878,154 @@ function captureUsageLimitedThread(threadId, options = {}) {
   } else if (request.goalsPrepared) {
     request.recoveryThreadIds.add(threadId);
   }
+}
+
+function captureAuthTokenRevokedThread(threadId, turnId) {
+  if (typeof threadId !== "string" || threadId.length === 0 || childExited) {
+    return;
+  }
+  const activeLocalAccountId = getActiveManagedLocalAccountId();
+  if (!activeLocalAccountId) {
+    return;
+  }
+  const workGeneration = readWorkGeneration(threadId, turnId) ?? ensureWorkGeneration(threadId);
+  const existing = recentAuthTokenRevokedThreads.get(threadId);
+  const sameGeneration =
+    existing &&
+    existing.workGeneration === workGeneration &&
+    existing.localAccountId === activeLocalAccountId;
+  if (sameGeneration) {
+    if (!existing.turnId && typeof turnId === "string") {
+      existing.turnId = turnId;
+    }
+  } else {
+    if (existing?.retryTimer) {
+      clearTimeout(existing.retryTimer);
+    }
+    recentAuthTokenRevokedThreads.delete(threadId);
+    recentAuthTokenRevokedThreads.set(threadId, {
+      recordedAt: Date.now(),
+      workGeneration,
+      turnId: typeof turnId === "string" ? turnId : undefined,
+      localAccountId: activeLocalAccountId,
+      notificationInFlight: false,
+      retryTimer: undefined
+    });
+    pruneRecentAuthTokenRevokedThreads();
+  }
+
+  const request = pendingSwitch;
+  if (request?.params.recoverRecentAuthRevokedTurns === true) {
+    request.recentAuthTokenRevokedThreadIds.add(threadId);
+    if (request.pausedGoalThreadIds.has(threadId)) {
+      request.recentAuthTokenRevokedGoalThreadIds.add(threadId);
+      request.recoveryThreadIds.delete(threadId);
+    } else if (request.goalsPrepared) {
+      request.recoveryThreadIds.add(threadId);
+    }
+  }
+
+  const entry = recentAuthTokenRevokedThreads.get(threadId);
+  if (entry && !entry.notificationInFlight && !entry.retryTimer) {
+    void notifyAuthTokenRevokedThread(threadId);
+  }
+}
+
+async function notifyAuthTokenRevokedThread(threadId) {
+  const entry = recentAuthTokenRevokedThreads.get(threadId);
+  if (!entry || entry.notificationInFlight || childExited) {
+    return;
+  }
+  if (entry.localAccountId !== getActiveManagedLocalAccountId()) {
+    clearAuthTokenRevokedThread(threadId);
+    return;
+  }
+  entry.notificationInFlight = true;
+  let retry = true;
+  try {
+    const result = await sendControlRequest("runtime/auth-revoked", {
+      threadId,
+      ...(entry.turnId ? { turnId: entry.turnId } : {}),
+      localAccountId: entry.localAccountId
+    });
+    retry = result?.handled !== true || recentAuthTokenRevokedThreads.get(threadId) === entry;
+  } catch (error) {
+    safeLog("failed to notify Manager about a revoked OAuth token: " + safeErrorMessage(error));
+  } finally {
+    if (recentAuthTokenRevokedThreads.get(threadId) !== entry) {
+      return;
+    }
+    entry.notificationInFlight = false;
+    if (retry) {
+      scheduleAuthTokenRevokedRetry(threadId, entry);
+    }
+  }
+}
+
+function scheduleAuthTokenRevokedRetry(threadId, entry) {
+  if (
+    recentAuthTokenRevokedThreads.get(threadId) !== entry ||
+    entry.retryTimer ||
+    childExited
+  ) {
+    return;
+  }
+  entry.retryTimer = setTimeout(() => {
+    entry.retryTimer = undefined;
+    void notifyAuthTokenRevokedThread(threadId);
+  }, AUTH_TOKEN_REVOKED_RETRY_DELAY_MS);
+  entry.retryTimer.unref?.();
+}
+
+function getRecentAuthTokenRevokedThreadIds() {
+  pruneRecentAuthTokenRevokedThreads();
+  return new Set(recentAuthTokenRevokedThreads.keys());
+}
+
+function getActiveManagedLocalAccountId() {
+  return (
+    activeManagedAccount?.localAccountId ||
+    usageAttributionAccount?.localAccountId ||
+    runtimeOAuthIdentity?.localAccountId
+  );
+}
+
+function clearAuthTokenRevokedThread(threadId) {
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return;
+  }
+  const entry = recentAuthTokenRevokedThreads.get(threadId);
+  if (entry?.retryTimer) {
+    clearTimeout(entry.retryTimer);
+  }
+  recentAuthTokenRevokedThreads.delete(threadId);
+  for (const request of [pendingSwitch, activeSwitchRequest]) {
+    request?.recentAuthTokenRevokedThreadIds.delete(threadId);
+    request?.recentAuthTokenRevokedGoalThreadIds.delete(threadId);
+    request?.recoveryThreadIds.delete(threadId);
+  }
+}
+
+function pruneRecentAuthTokenRevokedThreads() {
+  const cutoff = Date.now() - AUTH_TOKEN_REVOKED_THREAD_TTL_MS;
+  for (const [threadId, entry] of recentAuthTokenRevokedThreads) {
+    if (entry.recordedAt >= cutoff && recentAuthTokenRevokedThreads.size <= MAX_RECENT_AUTH_TOKEN_REVOKED_THREADS) {
+      break;
+    }
+    if (entry.retryTimer) {
+      clearTimeout(entry.retryTimer);
+    }
+    recentAuthTokenRevokedThreads.delete(threadId);
+  }
+}
+
+function clearAllAuthTokenRevokedThreads() {
+  for (const entry of recentAuthTokenRevokedThreads.values()) {
+    if (entry.retryTimer) {
+      clearTimeout(entry.retryTimer);
+    }
+  }
+  recentAuthTokenRevokedThreads.clear();
 }
 
 function configureUsageLimitObservation(params) {
@@ -2756,6 +3174,7 @@ function markUsageLimitExhaustionBatchReady(batch) {
     return;
   }
   batch.ready = true;
+  batch.readyAt = Date.now();
   readyUsageLimitExhaustionBatchId += 1;
   batch.id = readyUsageLimitExhaustionBatchId;
 }
@@ -2780,6 +3199,40 @@ function resetUsageLimitExhaustionObservation() {
 function getRecentUsageLimitedThreadIds() {
   pruneRecentUsageLimitedThreads();
   return new Set(recentUsageLimitedThreads.keys());
+}
+
+function getRecoverableRecentUsageLimitedThreadIds() {
+  expireStaleUsageLimitExhaustionBatch();
+  pruneRecentUsageLimitedThreads();
+  const exhaustionBatch = usageLimitExhaustionBatch;
+  if (exhaustionBatch?.ready) {
+    // A ready batch is the current exhaustion decision. Recover only the
+    // threads captured by that batch; never merge unrelated journal entries.
+    return new Set(exhaustionBatch.usageLimitedThreadIds);
+  }
+
+  const cutoff = Date.now() - RECENT_USAGE_LIMITED_RECOVERY_MAX_AGE_MS;
+  let newest;
+  for (const [threadId, recordedAt] of recentUsageLimitedThreads) {
+    if (recordedAt < cutoff) {
+      continue;
+    }
+    if (!newest || recordedAt > newest.recordedAt) {
+      newest = { threadId, recordedAt };
+    }
+  }
+  return newest ? new Set([newest.threadId]) : new Set();
+}
+
+function expireStaleUsageLimitExhaustionBatch() {
+  const batch = usageLimitExhaustionBatch;
+  if (!batch?.ready) {
+    return;
+  }
+  if (typeof batch.readyAt !== "number" || Date.now() - batch.readyAt > RECENT_USAGE_LIMITED_RECOVERY_MAX_AGE_MS) {
+    safeLog("discarding stale usage-limit exhaustion batch without replaying its threads");
+    suppressUsageLimitExhaustionObservation();
+  }
 }
 
 function clearRecentUsageLimitedThread(threadId) {
@@ -2869,6 +3322,20 @@ function isUsageLimitExceededTurn(value) {
   return Array.isArray(turn.items) && turn.items.some((item) => isUsageLimitExceededError(item));
 }
 
+function isAuthTokenRevokedTurn(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const turn = value.turn;
+  if (!turn || typeof turn !== "object") {
+    return false;
+  }
+  if (isAuthTokenRevokedError(turn.error)) {
+    return true;
+  }
+  return Array.isArray(turn.items) && turn.items.some((item) => isAuthTokenRevokedError(item));
+}
+
 function isModelCapacityTurn(value) {
   if (!value || typeof value !== "object") {
     return false;
@@ -2900,6 +3367,40 @@ function isUsageLimitExceededError(value) {
     isUsageLimitExceededError(value.data) ||
     isUsageLimitExceededError(value.error)
   );
+}
+
+function isAuthTokenRevokedError(value) {
+  if (typeof value === "string") {
+    return /(?:token[_ -]?revoked|invalidated\s+oauth\s+token)/iu.test(value);
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const codeCandidates = [
+    value.code,
+    value.errorCode,
+    value.authErrorCode,
+    value.auth_error_code,
+    value.authError && value.authError.code,
+    value.data && value.data.code,
+    value.data && value.data.errorCode,
+    value.data && value.data.authErrorCode,
+    value.error && value.error.code,
+    value.error && value.error.errorCode
+  ];
+  if (codeCandidates.some((code) => typeof code === "string" && code.trim().toLowerCase() === "token_revoked")) {
+    return true;
+  }
+  const message = [
+    value.message,
+    value.detail,
+    value.errorMessage,
+    value.data && value.data.message,
+    value.error && value.error.message
+  ]
+    .filter((part) => typeof part === "string")
+    .join(" ");
+  return /(?:token[_ -]?revoked|invalidated\s+oauth\s+token)/iu.test(message);
 }
 
 function isModelCapacityError(value) {
@@ -4260,6 +4761,23 @@ function resolveUsageAttributionDirectory(config) {
   const configured =
     config && typeof config.usageAttributionDirectory === "string" ? config.usageAttributionDirectory.trim() : "";
   return configured && path.isAbsolute(configured) ? configured : undefined;
+}
+
+function resolveRuntimeOwnerPath(config) {
+  const configured = config && typeof config.runtimeOwnerPath === "string" ? config.runtimeOwnerPath.trim() : "";
+  if (configured && path.isAbsolute(configured)) {
+    return configured;
+  }
+  const configuredCodexHome = typeof process.env.CODEX_HOME === "string" ? process.env.CODEX_HOME.trim() : "";
+  const codexHome = configuredCodexHome
+    ? configuredCodexHome.replace(/^['"]|['"]$/g, "")
+    : path.join(os.homedir(), ".codex");
+  return path.join(codexHome, ".codex-accounts-manager-runtime-owner");
+}
+
+function readRuntimeDuration(name, fallback, minimum, maximum) {
+  const configured = Number(process.env[name]);
+  return Number.isInteger(configured) && configured >= minimum && configured <= maximum ? configured : fallback;
 }
 
 function safeLog(message) {

@@ -18,8 +18,19 @@ import {
 import { AccountsRepository } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
 import { registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
-import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../../codex";
-import { isSub2ApiAccount, type SharedCodexAccountJson } from "../../core/types";
+import {
+  CodexHotSwitchRuntime,
+  HotSwitchAuthTokenRevokedEvent,
+  HotSwitchAuthTokenRevokedResult,
+  RuntimeAccountSwitchOptions,
+  RuntimeAccountSwitchOutcome
+} from "../../codex";
+import {
+  isAutomaticAccount,
+  isCurrentProviderAccount,
+  isSub2ApiAccount,
+  type SharedCodexAccountJson
+} from "../../core/types";
 import { resolveAccountHealth } from "../../application/accounts/health";
 import { isAccountReauthorizationRequired } from "../../domain/accountHealth";
 import { getErrorMessage } from "../../core/errors";
@@ -46,6 +57,8 @@ import {
 import { extractClaims } from "../../utils/jwt";
 import { refreshQuotaSummaryPanel } from "../dashboard/panel";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
+import { selectAuthRevocationCandidates } from "../../application/accounts/authRevocationSwitch";
+import { getCurrentWindowRuntimeAccountId } from "./windowRuntimeAccount";
 import { getTokenAutomationSnapshot } from "./tokenAutomationState";
 import {
   registerAutoRefreshScheduler,
@@ -60,6 +73,7 @@ const TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
 const MANAGER_CONTROL_RETRY_INITIAL_DELAY_MS = 1_000;
 const MANAGER_CONTROL_RETRY_MAX_DELAY_MS = 10_000;
 const OPENAI_REGISTRATION_URL = "https://auth.openai.com/create-account";
+const AUTH_REVOKED_ACCOUNT_COOLDOWN_MS = 30 * 60 * 1000;
 
 export class AccountsWorkbench {
   private readonly repo: AccountsRepository;
@@ -74,13 +88,16 @@ export class AccountsWorkbench {
   private managerControlRetryTimer: NodeJS.Timeout | undefined;
   private managerControlRetryAttempt = 0;
   private readonly oauthImportCancellationSources = new Map<string, vscode.CancellationTokenSource>();
+  private readonly authRevokedAccountIds = new Map<string, number>();
   private seamlessUsageLimitMonitor: SeamlessUsageLimitMonitor | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.repo = new AccountsRepository(context);
     this.statusBar = new AccountsStatusBarProvider(context, this.repo);
     this.refreshCoordinator = new WorkbenchRefreshCoordinator(context, this.repo, this.statusBar);
-    this.hotSwitchRuntime = new CodexHotSwitchRuntime(context, this.repo);
+    this.hotSwitchRuntime = new CodexHotSwitchRuntime(context, this.repo, (event) =>
+      this.handleAuthTokenRevoked(event)
+    );
     this.runtimeSwitchCoordinator = new RuntimeSwitchCoordinator(this.repo, this.hotSwitchRuntime, () =>
       isSeamlessSwitchEnabled()
     );
@@ -334,6 +351,7 @@ export class AccountsWorkbench {
       source.dispose();
     });
     this.oauthImportCancellationSources.clear();
+    this.authRevokedAccountIds.clear();
     this.refreshCoordinator.dispose();
     this.hotSwitchRuntime.dispose();
     this.localImportInbox?.dispose();
@@ -635,6 +653,97 @@ export class AccountsWorkbench {
     };
   }
 
+  private async handleAuthTokenRevoked(
+    event: HotSwitchAuthTokenRevokedEvent
+  ): Promise<HotSwitchAuthTokenRevokedResult> {
+    if (!isSeamlessSwitchEnabled() || !this.hotSwitchRuntime.isEnabled()) {
+      return { handled: false, reason: "seamless switching is not enabled" };
+    }
+    if (this.hotSwitchRuntime.isGatewayActive()) {
+      return { handled: false, reason: "Gateway route is active" };
+    }
+    if (!event.localAccountId) {
+      return { handled: false, reason: "the revoked token is not tied to a managed active account" };
+    }
+
+    const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
+    if (currentWindowAccountId && currentWindowAccountId !== event.localAccountId) {
+      return { handled: false, reason: "the revoked token is not from this window's active account" };
+    }
+
+    const accounts = await this.repo.listAccounts();
+    const activeAccount = accounts.find((account) => account.id === event.localAccountId);
+    if (!activeAccount || !isCurrentProviderAccount(activeAccount) || !isAutomaticAccount(activeAccount)) {
+      return { handled: false, reason: "the revoked token is not from the current active ChatGPT account" };
+    }
+
+    this.pruneAuthRevokedAccountIds();
+    this.authRevokedAccountIds.set(activeAccount.id, Date.now());
+    const candidates = selectAuthRevocationCandidates(
+      accounts,
+      activeAccount.id,
+      getCodexAccountsConfiguration(),
+      undefined,
+      new Set(this.authRevokedAccountIds.keys())
+    );
+    if (candidates.length === 0) {
+      return { handled: false, reason: "no eligible seamless-switch account is available" };
+    }
+
+    let lastFailure: string | undefined;
+    for (const candidate of candidates) {
+      const outcome = await this.switchRuntimeAccount(
+        candidate.id,
+        {
+          gracePeriodMs: 0,
+          longTurnPolicy: "interruptAndContinue",
+          recoverRecentAuthRevokedTurns: true
+        },
+        "automatic"
+      );
+      if (outcome.status === "switched") {
+        const refreshView = this.refreshCoordinator.createRefreshView();
+        refreshView.markObservedAuthIdentity?.(candidate.id);
+        refreshView.refresh();
+        void refreshQuotaSummaryPanel();
+        return {
+          handled: true,
+          accountId: candidate.id,
+          continuedThreads: outcome.continuedThreads
+        };
+      }
+      if (outcome.status === "suppressed" || outcome.status === "deferred" || outcome.status === "unavailable") {
+        return {
+          handled: false,
+          reason:
+            outcome.status === "suppressed"
+              ? "another runtime switch is already in progress"
+              : outcome.status === "deferred"
+                ? "the runtime could not reach a safe switch boundary"
+                : "the seamless-switch runtime is unavailable"
+        };
+      }
+      lastFailure = outcome.message;
+    }
+
+    return {
+      handled: false,
+      reason:
+        lastFailure === undefined
+          ? "no eligible account completed the automatic switch"
+          : "no eligible account completed the automatic switch: " + lastFailure
+    };
+  }
+
+  private pruneAuthRevokedAccountIds(): void {
+    const cutoff = Date.now() - AUTH_REVOKED_ACCOUNT_COOLDOWN_MS;
+    for (const [accountId, observedAt] of this.authRevokedAccountIds) {
+      if (observedAt < cutoff) {
+        this.authRevokedAccountIds.delete(accountId);
+      }
+    }
+  }
+
   private async resetSeamlessSwitchRuntime(): Promise<void> {
     resetSeamlessSwitchRuntimeState();
     if (this.seamlessUsageLimitMonitor) {
@@ -649,6 +758,9 @@ export class AccountsWorkbench {
     options: RuntimeAccountSwitchOptions | undefined,
     source: RuntimeSwitchSource
   ): Promise<RuntimeAccountSwitchOutcome> {
+    if (source !== "automatic") {
+      this.authRevokedAccountIds.delete(accountId);
+    }
     const account = await this.repo.getAccount(accountId);
     if (account && isSub2ApiAccount(account)) {
       if (source !== "manual") {

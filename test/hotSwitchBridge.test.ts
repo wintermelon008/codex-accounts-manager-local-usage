@@ -1,18 +1,27 @@
 import * as childProcess from "node:child_process";
 import * as http from "node:http";
-import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexHotSwitchBridge,
   getHotSwitchSocketPath,
+  type HotSwitchAuthTokenRevokedEvent,
   type HotSwitchRefreshRequest
 } from "../src/codex/hotSwitchBridge";
 
 type Message = {
   id?: string;
   method?: string;
+  error?: {
+    code?: string | number;
+    statusCode?: number;
+    message?: string;
+    data?: {
+      codexErrorInfo?: string;
+    };
+  };
   params?: {
     accountId?: string;
     runtimeAccountId?: string;
@@ -88,7 +97,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 13,
+      runtimeProtocolVersion: 14,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -136,6 +145,72 @@ describe("CodexHotSwitchBridge", () => {
       attributionActive: false,
       attributionFailureReason: "The app-server reported a different account for usage attribution"
     });
+  });
+
+  it("refuses a second Manager app-server for the same runtime owner", async () => {
+    const root = path.resolve(__dirname, "..");
+    const parentDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-runtime-owner-"));
+    const firstDirectory = path.join(parentDirectory, "first");
+    const secondDirectory = path.join(parentDirectory, "second");
+    const ownerPath = path.join(parentDirectory, "runtime-owner.lease");
+    const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
+    const sourceShimPath = path.join(root, "runtime", "codex-app-server-shim.cjs");
+    let second: childProcess.ChildProcessWithoutNullStreams | undefined;
+
+    try {
+      await mkdir(firstDirectory, { recursive: true });
+      await mkdir(secondDirectory, { recursive: true });
+      for (const directory of [firstDirectory, secondDirectory]) {
+        await copyFile(sourceShimPath, path.join(directory, "codex-app-server-shim.cjs"));
+        await writeFile(
+          path.join(directory, "codex-app-server-shim.json"),
+          JSON.stringify({
+            realCliPath: fakeCliPath,
+            forceHttpTransport: true,
+            runtimeOwnerPath: ownerPath
+          }),
+          "utf8"
+        );
+      }
+
+      shim = childProcess.spawn(path.join(firstDirectory, "codex-app-server-shim.cjs"), ["app-server"], {
+        cwd: root,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const messages = createMessageCollector(shim.stdout);
+      shim.stdin.write(`${JSON.stringify({ id: "owner-initialize", method: "initialize", params: {} })}\n`);
+      await messages.next((message) => message.id === "owner-initialize");
+
+      const stderr: string[] = [];
+      second = childProcess.spawn(path.join(secondDirectory, "codex-app-server-shim.cjs"), ["app-server"], {
+        cwd: root,
+        env: {
+          ...process.env,
+          CODEX_ACCOUNTS_RUNTIME_OWNER_ACQUIRE_WAIT_MS: "100"
+        },
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      second.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        second?.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+
+      expect(exit.code).not.toBe(0);
+      expect(stderr.join(" ")).toContain("refusing a second app-server");
+    } finally {
+      if (second && second.exitCode === null && second.signalCode === null) {
+        second.kill("SIGTERM");
+        await new Promise<void>((resolve) => second?.once("exit", () => resolve()));
+      }
+      const first = shim;
+      shim = undefined;
+      if (first && first.exitCode === null && first.signalCode === null) {
+        first.kill("SIGTERM");
+        await new Promise<void>((resolve) => first.once("exit", () => resolve()));
+      }
+      await rm(parentDirectory, { recursive: true, force: true });
+    }
   });
 
   it("drains active turns before forwarding the shutdown signal to the app-server", async () => {
@@ -2055,6 +2130,7 @@ describe("CodexHotSwitchBridge", () => {
     });
     await expect(bridge.getStatus()).resolves.toMatchObject({
       recentUsageLimitedThreads: 0,
+      recoverableRecentUsageLimitedThreads: 0,
       usageLimitExhaustionReady: false,
       usageLimitExhaustionBatchId: 0,
       observedUsageLimitFailures: 1,
@@ -2063,6 +2139,197 @@ describe("CodexHotSwitchBridge", () => {
 
     shim.stdin.write(`${JSON.stringify({ id: "quota-complete", method: "test/complete", params: {} })}\n`);
     await messages.next((message) => message.id === "quota-complete");
+  }, 15_000);
+
+  it("does not replay an expired quota-exhaustion batch during a later switch", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+        CODEX_ACCOUNTS_RECENT_USAGE_LIMITED_RECOVERY_MAX_AGE_MS: "1"
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "stale-quota-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "stale-quota-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "stale-quota-turn",
+        method: "turn/start",
+        params: { threadId: "stale-quota-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "stale-quota-thread"
+    );
+    shim.stdin.write(`${JSON.stringify({ id: "stale-quota-fail", method: "test/failUsageLimitNotification", params: {} })}\n`);
+    await messages.next((message) => message.id === "stale-quota-fail");
+    await sleep(20);
+
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      recentUsageLimitedThreads: 1,
+      recoverableRecentUsageLimitedThreads: 0,
+      usageLimitExhaustionReady: false,
+      observedUsageLimitFailures: 1
+    });
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue",
+        recoverRecentUsageLimitedTurns: true
+      })
+    ).resolves.toMatchObject({ status: "switched", continuedThreads: 0 });
+    expect(
+      messages.all.some(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "stale-quota-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).toBe(false);
+  }, 15_000);
+
+  it("switches the current managed account and continues after an explicit token_revoked response", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(JSON.stringify({ id: "revoked-initialize", method: "initialize", params: {} }) + "\n");
+    await messages.next((message) => message.id === "revoked-initialize");
+
+    const revokedEvents: HotSwitchAuthTokenRevokedEvent[] = [];
+    const activatedAccounts: string[] = [];
+    bridge = new CodexHotSwitchBridge(
+      async () => ({
+        accessToken: "rollback-token-a",
+        chatgptAccountId: "account-a",
+        chatgptPlanType: "plus"
+      }),
+      async (localAccountId) => {
+        activatedAccounts.push(localAccountId);
+      },
+      async () => undefined,
+      process.pid,
+      async (event) => {
+        revokedEvents.push(event);
+        const result = await bridge!.switchAccount({
+          accessToken: "access-token-b",
+          accountId: "account-b",
+          localAccountId: "local-b",
+          previousAccountId: "account-a",
+          previousLocalAccountId: "local-a",
+          previousExpectedEmail: "a@example.invalid",
+          expectedEmail: "b@example.invalid",
+          planType: "plus",
+          gracePeriodMs: 0,
+          longTurnPolicy: "interruptAndContinue",
+          recoverRecentAuthRevokedTurns: true
+        });
+        return result.status === "switched"
+          ? {
+              handled: true,
+              accountId: result.accountId,
+              continuedThreads: result.continuedThreads
+            }
+          : { handled: false, reason: result.reason };
+      }
+    );
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+    await bridge.activateUsageAttribution({
+      localAccountId: "local-a",
+      accountId: "account-a",
+      expectedEmail: "a@example.invalid"
+    });
+
+    shim.stdin.write(
+      JSON.stringify({ id: "revoked-arm", method: "test/failNextTurnStartWithAuthTokenRevoked", params: {} }) + "\n"
+    );
+    await messages.next((message) => message.id === "revoked-arm");
+    shim.stdin.write(
+      JSON.stringify({
+        id: "revoked-turn",
+        method: "turn/start",
+        params: { threadId: "revoked-thread", input: [] }
+      }) + "\n"
+    );
+    await expect(
+      messages.next((message) => message.id === "revoked-turn" && message.error?.code === "token_revoked")
+    ).resolves.toMatchObject({
+      error: {
+        code: "token_revoked",
+        message: expect.stringContaining("401 Unauthorized")
+      }
+    });
+
+    await expect(
+      messages.next(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "turn/start" &&
+          message.params?.threadId === "revoked-thread" &&
+          message.params?.recoveryMetadata === "true"
+      )
+    ).resolves.toMatchObject({
+      params: {
+        runtimeAccountId: "account-b",
+        inputText: "Continue."
+      }
+    });
+    await waitFor(() => revokedEvents.length === 1 && activatedAccounts.includes("local-b"));
+    expect(revokedEvents).toEqual([
+      {
+        threadId: "revoked-thread",
+        localAccountId: "local-a"
+      }
+    ]);
+    expect(activatedAccounts).toEqual(["local-b"]);
+
+    shim.stdin.write(JSON.stringify({ id: "revoked-complete", method: "test/complete", params: {} }) + "\n");
+    await messages.next((message) => message.id === "revoked-complete");
+
+    shim.stdin.write(
+      JSON.stringify({ id: "ordinary-401-arm", method: "test/failNextTurnStartWithUnauthorized", params: {} }) + "\n"
+    );
+    await messages.next((message) => message.id === "ordinary-401-arm");
+    shim.stdin.write(
+      JSON.stringify({
+        id: "ordinary-401-turn",
+        method: "turn/start",
+        params: { threadId: "ordinary-401-thread", input: [] }
+      }) + "\n"
+    );
+    await expect(
+      messages.next((message) => message.id === "ordinary-401-turn" && message.error?.statusCode === 401)
+    ).resolves.toMatchObject({ error: { message: "unexpected status 401 Unauthorized" } });
+    await sleep(50);
+    expect(revokedEvents).toHaveLength(1);
   }, 15_000);
 
   it("cancels only the exhaustion decision when a peer finishes normally and still recovers the stopped thread", async () => {

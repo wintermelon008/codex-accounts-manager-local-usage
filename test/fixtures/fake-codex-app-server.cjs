@@ -16,6 +16,8 @@ let goalSequence = 0;
 let reorderNextTurnStartResponse = false;
 let failNextTurnStartWithUsageLimit = false;
 let failNextTurnStartWithCapacity = false;
+let failNextTurnStartWithAuthTokenRevoked = false;
+let failNextTurnStartWithUnauthorized = false;
 let loginSettleTimer;
 let delayNextModelListResponse = false;
 
@@ -115,6 +117,25 @@ function handleLine(line) {
         emit({
           id: message.id,
           error: createCapacityError(message.params && message.params.capacityErrorField)
+        });
+        break;
+      }
+      if (failNextTurnStartWithAuthTokenRevoked) {
+        failNextTurnStartWithAuthTokenRevoked = false;
+        emit({
+          id: message.id,
+          error: createAuthTokenRevokedError()
+        });
+        break;
+      }
+      if (failNextTurnStartWithUnauthorized) {
+        failNextTurnStartWithUnauthorized = false;
+        emit({
+          id: message.id,
+          error: {
+            statusCode: 401,
+            message: "unexpected status 401 Unauthorized"
+          }
         });
         break;
       }
@@ -302,6 +323,41 @@ function handleLine(line) {
       respond(message.id, {});
       break;
     }
+    case "test/failAuthTokenRevoked": {
+      const activeTurn = activeTurns.shift();
+      if (activeTurn) {
+        const error = createAuthTokenRevokedError();
+        const turn = {
+          id: activeTurn.id,
+          items: [],
+          itemsView: { type: "all" },
+          status: "errored",
+          error
+        };
+        emit({ method: "turn/completed", params: { threadId: activeTurn.threadId, turn } });
+      }
+      respond(message.id, {});
+      break;
+    }
+    case "test/failAuthTokenRevokedNotification": {
+      const activeTurn = activeTurns.shift();
+      if (activeTurn) {
+        const error = createAuthTokenRevokedError();
+        emit({
+          method: "error",
+          params: {
+            threadId: activeTurn.threadId,
+            turnId: activeTurn.id,
+            willRetry: false,
+            error
+          }
+        });
+        const turn = { id: activeTurn.id, items: [], itemsView: { type: "all" }, status: "failed", error };
+        emit({ method: "turn/completed", params: { threadId: activeTurn.threadId, turn } });
+      }
+      respond(message.id, {});
+      break;
+    }
     case "test/notifyUsageLimit": {
       const requestedThreadId = message.params && message.params.threadId;
       const activeTurn =
@@ -354,6 +410,14 @@ function handleLine(line) {
       break;
     case "test/failNextTurnStartWithCapacity":
       failNextTurnStartWithCapacity = true;
+      respond(message.id, {});
+      break;
+    case "test/failNextTurnStartWithAuthTokenRevoked":
+      failNextTurnStartWithAuthTokenRevoked = true;
+      respond(message.id, {});
+      break;
+    case "test/failNextTurnStartWithUnauthorized":
+      failNextTurnStartWithUnauthorized = true;
       respond(message.id, {});
       break;
     case "test/probeGateway":
@@ -475,6 +539,15 @@ function createCapacityError(errorField) {
   return {
     message: "Selected model is at capacity. Please try a different model.",
     ...info
+  };
+}
+
+function createAuthTokenRevokedError() {
+  return {
+    code: "token_revoked",
+    statusCode: 401,
+    message:
+      "unexpected status 401 Unauthorized: Encountered invalidated oauth token for user, auth error code: token_revoked"
   };
 }
 

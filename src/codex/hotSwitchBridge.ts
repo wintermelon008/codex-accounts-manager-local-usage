@@ -32,7 +32,10 @@ export type HotSwitchStatus = {
   capacityRecoveryThreads: number;
   /** Subset of capacity recovery conversations whose 5–8 second timer is armed. */
   capacityRecoveryWaitingThreads: number;
+  /** Number of usage-limited observations retained for bounded diagnostics. */
   recentUsageLimitedThreads: number;
+  /** Number of usage-limited threads eligible for an automatic switch trigger. */
+  recoverableRecentUsageLimitedThreads?: number;
   /** A bounded batch of active conversations has reached actual quota exhaustion. */
   usageLimitExhaustionReady: boolean;
   /** Monotonic scalar used to distinguish one exhaustion batch from the next. */
@@ -44,6 +47,8 @@ export type HotSwitchStatus = {
   attributionActive: boolean;
   /** Why usage attribution is inactive, when it is not active. */
   attributionFailureReason: string | null;
+  /** Whether this shim owns the shared runtime or is using legacy mode. */
+  runtimeOwner?: "owner" | "legacy";
   shimPid: number;
   appServerPid: number | null;
 };
@@ -137,6 +142,7 @@ export type HotSwitchAccountParams = {
   gracePeriodMs: number;
   longTurnPolicy: HotSwitchLongTurnPolicy;
   recoverRecentUsageLimitedTurns?: boolean;
+  recoverRecentAuthRevokedTurns?: boolean;
 } & (HotSwitchManagedRollbackParams | HotSwitchSnapshotRollbackParams);
 
 /**
@@ -227,6 +233,21 @@ export type HotSwitchUsageAttributionResult = {
   localAccountId: string;
 };
 
+/** A terminal OAuth token-revocation signal raised by the resident runtime. */
+export type HotSwitchAuthTokenRevokedEvent = {
+  threadId: string;
+  turnId?: string;
+  localAccountId?: string;
+};
+
+/** Result returned after Manager attempts automatic token-revocation recovery. */
+export type HotSwitchAuthTokenRevokedResult = {
+  handled: boolean;
+  accountId?: string;
+  continuedThreads?: number;
+  reason?: string;
+};
+
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -276,7 +297,10 @@ export class CodexHotSwitchBridge {
     private readonly activateLocalAccount: (localAccountId: string) => Promise<void> = () => Promise.resolve(),
     private readonly restoreUnmanagedAccount: (rollbackContextId: string) => Promise<void> = () =>
       Promise.reject(new Error("Unmanaged Codex account rollback is not configured")),
-    private readonly extensionHostPid = process.pid
+    private readonly extensionHostPid = process.pid,
+    private readonly handleAuthTokenRevoked: (
+      event: HotSwitchAuthTokenRevokedEvent
+    ) => Promise<HotSwitchAuthTokenRevokedResult> = () => Promise.resolve({ handled: false })
   ) {}
 
   async getStatus(): Promise<HotSwitchStatus> {
@@ -466,6 +490,29 @@ export class CodexHotSwitchBridge {
       return;
     }
 
+    if (message.method === "runtime/auth-revoked") {
+      const event = readAuthTokenRevokedEvent(message.params);
+      if (!event) {
+        this.writeResponse(socket, message.id, {
+          error: { code: -32602, message: "Missing or invalid token-revoked event details" }
+        });
+        return;
+      }
+      void Promise.resolve()
+        .then(() => this.handleAuthTokenRevoked(event))
+        .then(
+          (result) => this.writeResponse(socket, message.id!, { result: result ?? { handled: false } }),
+          (error: unknown) =>
+            this.writeResponse(socket, message.id!, {
+              error: {
+                code: -32004,
+                message: error instanceof Error ? error.message : "Unable to recover from the revoked OAuth token"
+              }
+            })
+        );
+      return;
+    }
+
     if (message.method === "auth/refresh") {
       const request: HotSwitchRefreshRequest = {
         previousAccountId:
@@ -564,6 +611,28 @@ function isRuntimeMutationMethod(
 function readOperationId(params: object): string | undefined {
   const operationId = (params as Record<string, unknown>)["operationId"];
   return typeof operationId === "string" && operationId.length > 0 ? operationId : undefined;
+}
+
+function readAuthTokenRevokedEvent(
+  params: Record<string, unknown> | undefined
+): HotSwitchAuthTokenRevokedEvent | undefined {
+  const threadId = readBoundedString(params?.["threadId"], 256);
+  if (!threadId) {
+    return undefined;
+  }
+  return {
+    threadId,
+    turnId: readBoundedString(params?.["turnId"], 256),
+    localAccountId: readBoundedString(params?.["localAccountId"], 256)
+  };
+}
+
+function readBoundedString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= maxLength ? normalized : undefined;
 }
 
 export function getHotSwitchSocketPath(extensionHostPid: number): string {

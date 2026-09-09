@@ -21,6 +21,8 @@ import {
   CodexHotSwitchBridge,
   CodexExecProviderConfig,
   HotSwitchAccountResult,
+  HotSwitchAuthTokenRevokedEvent,
+  HotSwitchAuthTokenRevokedResult,
   HotSwitchIdentity,
   HotSwitchLongTurnPolicy,
   HotSwitchOperationStatus,
@@ -30,7 +32,7 @@ import {
   isHotSwitchOperationUncertainError,
   GatewayRuntimeStatus
 } from "./hotSwitchBridge";
-import { readAuthFile, writeAuthFile } from "./authFile";
+import { getCodexHome, readAuthFile, writeAuthFile } from "./authFile";
 import { installRemoteCliOverlay, restoreRemoteCliOverlay } from "./remoteCliOverlay";
 
 const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
@@ -42,8 +44,9 @@ const RUNTIME_DIRECTORY = "hot-switch-runtime";
 const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
 const SHIM_FILE = "codex-app-server-shim.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
+const RUNTIME_OWNER_FILE = "runtime-owner.lease";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 13;
+const RUNTIME_PROTOCOL_VERSION = 14;
 const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
 const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 const USAGE_ATTRIBUTION_RETRY_DELAY_MS = 5_000;
@@ -82,6 +85,7 @@ export type RuntimeAccountSwitchOptions = {
   gracePeriodMs?: number;
   longTurnPolicy?: HotSwitchLongTurnPolicy;
   recoverRecentUsageLimitedTurns?: boolean;
+  recoverRecentAuthRevokedTurns?: boolean;
   /** Reserved for RuntimeSwitchCoordinator's timeout reconciliation. */
   operationId?: string;
   /** Allows a manual OAuth handoff immediately after returning from Gateway. */
@@ -111,7 +115,10 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly repo: AccountsRepository
+    private readonly repo: AccountsRepository,
+    private readonly handleAuthTokenRevoked?: (
+      event: HotSwitchAuthTokenRevokedEvent
+    ) => Promise<HotSwitchAuthTokenRevokedResult>
   ) {}
 
   async initialize(): Promise<HotSwitchSetupResult> {
@@ -361,7 +368,8 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       planType: account.planType,
       gracePeriodMs: options.gracePeriodMs ?? getHotSwitchGraceSeconds() * 1_000,
       longTurnPolicy: options.longTurnPolicy ?? getHotSwitchLongTurnPolicy(),
-      recoverRecentUsageLimitedTurns: options.recoverRecentUsageLimitedTurns
+      recoverRecentUsageLimitedTurns: options.recoverRecentUsageLimitedTurns,
+      recoverRecentAuthRevokedTurns: options.recoverRecentAuthRevokedTurns
     };
     const previousRemoteAccountId = previousAccount?.accountId ?? previousTokens?.accountId;
     if (previousLocalAccountId && previousRemoteAccountId && previousAccount && previousTokens?.accessToken) {
@@ -591,6 +599,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const shimDestination = path.join(runtimeDirectory, SHIM_FILE);
       const launcherDestination = path.join(runtimeDirectory, SHIM_LAUNCHER_FILE);
       const shimConfigDestination = path.join(runtimeDirectory, SHIM_CONFIG_FILE);
+      const runtimeOwnerPath = path.join(getCodexHome(), RUNTIME_OWNER_FILE);
       const usageAttributionDirectory = path.join(runtimeDirectory, USAGE_ATTRIBUTION_DIRECTORY);
       const gatewayState = this.getGatewayRuntimeState();
       const gateway = gatewayState ? { ...gatewayState.config, active: gatewayState.active } : undefined;
@@ -615,6 +624,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
           realCliPath,
           forceHttpTransport: true,
           forceFastMode: isForceFastModeEnabled(),
+          runtimeOwnerPath,
           usageAttributionDirectory,
           gateway
         },
@@ -644,7 +654,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         const candidateBridge = new CodexHotSwitchBridge(
           (request) => this.refreshRuntimeAuth(request),
           (localAccountId) => this.activateLocalAccount(localAccountId),
-          (rollbackContextId) => this.restoreUnmanagedAccount(rollbackContextId)
+          (rollbackContextId) => this.restoreUnmanagedAccount(rollbackContextId),
+          process.pid,
+          (event) => this.handleAuthTokenRevoked?.(event) ?? Promise.resolve({ handled: false })
         );
         let runtimeStatusChecked = false;
         if (isOpenAiCodexExtensionActive()) {

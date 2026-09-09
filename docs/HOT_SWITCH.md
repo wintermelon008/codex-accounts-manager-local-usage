@@ -1,6 +1,6 @@
 # 实验性无感切号、额度分档与统一账号切换阈值
 
-本功能在 Codex Accounts Manager 内集成一个很小的本地 CLI shim。它不启动常驻 HTTP 服务，也不为每个账号启动一套 Codex；官方 VS Code 扩展仍只运行一个 Codex app-server。
+本功能在 Codex Accounts Manager 内集成一个很小的本地 CLI shim。它不启动常驻 HTTP 服务，也不为每个账号启动一套 Codex；同一个 `CODEX_HOME` 同时只允许一个 Manager shim 持有 Codex app-server。重复启动会等待短暂的旧进程退出，仍有 owner 时直接拒绝启动，避免多个 app-server 争抢同一 thread store。
 
 设置页将两套模式完全分开：**自动切号**是上游插件原有功能，继续使用它自己的阈值、候选选择和 reload 行为；本地新增的可配置额度分档、账号池、调度、无 reload 事务及普通会话/Goal 恢复全部属于**无感切号**。无感切号有独立总开关：关闭后手动切号和外部账号变化恢复 Manager 原有的账号写入与 reload 流程，但已安装 runtime 保留；重新开启无需再次安装 shim。无感分档无需开启官方自动切号或五小时配额控制；启用时它优先走独立的 fail-closed 路径，runtime 不可用便保持旧账号，不回退到写 `auth.json` 或 reload。
 
@@ -17,12 +17,13 @@
 - Dashboard 的“刷新当前页配额”只刷新当前显示页；单卡、明确选中的批量刷新和命令面板的显式全量刷新不受此页范围限制。
 - 定时配额刷新只处理未隐藏且分组已启用的第 `1` 页（最多 `50` 个账号）；其余账号仅按需手动刷新。需要持续参与分钟级无感调度的账号应放在这一范围内。
 - 全局任意时刻只启用一个账号，不把账号分配到单独的 conversation。
+- 当前正在使用的 ChatGPT Auth 账号收到明确的 OAuth token_revoked 或 invalidated oauth token 错误（包含 HTTP 401）时，若无感 runtime、当前账号归属和至少一个可用账号池候选都能确认，Manager 会自动切到下一个候选，并在同一 thread 发送一次带恢复上下文的 Continue。普通 401、历史 thread 或无法确认当前激活账号的错误不会触发自动切号；没有候选时保留原始错误，等待后续同类事件重试。已确认撤销的账号在当前 Manager 进程内暂时排除 30 分钟，手动切换该账号时解除排除，避免多个撤销账号之间循环切换。
 - 普通自动调度只依据最新有效额度窗口识别能力，不依据 Free、Plus 等套餐标签推断：同时有五小时和周窗口的是分档账号，明确没有五小时窗口但有周窗口的是储备账号，额度缺失、过期或报错时暂不参与自动选择。
 - 经过 Free/K12 标签与实际窗口双重验证的 Free/K12 账号是唯一不参加普通 `20%/25%/33%/50%` 分档的账号；它仍与其他账号共用统一的账号切换阈值。低额度或耗尽时，所有候选先按真实额度窗口与额度排序；Free/K12 目标额外要求最近两分钟内成功刷新。
 - 分档调度与低额度切号独立。分档调度默认关闭，设置页不提供入口；仅在 config 层开启后，非 Free 分档账号下降一个已配置档位才会优先切到五小时额度更高、周额度安全的池内账号。支持 20%、25%、33% 和 50% 分档，并使用可配置的“等待时间”。
 - “低额度切号”可选“耗尽后切换”、`1%`、`3%`（默认）或 `5%`。非零时，任一有效五小时或周窗口达到阈值，或出现结构化 `usageLimitExceeded`，都会立即发起切号；目标相关窗口必须严格高于阈值。
 - 关闭“低额度切号”后，低额度、结构化 `usageLimitExceeded` 和耗尽批次都不会启动新的自动切换；已开始的事务允许完成，分档切号不受影响。
-- 选择“耗尽后切换”时，25% 分档的 `26% → 1%` 仍可跨档平衡，而 `24% → 1%` 会等待当前活跃会话批次全部以结构化额度耗尽终止，最长观察 6 小时。Free/K12 在低额度路径中可选择明确没有五小时窗口、但周额度有效的 `reserve`；这类 Free/K12 目标仍须最近两分钟内成功刷新，且不会为选择它而强制刷新。
+- 选择“耗尽后切换”时，25% 分档的 `26% → 1%` 仍可跨档平衡，而 `24% → 1%` 会等待当前活跃会话批次全部以结构化额度耗尽终止，最长观察 6 小时。只有刚刚完成的当前耗尽批次，或最近 10 分钟内最新的一条额度失败，才允许在切号后自动恢复；过期批次只用于诊断并会被丢弃，不会回放旧会话。Free/K12 在低额度路径中可选择明确没有五小时窗口、但周额度有效的 `reserve`；这类 Free/K12 目标仍须最近两分钟内成功刷新，且不会为选择它而强制刷新。
 - “切换策略”适用于所有已发起的无感切换：分档和手动无感切号先等到“切换策略”下方配置的等待时间结束；低额度和耗尽后切号从零等待期开始。屏障期间新的 `turn/start` 会排队。
 - 若活动 turn 所属 thread 有 `active` 持久 Goal，切换事务会先把 Goal 改为 `paused`。等待期后仍未结束时，正式 `turn/interrupt` 旧 turn；确认其完成后切号，再把 Goal 恢复为 `active`。
 - 普通会话默认不被强制中断，而是延后本次切换并在下次配额刷新重试。也可显式选择“中断后手动继续”或实验性的“中断并在同一 thread 自动 Continue”。
@@ -43,7 +44,7 @@
 
 仅调用 `account/login/start` 不足以保证已有 thread 的下一轮请求改用新账号。已验证的 Codex `0.144.2` 会为每个已加载 thread 缓存 Responses WebSocket；登录接口会更新共享认证状态，`account/read` 也会显示新账号，但旧 thread 仍可能复用由旧账号建立的 WebSocket。这会造成 Manager 显示切换成功、实际却继续扣旧账号额度。
 
-runtime protocol v13 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v13 保留无旧 Manager 账号的内存回滚快照、只读账号用量归因和有界耗尽批次，并新增每笔热切换的临时 `operationId` 终态查询；控制 socket 超时或断开时，Manager 会在仍持有共享事务租约的情况下回查 shim，而不会立即启动第二笔切换。未托管旧账号的回滚快照只在结果不确定时保留最多十分钟，成功、确定失败或完成回滚后立即清除。关闭低额度切号不会让旧批次在重新开启后重放。可选 Gateway 的双路由仅在安装集成后、显式启用且语义确认额度耗尽时，才会原地回退到 ChatGPT Auth。
+runtime protocol v14 会为它启动的 app-server 选择一个与 OpenAI 内置配置等价、但声明 `supports_websockets=false` 的 provider。Responses 请求因此使用 HTTP streaming，并在每轮请求时重新读取当前认证。真实 Codex 二进制的本地确定性测试已经验证：同一个 thread 的第一轮携带账号 A，调用登录切换后，第二轮携带账号 B 的 access token 与 ChatGPT account ID。v14 保留无旧 Manager 账号的内存回滚快照、只读账号用量归因和有界耗尽批次，并新增每笔热切换的临时 `operationId` 终态查询；控制 socket 超时或断开时，Manager 会在仍持有共享事务租约的情况下回查 shim，而不会立即启动第二笔切换。未托管旧账号的回滚快照只在结果不确定时保留最多十分钟，成功、确定失败或完成回滚后立即清除。关闭低额度切号不会让旧批次在重新开启后重放。可选 Gateway 的双路由仅在安装集成后、显式启用且语义确认额度耗尽时，才会原地回退到 ChatGPT Auth。
 
 已保存账号区域的 `Fast` 开关只影响直接 ChatGPT Auth 路由：开启后，runtime 通过控制 socket 在线更新状态，下一次新建、恢复或继续回合会注入官方 service tier `priority`，不需要重新加载窗口；正在执行的回合不改变，Gateway 路由也不注入。该开关不会绕过账号、模型或产品对 Fast 的资格限制。
 
@@ -148,7 +149,7 @@ shim 以真实 `turn.id` 跟踪 app-server 中的活动 turn：
 
 普通会话的自动 Continue 不是恢复同一个 turn，而是在同一非子代理 thread 中新建一轮。恢复上下文会要求先检查 thread 历史、当前工作区与已完成工具结果，只继续未完成部分；这能降低重复执行概率，但无法为任意 MCP、网络请求、消息发送或其他非幂等外部副作用提供 exactly-once 保证。因此它是显式 opt-in 的实验策略，不通过创建“临时 Goal”实现，也不会覆盖或留下持久 Goal。multi-agent 子代理保留给父代理/会话编排控制：shim 只读其 thread 元数据后跳过直接 `turn/start`，避免 app-server 拒绝对子代理的直接输入。
 
-每个 VS Code extension host 都有独立屏障。自动调度、手动选择、外部 `auth.json` 收敛和 Gateway → ChatGPT 回退在最终改变 app-server 身份前，都会进入同一条可续租的跨宿主 `runtime-switch` 事务；同一宿主的第二笔请求会被抑制。跨窗口仍依靠共享账号修订与 `auth.json` 变化传播目标账号，而不是把多个 app-server 伪装成分布式原子事务；文件 watcher 之外还有两秒 stat/revision 轮询兜底，降低 Remote-SSH、网络文件系统或多设备连接时漏事件的影响。窗口会在各自正在运行的 turn 完成后收敛，因此切换期间允许旧 turn 按原账号正常结束。收到 deferred 结果后会继续定时尝试，直到该窗口的 runtime 已是目标账号；确定失败不会无限重试。
+每个 Manager extension host 都有独立屏障，但同一个 `CODEX_HOME` 只允许一个 shim owner 启动 app-server。自动调度、手动选择、外部 `auth.json` 收敛和 Gateway → ChatGPT 回退在最终改变 app-server 身份前，都会进入同一条可续租的跨宿主 `runtime-switch` 事务；同一宿主的第二笔请求会被抑制。其他窗口若误启动重复 shim 会被拒绝，不再让官方 app-server 直接并行写入同一 thread store。文件 watcher 之外还有两秒 stat/revision 轮询兜底，降低 Remote-SSH、网络文件系统或多设备连接时漏事件的影响。窗口会在各自正在运行的 turn 完成后收敛，因此切换期间允许旧 turn 按原账号正常结束。收到 deferred 结果后会继续定时尝试，直到该窗口的 runtime 已是目标账号；确定失败不会无限重试。
 
 同一 app-server 中的多个会话可能让 `turn/completed` 早于对应的 `turn/start` RPC 响应到达 shim，或让同一 thread 的活动 turn ID 在 shim 收到完整通知前被 app-server 替换。runtime 会保留有界的终态 turn ID 集合，避免迟到响应或通知把已完成 turn 重新计为活动；若 interrupt 明确返回“预期 turn A、当前为 turn B”，只会为该同一 thread 对账到 B 并重试一次中断，且仅在 B 确认 `interrupted` 后才自动 Continue。若 interrupt 明确返回“该 turn 已不活动”，则将其视为 app-server 的终态确认并继续屏障，而不会吞掉其他中断错误。
 
@@ -168,7 +169,7 @@ Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储
 
 - shim 与 manager 使用当前 extension-host PID 对应的本地 Unix socket；目录权限为 `0700`，socket 为 `0600`。
 - shim 在收到成功的 `initialize` 响应或客户端 `initialized` 通知后即可进入 ready；状态接口同时报告两个握手信号，便于区分官方扩展版本差异。热切换已启用但 bridge 未 ready 时，Manager 必须失败关闭，不能回退为磁盘切号。
-- runtime protocol v13 的状态接口必须同时报告 `httpTransportForced=true`、`forceFastMode`、`attributionActive` 和 `attributionFailureReason`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。`operationId` 仅是短期不透明标识，shim 最多保留 64 条、十分钟内的无凭据终态；诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
+- runtime protocol v14 的状态接口必须同时报告 `httpTransportForced=true`、`forceFastMode`、`attributionActive` 和 `attributionFailureReason`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。`operationId` 仅是短期不透明标识，shim 最多保留 64 条、十分钟内的无凭据终态；诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
 - access token 只通过进程内存和本地 IPC 传递，不写入 shim 配置，也不输出到日志。runtime 配置文件只保存官方 Codex CLI 的绝对路径、受保护的归因 journal 目录和不含凭据的 Fast 开关状态；这些字段均不含账号身份或凭据。
 - token 临近过期时由 manager 使用原有 OAuth 刷新逻辑更新；app-server 的 refresh 回调必须匹配原 ChatGPT account ID，否则拒绝返回凭据。
 - 同一 workspace ID 可能对应多个已导入用户。manager 在切换前校验 access token 的 user ID 与本地账号记录一致，再把 access token 的 runtime email 交给 app-server 身份校验；稳定账号记录邮箱与 runtime email 允许是同一 user ID 的不同别名。refresh 与失败回滚以 manager 本地账号 ID 和 workspace ID 为主；缺少本地身份且 workspace ID 不唯一时安全失败，不按数组顺序猜测账号。

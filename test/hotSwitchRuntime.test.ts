@@ -20,6 +20,7 @@ import {
 } from "../src/presentation/workbench/windowRuntimeAccount";
 
 vi.mock("../src/codex/authFile", () => ({
+  getCodexHome: vi.fn(() => path.join(os.homedir(), ".codex")),
   readAuthFile: vi.fn(),
   writeAuthFile: vi.fn()
 }));
@@ -637,7 +638,7 @@ describe("Codex hot-switch runtime setup", () => {
         .spyOn(CodexHotSwitchBridge.prototype, "getStatus")
         .mockRejectedValueOnce(new Error("Codex hot-switch runtime is not available"))
         .mockResolvedValueOnce({
-          runtimeProtocolVersion: 13,
+          runtimeProtocolVersion: 14,
           ready: false,
           httpTransportForced: true,
           gatewayConfigured: false,

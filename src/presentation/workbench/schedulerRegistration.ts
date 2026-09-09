@@ -159,9 +159,11 @@ export function registerSeamlessUsageLimitMonitor(params: {
       statusErrorReported = false;
       const exhaustionOnly = getSeamlessSwitchThreshold(getCodexAccountsConfiguration()) === 0;
       observeUsageLimitStatus(status, exhaustionOnly);
+      const recoverableRecentUsageLimitedThreads =
+        status.recoverableRecentUsageLimitedThreads ?? status.recentUsageLimitedThreads;
       const hasEligibleUsageSignal = exhaustionOnly
         ? status.usageLimitExhaustionReady
-        : status.recentUsageLimitedThreads > 0;
+        : recoverableRecentUsageLimitedThreads > 0;
       if (!status.ready || !hasEligibleUsageSignal) {
         retryPending = false;
         return;
@@ -217,7 +219,10 @@ export function registerSeamlessUsageLimitMonitor(params: {
       status.usageLimitExhaustionBatchId !== lastUsageLimitExhaustionBatchId;
 
     if (runtimeChanged || (exhaustionOnly ? exhaustionBatchChanged : failuresIncreased || failuresReset)) {
-      retryPending = exhaustionOnly ? status.usageLimitExhaustionReady : status.recentUsageLimitedThreads > 0;
+      retryPending =
+        exhaustionOnly
+          ? status.usageLimitExhaustionReady
+          : (status.recoverableRecentUsageLimitedThreads ?? status.recentUsageLimitedThreads) > 0;
       nextAttemptAt = 0;
     }
     lastShimPid = status.shimPid;
