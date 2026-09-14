@@ -13,11 +13,41 @@ vi.mock("../src/auth/oauth", async () => {
   };
 });
 
-import { ensureFreshTokensWithLease } from "../src/auth/tokenRefreshCoordinator";
+import { ensureFreshAccountTokens, ensureFreshTokensWithLease } from "../src/auth/tokenRefreshCoordinator";
+import { clearAccountStates } from "../src/application/accounts/accountState";
+import { resolveAccountHealth } from "../src/application/accounts/health";
 
 describe("token refresh coordinator", () => {
   beforeEach(() => {
     refreshTokensMock.mockReset();
+    clearAccountStates();
+  });
+
+  it("a managed OAuth renewal immediately makes the account healthy without a model request", async () => {
+    const account = {
+      id: "managed",
+      accountId: "workspace",
+      email: "test@example.invalid",
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1
+    };
+    let stored = { ...makeTokens("old", 1), accountId: account.accountId };
+    const issued = { ...makeTokens("new", 3_600), accountId: account.accountId };
+    refreshTokensMock.mockResolvedValue(issued);
+    const repo = {
+      ...makeLeaseRepo(),
+      getTokens: async () => stored,
+      updateTokens: vi.fn(async (_id: string, next: CodexTokens) => {
+        stored = next as typeof stored;
+      })
+    };
+    await ensureFreshAccountTokens(repo, account.id);
+    expect(refreshTokensMock).toHaveBeenCalledOnce();
+    expect(repo.updateTokens).toHaveBeenCalledOnce();
+    expect(
+      resolveAccountHealth(account, stored, { enabled: false, intervalMs: 0, skewSeconds: 300, accounts: {} })
+    ).toMatchObject({ kind: "healthy", availability: "usable", renewal: "succeeded" });
   });
 
   it("shares one in-process refresh and persists the resulting pair once", async () => {
@@ -155,9 +185,7 @@ function makeLease() {
   return { release: vi.fn(async () => undefined) };
 }
 
-function makeLeaseRepo(
-  acquire: () => Promise<{ release: () => Promise<void> }> = async () => makeLease()
-) {
+function makeLeaseRepo(acquire: () => Promise<{ release: () => Promise<void> }> = async () => makeLease()) {
   return {
     tryAcquireSchedulerLease: vi.fn(acquire)
   };

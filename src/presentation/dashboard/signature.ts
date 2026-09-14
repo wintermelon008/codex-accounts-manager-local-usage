@@ -46,6 +46,9 @@ export function buildDashboardStateSignature(state: DashboardState): string {
             ].join(",")
           : "",
         account.healthKind,
+        account.availability ?? "",
+        account.renewal ?? "",
+        account.availabilityObservedAt ?? "",
         account.healthMessage ?? "",
         account.mailboxDeactivated ? "1" : "0",
         account.dismissedHealth ? "1" : "0",

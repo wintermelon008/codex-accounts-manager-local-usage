@@ -1,14 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAccountRecord, CodexTokens } from "../src/core/types";
 
-const { fetchWithTimeoutMock } = vi.hoisted(() => ({
-  fetchWithTimeoutMock: vi.fn()
+const { fetchWithTimeoutMock, ensureFreshAccountTokensMock } = vi.hoisted(() => ({
+  fetchWithTimeoutMock: vi.fn(),
+  ensureFreshAccountTokensMock: vi.fn()
 }));
 
 vi.mock("../src/auth/oauth", () => ({
   needsRefresh: vi.fn(() => false),
   needsTokenRefresh: vi.fn(() => false),
   refreshTokens: vi.fn()
+}));
+
+vi.mock("../src/auth/tokenRefreshCoordinator", () => ({
+  ensureFreshAccountTokens: ensureFreshAccountTokensMock
 }));
 
 vi.mock("../src/services/workspaceRetry", () => ({
@@ -73,7 +78,21 @@ describe("quota cache invalidation", () => {
 
   beforeEach(() => {
     fetchWithTimeoutMock.mockReset();
+    ensureFreshAccountTokensMock.mockReset();
     clearQuotaCacheForAccount(account.id);
+  });
+
+  it("probes the existing access token when refresh authorization fails", async () => {
+    ensureFreshAccountTokensMock.mockRejectedValueOnce(new Error("Token refresh failed (401): refresh_token_invalidated"));
+    fetchWithTimeoutMock.mockResolvedValueOnce(createUsageResponse(10));
+
+    const result = await refreshQuota(account, tokens, true, {} as never);
+
+    expect(result.quota?.hourlyPercentage).toBe(90);
+    expect(result.tokenRefreshFailure).toEqual({
+      kind: "reauthorize",
+      message: "Token refresh failed (401): refresh_token_invalidated"
+    });
   });
 
   it("does not repopulate cache from an invalidated inflight refresh", async () => {

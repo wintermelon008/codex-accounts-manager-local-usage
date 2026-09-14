@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
 import type { CodexAccountRecord, CodexTokens } from "../src/core/types";
+import { clearAccountStates } from "../src/application/accounts/accountState";
 
 const { refreshTokensMock } = vi.hoisted(() => ({
   refreshTokensMock: vi.fn()
@@ -19,6 +20,7 @@ import { registerTokenRefreshScheduler } from "../src/presentation/workbench/sch
 describe("token refresh scheduler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearAccountStates();
   });
 
   it("refreshes an account when only its id token enters the five-minute window", async () => {
@@ -228,7 +230,7 @@ describe("token refresh scheduler", () => {
     }
   });
 
-  it("retries a refresh-token reuse conflict without marking reauthorization", async () => {
+  it("stops replaying an unrecoverable reused refresh token without declaring access unusable", async () => {
     vi.useFakeTimers();
     const account = makeAccount("account-a");
     const tokens = makeTokens(3_600, 240);
@@ -249,12 +251,12 @@ describe("token refresh scheduler", () => {
       expect(repo.updateTokenRefreshStatus).toHaveBeenCalledWith(
         "account-a",
         expect.objectContaining({
-          tokenRefreshLastErrorKind: "provider_response",
-          tokenRefreshNextRetryAt: expect.any(Number)
+          tokenRefreshLastErrorKind: "reauthorize",
+          tokenRefreshNextRetryAt: undefined
         })
       );
       await vi.advanceTimersByTimeAsync(300_000);
-      expect(refreshTokensMock).toHaveBeenCalledTimes(2);
+      expect(refreshTokensMock).toHaveBeenCalledOnce();
     } finally {
       registration.dispose();
       vi.useRealTimers();

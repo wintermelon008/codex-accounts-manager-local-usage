@@ -150,6 +150,9 @@ export interface DashboardCopy {
   tokenAutomationNextCheck: string;
   tokenAutomationLastFailure: string;
   tokenAutomationHealthy: string;
+  tokenAutomationUnverified: string;
+  tokenAutomationRefreshing: string;
+  tokenAutomationRefreshUnavailableUnverified: string;
   tokenAutomationExpiring: string;
   tokenAutomationRefreshFailed: string;
   tokenAutomationRefreshUnavailable: string;
@@ -457,6 +460,9 @@ export interface DashboardAccountViewModel {
   hasQuota402: boolean;
   quotaIssueKind?: "disabled" | "auth" | "quota";
   healthKind: AccountHealthKind;
+  availability?: import("../accountHealth").AvailabilityKind;
+  renewal?: import("../accountHealth").RenewalKind;
+  availabilityObservedAt?: number;
   /** True only when the optional Mailbox integration marked this email as deactivated. */
   mailboxDeactivated?: boolean;
   healthLabel: string;

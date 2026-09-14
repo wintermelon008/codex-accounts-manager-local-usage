@@ -216,6 +216,7 @@ body.privacy-hidden .privacy-sensitive-masked {
   color: #ffe2ad;
   border: 1px solid rgba(245,158,11,0.26);
 }
+
 html[data-theme="light"] .pill,
 html[data-theme="auto"] body.vscode-light .pill {
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -247,6 +248,35 @@ html[data-theme="auto"] body.vscode-light .pill.error {
   border-color: rgba(194, 65, 53, 0.22);
   background: rgba(194, 65, 53, 0.1);
   color: #963127;
+}
+/* Keep the detail badge palette aligned with the account cards. */
+html {
+  --health-usable-color: #06b6d4;
+  --health-usable-rgb: 6, 182, 212;
+  --health-unknown-color: #d29922;
+  --health-unknown-rgb: 210, 153, 34;
+}
+html[data-theme="light"],
+html[data-theme="auto"] body.vscode-light {
+  --health-usable-color: #0e7490;
+  --health-usable-rgb: 14, 116, 144;
+  --health-unknown-color: #ca8a04;
+  --health-unknown-rgb: 202, 138, 4;
+}
+.health-usable {
+  --health-state-color: var(--health-usable-color);
+  --health-state-rgb: var(--health-usable-rgb);
+}
+.health-unknown {
+  --health-state-color: var(--health-unknown-color);
+  --health-state-rgb: var(--health-unknown-rgb);
+}
+.pill:is(.health-unknown, .health-usable),
+html[data-theme="light"] .pill:is(.health-unknown, .health-usable),
+html[data-theme="auto"] body.vscode-light .pill:is(.health-unknown, .health-usable) {
+  color: var(--health-state-color);
+  border: 1px solid rgba(var(--health-state-rgb), 0.4);
+  background: rgba(var(--health-state-rgb), 0.1);
 }
 .tag-pill {
   display: inline-flex;

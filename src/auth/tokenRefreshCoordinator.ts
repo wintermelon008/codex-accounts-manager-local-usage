@@ -1,5 +1,6 @@
 import type { CodexTokens } from "../core/types";
 import { needsTokenRefresh, refreshTokens } from "./oauth";
+import { classifyRenewalFailure, readRenewal, recordRenewal } from "../application/accounts/accountState";
 
 const TOKEN_REFRESH_LEASE_MS = 60_000;
 const TOKEN_REFRESH_LEASE_WAIT_MS = 5_000;
@@ -119,7 +120,14 @@ async function refreshTokensWithLease(
     return initial;
   }
 
+  if (source.key.startsWith("account:") && readRenewal(source.key.slice(8), initial) === "unavailable") {
+    throw Object.assign(new Error("Refresh token unavailable (invalid_grant); update credentials before retrying"), {
+      context: { errorCode: "invalid_grant" }
+    });
+  }
+
   if (!initial.refreshToken) {
+    if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), initial, "unavailable");
     throw new Error("Token expired and no refresh token is available");
   }
 
@@ -151,18 +159,22 @@ async function refreshTokensWithLease(
     }
 
     if (!current.refreshToken) {
+      if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), current, "unavailable");
       throw new Error("Token expired and no refresh token is available");
     }
 
     try {
+      if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), current, "refreshing");
       const refreshed = await refreshTokens(current.refreshToken, current.idToken);
       const effectiveTokens: CodexTokens = {
         ...refreshed,
         accountId: refreshed.accountId ?? current.accountId
       };
       await source.save(effectiveTokens);
+      if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), effectiveTokens, "succeeded");
       return effectiveTokens;
     } catch (error) {
+      if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), current, classifyRenewalFailure(error));
       if (!isRefreshTokenReusedError(error)) {
         throw error;
       }

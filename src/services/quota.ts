@@ -18,12 +18,13 @@ import {
   CodexResetCreditsSnapshot,
   CodexTokens,
   CodexUsageResponse,
+  TokenRefreshErrorKind,
   UsageCreditsInfo,
   UsageRateLimitInfo,
   UsageWindowInfo,
   isSub2ApiAccount
 } from "../core/types";
-import { APIError, formatApiErrorMessage } from "../core/errors";
+import { APIError, formatApiErrorMessage, getErrorMessage, sanitizeApiErrorText } from "../core/errors";
 import { ensureFreshAccountTokens, type TokenRefreshAccountRepository } from "../auth/tokenRefreshCoordinator";
 import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { QUOTA_USAGE_URL, RESET_CREDITS_CONSUME_URL, RESET_CREDITS_URL } from "../infrastructure/config/apiEndpoints";
@@ -57,6 +58,11 @@ export interface QuotaRefreshResult {
   updatedTokens?: CodexTokens;
   updatedPlanType?: string;
   updatedSubscriptionActiveUntil?: string;
+  /** The refresh failed, but the existing access token was used successfully. */
+  tokenRefreshFailure?: {
+    kind: TokenRefreshErrorKind;
+    message: string;
+  };
 }
 
 /**
@@ -95,14 +101,25 @@ export async function refreshQuota(
 
   const refreshTask = (async (): Promise<QuotaRefreshResult> => {
     let effectiveTokens = tokens;
+    let tokenRefreshFailure: QuotaRefreshResult["tokenRefreshFailure"];
 
     if (tokenRepository) {
-      effectiveTokens =
-        (await ensureFreshAccountTokens(tokenRepository, account.id, {
-          fallbackTokens: tokens,
-          notifyTokenChange: false,
-          providerAccountId: account.accountId
-        })) ?? effectiveTokens;
+      try {
+        effectiveTokens =
+          (await ensureFreshAccountTokens(tokenRepository, account.id, {
+            fallbackTokens: tokens,
+            notifyTokenChange: false,
+            providerAccountId: account.accountId
+          })) ?? effectiveTokens;
+      } catch (error) {
+        if (!isRefreshAuthorizationFailure(error)) {
+          throw error;
+        }
+        tokenRefreshFailure = {
+          kind: "reauthorize",
+          message: sanitizeApiErrorText(getErrorMessage(error)) || "Token refresh failed"
+        };
+      }
     }
 
     const accountId = account.accountId ?? extractClaims(effectiveTokens.idToken, effectiveTokens.accessToken).accountId;
@@ -146,7 +163,8 @@ export async function refreshQuota(
       quota: quotaSummary,
       updatedTokens: effectiveTokens,
       updatedPlanType: usage.plan_type,
-      updatedSubscriptionActiveUntil: readUsageSubscriptionActiveUntil(usage)
+      updatedSubscriptionActiveUntil: readUsageSubscriptionActiveUntil(usage),
+      tokenRefreshFailure
     };
   })();
 
@@ -934,4 +952,15 @@ function extractErrorDetailCode(body: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isRefreshAuthorizationFailure(error: unknown): boolean {
+  const normalized = getErrorMessage(error).toLowerCase();
+  return (
+    normalized.includes("401") ||
+    normalized.includes("403") ||
+    normalized.includes("invalid_grant") ||
+    normalized.includes("refresh_token_invalidated") ||
+    normalized.includes("refresh token")
+  );
 }

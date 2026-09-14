@@ -638,7 +638,7 @@ describe("Codex hot-switch runtime setup", () => {
         .spyOn(CodexHotSwitchBridge.prototype, "getStatus")
         .mockRejectedValueOnce(new Error("Codex hot-switch runtime is not available"))
         .mockResolvedValueOnce({
-          runtimeProtocolVersion: 14,
+          runtimeProtocolVersion: 15,
           ready: false,
           httpTransportForced: true,
           gatewayConfigured: false,

@@ -32,6 +32,8 @@ import {
   type SharedCodexAccountJson
 } from "../../core/types";
 import { resolveAccountHealth } from "../../application/accounts/health";
+import { observeAccountAvailability } from "../../application/accounts/observeAvailability";
+import { clearAccountStates, initAccountStatePersistence, recordAuthorization } from "../../application/accounts/accountState";
 import { isAccountReauthorizationRequired } from "../../domain/accountHealth";
 import { getErrorMessage } from "../../core/errors";
 import {
@@ -95,8 +97,12 @@ export class AccountsWorkbench {
     this.repo = new AccountsRepository(context);
     this.statusBar = new AccountsStatusBarProvider(context, this.repo);
     this.refreshCoordinator = new WorkbenchRefreshCoordinator(context, this.repo, this.statusBar);
-    this.hotSwitchRuntime = new CodexHotSwitchRuntime(context, this.repo, (event) =>
-      this.handleAuthTokenRevoked(event)
+    this.hotSwitchRuntime = new CodexHotSwitchRuntime(context, this.repo,
+      (event) => this.handleAuthTokenRevoked(event),
+      async (event) => {
+        await observeAccountAvailability(this.repo, event);
+        this.refreshCoordinator.createRefreshView().refresh();
+      }
     );
     this.runtimeSwitchCoordinator = new RuntimeSwitchCoordinator(this.repo, this.hotSwitchRuntime, () =>
       isSeamlessSwitchEnabled()
@@ -185,6 +191,8 @@ export class AccountsWorkbench {
       : undefined;
     this.managerControlServer = new ManagerControlServer({
       repo: this.repo,
+      getAccountHealth: async (account) => resolveAccountHealth(account,
+        await this.repo.getTokens(account.id, { syncExternal: false }), getTokenAutomationSnapshot()),
       usage: new LocalUsageAnalyticsService({
         globalStoragePath: context.globalStorageUri.fsPath,
         backgroundRefreshEnabled: true
@@ -211,6 +219,7 @@ export class AccountsWorkbench {
     };
 
     registerDebugOutput(this.context);
+    initAccountStatePersistence(this.context.globalState);
     initSeamlessSwitchRuntimeState(this.context);
     initAutoSwitchRuntimeState(this.context);
     await measureStep("repo.init", async () => {
@@ -342,6 +351,7 @@ export class AccountsWorkbench {
   }
 
   dispose(): void {
+    clearAccountStates();
     if (this.managerControlRetryTimer) {
       clearTimeout(this.managerControlRetryTimer);
       this.managerControlRetryTimer = undefined;
@@ -543,6 +553,7 @@ export class AccountsWorkbench {
 
       throwIfOAuthImportCancelled(cancellationSource);
       const account = await this.repo.upsertFromTokens(tokens, false);
+      recordAuthorization(account.id, { ...tokens, accountId: account.accountId ?? tokens.accountId });
       throwIfOAuthImportCancelled(cancellationSource);
       const quota = await refreshImportedAccountQuota(this.repo, account.id);
       void refreshQuotaSummaryPanel();
@@ -675,6 +686,11 @@ export class AccountsWorkbench {
     const activeAccount = accounts.find((account) => account.id === event.localAccountId);
     if (!activeAccount || !isCurrentProviderAccount(activeAccount) || !isAutomaticAccount(activeAccount)) {
       return { handled: false, reason: "the revoked token is not from the current active ChatGPT account" };
+    }
+
+    const activeTokens = await this.repo.getTokens(activeAccount.id);
+    if (resolveAccountHealth(activeAccount, activeTokens, getTokenAutomationSnapshot()).availability !== "auth_unavailable") {
+      return { handled: false, reason: "account authentication is recoverable or unconfirmed" };
     }
 
     this.pruneAuthRevokedAccountIds();

@@ -13,6 +13,13 @@ export function renderHealthPill(account: DashboardAccountViewModel) {
   }
 
   switch (account.healthKind) {
+    case "refreshing":
+      return <span class="pill">{account.healthLabel}</span>;
+    case "unverified":
+    case "refresh_unavailable_unverified":
+      return <span class="pill health-unknown">{account.healthLabel}</span>;
+    case "refresh_unavailable":
+      return <span class="pill health-usable">{account.healthLabel}</span>;
     case "healthy":
       return null;
     case "expiring":
@@ -23,7 +30,6 @@ export function renderHealthPill(account: DashboardAccountViewModel) {
       return <span class="pill error">{account.healthLabel}</span>;
     case "refresh_failed":
     case "refresh_token_invalid":
-    case "refresh_unavailable":
     case "quota":
       return <span class="pill warning">{account.healthLabel}</span>;
     default:

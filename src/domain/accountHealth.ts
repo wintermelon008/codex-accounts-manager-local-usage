@@ -1,5 +1,11 @@
+export type AvailabilityKind = "unknown" | "usable" | "auth_unavailable" | "quota_limited";
+export type RenewalKind = "unknown" | "refreshing" | "succeeded" | "unavailable" | "network_failed";
+
 export type AccountHealthKind =
   | "healthy"
+  | "unverified"
+  | "refreshing"
+  | "refresh_unavailable_unverified"
   | "expiring"
   | "refresh_failed"
   | "refresh_unavailable"
@@ -12,6 +18,8 @@ export type AccountHealthKind =
 /** User-facing health categories shared by Dashboard and control consumers. */
 export type AccountHealthCategory =
   | "healthy"
+  | "unverified"
+  | "availability_unknown"
   | "expiring"
   | "temporary_error"
   | "credential_invalid"
@@ -29,6 +37,11 @@ export function getAccountHealthCategory(kind: AccountHealthKind): AccountHealth
     return "credential_invalid";
   }
   switch (kind) {
+    case "refresh_unavailable_unverified":
+    case "unverified":
+      return "availability_unknown";
+    case "refreshing":
+      return "unverified";
     case "expiring":
       return "expiring";
     case "refresh_token_invalid":

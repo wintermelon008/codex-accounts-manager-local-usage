@@ -227,6 +227,9 @@ function mapAccount(
       : copy.statusLimitTip,
     hasQuota402: virtual ? false : hasQuota402(account),
     healthKind: health.kind,
+    availability: health.availability,
+    renewal: health.renewal,
+    availabilityObservedAt: health.observedAt,
     healthLabel: formatHealthLabel(health.kind, copy),
     healthMessage: health.message,
     healthIssueKey: health.issueKey,
@@ -402,6 +405,12 @@ function hasQuota402(account: CodexAccountRecord): boolean {
 
 function formatHealthLabel(kind: DashboardAccountViewModel["healthKind"], copy: DashboardState["copy"]): string {
   switch (kind) {
+    case "unverified":
+      return copy.tokenAutomationUnverified;
+    case "refreshing":
+      return copy.tokenAutomationRefreshing;
+    case "refresh_unavailable_unverified":
+      return copy.tokenAutomationRefreshUnavailableUnverified;
     case "expiring":
       return copy.tokenAutomationExpiring;
     case "refresh_failed":

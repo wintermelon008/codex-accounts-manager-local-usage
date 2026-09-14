@@ -8,6 +8,7 @@ import {
   CodexHotSwitchBridge,
   getHotSwitchSocketPath,
   type HotSwitchAuthTokenRevokedEvent,
+  type HotSwitchAvailabilityEvent,
   type HotSwitchRefreshRequest
 } from "../src/codex/hotSwitchBridge";
 
@@ -70,6 +71,46 @@ describe("CodexHotSwitchBridge", () => {
     await exited;
   });
 
+  it.each([
+    { caseName: "structured revocation", error: undefined },
+    { caseName: "reported revoked refresh message", error: {
+      code: -32000,
+      message: "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again."
+    } }
+  ])("observes real-turn results with scoped credentials: $caseName", async ({ error }) => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root, env: { ...process.env, CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs") },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(JSON.stringify({ id: "availability-init", method: "initialize", params: {} }) + "\n");
+    await messages.next((m) => m.id === "availability-init");
+    const observed: HotSwitchAvailabilityEvent[] = [];
+    bridge = new CodexHotSwitchBridge(async () => ({ accessToken: "old-token", chatgptAccountId: "account-a", chatgptPlanType: "plus" }),
+      async () => undefined, async () => undefined, process.pid, async () => ({ handled: true }),
+      async (event) => { observed.push(event); });
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+    await bridge.switchAccount({ accessToken: "access-token-b", accountId: "account-b", localAccountId: "local-b",
+      expectedEmail: "b@example.invalid", previousAccountId: "account-a", previousLocalAccountId: "local-a",
+      previousExpectedEmail: "a@example.invalid", planType: "plus", gracePeriodMs: 0, longTurnPolicy: "defer" });
+    shim.stdin.write(JSON.stringify({ id: "availability-turn", method: "turn/start", params: { threadId: "availability-thread", input: [] } }) + "\n");
+    await messages.next((m) => m.id === "availability-turn");
+    expect(observed).toHaveLength(0);
+    shim.stdin.write(JSON.stringify({ id: "availability-complete", method: "test/complete", params: {} }) + "\n");
+    await messages.next((m) => m.id === "availability-complete");
+    await waitFor(() => observed.length > 0);
+    expect(observed[0]).toMatchObject({ localAccountId: "local-b", accountId: "account-b", kind: "usable",
+      runtimeId: expect.any(String), credentialFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+    expect(JSON.stringify(observed)).not.toContain("access-token-b");
+    shim.stdin.write(JSON.stringify({ id: "availability-revoke", method: "test/failNextTurnStartWithAuthTokenRevoked", params: { error } }) + "\n");
+    await messages.next((m) => m.id === "availability-revoke");
+    shim.stdin.write(JSON.stringify({ id: "availability-failed-turn", method: "turn/start", params: { threadId: "availability-thread-2", input: [] } }) + "\n");
+    await messages.next((m) => m.id === "availability-failed-turn");
+    await waitFor(() => observed.some((e) => e.kind === "auth_rejected"));
+    expect(observed.at(-1)?.localAccountId).toBe("local-b");
+  }, 15_000);
+
   it("is ready when initialized arrives before the initialize response", async () => {
     const root = path.resolve(__dirname, "..");
     const shimPath = path.join(root, "runtime", "codex-app-server-shim.cjs");
@@ -97,7 +138,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 14,
+      runtimeProtocolVersion: 15,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,

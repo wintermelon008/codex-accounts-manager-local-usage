@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { setAvailabilityRuntime } from "../application/accounts/accountState";
+import type { HotSwitchAvailabilityEvent } from "./hotSwitchBridge";
 import { needsRefresh } from "../auth/oauth";
 import { ensureFreshAccountTokens, ensureFreshTokensWithLease } from "../auth/tokenRefreshCoordinator";
 import { isSub2ApiAccount, type CodexAccountRecord, type CodexTokens } from "../core/types";
@@ -46,7 +48,7 @@ const SHIM_FILE = "codex-app-server-shim.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const RUNTIME_OWNER_FILE = "runtime-owner.lease";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 14;
+const RUNTIME_PROTOCOL_VERSION = 15;
 const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
 const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 const USAGE_ATTRIBUTION_RETRY_DELAY_MS = 5_000;
@@ -118,7 +120,8 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     private readonly repo: AccountsRepository,
     private readonly handleAuthTokenRevoked?: (
       event: HotSwitchAuthTokenRevokedEvent
-    ) => Promise<HotSwitchAuthTokenRevokedResult>
+    ) => Promise<HotSwitchAuthTokenRevokedResult>,
+    private readonly handleAvailability?: (event: HotSwitchAvailabilityEvent) => Promise<void>
   ) {}
 
   async initialize(): Promise<HotSwitchSetupResult> {
@@ -267,6 +270,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("Codex hot switch is not configured");
     }
     const status = await this.bridge.getStatus();
+    setAvailabilityRuntime(status.availabilityRuntimeId);
     return {
       ...status,
       attributionFailureReason: status.attributionActive
@@ -651,12 +655,18 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       this.bridge?.dispose();
       this.bridge = undefined;
       if (!requiresReload) {
-        const candidateBridge = new CodexHotSwitchBridge(
+        const candidateBridge: CodexHotSwitchBridge = new CodexHotSwitchBridge(
           (request) => this.refreshRuntimeAuth(request),
           (localAccountId) => this.activateLocalAccount(localAccountId),
           (rollbackContextId) => this.restoreUnmanagedAccount(rollbackContextId),
           process.pid,
-          (event) => this.handleAuthTokenRevoked?.(event) ?? Promise.resolve({ handled: false })
+          (event) => this.handleAuthTokenRevoked?.(event) ?? Promise.resolve({ handled: false }),
+          async (event) => {
+            const status = await candidateBridge.getStatus();
+            if (status.availabilityRuntimeId !== event.runtimeId) return;
+            setAvailabilityRuntime(status.availabilityRuntimeId);
+            await this.handleAvailability?.(event);
+          }
         );
         let runtimeStatusChecked = false;
         if (isOpenAiCodexExtensionActive()) {

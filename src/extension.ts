@@ -8,6 +8,7 @@ import {
 import { getDashboardProxyAddress } from "./infrastructure/config/extensionSettings";
 import { loadManagerControlEnvironment } from "./infrastructure/config/managerControlEnvironment";
 import { AccountsWorkbench } from "./presentation/workbench/accountsWorkbench";
+import { flushAccountStates } from "./application/accounts/accountState";
 
 let workbench: AccountsWorkbench | undefined;
 
@@ -46,8 +47,9 @@ async function initializeConfiguredProxyEnvironment(): Promise<void> {
 /**
  * 停用扩展
  */
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   workbench?.dispose();
   workbench = undefined;
   disposeCodexProxyEnvironment();
+  await flushAccountStates();
 }

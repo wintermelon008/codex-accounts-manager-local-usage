@@ -107,6 +107,7 @@ npm --prefix integrations/manager-gateway run package
 
 ## 文档索引
 
+- [账号可用性与续期状态机、界面映射和验证](docs/account-state-machine.md)
 - [无感切号、额度分档与阈值](docs/HOT_SWITCH.md)
 - [独立 Sub2API Gateway、S+ 导入器与迁移](docs/integrations/sub2api-gateway.md)
 - [飞书私聊 M+/S+ 导入机器人](docs/integrations/feishu-private-import.md)

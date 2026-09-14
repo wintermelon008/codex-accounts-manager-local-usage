@@ -10,7 +10,7 @@ import type {
 import { isSub2ApiAccount } from "../core/types";
 import { getErrorMessage } from "../core/errors";
 import { getBalanceQuotaCapability, type BalanceQuotaCapability } from "../application/accounts/balanceScheduler";
-import { getQuotaIssueKind } from "../utils/quotaIssue";
+import type { AccountHealthInfo } from "../application/accounts/health";
 import type { AccountsRepository } from "../storage";
 import type { CodexExecProviderConfig, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../codex";
 import { SessionHub, type SessionKind, type SessionListFilter, type SessionRegistration, type SessionStatus } from "../sessions";
@@ -51,6 +51,9 @@ export type ManagerControlAccount = {
   poolCapability: BalanceQuotaCapability;
   poolEligible: boolean;
   health: ManagerControlHealth;
+  healthKind?: AccountHealthInfo["kind"];
+  availability?: AccountHealthInfo["availability"];
+  renewal?: AccountHealthInfo["renewal"];
   lastQuotaAt?: number;
   quotaErrorCode?: string;
   resetCreditsAvailable?: number;
@@ -137,6 +140,7 @@ export type ManagerControlSwitchOptions = Pick<RuntimeAccountSwitchOptions, "gra
 
 export type ManagerControlServerOptions = {
   repo: Pick<AccountsRepository, "listAccounts">;
+  getAccountHealth?: (account: CodexAccountRecord) => Promise<AccountHealthInfo>;
   usage: Pick<LocalUsageAnalyticsService, "getSnapshots">;
   sessionHub?: SessionHub;
   refreshQuotas: (accountIds?: readonly string[]) => Promise<ManagerControlRefreshSummary>;
@@ -445,7 +449,8 @@ export class ManagerControlServer {
 
   private async readAccounts(): Promise<ManagerControlAccountSummary> {
     const accounts = await this.options.repo.listAccounts();
-    const mapped = accounts.map(mapAccount);
+    const mapped = await Promise.all(accounts.map(async (account) =>
+      mapAccount(account, await this.options.getAccountHealth?.(account))));
     const counts = mapped.reduce<ManagerControlAccountSummary["counts"]>(
       (summary, account) => {
         summary.total += 1;
@@ -555,24 +560,12 @@ export class ManagerControlServer {
   }
 }
 
-function mapAccount(account: CodexAccountRecord): ManagerControlAccount {
+function mapAccount(account: CodexAccountRecord, state?: AccountHealthInfo): ManagerControlAccount {
   const virtual = isSub2ApiAccount(account);
   const capability = virtual ? "unknown" : getBalanceQuotaCapability(account);
-  const issueKind = virtual ? undefined : getQuotaIssueKind(account.quotaError);
-  const temporaryRefreshFailure =
-    !virtual &&
-    account.tokenRefreshLastErrorKind !== "reauthorize" &&
-    (Boolean(account.tokenRefreshLastError) || account.tokenRefreshLastErrorKind !== undefined);
   const health: ManagerControlHealth =
-    issueKind === "disabled"
-      ? "disabled"
-      : issueKind === "auth"
-        ? "auth"
-        : issueKind === "quota"
-          ? "quota"
-          : temporaryRefreshFailure
-            ? "temporary"
-            : "healthy";
+    virtual || state?.kind === "healthy" ? "healthy" : state?.kind === "access_token_invalid" ? "auth"
+      : state?.kind === "quota" ? "quota" : "temporary";
   return {
     id: account.id,
     email: account.email,
@@ -591,6 +584,9 @@ function mapAccount(account: CodexAccountRecord): ManagerControlAccount {
     poolCapability: capability,
     poolEligible: !virtual && !account.isHidden && account.balancePoolEnabled === true && capability !== "unknown",
     health,
+    healthKind: state?.kind,
+    availability: state?.availability,
+    renewal: state?.renewal,
     lastQuotaAt: account.lastQuotaAt,
     quotaErrorCode: account.quotaError?.code,
     resetCreditsAvailable: account.quotaSummary?.resetCreditsAvailable,

@@ -9,7 +9,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const tls = require("node:tls");
-const { randomBytes, randomUUID, timingSafeEqual } = require("node:crypto");
+const { randomBytes, randomUUID, timingSafeEqual, createHash } = require("node:crypto");
 const { spawn } = require("node:child_process");
 
 const INTERNAL_ID_PREFIX = "__codex_accounts_manager__";
@@ -54,7 +54,12 @@ const AUTH_TOKEN_REVOKED_RETRY_DELAY_MS = 5_000;
 const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
-const RUNTIME_PROTOCOL_VERSION = 14;
+const RUNTIME_PROTOCOL_VERSION = 15;
+const availabilityRuntimeId = randomUUID();
+let availabilitySequence = 0;
+let runtimeCredential;
+const submittedAvailability = new Map();
+const turnAvailability = new Map();
 const FAST_MODE_SERVICE_TIER = "priority";
 const FAST_MODE_METHODS = new Set([
   "thread/start",
@@ -206,6 +211,9 @@ async function startRuntime() {
       configureGatewayLoopbackProxyBypass(childEnv);
       safeLog("Gateway loopback proxy bypass configured");
     }
+    // Pin the startup file, never substitute a later file's token for the
+    // credentials that the already-running child may still hold in memory.
+    if (!process.env.CODEX_ACCOUNTS_REAL_CLI) runtimeCredential = readStartupCredential();
     child = spawn(realCliPath, buildRealCliArgs(process.argv.slice(2)), {
       env: childEnv,
       stdio: ["pipe", "pipe", "pipe"]
@@ -544,6 +552,7 @@ function handleOfficialLine(line) {
   if (isWorkStartMethod(message.method) && Object.prototype.hasOwnProperty.call(message, "id")) {
     const requestKey = requestIdKey(message.id);
     submittedTurnStarts.set(requestKey, readThreadId(message.params));
+    submittedAvailability.set(requestKey, captureAvailabilityIdentity());
   }
 
   if (message.method === "initialize" && Object.prototype.hasOwnProperty.call(message, "id")) {
@@ -727,12 +736,15 @@ function handleCodexLine(line) {
     }
 
     if (submittedTurnStarts.has(key)) {
+      const availabilityIdentity = submittedAvailability.get(key);
+      submittedAvailability.delete(key);
       const submittedThreadId = submittedTurnStarts.get(key);
       const submittedWorkGeneration = submittedTurnStartGenerations.get(key);
       submittedTurnStarts.delete(key);
       submittedTurnStartGenerations.delete(key);
       if (!message.error) {
         const turnId = readTurnId(message.result);
+        if (turnId && availabilityIdentity) turnAvailability.set(turnId, availabilityIdentity);
         if (turnId) {
           if (!terminalTurnIds.has(turnId)) {
             rememberActiveTurn(turnId, submittedThreadId, submittedWorkGeneration);
@@ -741,8 +753,10 @@ function handleCodexLine(line) {
           anonymousActiveTurnCount += 1;
         }
       } else if (isAuthTokenRevokedError(message.error)) {
-        captureAuthTokenRevokedThread(submittedThreadId);
+        void emitAvailability(availabilityIdentity, "auth_rejected")
+          .then(() => captureAuthTokenRevokedThread(submittedThreadId));
       } else if (isUsageLimitExceededError(message.error)) {
+        emitAvailability(availabilityIdentity, "quota_limited");
         // A rejected turn/start has no following turn/completed event. It is
         // therefore already terminal when it becomes part of an exhaustion
         // batch.
@@ -774,7 +788,8 @@ function handleCodexLine(line) {
     const turnId = readNotificationTurnId(message.params);
     const workGeneration = readWorkGeneration(threadId, turnId);
     if (isAuthTokenRevokedError(message.params.error)) {
-      captureAuthTokenRevokedThread(threadId, turnId);
+      void emitAvailability(turnAvailability.get(turnId), "auth_rejected")
+        .then(() => captureAuthTokenRevokedThread(threadId, turnId));
     } else if (isUsageLimitExceededError(message.params.error)) {
       clearCapacityRecoveryThread(threadId, { force: true });
       captureUsageLimitedThread(threadId);
@@ -795,9 +810,15 @@ function handleCodexLine(line) {
     const authTokenRevoked = Boolean(threadId && isAuthTokenRevokedTurn(message.params));
     const usageLimitExceeded = Boolean(threadId && isUsageLimitExceededTurn(message.params));
     const modelCapacity = Boolean(threadId && isModelCapacityTurn(message.params));
+    const observation = turnAvailability.get(turnId);
+    if (authTokenRevoked) void emitAvailability(observation, "auth_rejected")
+      .then(() => captureAuthTokenRevokedThread(threadId, turnId));
+    else if (usageLimitExceeded) emitAvailability(observation, "quota_limited");
+    else if (readTurnStatus(message.params) === "completed") emitAvailability(observation, "usable");
+    turnAvailability.delete(turnId);
     const workGeneration = readWorkGeneration(threadId, turnId);
     if (authTokenRevoked) {
-      captureAuthTokenRevokedThread(threadId, turnId);
+      // Availability reconciliation above runs before automatic account recovery.
     } else if (usageLimitExceeded) {
       // Remember the recovery candidate while the completed turn is still in
       // the active snapshot. Terminal classification happens after removing
@@ -1839,6 +1860,7 @@ async function handleAuthRefreshRequest(message) {
     if (previousAccountId && result.chatgptAccountId !== previousAccountId) {
       throw new Error("The account manager refreshed a different ChatGPT workspace");
     }
+    rememberRuntimeCredential(result.chatgptAccountId, result.accessToken);
     writeChildMessage({ id: message.id, result });
   } catch (error) {
     writeChildMessage({
@@ -1881,7 +1903,10 @@ function sendChatGptLogin(params) {
   const completion = waitForLoginCompletion();
   const response = sendInternalRequest("account/login/start", params);
   return Promise.all([response, completion]).then(
-    ([result]) => result,
+    ([result]) => {
+      rememberRuntimeCredential(params.chatgptAccountId, params.accessToken);
+      return result;
+    },
     (error) => {
       cancelLoginCompletion(error);
       throw error;
@@ -1968,6 +1993,7 @@ function runtimeStatus() {
   const gatewayRoute = gatewayAdapter?.route;
   return {
     runtimeProtocolVersion: RUNTIME_PROTOCOL_VERSION,
+    availabilityRuntimeId,
     ready: childReady && !childExited,
     initializeResponseReceived,
     initializedNotificationReceived,
@@ -2452,6 +2478,8 @@ function recordActiveUsageAttribution() {
 }
 
 function rememberActiveTurn(turnId, threadId, workGeneration) {
+  if (!turnAvailability.has(turnId)) turnAvailability.set(turnId, captureAvailabilityIdentity());
+  if (turnAvailability.size > MAX_TERMINAL_TURN_IDS) turnAvailability.delete(turnAvailability.keys().next().value);
   if (typeof threadId === "string" && threadId.length > 0) {
     for (const [knownTurnId, knownThreadId] of activeTurns) {
       if (knownTurnId !== turnId && knownThreadId === threadId) {
@@ -2462,6 +2490,45 @@ function rememberActiveTurn(turnId, threadId, workGeneration) {
   rememberTurnWorkGeneration(turnId, threadId, workGeneration);
   activeTurns.set(turnId, threadId);
   recordUsageAttribution(threadId);
+}
+
+function rememberRuntimeCredential(accountId, accessToken) {
+  runtimeCredential = typeof accountId === "string" && typeof accessToken === "string"
+    ? { accountId, credentialFingerprint: createHash("sha256").update(JSON.stringify([accountId, accessToken])).digest("hex") }
+    : undefined;
+}
+
+function readStartupCredential() {
+  try {
+    const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+    const auth = JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8"));
+    const accountId = auth.tokens?.account_id;
+    const token = auth.tokens?.access_token;
+    if (!accountId || !token || auth.OPENAI_API_KEY) return undefined;
+    return { accountId, fromAuthFile: true,
+      credentialFingerprint: createHash("sha256").update(JSON.stringify([accountId, token])).digest("hex") };
+  } catch { return undefined; }
+}
+
+function hasCurrentRuntimeCredential() {
+  return runtimeCredential && (!runtimeCredential.fromAuthFile ||
+    readStartupCredential()?.credentialFingerprint === runtimeCredential.credentialFingerprint);
+}
+
+function captureAvailabilityIdentity() {
+  const identity = activeManagedAccount || usageAttributionAccount;
+  if (gatewayAdapter?.route === "gateway" || !identity?.localAccountId ||
+      !hasCurrentRuntimeCredential() || runtimeCredential.accountId !== identity.accountId) return undefined;
+  return { ...runtimeCredential, localAccountId: identity.localAccountId,
+    runtimeId: availabilityRuntimeId, sequence: ++availabilitySequence };
+}
+
+async function emitAvailability(identity, kind) {
+  // Never attribute an old turn to credentials loaded by a later switch/refresh.
+  if (!identity || !hasCurrentRuntimeCredential() || gatewayAdapter?.route === "gateway" ||
+      identity.credentialFingerprint !== runtimeCredential?.credentialFingerprint) return;
+  await sendControlRequest("runtime/account-availability", { ...identity, kind, observedAt: Date.now() })
+    .catch(() => undefined); // Observation must never interrupt the user's turn.
 }
 
 function recordUsageAttribution(threadId) {
@@ -3371,7 +3438,7 @@ function isUsageLimitExceededError(value) {
 
 function isAuthTokenRevokedError(value) {
   if (typeof value === "string") {
-    return /(?:token[_ -]?revoked|invalidated\s+oauth\s+token)/iu.test(value);
+    return isExplicitAuthRevocationMessage(value);
   }
   if (!value || typeof value !== "object") {
     return false;
@@ -3400,7 +3467,13 @@ function isAuthTokenRevokedError(value) {
   ]
     .filter((part) => typeof part === "string")
     .join(" ");
-  return /(?:token[_ -]?revoked|invalidated\s+oauth\s+token)/iu.test(message);
+  return isExplicitAuthRevocationMessage(message);
+}
+
+function isExplicitAuthRevocationMessage(message) {
+  // This is the actual terminal Codex error shown in the reported incident.
+  // Do not broaden it into a match for arbitrary 401s or quota error messages.
+  return /(?:token[_ -]?revoked|invalidated\s+oauth\s+token|your access token could not be refreshed because your refresh token was revoked)/iu.test(message);
 }
 
 function isModelCapacityError(value) {

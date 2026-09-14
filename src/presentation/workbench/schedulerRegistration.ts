@@ -2,7 +2,12 @@ import * as vscode from "vscode";
 import { needsTokenRefresh } from "../../auth/oauth";
 import { ensureFreshAccountTokens } from "../../auth/tokenRefreshCoordinator";
 import type { CodexHotSwitchRuntime, HotSwitchIdentity, HotSwitchStatus } from "../../codex";
-import { isAutomaticAccount, type CodexAccountRecord, type TokenRefreshErrorKind } from "../../core/types";
+import {
+  isAutomaticAccount,
+  type CodexAccountRecord,
+  type CodexTokens,
+  type TokenRefreshErrorKind
+} from "../../core/types";
 import { ErrorCode, getErrorMessage, sanitizeApiErrorText } from "../../core/errors";
 import { DASHBOARD_AUTOMATIC_REFRESH_PAGE_SIZE } from "../../domain/dashboard/types";
 import {
@@ -819,8 +824,9 @@ export function registerTokenRefreshScheduler(params: {
     counters: { checked: number; refreshed: number; lastFailureMessage?: string }
   ): Promise<void> => {
     let attemptAt: number | undefined;
+    let tokens: CodexTokens | undefined;
     try {
-      const tokens = await params.repo.getTokens(account.id);
+      tokens = await params.repo.getTokens(account.id);
       markTokenAutomationCheck(account.id);
       counters.checked += 1;
       if (!leaseIsActive()) {
@@ -1057,7 +1063,7 @@ function classifyTokenRefreshFailure(error: unknown): { kind: TokenRefreshErrorK
   const normalized = getErrorMessage(error).toLowerCase();
 
   if (errorCode === "refresh_token_reused" || normalized.includes("refresh_token_reused")) {
-    return { kind: "provider_response", retry: true };
+    return { kind: "reauthorize", retry: false };
   }
 
   if (

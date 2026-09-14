@@ -1,5 +1,6 @@
 import type { CodexAccountRecord, CodexIndexHealthSummary } from "../../core/types";
 import type { TokenAutomationSnapshot } from "./tokenAutomationState";
+import { accountStateRevision } from "../../application/accounts/accountState";
 
 export function buildWorkbenchRefreshSignature(params: {
   observedAuthIdentity?: string;
@@ -92,6 +93,7 @@ export function buildWorkbenchRefreshSignature(params: {
     : "";
 
   return [
+    accountStateRevision(),
     params.observedAuthIdentity ?? "",
     params.indexHealth.status,
     params.indexHealth.lastRestoreSource ?? "",

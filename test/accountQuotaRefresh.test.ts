@@ -102,6 +102,39 @@ describe("refreshSingleQuota token automation state", () => {
     expect(clearTokenAutomationErrorMock).toHaveBeenCalledWith(account.id);
   });
 
+  it("keeps the refresh failure visible after a successful access-token probe", async () => {
+    const repo: QuotaRefreshRepo = {
+      getAccount: vi.fn(async () => account),
+      getTokens: vi.fn(async () => tokens),
+      updateQuota: vi.fn(async () => account),
+      refreshSubscriptionState: vi.fn(async () => undefined),
+      updateResetCreditsSnapshot: vi.fn(async () => undefined)
+    };
+
+    refreshQuotaMock.mockResolvedValue({
+      quota: { hourlyPercentage: 90, weeklyPercentage: 90, codeReviewPercentage: 100 },
+      updatedTokens: tokens,
+      tokenRefreshFailure: {
+        kind: "reauthorize",
+        message: "Token refresh failed (401)"
+      }
+    });
+
+    await refreshSingleQuota(repo as AccountsRepository, { refresh: vi.fn() }, account.id, {
+      announce: false,
+      refreshView: false,
+      warnQuota: false,
+      forceRefresh: true
+    });
+
+    expect(markTokenAutomationRefreshFailureMock).toHaveBeenCalledWith(
+      account.id,
+      "Token refresh failed (401)",
+      "reauthorize"
+    );
+    expect(clearTokenAutomationErrorMock).not.toHaveBeenCalled();
+  });
+
   it("marks thrown manual refresh failures so the account asks for reauthorization", async () => {
     const hiddenAccount: CodexAccountRecord = {
       ...account,

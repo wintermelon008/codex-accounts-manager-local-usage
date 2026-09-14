@@ -36,9 +36,9 @@ describe("ManagerControlServer", () => {
       usageToday: { date: string; total: { totalTokens: number }; byModel: Array<{ model: string }> };
     };
 
-    expect(body.accounts.counts).toMatchObject({ total: 3, poolEligible: 1, temporaryFailed: 1 });
-    expect(body.accounts.accounts[0]).toMatchObject({ health: "healthy" });
-    expect(body.accounts.accounts[1]).toMatchObject({ health: "auth" });
+    expect(body.accounts.counts).toMatchObject({ total: 3, poolEligible: 1, temporaryFailed: 3 });
+    expect(body.accounts.accounts[0]).toMatchObject({ health: "temporary" });
+    expect(body.accounts.accounts[1]).toMatchObject({ health: "temporary" });
     expect(body.accounts.accounts.find((account) => account.email === "three@example.com")).toMatchObject({
       health: "temporary"
     });

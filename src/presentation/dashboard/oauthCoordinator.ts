@@ -6,6 +6,7 @@ import {
   runPreparedOAuthLoginSession
 } from "../../auth/oauth";
 import { refreshImportedAccountQuota } from "../../application/accounts/quota";
+import { recordAuthorization } from "../../application/accounts/accountState";
 import type { AccountsRepository } from "../../storage";
 import type { DashboardHostMessage } from "../../domain/dashboard/types";
 import type { TranslationKey, TranslationParams } from "../../utils/i18n";
@@ -91,6 +92,7 @@ export class DashboardOAuthCoordinator {
       this.oauthCancellationSources.set(oauthSessionId, source);
       const tokens = await runPreparedOAuthLoginSession(session, source.token);
       const created = await this.repo.upsertFromTokens(tokens, false);
+      recordAuthorization(created.id, { ...tokens, accountId: created.accountId ?? tokens.accountId });
       await refreshImportedAccountQuota(this.repo, created.id);
       this.cancelSession(oauthSessionId);
       this.schedulePublishState();
@@ -143,6 +145,7 @@ export class DashboardOAuthCoordinator {
     try {
       const tokens = await completeOAuthLoginSession(session, callbackUrl.trim());
       const created = await this.repo.upsertFromTokens(tokens, false);
+      recordAuthorization(created.id, { ...tokens, accountId: created.accountId ?? tokens.accountId });
       this.oauthCancellationSources.get(oauthSessionId)?.dispose();
       this.oauthCancellationSources.delete(oauthSessionId);
       this.oauthSessions.delete(oauthSessionId);

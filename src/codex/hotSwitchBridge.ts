@@ -1,6 +1,11 @@
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AvailabilityObservation } from "../application/accounts/accountState";
+
+export type HotSwitchAvailabilityEvent = Omit<AvailabilityObservation, "kind"> & {
+  kind: "usable" | "auth_rejected" | "quota_limited";
+};
 
 const CONNECT_TIMEOUT_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -10,6 +15,7 @@ export type HotSwitchLongTurnPolicy = "defer" | "interrupt" | "interruptAndConti
 
 export type HotSwitchStatus = {
   runtimeProtocolVersion: number;
+  availabilityRuntimeId?: string;
   ready: boolean;
   initializeResponseReceived: boolean;
   initializedNotificationReceived: boolean;
@@ -300,7 +306,8 @@ export class CodexHotSwitchBridge {
     private readonly extensionHostPid = process.pid,
     private readonly handleAuthTokenRevoked: (
       event: HotSwitchAuthTokenRevokedEvent
-    ) => Promise<HotSwitchAuthTokenRevokedResult> = () => Promise.resolve({ handled: false })
+    ) => Promise<HotSwitchAuthTokenRevokedResult> = () => Promise.resolve({ handled: false }),
+    private readonly handleAvailability: (event: HotSwitchAvailabilityEvent) => Promise<void> = () => Promise.resolve()
   ) {}
 
   async getStatus(): Promise<HotSwitchStatus> {
@@ -487,6 +494,23 @@ export class CodexHotSwitchBridge {
       } else {
         pending.resolve(message.result);
       }
+      return;
+    }
+
+    if (message.method === "runtime/account-availability") {
+      const p = message.params;
+      if (!p || !readBoundedString(p["localAccountId"], 256) || !readBoundedString(p["accountId"], 256) ||
+          !readBoundedString(p["runtimeId"], 128) || typeof p["credentialFingerprint"] !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(p["credentialFingerprint"]) || !Number.isSafeInteger(p["sequence"]) ||
+          Number(p["sequence"]) <= 0 || typeof p["observedAt"] !== "number" || !Number.isFinite(p["observedAt"]) ||
+          !["usable", "auth_rejected", "quota_limited"].includes(String(p["kind"]))) {
+        this.writeResponse(socket, message.id, { error: { code: -32602, message: "Invalid availability observation" } });
+        return;
+      }
+      void this.handleAvailability(p as unknown as HotSwitchAvailabilityEvent).then(
+        () => this.writeResponse(socket, message.id!, { result: { handled: true } }),
+        () => this.writeResponse(socket, message.id!, { result: { handled: false } })
+      );
       return;
     }
 

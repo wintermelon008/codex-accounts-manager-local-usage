@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { loginWithOAuth } from "../../auth";
+import { recordAuthorization } from "./accountState";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOutcome, getCodexHome } from "../../codex";
 import { getErrorMessage } from "../../core";
 import { CodexAccountRecord, SharedCodexAccountJson, isSub2ApiAccount } from "../../core/types";
@@ -72,6 +73,7 @@ export class AccountsCommandService {
             accountId: tokens.accountId
           });
           const account = await this.repo.upsertFromTokens(tokens, false);
+          recordAuthorization(account.id, { ...tokens, accountId: account.accountId ?? tokens.accountId });
           logNetworkEvent("account.add", {
             step: "account-upserted",
             storedAccountId: account.accountId,
@@ -152,12 +154,15 @@ export class AccountsCommandService {
 
         if (!authorizedId || authorizedId !== account.id) {
           void vscode.window.showWarningMessage(
-            `Authorized account does not match ${account.email}. No changes were applied.`
+            getLanguage() === "zh"
+              ? `认证账号与 ${account.email} 不一致，未作任何修改。`
+              : `Authorized account does not match ${account.email}. No changes were applied.`
           );
           return;
         }
 
         const updated = await this.repo.upsertFromTokens(tokens, account.isActive);
+        recordAuthorization(updated.id, { ...tokens, accountId: updated.accountId ?? tokens.accountId });
         if (account.isActive) {
           await this.repo.switchAccount(updated.id);
           this.view.markObservedAuthIdentity?.(updated.id);

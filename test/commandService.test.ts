@@ -1,7 +1,66 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import type { CodexAccountRecord } from "../src/core/types";
 import { AccountsCommandService } from "../src/application/accounts/commandService";
+import { loginWithOAuth } from "../src/auth";
+import { clearAccountStates, recordRenewal } from "../src/application/accounts/accountState";
+import { resolveAccountHealth } from "../src/application/accounts/health";
+import { buildAccountStorageId } from "../src/utils/accountIdentity";
+
+vi.mock("../src/auth", () => ({ loginWithOAuth: vi.fn() }));
+vi.mock("../src/application/accounts/quota", async (original) => ({
+  ...await original<typeof import("../src/application/accounts/quota")>(),
+  refreshImportedAccountQuota: vi.fn(async () => ({}))
+}));
+
+beforeEach(() => { clearAccountStates(); vi.clearAllMocks(); });
+
+describe("account-bound reauthorization (simulated OAuth, no network)", () => {
+  const token = (email: string) => `header.${Buffer.from(JSON.stringify({ email,
+    exp: Math.floor(Date.now() / 1000) + 86400,
+    "https://api.openai.com/auth": { chatgpt_account_id: "workspace" }
+  })).toString("base64url")}.signature`;
+  const account = { id: buildAccountStorageId("target@example.invalid", "workspace"),
+    accountId: "workspace", email: "target@example.invalid", isActive: false, createdAt: 1, updatedAt: 1 };
+  const old = { accountId: "workspace", idToken: token(account.email), accessToken: "old-access", refreshToken: "old-refresh" };
+  const automation = { enabled: false, intervalMs: 0, skewSeconds: 300, accounts: {} };
+  function setup() {
+    let stored = old;
+    recordRenewal(account.id, old, "unavailable");
+    const repo = { upsertFromTokens: vi.fn(async (tokens: typeof old) => { stored = tokens; return account; }),
+      switchAccount: vi.fn() };
+    const service = new AccountsCommandService({} as vscode.ExtensionContext, repo as never, { refresh: vi.fn() }, {} as never);
+    Object.assign(service, { withProgress: (_title: unknown, callback: (progress: unknown, cancellation: unknown) => Promise<unknown>) => callback({}, {}) });
+    return { repo, service, health: () => resolveAccountHealth(account, stored, automation) };
+  }
+
+  it("clears cyan only after the matching account is successfully saved, without switching inactive accounts", async () => {
+    const { repo, service, health } = setup();
+    vi.mocked(loginWithOAuth).mockResolvedValue({ ...old, accessToken: token(account.email), refreshToken: "new-refresh" });
+    await service.reauthorizeAccount(account);
+    expect(health().kind).toBe("healthy");
+    expect(repo.upsertFromTokens).toHaveBeenCalledOnce();
+    expect(repo.switchAccount).not.toHaveBeenCalled();
+  });
+
+  it("does not clear cyan or write credentials when another account signs in", async () => {
+    const { repo, service, health } = setup();
+    vi.mocked(loginWithOAuth).mockResolvedValue({ ...old, idToken: token("other@example.invalid"), accessToken: token("other@example.invalid") });
+    await service.reauthorizeAccount(account);
+    expect(health().kind).toBe("refresh_unavailable_unverified");
+    expect(repo.upsertFromTokens).not.toHaveBeenCalled();
+    expect(repo.switchAccount).not.toHaveBeenCalled();
+  });
+
+  it.each(["OAuth login cancelled by user.", "Network timeout"])("preserves cyan on %s", async (message) => {
+    const { repo, service, health } = setup();
+    vi.mocked(loginWithOAuth).mockRejectedValue(new Error(message));
+    await expect(service.reauthorizeAccount(account)).rejects.toThrow(message);
+    expect(health().kind).toBe("refresh_unavailable_unverified");
+    expect(repo.upsertFromTokens).not.toHaveBeenCalled();
+    expect(repo.switchAccount).not.toHaveBeenCalled();
+  });
+});
 
 describe("AccountsCommandService account switching", () => {
   it("routes a manual OAuth selection through the atomic Gateway handoff", async () => {

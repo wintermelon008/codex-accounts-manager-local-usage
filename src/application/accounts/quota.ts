@@ -132,6 +132,16 @@ export async function refreshSingleQuota(
     }
     throw error;
   }
+  if (result.tokenRefreshFailure) {
+    // Record the refresh failure before persisting the successful quota probe,
+    // so health resolution can use the new quota timestamp as proof that the
+    // existing access token is still accepted.
+    markTokenAutomationRefreshFailure(
+      accountId,
+      result.tokenRefreshFailure.message,
+      result.tokenRefreshFailure.kind
+    );
+  }
   const updatedAccount = await repo.updateQuota(
     accountId,
     result.quota,
@@ -154,7 +164,7 @@ export async function refreshSingleQuota(
     const credAccountId = updatedAccount.accountId ?? account.accountId ?? undefined;
     void syncResetCreditsSnapshot(repo, view, accountId, updatedAccount, credAccountId, credTokens);
   }
-  if (!result.error) {
+  if (!result.error && !result.tokenRefreshFailure) {
     clearTokenAutomationError(accountId);
   }
   if (shouldRefreshView) {
@@ -197,6 +207,13 @@ export async function refreshImportedAccountQuota(
   }
 
   const result = await refreshQuota(account, tokens, true, repo);
+  if (result.tokenRefreshFailure) {
+    markTokenAutomationRefreshFailure(
+      accountId,
+      result.tokenRefreshFailure.message,
+      result.tokenRefreshFailure.kind
+    );
+  }
   const updatedAccount = await repo.updateQuota(
     accountId,
     result.quota,
@@ -212,7 +229,7 @@ export async function refreshImportedAccountQuota(
     const credAccountId = updatedAccount.accountId ?? account.accountId ?? undefined;
     void syncResetCreditsSnapshot(repo, undefined, accountId, updatedAccount, credAccountId, credTokens);
   }
-  if (!result.error) {
+  if (!result.error && !result.tokenRefreshFailure) {
     clearTokenAutomationError(accountId);
   }
   await maybeWarnForAccount(repo, accountId);

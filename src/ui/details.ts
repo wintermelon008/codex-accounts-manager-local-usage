@@ -772,6 +772,12 @@ function renderHealthBadge(
   switch (kind) {
     case "healthy":
       return `<span class="pill ok">${escapeHtml(copy.tokenAutomationHealthy)}</span>`;
+    case "unverified":
+      return `<span class="pill health-unknown">${escapeHtml(copy.tokenAutomationUnverified)}</span>`;
+    case "refreshing":
+      return `<span class="pill">${escapeHtml(copy.tokenAutomationRefreshing)}</span>`;
+    case "refresh_unavailable_unverified":
+      return `<span class="pill health-unknown">${escapeHtml(copy.tokenAutomationRefreshUnavailableUnverified)}</span>`;
     case "expiring":
       return `<span class="pill warning">${escapeHtml(copy.tokenAutomationExpiring)}</span>`;
     case "access_token_invalid":
@@ -783,7 +789,7 @@ function renderHealthBadge(
     case "refresh_token_invalid":
       return `<span class="pill warning">${escapeHtml(copy.tokenAutomationRefreshTokenInvalid)}</span>`;
     case "refresh_unavailable":
-      return `<span class="pill warning">${escapeHtml(copy.tokenAutomationRefreshUnavailable)}</span>`;
+      return `<span class="pill health-usable">${escapeHtml(copy.tokenAutomationRefreshUnavailable)}</span>`;
     case "disabled":
       return `<span class="pill error">${escapeHtml(copy.tokenAutomationDisabled)}</span>`;
     case "quota":

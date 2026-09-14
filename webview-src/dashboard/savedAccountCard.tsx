@@ -96,11 +96,17 @@ export function SavedAccountCard(props: {
         : props.lang === "zh-hant"
           ? "加入無感切換池"
           : "Add to seamless-switch pool";
-  const showReauthorizeButton = !virtual && isAccountReauthorizationRequired(account.healthKind) && !account.dismissedHealth;
   const [flipped, setFlipped] = useState(false);
   const hasErrorHealth = !account.dismissedHealth && isAccountInvalid(account.healthKind);
+  const hasUsableRenewalWarning = !account.dismissedHealth && account.healthKind === "refresh_unavailable";
   const hasWarningHealth =
-    !account.dismissedHealth && getAccountHealthCategory(account.healthKind) === "temporary_error";
+    !account.dismissedHealth && !hasUsableRenewalWarning &&
+    getAccountHealthCategory(account.healthKind) === "temporary_error";
+  const hasUnknownHealth =
+    !account.dismissedHealth && getAccountHealthCategory(account.healthKind) === "availability_unknown";
+  const showReauthorizeButton =
+    !virtual && !account.dismissedHealth &&
+    (isAccountReauthorizationRequired(account.healthKind) || hasWarningHealth || hasUsableRenewalWarning || hasUnknownHealth);
   const gatewayActive = virtual && account.providerActive;
   const providerCard = virtual ? account.providerCard : undefined;
   const profileSelectionActions =
@@ -124,7 +130,9 @@ export function SavedAccountCard(props: {
     props.busy ? "is-busy" : "",
     props.selected ? "selected" : "",
     hasErrorHealth ? "health-error" : "",
-    hasWarningHealth ? "health-warning" : ""
+    hasWarningHealth ? "health-warning" : "",
+    hasUsableRenewalWarning ? "health-usable" : "",
+    hasUnknownHealth ? "health-unknown" : ""
   ]
     .filter(Boolean)
     .join(" ");

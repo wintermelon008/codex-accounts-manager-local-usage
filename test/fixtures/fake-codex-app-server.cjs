@@ -121,10 +121,11 @@ function handleLine(line) {
         break;
       }
       if (failNextTurnStartWithAuthTokenRevoked) {
+        const error = failNextTurnStartWithAuthTokenRevoked;
         failNextTurnStartWithAuthTokenRevoked = false;
         emit({
           id: message.id,
-          error: createAuthTokenRevokedError()
+          error
         });
         break;
       }
@@ -413,7 +414,7 @@ function handleLine(line) {
       respond(message.id, {});
       break;
     case "test/failNextTurnStartWithAuthTokenRevoked":
-      failNextTurnStartWithAuthTokenRevoked = true;
+      failNextTurnStartWithAuthTokenRevoked = message.params?.error || createAuthTokenRevokedError();
       respond(message.id, {});
       break;
     case "test/failNextTurnStartWithUnauthorized":
