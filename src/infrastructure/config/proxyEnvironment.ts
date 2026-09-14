@@ -36,11 +36,19 @@ export class CodexProxyConfigurationError extends Error {
  */
 export async function initializeCodexProxyEnvironment(httpsProxyOverride?: string): Promise<boolean> {
   try {
-    const fileEnvironment = await readProxyEnvironmentFile(path.join(getCodexHome(), ".env"));
-    return configureCodexProxyEnvironment(resolveProxySettings(process.env, fileEnvironment, httpsProxyOverride));
+    return configureCodexProxyEnvironment(await getConfiguredProxySettings(httpsProxyOverride));
   } catch (error) {
     return rejectProxyConfiguration(error);
   }
+}
+
+/**
+ * Resolve the same effective proxy settings used by the Manager request
+ * dispatcher without changing the process-wide dispatcher.
+ */
+export async function getConfiguredProxySettings(httpsProxyOverride?: string): Promise<ProxySettings> {
+  const fileEnvironment = await readProxyEnvironmentFile(path.join(getCodexHome(), ".env"));
+  return resolveProxySettings(process.env, fileEnvironment, httpsProxyOverride);
 }
 
 export function configureCodexProxyEnvironment(settings: ProxySettings): boolean {

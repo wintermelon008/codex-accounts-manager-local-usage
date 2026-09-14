@@ -6,7 +6,7 @@ const { normalizeMessage } = require("../messages.cjs");
 const { createMailboxProvider } = require("../provider.cjs");
 
 const TOTOTO_ICLOUD_PROVIDER_ID = "tototo-icloud";
-const TOTOTO_ICLOUD_HOSTNAME = "ima4.52dfd.top";
+const TOTOTO_ICLOUD_HOSTNAME = "ima2.52dfd.top";
 const TOTOTO_ICLOUD_BASE_URL = "https://" + TOTOTO_ICLOUD_HOSTNAME;
 const TOTOTO_ICLOUD_PATH_PREFIX = "/api/v1/mailboxes/";
 const TOTOTO_ICLOUD_PATH_SUFFIX = "/code";
@@ -33,7 +33,7 @@ class TototoIcloudProvider {
         label: "邮箱----验证码查询 URL",
         description: "每行一个 iCloud 邮箱和对应的验证码查询 URL；URL 只保存在 Mailbox 私有存储中。",
         placeholder:
-          "user@example.com----https://ima4.52dfd.top/api/v1/mailboxes/user@example.com/code?key=your_key"
+          "user@example.com----https://ima2.52dfd.top/api/v1/mailboxes/user@example.com/code?key=your_key"
       },
       parseImport: (input) => parseTototoIcloudImport(input),
       query: (account, options) => this.query(account, options)
@@ -150,8 +150,8 @@ function normalizeCodeUrl(value, address) {
     throw new Error("tototo-icloud code URL is required");
   }
   const parsed = new URL(value.trim());
-  if (parsed.protocol !== "https:" || parsed.hostname !== TOTOTO_ICLOUD_HOSTNAME) {
-    throw new Error("tototo-icloud code URL must use the approved HTTPS endpoint");
+  if (parsed.protocol !== "https:") {
+    throw new Error("tototo-icloud code URL must use HTTPS");
   }
   if (parsed.hash) {
     throw new Error("tototo-icloud code URL must not contain a fragment");

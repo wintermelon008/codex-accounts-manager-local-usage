@@ -146,7 +146,11 @@ describe("Sub2API virtual account boundaries", () => {
         { announcements: [], unreadIds: [] }
       );
 
-      expect(state.accounts[0]?.mailboxDeactivated).toBe(true);
+      expect(state.accounts[0]).toMatchObject({
+        mailboxDeactivated: true,
+        healthKind: "disabled",
+        dismissedHealth: false
+      });
     } finally {
       host.dispose();
       setActiveManagerIntegrationHost(previousHost);

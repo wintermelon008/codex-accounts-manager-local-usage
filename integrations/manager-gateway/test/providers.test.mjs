@@ -13,6 +13,56 @@ afterEach(async () => {
 });
 
 describe("manager gateway Codex provider", () => {
+  it("uses the lightweight AGENTS instructions for a fast Workbench query", async () => {
+    const harness = await createHarness("success");
+    const provider = createProvider(harness.config);
+
+    await provider.run({
+      session: sessionFor(harness.root, {
+        message: "查看今日我的日程",
+        context: {
+          fastWorkbench: true,
+          fastWorkbenchKind: "schedule",
+          fastWorkbenchDate: "2026-09-10"
+        }
+      }),
+      emit() {}
+    });
+    const [{ argv }] = await readInvocations(harness.logPath);
+    const prompt = argv.at(-1);
+    assert.match(prompt, /轻量|只读/u);
+    assert.match(prompt, /\/api\/workbench\/records/u);
+    assert.match(prompt, /fastWorkbenchKind|schedule/u);
+    assert.doesNotMatch(prompt, /请先阅读仓库根目录 AGENTS\.md/u);
+  });
+
+  it("applies the current Manager HTTPS proxy to each Codex child process", async () => {
+    const harness = await createHarness("success");
+    const provider = createProvider(harness.config, {
+      manager: {
+        async getProxySettings() {
+          return {
+            httpsProxy: "http://proxy.example:7890",
+            noProxy: "127.0.0.1,localhost"
+          };
+        }
+      }
+    });
+
+    await provider.run({
+      session: sessionFor(harness.root, { message: "use the selected proxy" }),
+      emit() {}
+    });
+    const [{ proxyEnvironment }] = await readInvocations(harness.logPath);
+
+    assert.deepEqual(proxyEnvironment, {
+      HTTP_PROXY: "http://proxy.example:7890",
+      HTTPS_PROXY: "http://proxy.example:7890",
+      ALL_PROXY: "http://proxy.example:7890",
+      NO_PROXY: "127.0.0.1,localhost,::1"
+    });
+  });
+
   it("uses the current ChatGPT adapter route without forcing the external Gateway model", async () => {
     const harness = await createHarness("success");
     const provider = createProvider(harness.config, {
@@ -456,7 +506,15 @@ const argv = process.argv.slice(2);
 const logPath = "argv.jsonl";
 const previous = existsSync(logPath) ? readFileSync(logPath, "utf8").trim() : "";
 const callNumber = previous ? previous.split("\\n").length + 1 : 1;
-appendFileSync(logPath, JSON.stringify({ argv, adapterToken: process.env.CODEX_ACCOUNTS_GATEWAY_ADAPTER_TOKEN, workbenchDataUrl: process.env.WORKBENCH_DATA_URL, workbenchDataToken: process.env.WORKBENCH_DATA_TOKEN }) + "\\n");
+appendFileSync(logPath, JSON.stringify({
+  argv,
+  adapterToken: process.env.CODEX_ACCOUNTS_GATEWAY_ADAPTER_TOKEN,
+  workbenchDataUrl: process.env.WORKBENCH_DATA_URL,
+  workbenchDataToken: process.env.WORKBENCH_DATA_TOKEN,
+  proxyEnvironment: Object.fromEntries([
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"
+  ].map((key) => [key, process.env[key]]).filter(([, value]) => value !== undefined))
+}) + "\\n");
 
 if (${JSON.stringify(behavior)} === "resume-failure" && callNumber === 1 && argv[1] === "resume") {
   process.stderr.write("thread not found\\n");

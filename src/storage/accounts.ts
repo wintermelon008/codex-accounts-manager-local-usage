@@ -62,6 +62,7 @@ import {
 } from "./accountsWriteCoordinator";
 import { readAuthFile, writeAuthFile } from "../codex";
 import { ensureFreshAccountTokens } from "../auth/tokenRefreshCoordinator";
+import { forgetAccountState } from "../application/accounts/accountState";
 import { createKeyedMutex } from "../utils/concurrency";
 import {
   CodexAccountRecord,
@@ -81,6 +82,7 @@ import {
 } from "../core/types";
 import { fetchRemoteAccountProfile } from "../services/profile";
 import { clearQuotaCacheForAccount } from "../services/quota";
+import { prunePersistedAccountConcurrencyWindows } from "../application/accounts/accountConcurrency";
 import {
   clearSubscriptionRetryPending,
   fetchSubscriptionStatus,
@@ -714,8 +716,12 @@ export class AccountsRepository {
    * @param forceActive - 是否强制设为激活状态
    * @returns 账号记录
    */
-  async upsertFromTokens(tokens: CodexTokens, forceActive = false): Promise<CodexAccountRecord> {
-    return this.upsertFromTokensInternal(tokens, forceActive);
+  async upsertFromTokens(
+    tokens: CodexTokens,
+    forceActive = false,
+    options: { registrationAt?: number; addedVia?: CodexAccountRecord["addedVia"] } = {}
+  ): Promise<CodexAccountRecord> {
+    return this.upsertFromTokensInternal(tokens, forceActive, options);
   }
 
   /**
@@ -757,6 +763,7 @@ export class AccountsRepository {
       isHidden: false,
       balancePoolEnabled: false,
       createdAt: existing?.createdAt ?? now,
+      importedAt: existing?.importedAt ?? now,
       updatedAt: now
     };
     index.accounts = index.accounts.filter((item) => item.id !== id);
@@ -801,6 +808,7 @@ export class AccountsRepository {
       persistImmediately?: boolean;
       restoreSource?: CodexAccountsRestoreResult["source"];
       addedVia?: CodexAccountRecord["addedVia"];
+      registrationAt?: number;
       disableBalancePool?: boolean;
       flushImmediately?: boolean;
     } = {}
@@ -860,6 +868,7 @@ export class AccountsRepository {
       existingAccounts: index.accounts,
       remoteProfile,
       addedVia: options.addedVia ?? "oauth",
+      registrationAt: options.registrationAt,
       forceActive,
       now
     });
@@ -1180,6 +1189,7 @@ export class AccountsRepository {
     this.writeIndex(index);
     this.notifyTokensChanged([accountId]);
     this.notifyAccountsChanged([accountId]);
+    forgetAccountState(accountId);
   }
 
   /**
@@ -1422,6 +1432,7 @@ export class AccountsRepository {
       updatedSubscriptionActiveUntil,
       now
     });
+    account.concurrencyWindows = prunePersistedAccountConcurrencyWindows(account);
     const storedTokens = updatedTokens ?? (await this.secretStore.getTokens(accountId));
     const previousStoredAccountId = storedTokens?.accountId;
     if (storedTokens) {
@@ -1480,6 +1491,21 @@ export class AccountsRepository {
     }
 
     return account;
+  }
+
+  async updateConcurrencyWindows(
+    accountId: string,
+    concurrencyWindows: NonNullable<CodexAccountRecord["concurrencyWindows"]>
+  ): Promise<void> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account || isSub2ApiAccount(account)) {
+      return;
+    }
+
+    account.concurrencyWindows = concurrencyWindows;
+    account.updatedAt = Date.now();
+    this.writeIndex(index);
   }
 
   /** Persist redacted background OAuth refresh diagnostics without touching secrets. */

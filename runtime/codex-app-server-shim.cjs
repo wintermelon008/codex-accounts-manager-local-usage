@@ -164,6 +164,9 @@ const recentAuthTokenRevokedThreads = new Map();
 const initializeRequests = new Set();
 const controlSockets = new Set();
 const lastUsageAttributionByThread = new Map();
+const runtimeTurnActivities = new Map();
+const runtimeThreadTokenTotals = new Map();
+const runtimeThreadLastUsageSignatures = new Map();
 let pendingUsageAttributionRecords = [];
 let usageAttributionFlushTimer;
 let usageAttributionWriteFailureReported = false;
@@ -211,8 +214,8 @@ async function startRuntime() {
       configureGatewayLoopbackProxyBypass(childEnv);
       safeLog("Gateway loopback proxy bypass configured");
     }
-    // Pin the startup file, never substitute a later file's token for the
-    // credentials that the already-running child may still hold in memory.
+    // Pin the startup credential so a later auth-file change cannot make an
+    // already-running child report evidence for a different credential.
     if (!process.env.CODEX_ACCOUNTS_REAL_CLI) runtimeCredential = readStartupCredential();
     child = spawn(realCliPath, buildRealCliArgs(process.argv.slice(2)), {
       env: childEnv,
@@ -434,6 +437,7 @@ async function gracefullyStopChild(signal) {
   deferredOfficialLines.length = 0;
   const hadActiveTurns = getActiveTurnCount() > 0;
   await drainActiveTurnsBeforeShutdown();
+  finishAllRuntimeTurnActivities();
   if (hadActiveTurns && !childExited) {
     await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_PROJECTION_SETTLE_MS));
   }
@@ -483,12 +487,15 @@ async function interruptTurnBeforeShutdown(turnId, threadId, timeoutMs) {
   } catch (error) {
     const replacementTurnId = readReplacementActiveTurnId(error);
     if (replacementTurnId && replacementTurnId !== turnId) {
+      finishRuntimeTurnActivity(turnId, threadId);
+      rememberTerminalTurnId(turnId);
       activeTurns.delete(turnId);
       rememberActiveTurn(replacementTurnId, threadId);
       return;
     }
     if (isAlreadyInactiveTurnError(error)) {
       if (activeTurns.get(turnId) === threadId) {
+        finishRuntimeTurnActivity(turnId, threadId);
         activeTurns.delete(turnId);
       }
       rememberTerminalTurnId(turnId);
@@ -689,6 +696,8 @@ function handleCodexLine(line) {
     return;
   }
 
+  recordRuntimeTurnTokenUsage(message);
+
   if (message.method === "account/login/completed") {
     settleLoginCompletion(message.params);
   }
@@ -779,7 +788,9 @@ function handleCodexLine(line) {
       if (!activeTurns.has(turnId) && anonymousActiveTurnCount > 0) {
         anonymousActiveTurnCount -= 1;
       }
-      rememberActiveTurn(turnId, readThreadId(message.params));
+      // Preserve the thread learned from the turn/start request/response pair
+      // when a notification carries a delayed or incomplete thread field.
+      rememberActiveTurn(turnId, activeTurns.get(turnId) ?? readThreadId(message.params));
     }
   }
 
@@ -802,20 +813,25 @@ function handleCodexLine(line) {
 
   if (message.method === "turn/completed") {
     const turnId = readTurnId(message.params);
-    const threadId = readThreadId(message.params) || (turnId ? activeTurns.get(turnId) : undefined);
+    const threadId = (turnId ? activeTurns.get(turnId) : undefined) || readThreadId(message.params);
+    const observation = turnAvailability.get(turnId);
+    const authTokenRevoked = Boolean(threadId && isAuthTokenRevokedTurn(message.params));
+    const usageLimitExceeded = Boolean(threadId && isUsageLimitExceededTurn(message.params));
+    if (authTokenRevoked) {
+      void emitAvailability(observation, "auth_rejected")
+        .then(() => captureAuthTokenRevokedThread(threadId, turnId));
+    } else if (usageLimitExceeded) {
+      emitAvailability(observation, "quota_limited");
+    } else if (readTurnStatus(message.params) === "completed") {
+      emitAvailability(observation, "usable");
+    }
+    turnAvailability.delete(turnId);
+    finishRuntimeTurnActivity(turnId, threadId, message.params);
     if (turnId) {
       rememberTerminalTurnId(turnId);
     }
     const request = pendingSwitch;
-    const authTokenRevoked = Boolean(threadId && isAuthTokenRevokedTurn(message.params));
-    const usageLimitExceeded = Boolean(threadId && isUsageLimitExceededTurn(message.params));
     const modelCapacity = Boolean(threadId && isModelCapacityTurn(message.params));
-    const observation = turnAvailability.get(turnId);
-    if (authTokenRevoked) void emitAvailability(observation, "auth_rejected")
-      .then(() => captureAuthTokenRevokedThread(threadId, turnId));
-    else if (usageLimitExceeded) emitAvailability(observation, "quota_limited");
-    else if (readTurnStatus(message.params) === "completed") emitAvailability(observation, "usable");
-    turnAvailability.delete(turnId);
     const workGeneration = readWorkGeneration(threadId, turnId);
     if (authTokenRevoked) {
       // Availability reconciliation above runs before automatic account recovery.
@@ -1549,12 +1565,15 @@ async function interruptActiveTurn(request, initialTurnId, threadId) {
       request.interruptedTurnIds.delete(turnId);
       const replacementTurnId = attempt === 0 ? readReplacementActiveTurnId(error) : undefined;
       if (replacementTurnId && replacementTurnId !== turnId) {
+        finishRuntimeTurnActivity(turnId, threadId);
+        rememberTerminalTurnId(turnId);
         activeTurns.delete(turnId);
         rememberActiveTurn(replacementTurnId, threadId);
         turnId = replacementTurnId;
         continue;
       }
       if (isAlreadyInactiveTurnError(error)) {
+        finishRuntimeTurnActivity(turnId, threadId);
         activeTurns.delete(turnId);
         rememberTerminalTurnId(turnId);
         return false;
@@ -2475,6 +2494,9 @@ function recordActiveUsageAttribution() {
   for (const threadId of getActiveThreadIds()) {
     recordUsageAttribution(threadId);
   }
+  for (const [turnId, threadId] of activeTurns) {
+    beginRuntimeTurnActivity(turnId, threadId);
+  }
 }
 
 function rememberActiveTurn(turnId, threadId, workGeneration) {
@@ -2483,18 +2505,320 @@ function rememberActiveTurn(turnId, threadId, workGeneration) {
   if (typeof threadId === "string" && threadId.length > 0) {
     for (const [knownTurnId, knownThreadId] of activeTurns) {
       if (knownTurnId !== turnId && knownThreadId === threadId) {
+        finishRuntimeTurnActivity(knownTurnId, knownThreadId);
         activeTurns.delete(knownTurnId);
       }
     }
   }
   rememberTurnWorkGeneration(turnId, threadId, workGeneration);
   activeTurns.set(turnId, threadId);
+  beginRuntimeTurnActivity(turnId, threadId);
   recordUsageAttribution(threadId);
+}
+
+function beginRuntimeTurnActivity(turnId, threadId) {
+  if (
+    typeof turnId !== "string" ||
+    turnId.length === 0 ||
+    turnId.length > 256 ||
+    typeof threadId !== "string" ||
+    threadId.length === 0 ||
+    threadId.length > 256 ||
+    runtimeTurnActivities.has(turnId)
+  ) {
+    return;
+  }
+  const account = usageAttributionAccount;
+  if (
+    !account ||
+    typeof account.localAccountId !== "string" ||
+    account.localAccountId.length === 0 ||
+    account.localAccountId.length > 256
+  ) {
+    return;
+  }
+  runtimeTurnActivities.set(turnId, {
+    turnId,
+    threadId,
+    accountId: account.localAccountId,
+    startedAt: Date.now(),
+    tokens: 0
+  });
+  reportRuntimeAccountSessionActivity({
+    sessionId: runtimeActivitySessionId(threadId),
+    accountId: account.localAccountId,
+    active: true
+  });
+}
+
+function finishRuntimeTurnActivity(turnId, threadId, params) {
+  const activity = findRuntimeTurnActivity(turnId, threadId);
+  if (!activity) {
+    return;
+  }
+  if (turnId && runtimeTurnActivities.has(turnId)) {
+    runtimeTurnActivities.delete(turnId);
+  } else {
+    runtimeTurnActivities.delete(activity.turnId);
+  }
+  const directTokens = readDirectTurnTokenCount(params);
+  const tokens = Math.max(activity.tokens, directTokens ?? 0);
+  reportRuntimeAccountSessionActivity({
+    sessionId: runtimeActivitySessionId(activity.threadId),
+    accountId: activity.accountId,
+    active: false,
+    tokens,
+    durationMs: Math.max(0, Date.now() - activity.startedAt)
+  });
+}
+
+function finishAllRuntimeTurnActivities() {
+  for (const activity of [...runtimeTurnActivities.values()]) {
+    finishRuntimeTurnActivity(activity.turnId, activity.threadId);
+  }
+}
+
+function findRuntimeTurnActivity(turnId, threadId) {
+  if (typeof turnId === "string" && turnId.length > 0) {
+    return runtimeTurnActivities.get(turnId);
+  }
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return undefined;
+  }
+  for (const activity of runtimeTurnActivities.values()) {
+    if (activity.threadId === threadId) {
+      return activity;
+    }
+  }
+  return undefined;
+}
+
+function runtimeActivitySessionId(threadId) {
+  return `codex-thread:${threadId}`;
+}
+
+function recordRuntimeTurnTokenUsage(message) {
+  const observation = readRuntimeTokenUsageObservation(message);
+  let activity = observation ? findRuntimeTurnActivity(observation.turnId, observation.threadId) : undefined;
+  if (!activity && observation && !observation.threadId && !observation.turnId) {
+    const activeActivities = [...runtimeTurnActivities.values()];
+    if (activeActivities.length === 1) {
+      activity = activeActivities[0];
+    }
+  }
+  if (!observation) {
+    return;
+  }
+  const threadId = activity?.threadId || observation.threadId;
+  if (!threadId) {
+    return;
+  }
+
+  let delta = 0;
+  if (observation.cumulativeTokens !== undefined) {
+    const previous = runtimeThreadTokenTotals.get(threadId);
+    delta = previous === undefined
+      ? (observation.lastTokens ?? 0)
+      : observation.cumulativeTokens < previous
+        ? (observation.lastTokens ?? 0)
+        : observation.cumulativeTokens - previous;
+    runtimeThreadTokenTotals.set(threadId, observation.cumulativeTokens);
+    if (observation.lastTokens !== undefined) {
+      runtimeThreadLastUsageSignatures.set(
+        threadId,
+        `${observation.lastTokens}:${observation.lastInputTokens ?? ""}:${observation.lastOutputTokens ?? ""}`
+      );
+    } else {
+      runtimeThreadLastUsageSignatures.delete(threadId);
+    }
+  } else if (observation.lastTokens !== undefined) {
+    const signature = `${observation.lastTokens}:${observation.lastInputTokens ?? ""}:${observation.lastOutputTokens ?? ""}`;
+    if (runtimeThreadLastUsageSignatures.get(threadId) !== signature) {
+      delta = observation.lastTokens;
+      runtimeThreadLastUsageSignatures.set(threadId, signature);
+    }
+  }
+
+  if (activity && delta > 0) {
+    const tracked = runtimeTurnActivities.get(activity.turnId);
+    if (tracked) {
+      tracked.tokens += delta;
+    }
+  }
+  rememberRuntimeThreadTokenTotals(threadId);
+}
+
+function readRuntimeTokenUsageObservation(message) {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const params = isPlainObject(message.params) ? message.params : undefined;
+  const tokenUsage = isPlainObject(params?.tokenUsage)
+    ? params.tokenUsage
+    : isPlainObject(params?.token_usage)
+      ? params.token_usage
+      : undefined;
+  const tokenUsageLast = readRuntimeTokenUsage(tokenUsage?.last);
+  const tokenUsageTotal = readRuntimeTokenUsage(tokenUsage?.total);
+  if (tokenUsageLast || tokenUsageTotal) {
+    return {
+      threadId:
+        readBoundedRuntimeString(params?.threadId) ??
+        readBoundedRuntimeString(params?.thread_id) ??
+        readBoundedRuntimeString(params?.conversationId) ??
+        readBoundedRuntimeString(params?.conversation_id) ??
+        readBoundedRuntimeString(message.threadId) ??
+        readBoundedRuntimeString(message.thread_id) ??
+        readBoundedRuntimeString(message.conversationId) ??
+        readBoundedRuntimeString(message.conversation_id),
+      turnId: readBoundedRuntimeString(params?.turnId) ?? readBoundedRuntimeString(params?.turn_id),
+      lastTokens: tokenUsageLast?.totalTokens,
+      lastInputTokens: tokenUsageLast?.inputTokens,
+      lastOutputTokens: tokenUsageLast?.outputTokens,
+      cumulativeTokens: tokenUsageTotal?.totalTokens
+    };
+  }
+  const candidates = [
+    params?.msg,
+    params?.event,
+    params?.payload,
+    params?.msg?.payload,
+    params?.event?.payload,
+    params
+  ];
+  const event = candidates.find((candidate) => {
+    if (!isPlainObject(candidate)) {
+      return false;
+    }
+    return candidate.type === "token_count" || candidate.type === "tokenCount" || isPlainObject(candidate.info);
+  });
+  if (!isPlainObject(event)) {
+    return undefined;
+  }
+  const payload = isPlainObject(event.payload) ? event.payload : event;
+  const info = isPlainObject(payload.info) ? payload.info : undefined;
+  if (!info) {
+    return undefined;
+  }
+  const last = readRuntimeTokenUsage(info.last_token_usage ?? info.lastTokenUsage);
+  const cumulative = readRuntimeTokenUsage(info.total_token_usage ?? info.totalTokenUsage);
+  if (!last && !cumulative) {
+    return undefined;
+  }
+  return {
+    threadId:
+      readBoundedRuntimeString(params?.threadId) ??
+      readBoundedRuntimeString(params?.thread_id) ??
+      readBoundedRuntimeString(params?.conversationId) ??
+      readBoundedRuntimeString(params?.conversation_id) ??
+      readBoundedRuntimeString(message.threadId) ??
+      readBoundedRuntimeString(message.thread_id) ??
+      readBoundedRuntimeString(message.conversationId) ??
+      readBoundedRuntimeString(message.conversation_id) ??
+      readBoundedRuntimeString(event.threadId) ??
+      readBoundedRuntimeString(event.thread_id) ??
+      readBoundedRuntimeString(event.conversationId) ??
+      readBoundedRuntimeString(event.conversation_id),
+    turnId:
+      readBoundedRuntimeString(params?.turnId) ??
+      readBoundedRuntimeString(params?.turn_id) ??
+      readBoundedRuntimeString(event.turnId) ??
+      readBoundedRuntimeString(event.turn_id),
+    lastTokens: last?.totalTokens,
+    lastInputTokens: last?.inputTokens,
+    lastOutputTokens: last?.outputTokens,
+    cumulativeTokens: cumulative?.totalTokens
+  };
+}
+
+function readRuntimeTokenUsage(value) {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+  const inputTokens = nonNegativeSafeInteger(value.input_tokens ?? value.inputTokens);
+  const outputTokens = nonNegativeSafeInteger(value.output_tokens ?? value.outputTokens);
+  const totalTokens = nonNegativeSafeInteger(value.total_tokens ?? value.totalTokens);
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: totalTokens ?? (inputTokens ?? 0) + (outputTokens ?? 0)
+  };
+}
+
+function readDirectTurnTokenCount(params) {
+  if (!isPlainObject(params)) {
+    return undefined;
+  }
+  const candidates = [
+    params.usage,
+    params.tokenUsage,
+    params.token_usage,
+    params.turn?.usage,
+    params.turn?.tokenUsage,
+    params.turn?.token_usage,
+    params.turn?.last_token_usage
+  ];
+  for (const candidate of candidates) {
+    const usage = readRuntimeTokenUsage(candidate);
+    if (usage) {
+      return usage.totalTokens;
+    }
+    if (isPlainObject(candidate)) {
+      const total = readRuntimeTokenUsage(candidate.total ?? candidate.last);
+      if (total) {
+        return total.totalTokens;
+      }
+    }
+  }
+  return undefined;
+}
+
+function readBoundedRuntimeString(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : undefined;
+}
+
+function rememberRuntimeThreadTokenTotals(threadId) {
+  while (runtimeThreadTokenTotals.size > MAX_USAGE_ATTRIBUTION_THREADS) {
+    const oldestThreadId = runtimeThreadTokenTotals.keys().next().value;
+    if (oldestThreadId === undefined) {
+      break;
+    }
+    runtimeThreadTokenTotals.delete(oldestThreadId);
+    runtimeThreadLastUsageSignatures.delete(oldestThreadId);
+  }
+  while (runtimeThreadLastUsageSignatures.size > MAX_USAGE_ATTRIBUTION_THREADS) {
+    const oldestThreadId = runtimeThreadLastUsageSignatures.keys().next().value;
+    if (oldestThreadId === undefined) {
+      break;
+    }
+    runtimeThreadLastUsageSignatures.delete(oldestThreadId);
+  }
+}
+
+function reportRuntimeAccountSessionActivity(activity) {
+  const socket = latestControlSocket;
+  if (!socket || socket.destroyed) {
+    return;
+  }
+  const id = `${INTERNAL_ID_PREFIX}:account-session:${++controlSequence}`;
+  writeSocketMessage(socket, {
+    id,
+    method: "runtime/account-session-activity",
+    params: activity
+  });
 }
 
 function rememberRuntimeCredential(accountId, accessToken) {
   runtimeCredential = typeof accountId === "string" && typeof accessToken === "string"
-    ? { accountId, credentialFingerprint: createHash("sha256").update(JSON.stringify([accountId, accessToken])).digest("hex") }
+    ? {
+        accountId,
+        credentialFingerprint: createHash("sha256")
+          .update(JSON.stringify([accountId, accessToken]))
+          .digest("hex")
+      }
     : undefined;
 }
 
@@ -2505,9 +2829,16 @@ function readStartupCredential() {
     const accountId = auth.tokens?.account_id;
     const token = auth.tokens?.access_token;
     if (!accountId || !token || auth.OPENAI_API_KEY) return undefined;
-    return { accountId, fromAuthFile: true,
-      credentialFingerprint: createHash("sha256").update(JSON.stringify([accountId, token])).digest("hex") };
-  } catch { return undefined; }
+    return {
+      accountId,
+      fromAuthFile: true,
+      credentialFingerprint: createHash("sha256")
+        .update(JSON.stringify([accountId, token]))
+        .digest("hex")
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function hasCurrentRuntimeCredential() {
@@ -2517,18 +2848,33 @@ function hasCurrentRuntimeCredential() {
 
 function captureAvailabilityIdentity() {
   const identity = activeManagedAccount || usageAttributionAccount;
-  if (gatewayAdapter?.route === "gateway" || !identity?.localAccountId ||
-      !hasCurrentRuntimeCredential() || runtimeCredential.accountId !== identity.accountId) return undefined;
-  return { ...runtimeCredential, localAccountId: identity.localAccountId,
-    runtimeId: availabilityRuntimeId, sequence: ++availabilitySequence };
+  if (
+    gatewayAdapter?.route === "gateway" ||
+    !identity?.localAccountId ||
+    !hasCurrentRuntimeCredential() ||
+    runtimeCredential.accountId !== identity.accountId
+  ) return undefined;
+  return {
+    ...runtimeCredential,
+    localAccountId: identity.localAccountId,
+    runtimeId: availabilityRuntimeId,
+    sequence: ++availabilitySequence
+  };
 }
 
 async function emitAvailability(identity, kind) {
   // Never attribute an old turn to credentials loaded by a later switch/refresh.
-  if (!identity || !hasCurrentRuntimeCredential() || gatewayAdapter?.route === "gateway" ||
-      identity.credentialFingerprint !== runtimeCredential?.credentialFingerprint) return;
-  await sendControlRequest("runtime/account-availability", { ...identity, kind, observedAt: Date.now() })
-    .catch(() => undefined); // Observation must never interrupt the user's turn.
+  if (
+    !identity ||
+    !hasCurrentRuntimeCredential() ||
+    gatewayAdapter?.route === "gateway" ||
+    identity.credentialFingerprint !== runtimeCredential?.credentialFingerprint
+  ) return;
+  await sendControlRequest("runtime/account-availability", {
+    ...identity,
+    kind,
+    observedAt: Date.now()
+  }).catch(() => undefined); // Observation must never interrupt the user's turn.
 }
 
 function recordUsageAttribution(threadId) {
@@ -2908,6 +3254,7 @@ function clearAllCapacityRecoveryThreads() {
 }
 
 function rememberTerminalTurnId(turnId) {
+  turnAvailability.delete(turnId);
   terminalTurnIds.delete(turnId);
   terminalTurnIds.add(turnId);
   while (terminalTurnIds.size > MAX_TERMINAL_TURN_IDS) {
@@ -3346,6 +3693,9 @@ function readTurnId(value) {
   if (!value || typeof value !== "object") {
     return undefined;
   }
+  if (typeof value.turnId === "string" && value.turnId.length > 0) {
+    return value.turnId;
+  }
   const turn = value.turn;
   return turn && typeof turn === "object" && typeof turn.id === "string" ? turn.id : undefined;
 }
@@ -3471,8 +3821,7 @@ function isAuthTokenRevokedError(value) {
 }
 
 function isExplicitAuthRevocationMessage(message) {
-  // This is the actual terminal Codex error shown in the reported incident.
-  // Do not broaden it into a match for arbitrary 401s or quota error messages.
+  // Do not broaden terminal auth recovery to arbitrary 401 or quota errors.
   return /(?:token[_ -]?revoked|invalidated\s+oauth\s+token|your access token could not be refreshed because your refresh token was revoked)/iu.test(message);
 }
 
@@ -3689,6 +4038,7 @@ function startGatewayAdapter(config) {
       reasoningTokens: 0,
       totalTokens: 0,
       credentialWaiters: new Set(),
+      chatgptCredentialWaiters: new Set(),
       server: undefined,
       baseUrl: undefined
     };
@@ -3752,6 +4102,7 @@ function activateGatewayAdapter() {
   if (!gatewayAdapter || !gatewayConfig) {
     throw new Error("The Gateway relay is unavailable");
   }
+  finishAllRuntimeTurnActivities();
   if (!gatewayAdapter.apiKey) {
     throw new Error("The Gateway credential is not ready");
   }
@@ -3769,6 +4120,7 @@ function activateChatGptGatewayRoute(accessToken) {
   if (!gatewayAdapter || !gatewayConfig) {
     throw new Error("The Gateway relay is unavailable");
   }
+  finishAllRuntimeTurnActivities();
   let modelListRouteChanged = false;
   if (accessToken !== undefined) {
     if (typeof accessToken !== "string" || !accessToken.trim() || accessToken.length > 16_384) {
@@ -3784,6 +4136,9 @@ function activateChatGptGatewayRoute(accessToken) {
   if (modelListRouteChanged) {
     gatewayAdapter.modelListRouteVersion += 1;
   }
+  if (gatewayAdapter.chatgptAccessToken) {
+    releaseChatGptCredentialWaiters(gatewayAdapter);
+  }
   usageAttributionAccount = undefined;
   usageAttributionFailureReason = "not_activated";
 }
@@ -3792,6 +4147,7 @@ function restoreGatewayRoute() {
   if (!gatewayAdapter || !gatewayConfig) {
     throw new Error("The Gateway relay is unavailable");
   }
+  finishAllRuntimeTurnActivities();
   usageAttributionAccount = undefined;
   usageAttributionFailureReason = "gateway_route_active";
   if (gatewayAdapter.route !== "gateway") {
@@ -3872,6 +4228,7 @@ function closeGatewayAdapter() {
   }
   gatewayAdapter.apiKey = undefined;
   releaseGatewayCredentialWaiters(gatewayAdapter);
+  releaseChatGptCredentialWaiters(gatewayAdapter);
   gatewayAdapter.server?.close();
   gatewayAdapter = undefined;
 }
@@ -4209,6 +4566,16 @@ async function handleChatGptGatewayRequest(adapter, request, response) {
     return;
   }
 
+  if (adapter.config.autoFallbackToChatGpt !== true && !adapter.chatgptAccessToken) {
+    safeLog(`ChatGPT route request is waiting for credential: method=${request.method} path=${target.pathname}`);
+    const credentialReady = await waitForChatGptCredential(adapter);
+    if (!credentialReady || !adapter.chatgptAccessToken) {
+      safeLog(`ChatGPT route credential wait timed out: method=${request.method} path=${target.pathname}`);
+      writeGatewayError(response, 503, "The local ChatGPT credential is not ready");
+      return;
+    }
+  }
+
   const headers = { ...request.headers };
   delete headers["x-api-key"];
   delete headers.host;
@@ -4477,6 +4844,37 @@ function releaseGatewayCredentialWaiters(adapter) {
     waiter();
   }
   adapter.credentialWaiters.clear();
+}
+
+function waitForChatGptCredential(adapter) {
+  if (adapter.chatgptAccessToken) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const waiter = () => {
+      clearTimeout(timeout);
+      resolve(Boolean(adapter.chatgptAccessToken));
+    };
+    const timeout = setTimeout(() => {
+      adapter.chatgptCredentialWaiters.delete(waiter);
+      resolve(Boolean(adapter.chatgptAccessToken));
+    }, GATEWAY_CREDENTIAL_WAIT_TIMEOUT_MS);
+    adapter.chatgptCredentialWaiters.add(waiter);
+    // The credential may have arrived between the initial check and adding
+    // this waiter through the control socket's event loop turn.
+    if (adapter.chatgptAccessToken) {
+      adapter.chatgptCredentialWaiters.delete(waiter);
+      clearTimeout(timeout);
+      resolve(true);
+    }
+  });
+}
+
+function releaseChatGptCredentialWaiters(adapter) {
+  for (const waiter of adapter.chatgptCredentialWaiters) {
+    waiter();
+  }
+  adapter.chatgptCredentialWaiters.clear();
 }
 
 /**

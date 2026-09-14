@@ -764,7 +764,12 @@ function App() {
                       hasGlobalPendingAction ||
                       snapshot.indexHealth.status === "corrupted_unrecoverable"
                     }
-                    onClick={() => sendAction("batchRemove", undefined, { accountIds: blockedAccountIds })}
+                    onClick={() =>
+                      sendAction("batchRemove", undefined, {
+                        accountIds: blockedAccountIds,
+                        removeLinkedMailboxes: true
+                      })
+                    }
                   >
                     {formatTemplate(snapshot.copy.removeBlockedAccountsBtn, { count: blockedAccountCount })}
                   </ActionButton>

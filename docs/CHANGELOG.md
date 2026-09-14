@@ -1,10 +1,13 @@
 # 变更日志
 
-## Unreleased
+## 0.1.19-l2（2026-09-14）
 
-- Dashboard 将 refresh token 失效与 access token 失效分开显示；Mailbox、Manager Control 和其他重新授权依赖仍统一识别两类状态。
-- Dashboard 顶部的 Codex 会话锁解锁改为强制模式：会终止非当前 VS Code 窗口且持有对应 `FLOCK` 的 Codex `app-server`，再释放其会话锁；当前窗口和无法确认的进程不会被终止。
-- Mailbox 注册助手邮箱库新增“仅 GPT 注册 ≥ 7 天”筛选；已注册标签按第一封来自 OpenAI 的邮件时间显示已注册天数。
+- 接入 availability/renewal 分离的账号状态机：状态按当前凭据绑定并持久化，reload 后保留有效证据，删除账号时清理健康状态。
+- runtime protocol 升级到 15：会话完成、认证拒绝和额度受限都会上报账号可用性；切号遇到 turn 替换或已失活时会释放旧账号活动记录，避免历史会话抬高并发高水位。
+- Dashboard、详情页和 Manager Control 展示注册时间、当前额度窗口最大并发、窗口 Token 聚合速率以及账号健康状态；平均速率使用 `sum(Token)/sum(time)`。
+- 保留并整合 Mailbox 的注册时间、OpenAI 邮件历史、封禁账号联删和注册助手修复；Mailbox/Gateway 集成测试与打包检查通过。
+- 隐藏账号的 5 小时或长期主额度 reset 倒计时到期后，Manager 会在后台自动查询一次额度；同一窗口在本次扩展运行期间不会重复请求。
+- Dashboard 顶部的 Codex 会话锁解锁改为强制模式；Mailbox 注册助手邮箱库新增“仅 GPT 注册 ≥ 7 天”筛选。
 
 ## 0.1.19-l1（2026-09-09）
 

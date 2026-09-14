@@ -1,7 +1,12 @@
 import type { TokenRefreshAccountRepository } from "../../auth/tokenRefreshCoordinator";
 import type { CodexAccountRecord } from "../../core/types";
 import type { HotSwitchAvailabilityEvent } from "../../codex/hotSwitchBridge";
-import { accessCredentialFingerprint, classifyRenewalFailure, readRenewal, recordAvailability } from "./accountState";
+import {
+  accessCredentialFingerprint,
+  classifyRenewalFailure,
+  readRenewal,
+  recordAvailability
+} from "./accountState";
 
 type Repository = TokenRefreshAccountRepository & {
   getAccount(id: string): Promise<CodexAccountRecord | undefined>;

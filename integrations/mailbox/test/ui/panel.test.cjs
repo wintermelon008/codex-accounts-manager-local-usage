@@ -111,6 +111,92 @@ test("registration rerenders preserve the focused input caret", () => {
   assert.deepEqual(restoredSelection, [4, 4]);
 });
 
+test("N replaces and copies the active phone only while the registration phone panel is open", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const messages = [];
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  let phoneOrderElement = {
+    hidden: false,
+    dataset: { registrationPhoneOrderSessionId: "session:phone" },
+    getClientRects() { return [{}]; }
+  };
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const notice = { style: {} };
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? notice : null; },
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      return selector === "[data-registration-phone-order-session-id]" ? [phoneOrderElement] : [];
+    },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
+    console
+  });
+
+  const buildState = (phone, orderId, phase = "polling") => ({
+    mailboxes: [],
+    providers: [],
+    registrationSessions: [{
+      id: "session:phone",
+      email: "phone@example.com",
+      mode: "oauth",
+      state: "awaiting_phone_input",
+      phoneOrder: { phase, running: true, order: { id: orderId, phone, smsCode: "" } },
+      emailCode: { phase: "idle" }
+    }]
+  });
+
+  windowListeners.get("message")({ data: { type: "state", state: buildState("+447000000001", "order-1") } });
+  messages.length = 0;
+  let prevented = false;
+  documentListeners.get("keydown")({
+    key: "n",
+    repeat: false,
+    target: { tagName: "BODY" },
+    preventDefault() { prevented = true; }
+  });
+  assert.equal(prevented, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "mailbox:action",
+    action: "registrationReplacePhone",
+    sessionId: "session:phone"
+  });
+
+  windowListeners.get("message")({ data: { type: "state", state: buildState("+447000000002", "order-2") } });
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "mailbox:action",
+    action: "copyText",
+    text: "+447000000002",
+    successMessage: "新手机号已复制"
+  });
+
+  messages.length = 0;
+  phoneOrderElement.hidden = true;
+  documentListeners.get("keydown")({ key: "n", repeat: false, target: { tagName: "BODY" }, preventDefault() {} });
+  assert.equal(messages.length, 0);
+  phoneOrderElement.hidden = false;
+  document.activeElement = { tagName: "INPUT" };
+  documentListeners.get("keydown")({ key: "n", repeat: false, target: document.activeElement, preventDefault() {} });
+  assert.equal(messages.length, 0);
+});
+
 test("new registration sessions are rendered above older sessions", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -1581,7 +1667,7 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
           catalog: [
             { country: "usa", countryName: "USA", prefix: "+1", operator: "any", count: 4, successRate: 97, price: 0.08, product: "openai" },
             { country: "england", countryName: "England", prefix: "+44", operator: "virtual66", count: 444383, successRate: 59.38, price: 0.09, product: "openai" },
-            { country: "england", countryName: "England", prefix: "+44", operator: "virtual60", count: 41831, successRate: 20.79, price: 0.0609, product: "openai" },
+            { country: "england", countryName: "England", prefix: "+44", operator: "virtual60", count: 41831, instantSuccessRate: 0, averageSuccessRate: 6.19, successRate: 6.19, price: 0.0609, product: "openai" },
             { country: "england", countryName: "England", prefix: "+44", operator: "virtual58", count: 689, successRate: 25.88, price: 0.08, product: "openai" },
             { country: "england", countryName: "England", prefix: "+44", operator: "lowrate", count: 10, successRate: 0.5, price: 0.01, product: "openai" },
             { country: "england", countryName: "England", prefix: "+44", operator: "zeronumber", count: 10, successRate: 0, price: 0.015, product: "openai" },
@@ -1605,6 +1691,7 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   assert.match(renderedHtml, /\$0\.0609\(¥0\.43\)/u);
   assert.match(renderedHtml, /含 2\.9% 手续费/u);
   assert.match(renderedHtml, /最低价条目：virtual60/u);
+  assert.match(renderedHtml, /即时 0% · 平均 6.19%/u);
   assert.match(renderedHtml, /接码率最高/u);
   assert.match(renderedHtml, /最低价/u);
   assert.match(renderedHtml, /\$0\.0609/u);

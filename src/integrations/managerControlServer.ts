@@ -11,12 +11,19 @@ import { isSub2ApiAccount } from "../core/types";
 import { getErrorMessage } from "../core/errors";
 import { getBalanceQuotaCapability, type BalanceQuotaCapability } from "../application/accounts/balanceScheduler";
 import type { AccountHealthInfo } from "../application/accounts/health";
+import { getQuotaIssueKind } from "../utils/quotaIssue";
 import type { AccountsRepository } from "../storage";
 import type { CodexExecProviderConfig, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../codex";
 import { SessionHub, type SessionKind, type SessionListFilter, type SessionRegistration, type SessionStatus } from "../sessions";
 import { normalizeLocalImportAccounts } from "./localImportProtocol";
 import type { LocalUsageAnalyticsService } from "../services/localUsageAnalytics";
 import type { DashboardLocalUsageDayModelViewModel, DashboardLocalUsageTokenTotals } from "../domain/dashboard/types";
+import {
+  accountConcurrencyTracker,
+  getPersistedAccountConcurrencySnapshot,
+  type AccountConcurrencySnapshot,
+  type AccountSessionActivity
+} from "../application/accounts/accountConcurrency";
 
 const CONTROL_HOST = "127.0.0.1";
 const CONTROL_API_PREFIX = "/api/manager";
@@ -54,6 +61,13 @@ export type ManagerControlAccount = {
   healthKind?: AccountHealthInfo["kind"];
   availability?: AccountHealthInfo["availability"];
   renewal?: AccountHealthInfo["renewal"];
+  mailboxDeactivated?: boolean;
+  registrationAt?: number;
+  importedAt?: number;
+  maxConcurrency?: number;
+  averageTokenRate?: number;
+  windowTotalTokens?: number;
+  windowTotalDurationMs?: number;
   lastQuotaAt?: number;
   quotaErrorCode?: string;
   resetCreditsAvailable?: number;
@@ -90,6 +104,11 @@ export type ManagerControlAccountSummary = {
     poolEligible: number;
   };
   accounts: ManagerControlAccount[];
+};
+
+export type ManagerControlProxySettings = {
+  httpsProxy?: string;
+  noProxy?: string;
 };
 
 export type ManagerControlUsage = {
@@ -151,6 +170,9 @@ export type ManagerControlServerOptions = {
     options?: ManagerControlSwitchOptions
   ) => Promise<RuntimeAccountSwitchOutcome>;
   getCodexExecProviderConfig?: () => Promise<CodexExecProviderConfig>;
+  getProxySettings?: () => Promise<ManagerControlProxySettings>;
+  getDeactivatedMailboxEmails?: () => readonly string[];
+  onAccountConcurrencyChanged?: (activity: AccountSessionActivity, snapshot?: AccountConcurrencySnapshot) => void;
   now?: () => number;
 };
 
@@ -250,6 +272,15 @@ export class ManagerControlServer {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === `${CONTROL_API_PREFIX}/proxy`) {
+      if (!this.options.getProxySettings) {
+        sendJson(response, 503, { error: "Manager proxy configuration is unavailable" });
+        return;
+      }
+      sendJson(response, 200, await this.options.getProxySettings());
+      return;
+    }
+
     if (url.pathname === `${CONTROL_API_PREFIX}/status` && request.method === "GET") {
       const [accounts, usageToday] = await Promise.all([this.readAccounts(), this.readUsageToday()]);
       sendJson(response, 200, { generatedAt: Date.now(), accounts, usageToday });
@@ -293,6 +324,27 @@ export class ManagerControlServer {
         return;
       }
       sendJson(response, 200, outcome);
+      return;
+    }
+
+    if (url.pathname === `${CONTROL_API_PREFIX}/account-concurrency` && request.method === "POST") {
+      let body: unknown;
+      try {
+        body = await readJsonBody(request);
+      } catch {
+        sendJson(response, 400, { error: "account concurrency activity must be valid JSON and no larger than 16 KB" });
+        return;
+      }
+      const activity = parseAccountSessionActivity(body);
+      if (!activity) {
+        sendJson(response, 400, { error: "sessionId, accountId, and active are required" });
+        return;
+      }
+      const result = accountConcurrencyTracker.record(activity);
+      if (result.changed) {
+        this.options.onAccountConcurrencyChanged?.(activity, result.snapshot);
+      }
+      sendJson(response, 200, { ok: true, ...(result.snapshot ? { snapshot: result.snapshot } : {}) });
       return;
     }
 
@@ -449,8 +501,17 @@ export class ManagerControlServer {
 
   private async readAccounts(): Promise<ManagerControlAccountSummary> {
     const accounts = await this.options.repo.listAccounts();
-    const mapped = await Promise.all(accounts.map(async (account) =>
-      mapAccount(account, await this.options.getAccountHealth?.(account))));
+    const deactivatedMailboxEmails = new Set(
+      (this.options.getDeactivatedMailboxEmails?.() ?? [])
+        .filter((email): email is string => typeof email === "string")
+        .map((email) => email.trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const mapped = await Promise.all(
+      accounts.map(async (account) =>
+        mapAccount(account, await this.options.getAccountHealth?.(account), deactivatedMailboxEmails)
+      )
+    );
     const counts = mapped.reduce<ManagerControlAccountSummary["counts"]>(
       (summary, account) => {
         summary.total += 1;
@@ -560,12 +621,43 @@ export class ManagerControlServer {
   }
 }
 
-function mapAccount(account: CodexAccountRecord, state?: AccountHealthInfo): ManagerControlAccount {
+function mapAccount(
+  account: CodexAccountRecord,
+  state?: AccountHealthInfo,
+  deactivatedMailboxEmails: ReadonlySet<string> = new Set()
+): ManagerControlAccount {
   const virtual = isSub2ApiAccount(account);
+  const mailboxDeactivated =
+    !virtual && deactivatedMailboxEmails.has(account.email.trim().toLowerCase());
   const capability = virtual ? "unknown" : getBalanceQuotaCapability(account);
+  const concurrency = virtual
+    ? undefined
+    : account.concurrencyWindows
+      ? getPersistedAccountConcurrencySnapshot(account)
+      : accountConcurrencyTracker.get(account.id);
+  const issueKind = virtual ? undefined : getQuotaIssueKind(account.quotaError);
+  const temporaryRefreshFailure =
+    !virtual &&
+    account.tokenRefreshLastErrorKind !== "reauthorize" &&
+    (Boolean(account.tokenRefreshLastError) || account.tokenRefreshLastErrorKind !== undefined);
   const health: ManagerControlHealth =
-    virtual || state?.kind === "healthy" ? "healthy" : state?.kind === "access_token_invalid" ? "auth"
-      : state?.kind === "quota" ? "quota" : "temporary";
+    mailboxDeactivated || issueKind === "disabled"
+      ? "disabled"
+      : state
+        ? virtual || state.kind === "healthy"
+          ? "healthy"
+          : state.kind === "access_token_invalid"
+            ? "auth"
+            : state.kind === "quota"
+              ? "quota"
+              : "temporary"
+        : issueKind === "auth"
+          ? "auth"
+          : issueKind === "quota"
+            ? "quota"
+            : temporaryRefreshFailure
+              ? "temporary"
+              : "healthy";
   return {
     id: account.id,
     email: account.email,
@@ -587,6 +679,13 @@ function mapAccount(account: CodexAccountRecord, state?: AccountHealthInfo): Man
     healthKind: state?.kind,
     availability: state?.availability,
     renewal: state?.renewal,
+    mailboxDeactivated: mailboxDeactivated || undefined,
+    registrationAt: virtual ? undefined : account.registrationAt,
+    importedAt: virtual ? undefined : account.importedAt,
+    maxConcurrency: concurrency?.max,
+    averageTokenRate: concurrency?.averageTokenRate,
+    windowTotalTokens: concurrency?.totalTokens,
+    windowTotalDurationMs: concurrency?.totalDurationMs,
     lastQuotaAt: account.lastQuotaAt,
     quotaErrorCode: account.quotaError?.code,
     resetCreditsAvailable: account.quotaSummary?.resetCreditsAvailable,
@@ -699,6 +798,33 @@ function parseAccountId(body: unknown): string | undefined {
   }
   const value = body["accountId"];
   return typeof value === "string" && value.trim() && value.trim().length <= 256 ? value.trim() : undefined;
+}
+
+function parseAccountSessionActivity(body: unknown): AccountSessionActivity | undefined {
+  if (!isRecord(body) || typeof body["sessionId"] !== "string" || typeof body["accountId"] !== "string") {
+    return undefined;
+  }
+  if (typeof body["active"] !== "boolean") {
+    return undefined;
+  }
+  const sessionId = body["sessionId"].trim();
+  const accountId = body["accountId"].trim();
+  if (!sessionId || !accountId || sessionId.length > 256 || accountId.length > 256) {
+    return undefined;
+  }
+  const tokens = readNonNegativeNumber(body["tokens"]);
+  const durationMs = readNonNegativeNumber(body["durationMs"]);
+  return {
+    sessionId,
+    accountId,
+    active: body["active"],
+    ...(tokens !== undefined ? { tokens } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {})
+  };
+}
+
+function readNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function parseSessionListFilter(params: URLSearchParams): SessionListFilter {

@@ -142,6 +142,9 @@ describe("manager gateway HTTP API", () => {
         },
         async getStatus() {
           return { ok: true, activeAccountId: "account-a" };
+        },
+        async getProxySettings() {
+          return { httpsProxy: "http://proxy.example:7890", noProxy: "127.0.0.1,localhost" };
         }
       }
     });
@@ -161,6 +164,13 @@ describe("manager gateway HTTP API", () => {
     const status = await fetch(`${baseUrl}/v1/manager/status`, { headers });
     assert.equal(status.status, 200);
     assert.deepEqual(await status.json(), { ok: true, activeAccountId: "account-a" });
+
+    const proxy = await fetch(`${baseUrl}/v1/manager/proxy`, { headers });
+    assert.equal(proxy.status, 200);
+    assert.deepEqual(await proxy.json(), {
+      httpsProxy: "http://proxy.example:7890",
+      noProxy: "127.0.0.1,localhost"
+    });
   });
 
   it("exposes Gateway-owned token usage even without Manager control APIs", async () => {

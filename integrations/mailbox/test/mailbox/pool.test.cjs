@@ -6,7 +6,17 @@ const { BoyaProvider } = require("../../src/core/providers/boya.cjs");
 const { CdnsProvider } = require("../../src/core/providers/cdns.cjs");
 const { Eight92Provider } = require("../../src/core/providers/eight92.cjs");
 const { createMailboxProvider } = require("../../src/core/provider.cjs");
-const { MailboxPool, METADATA_KEY, detailKey, secretKey } = require("../../src/mailbox/storage.cjs");
+const {
+  MailboxPool,
+  METADATA_KEY,
+  TRASH_INDEX_KEY,
+  detailKey,
+  secretKey,
+  trashSecretKey
+} = require("../../src/mailbox/storage.cjs");
+
+const OPENAI_FROM = ["no-reply", "openai.com"].join("@");
+const OPENAI_SAFETY_FROM = ["trustandsafety", "tm.openai.com"].join("@");
 
 test("metadata stores complete mailbox identity but never stores provider credentials", async () => {
   const stores = memoryStores();
@@ -99,15 +109,15 @@ test("tracks the earliest received OpenAI email for GPT age across queries and r
   await pool.recordQueryResult(id, {
     ok: true,
     messages: [
-      { id: "openai-later", from: "no-reply@openai.com", receivedAt: "2026-09-03T00:00:00.000Z" },
-      { id: "openai-first", from: "trustandsafety@tm.openai.com", receivedAt: "2026-09-01T00:00:00.000Z" }
+      { id: "openai-later", from: OPENAI_FROM, receivedAt: "2026-09-03T00:00:00.000Z" },
+      { id: "openai-first", from: OPENAI_SAFETY_FROM, receivedAt: "2026-09-01T00:00:00.000Z" }
     ]
   });
   assert.equal(pool.listMetadata()[0].firstOpenAiEmailAt, "2026-09-01T00:00:00.000Z");
 
   await pool.recordQueryResult(id, {
     ok: true,
-    messages: [{ id: "openai-new", from: "no-reply@openai.com", receivedAt: "2026-09-08T00:00:00.000Z" }]
+    messages: [{ id: "openai-new", from: OPENAI_FROM, receivedAt: "2026-09-08T00:00:00.000Z" }]
   });
   assert.equal(pool.listMetadata()[0].firstOpenAiEmailAt, "2026-09-01T00:00:00.000Z");
 
@@ -148,7 +158,7 @@ test("querying an OpenAI deactivation notice marks the mailbox and keeps the mar
   assert.equal(restored.listMetadata()[0].openaiAccountDeactivated, true);
 });
 
-test("a clean successful query clears a stale deactivation marker", async () => {
+test("a clean successful query preserves a historical deactivation marker", async () => {
   const stores = memoryStores();
   const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
   const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
@@ -169,12 +179,50 @@ test("a clean successful query clears a stale deactivation marker", async () => 
   });
   assert.equal(pool.listMetadata()[0].openaiAccountDeactivated, true);
 
-  const cleared = await pool.recordQueryResult(id, {
+  const refreshed = await pool.recordQueryResult(id, {
     ok: true,
     messages: [{ id: "ordinary", subject: "OpenAI verification code", from: ["no-reply", "openai.com"].join("@") }]
   });
-  assert.equal(cleared.openaiAccountDeactivated, false);
-  assert.equal(pool.listMetadata()[0].openaiAccountDeactivated, false);
+  assert.equal(refreshed.openaiAccountDeactivated, true);
+  assert.equal(pool.listMetadata()[0].openaiAccountDeactivated, true);
+  assert.equal((await pool.getDetail(id)).messages.some((message) => message.id === "stale-deactivated"), true);
+});
+
+test("historical deactivation evidence survives more than the detail cache limit", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "long-lived-deactivated@example.com----password----client----refresh"
+  })).imported;
+
+  await pool.recordQueryResult(id, {
+    ok: true,
+    messages: [{
+      id: "historical-deactivated",
+      subject: "Your account has been deactivated",
+      from: ["no-reply", "openai.com"].join("@"),
+      body: "Your account has been deactivated."
+    }]
+  });
+  for (let index = 0; index < 25; index += 1) {
+    await pool.recordQueryResult(id, {
+      ok: true,
+      messages: [{
+        id: `ordinary-${index}`,
+        subject: "OpenAI verification code",
+        from: ["no-reply", "openai.com"].join("@"),
+        body: "Use this code to continue."
+      }]
+    });
+  }
+
+  const detail = await pool.getDetail(id);
+  assert.equal(pool.listMetadata()[0].openaiAccountDeactivated, true);
+  assert.equal(detail.messages.some((message) => message.id === "historical-deactivated"), true);
+  assert.equal(detail.messages.length, 2);
 });
 
 test("loading the pool backfills deactivation markers from existing message details", async () => {
@@ -202,7 +250,7 @@ test("loading the pool backfills deactivation markers from existing message deta
   assert.equal(restored.listMetadata()[0].openaiAccountDeactivated, true);
 });
 
-test("loading the pool clears a stale marker when stored details have no deactivation notice", async () => {
+test("loading the pool preserves a historical marker even when stored details have no notice", async () => {
   const stores = memoryStores();
   const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
   const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
@@ -222,7 +270,7 @@ test("loading the pool clears a stale marker when stored details have no deactiv
 
   const restored = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
   await restored.load();
-  assert.equal(restored.listMetadata()[0].openaiAccountDeactivated, false);
+  assert.equal(restored.listMetadata()[0].openaiAccountDeactivated, true);
 });
 
 test("renewal writes a new secret only after the provider reports changed credentials", async () => {
@@ -370,7 +418,7 @@ test("GPT registration status persists through reimport, editing, and a new pool
   assert.equal(restored.listMetadata()[0].gptRegisteredAt, 102);
 });
 
-test("deleting an account removes its secret, detail and metadata entry", async () => {
+test("deleting an account moves its data to the private undo trash", async () => {
   const stores = memoryStores();
   const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
   const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
@@ -378,10 +426,37 @@ test("deleting an account removes its secret, detail and metadata entry", async 
   const [{ id }] = (await pool.importProvider({ provider, input: "one@example.com----password-one----client-one----refresh-one" })).imported;
   await pool.recordQueryResult(id, { ok: true, messages: [{ id: "message", subject: "Code", body: "hello" }] });
 
-  await pool.deleteAccount(id);
+  const deleted = await pool.deleteAccount(id);
   assert.equal(pool.listMetadata().length, 0);
   assert.equal(stores.secretStore.values.has(secretKey(id)), false);
   assert.equal(stores.metadata.values.has(detailKey(id)), false);
+  assert.equal(deleted.undoAvailable, true);
+  assert.equal(stores.secretStore.values.has(trashSecretKey(id)), true);
+  assert.equal(stores.metadata.values.get(TRASH_INDEX_KEY).entries[0].id, id);
+});
+
+test("an accidentally deleted account can be restored with its credentials and detail", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "restore@example.com----password----client----refresh"
+  })).imported;
+  await pool.recordQueryResult(id, {
+    ok: true,
+    messages: [{ id: "restore-message", subject: "Code", body: "hello" }]
+  });
+
+  await pool.deleteAccount(id);
+  const restored = await pool.restoreDeletedAccount(id);
+
+  assert.equal(restored.address, "restore@example.com");
+  assert.equal((await pool.getAccount(id)).credentials.refreshToken, "refresh");
+  assert.equal((await pool.getDetail(id)).messages[0].id, "restore-message");
+  assert.equal(stores.secretStore.values.has(trashSecretKey(id)), false);
+  assert.equal(stores.metadata.values.has(TRASH_INDEX_KEY), false);
 });
 
 test("editing can switch the provider format while keeping the mailbox address", async () => {

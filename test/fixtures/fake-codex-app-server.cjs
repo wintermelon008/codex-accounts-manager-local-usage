@@ -159,6 +159,7 @@ function handleLine(line) {
       const activeTurn = { id: `turn-${turnSequence}`, threadId: message.params.threadId };
       activeTurns.push(activeTurn);
       const turn = { id: activeTurn.id, items: [], itemsView: { type: "all" }, status: "inProgress" };
+      const useTurnIdResponse = message.params && message.params.testTurnResponse === "turnId";
       if (reorderNextTurnStartResponse) {
         reorderNextTurnStartResponse = false;
         emit({ method: "turn/started", params: { threadId: message.params.threadId, turn } });
@@ -167,11 +168,13 @@ function handleLine(line) {
           method: "turn/completed",
           params: { threadId: message.params.threadId, turn: { ...turn, status: "completed" } }
         });
-        respond(message.id, { turn });
+        respond(message.id, useTurnIdResponse ? { turnId: activeTurn.id, status: "inProgress" } : { turn });
         break;
       }
-      respond(message.id, { turn });
-      emit({ method: "turn/started", params: { threadId: message.params.threadId, turn } });
+      respond(message.id, useTurnIdResponse ? { turnId: activeTurn.id, status: "inProgress" } : { turn });
+      if (!useTurnIdResponse) {
+        emit({ method: "turn/started", params: { threadId: message.params.threadId, turn } });
+      }
       break;
     }
     case "thread/goal/get":
@@ -218,6 +221,79 @@ function handleLine(line) {
         const goal = { ...previousGoal, status: "usageLimited", updatedAt: previousGoal.updatedAt + 1 };
         goals.set(message.params.threadId, goal);
         emit({ method: "thread/goal/updated", params: { threadId: message.params.threadId, turnId: null, goal } });
+      }
+      respond(message.id, {});
+      break;
+    }
+    case "test/tokenCount": {
+      const activeTurn = activeTurns[0];
+      if (activeTurn) {
+        const totalTokens = Number.isSafeInteger(message.params?.totalTokens) ? message.params.totalTokens : 150;
+        emit({
+          method: "codex/event/token_count",
+          params: {
+            conversationId: activeTurn.threadId,
+            turnId: activeTurn.id,
+            msg: {
+              type: "token_count",
+              info: {
+                last_token_usage: {
+                  input_tokens: totalTokens,
+                  output_tokens: 0,
+                  total_tokens: totalTokens
+                },
+                total_token_usage: {
+                  input_tokens: totalTokens,
+                  output_tokens: 0,
+                  total_tokens: totalTokens
+                }
+              }
+            }
+          }
+        });
+      }
+      respond(message.id, {});
+      break;
+    }
+    case "test/tokenCountUnscoped": {
+      const activeTurn = activeTurns[0];
+      if (activeTurn) {
+        const totalTokens = Number.isSafeInteger(message.params?.totalTokens) ? message.params.totalTokens : 100;
+        emit({
+          method: "codex/event/token_count",
+          params: {
+            msg: {
+              type: "token_count",
+              info: {
+                last_token_usage: { input_tokens: totalTokens, output_tokens: 0, total_tokens: totalTokens },
+                total_token_usage: { input_tokens: totalTokens, output_tokens: 0, total_tokens: totalTokens }
+              }
+            }
+          }
+        });
+      }
+      respond(message.id, {});
+      break;
+    }
+    case "test/threadTokenUsage": {
+      const activeTurn = activeTurns[0];
+      if (activeTurn) {
+        const totalTokens = Number.isSafeInteger(message.params?.totalTokens) ? message.params.totalTokens : 200;
+        const usage = {
+          inputTokens: totalTokens,
+          cachedInputTokens: 0,
+          outputTokens: 0,
+          reasoningOutputTokens: 0,
+          totalTokens
+        };
+        emit({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: activeTurn.threadId,
+            turnId: activeTurn.id,
+            tokenUsage: { last: usage, total: usage }
+          }
+        });
       }
       respond(message.id, {});
       break;
@@ -401,6 +477,10 @@ function handleLine(line) {
       respond(message.id, {});
       break;
     }
+    case "test/dropActiveTurn":
+      activeTurns.shift();
+      respond(message.id, {});
+      break;
     case "test/reorderNextTurnStartResponse":
       reorderNextTurnStartResponse = true;
       respond(message.id, {});

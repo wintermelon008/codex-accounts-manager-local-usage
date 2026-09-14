@@ -5,7 +5,10 @@ const test = require("node:test");
 const {
   FiveSimClient,
   FiveSimPhoneOrderSession,
+  averageSuccessRate,
+  effectiveSuccessRate,
   flattenCatalog,
+  instantSuccessRate,
   normalizeSuccessRate
 } = require("../../src/operations/fivesim-phone-order.cjs");
 
@@ -43,6 +46,8 @@ test("5SIM client reads balance and flattens country/operator offers", async () 
       product: "openai",
       price: 0.29,
       count: 12,
+      instantSuccessRate: 98.5,
+      averageSuccessRate: null,
       successRate: 98.5
     },
     {
@@ -54,6 +59,8 @@ test("5SIM client reads balance and flattens country/operator offers", async () 
       product: "openai",
       price: 0.42,
       count: 3,
+      instantSuccessRate: 99.1,
+      averageSuccessRate: null,
       successRate: 99.1
     }
   ]);
@@ -156,6 +163,57 @@ test("5SIM number replacement cancels the old order before buying the next one",
   assert.equal(replaced.order.phone, "+447000000002");
   assert.equal(replaced.replacements, 1);
   await session.dispose();
+});
+
+test("5SIM number replacement remains available after ten replacements", async () => {
+  let orderNumber = 0;
+  const fakeClient = {
+    async profile() { return { balance: 3, rating: 96 }; },
+    async catalog() { return [{ country: "england", countryName: "England", operator: "any", product: "openai", price: 0.29, count: 4, successRate: 98 }]; },
+    async buyActivation() {
+      orderNumber += 1;
+      return { id: orderNumber, country: "england", operator: "any", product: "openai", phone: `+44700000000${orderNumber}`, status: "PENDING", sms: null };
+    },
+    async checkOrder(orderId) { return { id: orderId, status: "PENDING", sms: null }; },
+    async cancelOrder(orderId) { return { id: orderId, status: "CANCELED", sms: null }; }
+  };
+  const session = new FiveSimPhoneOrderSession({ clientFactory: () => fakeClient, pollIntervalMs: 1000 });
+
+  await session.start("token", { country: "england", operator: "any" });
+  for (let index = 0; index < 11; index += 1) await session.replaceNumber();
+
+  assert.equal(session.snapshot().replacements, 11);
+  assert.equal(session.snapshot().order.phone, "+4470000000012");
+  await session.dispose();
+});
+
+test("5SIM falls back to historical rate windows when the current rate is zero", () => {
+  assert.equal(instantSuccessRate({ rate: 0, rate3: 1.31, rate24: 8.56 }), 0);
+  assert.equal(averageSuccessRate({ rate: 0, rate3: 1.31, rate24: 8.56 }), 4.94);
+  assert.equal(effectiveSuccessRate({ rate: 0, rate3: 1.31, rate24: 8.56 }), 4.94);
+  assert.equal(effectiveSuccessRate({ rate: 0, rate168: 0.2, rate720: 0.85 }), 0.53);
+  assert.equal(effectiveSuccessRate({ rate: 0, rate3: 0 }), 0);
+});
+
+test("flattenCatalog includes an in-stock offer with a usable historical rate", () => {
+  const catalog = flattenCatalog(
+    { openai: { argentina: { virtual62: { cost: 0.05, count: 712, rate: 0, rate3: 1.31, rate24: 8.56 } } } },
+    { argentina: { text_en: "Argentina", iso: { ar: 1 }, prefix: { "+54": 1 } } },
+    "openai"
+  );
+  assert.deepEqual(catalog[0], {
+    country: "argentina",
+    countryName: "Argentina",
+    iso: "ar",
+    prefix: "+54",
+    operator: "virtual62",
+    product: "openai",
+    price: 0.05,
+    count: 712,
+    instantSuccessRate: 0,
+    averageSuccessRate: 4.94,
+    successRate: 4.94
+  });
 });
 
 test("flattenCatalog supports country-first price responses", () => {

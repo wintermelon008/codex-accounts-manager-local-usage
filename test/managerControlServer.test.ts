@@ -6,10 +6,13 @@ import {
 } from "../src/integrations/managerControlServer";
 import type { CodexExecProviderConfig, RuntimeAccountSwitchOutcome } from "../src/codex";
 import type { CodexAccountRecord, SharedCodexAccountJson } from "../src/core/types";
+import { accountConcurrencyTracker } from "../src/application/accounts/accountConcurrency";
+import type { AccountHealthInfo } from "../src/application/accounts/health";
 
 const servers: ManagerControlServer[] = [];
 
 afterEach(() => {
+  accountConcurrencyTracker.reset();
   for (const server of servers.splice(0)) {
     server.dispose();
   }
@@ -36,15 +39,52 @@ describe("ManagerControlServer", () => {
       usageToday: { date: string; total: { totalTokens: number }; byModel: Array<{ model: string }> };
     };
 
-    expect(body.accounts.counts).toMatchObject({ total: 3, poolEligible: 1, temporaryFailed: 3 });
-    expect(body.accounts.accounts[0]).toMatchObject({ health: "temporary" });
-    expect(body.accounts.accounts[1]).toMatchObject({ health: "temporary" });
+    expect(body.accounts.counts).toMatchObject({ total: 3, poolEligible: 1, temporaryFailed: 1 });
+    expect(body.accounts.accounts[0]).toMatchObject({ health: "healthy" });
+    expect(body.accounts.accounts[1]).toMatchObject({ health: "auth" });
     expect(body.accounts.accounts.find((account) => account.email === "three@example.com")).toMatchObject({
       health: "temporary"
     });
     expect(body.accounts.accounts[0]).not.toHaveProperty("rawData");
     expect(body.usageToday).toMatchObject({ date: "2026-08-18", total: { totalTokens: 42 } });
     expect(body.usageToday.byModel).toMatchObject([{ date: "2026-08-18", model: "gpt-test", totalTokens: 42 }]);
+    expect(body.accounts.accounts[0]).toMatchObject({
+      registrationAt: 1_700_000_000_000,
+      importedAt: 1_700_000_100_000,
+      maxConcurrency: 3,
+      averageTokenRate: 10,
+      windowTotalTokens: 600,
+      windowTotalDurationMs: 60_000
+    });
+  });
+
+  it("exposes the shared availability and renewal state in the control read model", async () => {
+    const server = createServer({
+      getAccountHealth: async (account) =>
+        account.id === "account-1"
+          ? {
+              kind: "refresh_unavailable",
+              issueKey: "refresh_unavailable:1:unavailable",
+              availability: "usable",
+              renewal: "unavailable",
+              observedAt: 1_700_000_000_000
+            }
+          : { kind: "healthy", issueKey: "healthy:0:unknown" }
+    });
+    const address = await server.start(0, "control-secret");
+    servers.push(server);
+
+    const response = await fetch(`http://${address.host}:${address.port}/api/manager/accounts`, {
+      headers: { authorization: "Bearer control-secret" }
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { accounts: Array<Record<string, unknown>> };
+    expect(body.accounts.find((account) => account.id === "account-1")).toMatchObject({
+      health: "temporary",
+      healthKind: "refresh_unavailable",
+      availability: "usable",
+      renewal: "unavailable"
+    });
   });
 
   it("creates a refresh job and exposes redacted import status", async () => {
@@ -184,6 +224,79 @@ describe("ManagerControlServer", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(provider);
   });
+
+  it("marks accounts linked to deactivated Mailbox entries as unavailable", async () => {
+    const server = createServer({
+      getDeactivatedMailboxEmails: () => ["ONE@EXAMPLE.COM"]
+    });
+    const address = await server.start(0, "control-secret");
+    servers.push(server);
+
+    const response = await fetch(`http://${address.host}:${address.port}/api/manager/accounts`, {
+      headers: { authorization: "Bearer control-secret" }
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { accounts: Array<Record<string, unknown>> };
+    expect(body.accounts.find((account) => account.email === "one@example.com")).toMatchObject({
+      health: "disabled",
+      mailboxDeactivated: true
+    });
+  });
+
+  it("returns the effective HTTPS proxy through the protected control API", async () => {
+    const server = createServer({
+      getProxySettings: async () => ({
+        httpsProxy: "http://proxy.example:7890",
+        noProxy: "127.0.0.1,localhost"
+      })
+    });
+    const address = await server.start(0, "control-secret");
+    servers.push(server);
+
+    const response = await fetch(`http://${address.host}:${address.port}/api/manager/proxy`, {
+      headers: { authorization: "Bearer control-secret" }
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      httpsProxy: "http://proxy.example:7890",
+      noProxy: "127.0.0.1,localhost"
+    });
+  });
+
+  it("records Gateway session peaks and aggregate Token/s through the protected API", async () => {
+    const changes: number[] = [];
+    const server = createServer({ onAccountConcurrencyChanged: () => changes.push(1) });
+    const address = await server.start(0, "control-secret");
+    servers.push(server);
+    const baseUrl = `http://${address.host}:${address.port}`;
+    const headers = {
+      authorization: "Bearer control-secret",
+      "content-type": "application/json"
+    };
+    const report = async (body: Record<string, unknown>) => {
+      const response = await fetch(`${baseUrl}/api/manager/account-concurrency`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body)
+      });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+
+    await report({ sessionId: "session-1", accountId: "account-1", active: true });
+    await report({ sessionId: "session-2", accountId: "account-1", active: true });
+    await report({ sessionId: "session-1", accountId: "account-1", active: false, tokens: 100, durationMs: 10_000 });
+    await report({ sessionId: "session-2", accountId: "account-1", active: false, tokens: 300, durationMs: 30_000 });
+
+    expect(accountConcurrencyTracker.get("account-1")).toEqual({
+      current: 0,
+      max: 2,
+      totalTokens: 400,
+      totalDurationMs: 40_000,
+      averageTokenRate: 10
+    });
+    expect(changes).toHaveLength(4);
+  });
 });
 
 function createServer(
@@ -195,6 +308,10 @@ function createServer(
       options?: { force?: boolean; gracePeriodMs?: number; longTurnPolicy?: "defer" | "interrupt" | "interruptAndContinue" }
     ) => Promise<RuntimeAccountSwitchOutcome>;
     getCodexExecProviderConfig?: () => Promise<CodexExecProviderConfig>;
+    getAccountHealth?: (account: CodexAccountRecord) => Promise<AccountHealthInfo>;
+    getProxySettings?: () => Promise<{ httpsProxy?: string; noProxy?: string }>;
+    getDeactivatedMailboxEmails?: () => readonly string[];
+    onAccountConcurrencyChanged?: () => void;
   } = {}
 ): ManagerControlServer {
   const usage = {
@@ -274,11 +391,24 @@ function createServer(
               hourlyPercentage: 90,
               hourlyWindowPresent: true,
               hourlyWindowMinutes: 300,
+              hourlyResetTime: 2_000_000_000,
               weeklyPercentage: 80,
               weeklyWindowPresent: true,
               weeklyWindowMinutes: 10080,
               codeReviewPercentage: 100
             },
+            registrationAt: 1_700_000_000_000,
+            importedAt: 1_700_000_100_000,
+            concurrencyWindows: [
+              {
+                window: "hourly" as const,
+                resetAt: 2_000_000_000,
+                windowMinutes: 300,
+                maxConcurrency: 3,
+                totalTokens: 600,
+                totalDurationMs: 60_000
+              }
+            ],
             createdAt: Date.now(),
             updatedAt: Date.now()
           },
@@ -324,6 +454,10 @@ function createServer(
       (async (accounts) => ({ id: "22222222-2222-4222-8222-222222222222", accountCount: accounts.length })),
     getImportStatus: async () => importStatus,
     switchAccount: overrides.switchAccount,
-    getCodexExecProviderConfig: overrides.getCodexExecProviderConfig
+    getAccountHealth: overrides.getAccountHealth,
+    getCodexExecProviderConfig: overrides.getCodexExecProviderConfig,
+    getProxySettings: overrides.getProxySettings,
+    getDeactivatedMailboxEmails: overrides.getDeactivatedMailboxEmails,
+    onAccountConcurrencyChanged: overrides.onAccountConcurrencyChanged
   });
 }

@@ -168,6 +168,21 @@ test("number replacement is performed only by the explicit replace action and re
   await session.dispose();
 });
 
+test("LIYE number replacement remains available after ten replacements", async () => {
+  const client = fakeClient({
+    order: { id: "order-many", status: "waiting", phone: "+8613900000000" },
+    replacement: { id: "order-many", status: "waiting", phone: "+8613911111111" }
+  });
+  const session = new LIYEPhoneOrderSession({ clientFactory: () => client, pollIntervalMs: 1000 });
+
+  await session.start("card-secret");
+  for (let index = 0; index < 11; index += 1) await session.replaceNumber();
+
+  assert.equal(session.snapshot().replacements, 11);
+  assert.equal(client.actionCalls.length, 11);
+  await session.dispose();
+});
+
 test("a replace race after SMS arrival recovers the current code instead of stopping polling", async () => {
   const client = fakeClient({
     order: { id: "order-race", status: "waiting", phone: "+8613900000000" },

@@ -13,6 +13,7 @@
   },
   "files": [
     "src",
+    "fast-query",
     "test",
     "README.md",
     "package.json",

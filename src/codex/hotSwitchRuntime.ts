@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { setAvailabilityRuntime } from "../application/accounts/accountState";
-import type { HotSwitchAvailabilityEvent } from "./hotSwitchBridge";
 import { needsRefresh } from "../auth/oauth";
 import { ensureFreshAccountTokens, ensureFreshTokensWithLease } from "../auth/tokenRefreshCoordinator";
 import { isSub2ApiAccount, type CodexAccountRecord, type CodexTokens } from "../core/types";
@@ -25,6 +24,7 @@ import {
   HotSwitchAccountResult,
   HotSwitchAuthTokenRevokedEvent,
   HotSwitchAuthTokenRevokedResult,
+  HotSwitchAvailabilityEvent,
   HotSwitchIdentity,
   HotSwitchLongTurnPolicy,
   HotSwitchOperationStatus,
@@ -36,6 +36,7 @@ import {
 } from "./hotSwitchBridge";
 import { getCodexHome, readAuthFile, writeAuthFile } from "./authFile";
 import { installRemoteCliOverlay, restoreRemoteCliOverlay } from "./remoteCliOverlay";
+import type { AccountConcurrencySnapshot, AccountSessionActivity } from "../application/accounts/accountConcurrency";
 
 const HOT_SWITCH_ENABLED = "hotSwitchEnabled";
 const HOT_SWITCH_GRACE_SECONDS = "hotSwitchGraceSeconds";
@@ -121,6 +122,10 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     private readonly handleAuthTokenRevoked?: (
       event: HotSwitchAuthTokenRevokedEvent
     ) => Promise<HotSwitchAuthTokenRevokedResult>,
+    private readonly onAccountConcurrencyChanged?: (
+      activity: AccountSessionActivity,
+      snapshot?: AccountConcurrencySnapshot
+    ) => void,
     private readonly handleAvailability?: (event: HotSwitchAvailabilityEvent) => Promise<void>
   ) {}
 
@@ -661,6 +666,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
           (rollbackContextId) => this.restoreUnmanagedAccount(rollbackContextId),
           process.pid,
           (event) => this.handleAuthTokenRevoked?.(event) ?? Promise.resolve({ handled: false }),
+          (activity, snapshot) => this.onAccountConcurrencyChanged?.(activity, snapshot),
           async (event) => {
             const status = await candidateBridge.getStatus();
             if (status.availabilityRuntimeId !== event.runtimeId) return;

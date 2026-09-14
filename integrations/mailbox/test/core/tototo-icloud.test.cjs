@@ -13,7 +13,7 @@ const account = {
   address: "discord.tatamis.1y@icloud.com",
   credentials: {
     codeUrl:
-      "https://ima4.52dfd.top/api/v1/mailboxes/discord.tatamis.1y@icloud.com/code?key=test-key-value"
+      "https://ima2.52dfd.top/api/v1/mailboxes/discord.tatamis.1y@icloud.com/code?key=test-key-value"
   }
 };
 
@@ -23,13 +23,13 @@ test("tototo-icloud exposes the provider contract and parses email----URL rows",
   assert.equal(provider.id, TOTOTO_ICLOUD_PROVIDER_ID);
   assert.equal(provider.displayName, "tototo-icloud");
   assert.deepEqual(provider.capabilities, { history: "latest", maxMessages: 1, manualRenewal: false });
-  assert.match(provider.importSchema.placeholder, /^user@example.com----https:\/\/ima4\.52dfd\.top/u);
+  assert.match(provider.importSchema.placeholder, /^user@example.com----https:\/\/ima2\.52dfd\.top/u);
   assert.deepEqual(provider.parseImport(account.address + "----" + account.credentials.codeUrl), {
     entries: [{ address: account.address, credentials: { codeUrl: account.credentials.codeUrl } }],
     failed: []
   });
-  assert.equal(TOTOTO_ICLOUD_HOSTNAME, "ima4.52dfd.top");
-  assert.equal(TOTOTO_ICLOUD_BASE_URL, "https://ima4.52dfd.top");
+  assert.equal(TOTOTO_ICLOUD_HOSTNAME, "ima2.52dfd.top");
+  assert.equal(TOTOTO_ICLOUD_BASE_URL, "https://ima2.52dfd.top");
 });
 
 test("tototo-icloud queries the supplied URL and normalizes a returned code", async () => {
@@ -83,17 +83,23 @@ test("tototo-icloud treats the service no_code response as a successful empty qu
   assert.match(result.fetchedAt, /^\d{4}-\d{2}-\d{2}T/u);
 });
 
-test("tototo-icloud rejects unapproved URL rows and keeps HTTP errors safe", async () => {
+test("tototo-icloud validates URL shape without restricting the HTTPS hostname", async () => {
   const provider = new TototoIcloudProvider({ fetchImpl: async () => response({}) }).asProvider();
   const parsed = provider.parseImport([
-    account.address + "----https://example.invalid/api/v1/mailboxes/" + account.address + "/code?key=secret",
-    account.address + "----https://ima4.52dfd.top/api/v1/mailboxes/other@example.com/code?key=secret",
-    account.address + "----https://ima4.52dfd.top/api/v1/mailboxes/" + account.address + "/code"
+    account.address + "----http://ima2.52dfd.top/api/v1/mailboxes/" + account.address + "/code?key=secret",
+    account.address + "----https://ima2.52dfd.top/api/v1/mailboxes/other@example.com/code?key=secret",
+    account.address + "----https://example.invalid/api/v1/mailboxes/" + account.address + "/code"
   ].join("\n"));
 
   assert.equal(parsed.entries.length, 0);
   assert.equal(parsed.failed.length, 3);
   assert.doesNotMatch(JSON.stringify(parsed), /secret/u);
+
+  const externalHost = "https://mail.example.invalid/api/v1/mailboxes/" + account.address + "/code?key=external-key";
+  assert.deepEqual(provider.parseImport(account.address + "----" + externalHost), {
+    entries: [{ address: account.address, credentials: { codeUrl: externalHost } }],
+    failed: []
+  });
 
   const failed = new TototoIcloudProvider({
     fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({}) })

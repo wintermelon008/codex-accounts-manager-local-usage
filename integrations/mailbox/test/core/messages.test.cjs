@@ -26,6 +26,33 @@ test("detects Chinese OpenAI access-disabled notices", () => {
   assert.equal(isOpenAiAccountDeactivatedMessage(message), true);
 });
 
+test("detects NLoop messages whose sender is only the OpenAI display name", () => {
+  const message = normalizeMessage({
+    id: "nloop-deactivated",
+    subject: "OpenAI - 访问权限已停用 [C-zSLBuOWKPqMM]",
+    from: "OpenAI",
+    body: "由于你近期的活动违反了我们的条款，你的账户已被停用。"
+  });
+
+  assert.equal(message.from, "OpenAI");
+  assert.equal(message.senderName, "OpenAI");
+  assert.equal(isOpenAiAccountDeactivatedMessage(message), true);
+});
+
+test("supports provider sender fields when the display name and address are separate", () => {
+  const message = normalizeMessage({
+    id: "provider-sender-fields",
+    subject: "Your account has been deactivated",
+    from: "OpenAI",
+    fromAddress: ["trustandsafety", "tm.openai.com"].join("@"),
+    body: "Your account has been deactivated."
+  });
+
+  assert.equal(message.from, ["trustandsafety", "tm.openai.com"].join("@"));
+  assert.equal(message.senderName, "OpenAI");
+  assert.equal(isOpenAiAccountDeactivatedMessage(message), true);
+});
+
 test("does not treat unrelated senders or ordinary OpenAI messages as deactivation notices", () => {
   const unrelatedSender = normalizeMessage({
     id: "unrelated-sender",
@@ -38,7 +65,14 @@ test("does not treat unrelated senders or ordinary OpenAI messages as deactivati
     from: ["no-reply", "openai.com"].join("@"),
     body: "Use this code to continue."
   });
+  const ordinaryDisplayNameMessage = normalizeMessage({
+    id: "display-name-verification",
+    subject: "OpenAI verification code",
+    from: "OpenAI",
+    body: "Use this code to continue."
+  });
 
   assert.equal(isOpenAiAccountDeactivatedMessage(unrelatedSender), false);
   assert.equal(isOpenAiAccountDeactivatedMessage(ordinaryOpenAiMessage), false);
+  assert.equal(isOpenAiAccountDeactivatedMessage(ordinaryDisplayNameMessage), false);
 });

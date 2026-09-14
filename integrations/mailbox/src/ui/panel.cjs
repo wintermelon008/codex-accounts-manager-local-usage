@@ -62,8 +62,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .subtitle, .muted { color: var(--muted); }
     .subtitle { margin-top: 4px; }
     .top-actions, .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-    .notice { display: none; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-soft); }
-    .notice.visible { display: block; }
+    .notice { display: none; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-soft); }
+    .notice.visible { display: flex; }
+    .notice-message { min-width: 0; overflow-wrap: anywhere; }
+    .notice-undo { flex: none; padding: 4px 10px; }
     .notice.success { color: var(--success); border-color: color-mix(in srgb, var(--success) 35%, var(--border)); background: color-mix(in srgb, var(--success) 8%, transparent); }
     .notice.warning { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 35%, var(--border)); background: color-mix(in srgb, var(--warning) 8%, transparent); }
     .notice.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, transparent); }
@@ -358,11 +360,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let modalFormValues = { importForm: {}, editForm: {} };
       let pendingRenderWhileSelect = false;
       let registrationCountdownTimer;
+      let pendingRegistrationPhoneShortcut = null;
 
       window.addEventListener("message", (event) => {
         const message = event.data || {};
         if (message.type === "state") {
           state = message.state || state;
+          completeRegistrationPhoneShortcutIfReady();
           pendingCodexImports = Object.fromEntries((state.codexImports || []).map((mailboxId) => [mailboxId, true]));
           const knownMailboxIds = new Set((state.mailboxes || []).map((mailbox) => mailbox.id));
           selectedMailboxIds = new Set([...selectedMailboxIds].filter((mailboxId) => knownMailboxIds.has(mailboxId)));
@@ -411,7 +415,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
               pendingActions[mailboxId] = "";
             }
           }
-          showNotice(message.message, message.level);
+          showNotice(message.message, message.level, message.undo);
           render();
         }
       });
@@ -437,9 +441,23 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         clearPressedButtons();
       });
       document.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        const target = closestTarget(event, "button:not(:disabled)");
-        target?.classList.add("is-pressed");
+        if (event.key === "Enter" || event.key === " ") {
+          const target = closestTarget(event, "button:not(:disabled)");
+          target?.classList.add("is-pressed");
+          return;
+        }
+        if (String(event.key || "").toLowerCase() !== "n" || event.repeat || event.defaultPrevented) return;
+        if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || isEditableKeyboardTarget(event)) return;
+        const session = getRegistrationPhoneShortcutSession();
+        if (!session || pendingRegistrationPhoneShortcut) return;
+        event.preventDefault();
+        pendingRegistrationPhoneShortcut = {
+          sessionId: session.id,
+          previousPhone: String(session.phoneOrder?.order?.phone || "").trim(),
+          previousOrderId: String(session.phoneOrder?.order?.id || "").trim()
+        };
+        showNotice("正在重新取号，获取新号码后自动复制…", "info");
+        send("registrationReplacePhone", { sessionId: session.id });
       });
       document.addEventListener("keyup", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
@@ -487,6 +505,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "confirm-delete") confirmDelete();
         else if (action === "edit-mailbox") openEditModal(target.dataset.mailboxId || "");
         else if (action === "delete-mailbox") requestDelete(target.dataset.mailboxId || "");
+        else if (action === "undo-delete-mailbox") send("undoDeleteMailbox", { mailboxId: target.dataset.mailboxId || "" });
         else if (action === "delete-mailbox-and-codex") requestDeleteMailboxAndCodex(target.dataset.mailboxId || "");
         else if (action === "codex-import") requestCodexImport(target.dataset.mailboxId || state.selectedMailboxId);
         else if (action === "copy-mailbox-email") copyText(target.dataset.email || "", "邮箱已复制");
@@ -1250,7 +1269,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       }
 
       function renderPhoneOrder(session) {
-        const orderState = session.phoneOrder || { phase: "idle", running: false, replacements: 0, maxReplacements: 10 };
+        const orderState = session.phoneOrder || { phase: "idle", running: false, replacements: 0 };
         const order = orderState.order || {};
         const phone = String(order.phone || "").trim();
         const code = String(order.smsCode || "").trim();
@@ -1260,7 +1279,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         // A completed GPT-only session can still need a phone while its
         // follow-up Codex OAuth browser is running.
         const terminal = ["completed", "failed", "cancelled"].includes(session.state) && !(manualBrowser && session.state === "completed");
-        const canReplace = !terminal && active && ["waiting", "polling"].includes(phase) && !code && Number(orderState.replacements || 0) < Number(orderState.maxReplacements || 0);
+        const canReplace = !terminal && active && ["waiting", "polling"].includes(phase) && !code;
         const canCancel = !terminal && active && !["received", "completed", "cancelled", "error", "timed_out"].includes(phase);
         const sources = Array.isArray(state.phoneSources) && state.phoneSources.length
           ? state.phoneSources
@@ -1374,7 +1393,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             const offer = group.minOffer;
             const countryLabel = [offer.countryName || group.country, offer.prefix ? "(" + offer.prefix + ")" : ""].filter(Boolean).join(" ");
             const operatorLabel = offer.operator && offer.operator !== "any" ? offer.operator : "任意运营商";
-            return '<button type="button" class="registration-fivesim-country' + (group.country === selectedFiveSimCountry ? ' selected' : '') + '" data-action="registration-select-fivesim-country" data-session-id="' + esc(session.id) + '" data-country="' + esc(group.country) + '"><span class="registration-fivesim-country-main"><strong>' + esc(countryLabel) + '</strong><small>最低价条目：' + esc(operatorLabel) + ' · ' + esc(formatFiveSimCount(offer.count)) + ' 个号码</small></span><span class="registration-fivesim-country-price"><strong>' + esc(formatFiveSimOfferPrice(offer.price)) + ' 起</strong><small>' + esc(String(group.offers.length)) + ' 个运营商</small></span></button>';
+            return '<button type="button" class="registration-fivesim-country' + (group.country === selectedFiveSimCountry ? ' selected' : '') + '" data-action="registration-select-fivesim-country" data-session-id="' + esc(session.id) + '" data-country="' + esc(group.country) + '"><span class="registration-fivesim-country-main"><strong>' + esc(countryLabel) + '</strong><small>最低价条目：' + esc(operatorLabel) + ' · ' + esc(formatFiveSimCount(offer.count)) + ' 个号码 · ' + esc(formatFiveSimRateSummary(offer)) + '</small></span><span class="registration-fivesim-country-price"><strong>' + esc(formatFiveSimOfferPrice(offer.price)) + ' 起</strong><small>' + esc(String(group.offers.length)) + ' 个运营商</small></span></button>';
           }).join("")
           : '<div class="field-note">暂无符合条件的可选号区。请刷新 5SIM 信息，或放宽价格/成功率筛选。</div>';
         const fiveSimOperatorRows = recommendedOperatorOffers.length
@@ -1382,7 +1401,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             const selected = offer.country === fiveSimSelection.country && offer.operator === fiveSimSelection.operator;
             const badges = (highestRate ? '<span class="registration-fivesim-badge rate">接码率最高</span>' : '') + (lowestPrice ? '<span class="registration-fivesim-badge price">最低价</span>' : '');
             const operatorLabel = offer.operator && offer.operator !== "any" ? offer.operator : "任意运营商";
-            return '<button type="button" class="registration-fivesim-operator-card' + (selected ? ' selected' : '') + '" data-action="registration-select-fivesim-offer" data-session-id="' + esc(session.id) + '" data-country="' + esc(offer.country) + '" data-operator="' + esc(offer.operator || "any") + '"><span class="registration-fivesim-operator-main"><span class="registration-fivesim-operator-badges">' + badges + '</span><strong>' + esc(operatorLabel) + '</strong><span class="registration-fivesim-operator-meta">成功率 ' + esc(formatPhoneSuccessRate(fiveSimSuccessRateRaw(offer))) + ' · >1 SMS</span></span><span class="registration-fivesim-operator-side"><strong class="registration-fivesim-operator-price">' + esc(formatFiveSimOfferPrice(offer.price)) + '</strong><span class="registration-fivesim-operator-stock">' + esc(formatFiveSimCount(offer.count)) + ' 个号码</span></span></button>';
+            return '<button type="button" class="registration-fivesim-operator-card' + (selected ? ' selected' : '') + '" data-action="registration-select-fivesim-offer" data-session-id="' + esc(session.id) + '" data-country="' + esc(offer.country) + '" data-operator="' + esc(offer.operator || "any") + '"><span class="registration-fivesim-operator-main"><span class="registration-fivesim-operator-badges">' + badges + '</span><strong>' + esc(operatorLabel) + '</strong><span class="registration-fivesim-operator-meta">即时 ' + esc(formatPhoneSuccessRate(fiveSimInstantSuccessRateRaw(offer))) + ' · 平均 ' + esc(formatPhoneSuccessRate(fiveSimAverageSuccessRateRaw(offer))) + ' · &gt;1 SMS</span></span><span class="registration-fivesim-operator-side"><strong class="registration-fivesim-operator-price">' + esc(formatFiveSimOfferPrice(offer.price)) + '</strong><span class="registration-fivesim-operator-stock">' + esc(formatFiveSimCount(offer.count)) + ' 个号码</span></span></button>';
           }).join("")
           : '<div class="field-note">请先选择一个地区，或当前筛选条件下暂无运营商。</div>';
         const fiveSimToken = state.registrationFiveSimToken || { configured: false, masked: "" };
@@ -1431,7 +1450,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sourceLink = source.websiteUrl
           ? '<a href="' + esc(source.websiteUrl) + '" target="_blank" rel="noreferrer">打开接码网页</a>'
           : "";
-        const successRate = formatPhoneSuccessRate(isFiveSim ? fiveSimSuccessRateRaw(selectedFiveSimOffer) : orderState.card?.successRate);
+        const successRateLabel = isFiveSim
+          ? '即时成功率：' + formatPhoneSuccessRate(fiveSimInstantSuccessRateRaw(selectedFiveSimOffer)) + ' · 平均成功率：' + formatPhoneSuccessRate(fiveSimAverageSuccessRateRaw(selectedFiveSimOffer))
+          : '成功率：' + formatPhoneSuccessRate(orderState.card?.successRate);
         const selectedPrice = isFiveSim ? formatFiveSimOfferPrice(selectedFiveSimOffer?.price) : "";
         const selectedOfferLabel = isFiveSim && selectedFiveSimOffer
           ? ' · ' + esc(selectedFiveSimOffer.countryName || selectedFiveSimOffer.country) + ' / ' + esc(selectedFiveSimOffer.operator || "any") + ' · ' + esc(selectedPrice)
@@ -1442,14 +1463,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '<button type="button" class="secondary danger" data-action="registration-cancel-phone" data-session-id="' + esc(session.id) + '"' + (canCancel ? "" : " disabled") + '>取消取号</button>' +
           (canAcquire ? '<button type="button" class="primary" data-action="registration-acquire-phone" data-session-id="' + esc(session.id) + '"' + (acquireReady ? "" : " disabled") + '>开始取号</button>' : '') +
           '</div>';
-        return '<div class="registration-phone-order">' +
-          '<div class="registration-phone-order-head"><strong>接码平台（' + (manualBrowser ? "手动控制" : "手动确认，自动读取短信") + '）</strong><span class="registration-phone-order-source">' + sourceLink + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' 成功率：' + esc(successRate) + selectedOfferLabel + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
+        return '<div class="registration-phone-order" data-registration-phone-order-session-id="' + esc(session.id) + '" aria-keyshortcuts="N">' +
+          '<div class="registration-phone-order-head"><strong>接码平台（' + (manualBrowser ? "手动控制" : "手动确认，自动读取短信") + '）</strong><span class="registration-phone-order-source">' + sourceLink + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' ' + esc(successRateLabel) + selectedOfferLabel + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
           acquireHtml +
           '<div class="registration-phone-order-grid">' +
             '<div class="registration-phone-result"><label>当前手机号</label><strong>' + esc(phone || "— — —") + '</strong>' + phoneButton + '</div>' +
             '<div class="registration-phone-result"><label>验证码</label><strong>' + esc(code || "— — —") + '</strong>' + codeButton + '</div>' +
           '</div>' +
-          '<div class="field-note">' + (manualBrowser ? "只有点击开始取号/重新取号后才会访问接码来源；手机号和验证码只显示/复制，不会自动填写或提交到注册网页。" : isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "") + '</div>' +
+          '<div class="field-note">' + (manualBrowser ? "只有点击开始取号/重新取号后才会访问接码来源；手机号和验证码只显示/复制，不会自动填写或提交到注册网页。" : isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "") + (registrationOnly ? " · 取号界面按 N 可重新取号并自动复制新号码" : "") + '</div>' +
           actionHtml +
           (orderState.message ? '<div class="field-note" aria-live="polite">' + esc(orderState.message) + '</div>' : "") +
           (orderState.error ? '<div class="tag" style="margin-top:8px;color:var(--danger)">' + esc(orderState.error) + '</div>' : "") +
@@ -1802,11 +1823,39 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       }
 
       function fiveSimSuccessRateRaw(offer) {
-        for (const key of ["successRate", "rate", "success_rate", "success_rate_percent"]) {
+        return fiveSimAverageSuccessRateRaw(offer) ?? fiveSimInstantSuccessRateRaw(offer);
+      }
+
+      function fiveSimInstantSuccessRateRaw(offer) {
+        for (const key of ["instantSuccessRate", "instantRate", "rate", "instant_success_rate"]) {
           const value = offer?.[key];
           if (value !== null && value !== undefined && String(value).trim() !== "") return value;
         }
+        if (offer?.averageSuccessRate === undefined && offer?.averageRate === undefined) {
+          for (const key of ["successRate", "success_rate", "success_rate_percent"]) {
+            const value = offer?.[key];
+            if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+          }
+        }
         return null;
+      }
+
+      function fiveSimAverageSuccessRateRaw(offer) {
+        for (const key of ["averageSuccessRate", "averageRate", "average_success_rate"]) {
+          const value = offer?.[key];
+          if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+        }
+        if (offer?.instantSuccessRate === undefined && offer?.instantRate === undefined && offer?.rate === undefined) {
+          for (const key of ["successRate", "success_rate", "success_rate_percent"]) {
+            const value = offer?.[key];
+            if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+          }
+        }
+        return null;
+      }
+
+      function formatFiveSimRateSummary(offer) {
+        return '即时 ' + formatPhoneSuccessRate(fiveSimInstantSuccessRateRaw(offer)) + ' · 平均 ' + formatPhoneSuccessRate(fiveSimAverageSuccessRateRaw(offer));
       }
 
       function fiveSimOfferPassesSuccessRate(offer) {
@@ -1950,6 +1999,57 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function copyText(value, successMessage) {
         if (!value) return;
         send("copyText", { text: value, successMessage: successMessage || "已复制" });
+      }
+
+      function isEditableKeyboardTarget(event) {
+        const target = event?.target || document.activeElement;
+        const tagName = String(target?.tagName || "").toUpperCase();
+        return ["INPUT", "TEXTAREA", "SELECT"].includes(tagName) || target?.isContentEditable === true;
+      }
+
+      function isVisibleRegistrationPhoneOrder(element) {
+        if (!element || element.hidden === true) return false;
+        return typeof element.getClientRects !== "function" || element.getClientRects().length > 0;
+      }
+
+      function getRegistrationPhoneShortcutSession() {
+        if (!registrationOnly || typeof document.querySelectorAll !== "function") return null;
+        const visibleSessionIds = new Set([...document.querySelectorAll("[data-registration-phone-order-session-id]")]
+          .filter(isVisibleRegistrationPhoneOrder)
+          .map((element) => String(element.dataset?.registrationPhoneOrderSessionId || "").trim())
+          .filter(Boolean));
+        if (!visibleSessionIds.size) return null;
+        const sessions = (state.registrationSessions || []).filter((session) => {
+          const orderState = session?.phoneOrder || {};
+          const phase = String(orderState.phase || "");
+          return visibleSessionIds.has(String(session.id || ""))
+            && orderState.running === true
+            && ["waiting", "polling"].includes(phase)
+            && !String(orderState.order?.smsCode || "").trim();
+        });
+        if (!sessions.length) return null;
+        const focusedOrder = document.activeElement?.closest?.("[data-registration-phone-order-session-id]");
+        const focusedSessionId = String(focusedOrder?.dataset?.registrationPhoneOrderSessionId || "").trim();
+        return sessions.find((session) => session.id === focusedSessionId) || sessions[sessions.length - 1];
+      }
+
+      function completeRegistrationPhoneShortcutIfReady() {
+        const pending = pendingRegistrationPhoneShortcut;
+        if (!pending) return;
+        const session = (state.registrationSessions || []).find((item) => item.id === pending.sessionId);
+        const orderState = session?.phoneOrder || {};
+        const order = orderState.order || {};
+        const phone = String(order.phone || "").trim();
+        const orderId = String(order.id || "").trim();
+        const changed = Boolean(phone) && (phone !== pending.previousPhone || orderId !== pending.previousOrderId);
+        if (changed) {
+          pendingRegistrationPhoneShortcut = null;
+          copyText(phone, "新手机号已复制");
+          return;
+        }
+        if (!session || ["received", "completed", "cancelled", "error", "timed_out"].includes(String(orderState.phase || ""))) {
+          pendingRegistrationPhoneShortcut = null;
+        }
       }
 
       function updateRegistrationPhoneSourcePanels(sessionId, sourceId) {
@@ -2148,8 +2248,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         document.querySelectorAll("button.is-pressed").forEach((button) => button.classList.remove("is-pressed"));
       }
       function send(action, payload = {}) { vscode.postMessage({ type: "mailbox:action", action, ...payload }); }
-      function showNotice(message, level) {
-        notice.textContent = message || "";
+      function showNotice(message, level, undo) {
+        const text = message || "";
+        if (undo?.action === "undoDeleteMailbox" && undo.mailboxId) {
+          notice.innerHTML = '<span class="notice-message">' + esc(text) + '</span><button type="button" class="notice-undo" data-action="undo-delete-mailbox" data-mailbox-id="' + esc(undo.mailboxId) + '">撤销</button>';
+        } else {
+          notice.textContent = text;
+          if ("innerHTML" in notice) notice.innerHTML = esc(text);
+        }
         notice.className = "notice visible" + (level ? " " + level : "");
         if (notice.style) notice.style.color = "";
       }

@@ -9,8 +9,11 @@ const { isOpenAiAccountDeactivatedMessage, isOpenAiMessage } = require("../core/
 const METADATA_KEY = "codexAccounts.mailbox.pool.v2";
 const DETAIL_KEY_PREFIX = "codexAccounts.mailbox.detail.";
 const SECRET_KEY_PREFIX = "codexAccounts.mailbox.credential.";
+const TRASH_INDEX_KEY = "codexAccounts.mailbox.trash.v1";
+const TRASH_SECRET_KEY_PREFIX = "codexAccounts.mailbox.trash.credential.";
 const POOL_SCHEMA_VERSION = 2;
 const MAX_STORED_MESSAGES = 20;
+const TRASH_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 class MailboxPool {
   constructor({ metadataStore, secretStore, now = () => Date.now() }) {
@@ -42,6 +45,7 @@ class MailboxPool {
   async loadFromStore() {
     const raw = await this.metadataStore.get(METADATA_KEY);
     this.metadata = parseMetadata(raw);
+    await this.purgeExpiredTrash();
     this.loaded = true;
     if (!this.deactivationBackfillDone) {
       await this.backfillOpenAiAccountDeactivationFlags();
@@ -64,7 +68,8 @@ class MailboxPool {
     for (const metadata of this.metadata.accounts) {
       const detail = await this.metadataStore.get(detailKey(metadata.id));
       const messages = normalizeStoredMessages(detail?.messages);
-      const hasDeactivationNotice = messages.some(isOpenAiAccountDeactivatedMessage);
+      const hasDeactivationNotice =
+        metadata.openaiAccountDeactivated === true || messages.some(isOpenAiAccountDeactivatedMessage);
       const firstOpenAiEmailAt = mergeFirstOpenAiEmailAt(metadata.firstOpenAiEmailAt, findFirstOpenAiEmailAt(messages));
       if (metadata.openaiAccountDeactivated !== hasDeactivationNotice || metadata.firstOpenAiEmailAt !== firstOpenAiEmailAt) {
         metadata.openaiAccountDeactivated = hasDeactivationNotice;
@@ -194,11 +199,14 @@ class MailboxPool {
       metadata.lastStatus = result?.ok ? (result.codes?.length ? "code_found" : "ready") : "error";
       metadata.lastError = result?.ok ? undefined : sanitizeError(result?.error);
       if (result?.ok) {
-        const messages = normalizeStoredMessages(result.messages);
-        metadata.openaiAccountDeactivated = messages.some(isOpenAiAccountDeactivatedMessage);
+        const fetchedMessages = normalizeStoredMessages(result.messages);
+        const previousDetail = await this.metadataStore.get(detailKey(id));
+        const messages = mergeStoredMessages(fetchedMessages, previousDetail?.messages);
+        metadata.openaiAccountDeactivated =
+          metadata.openaiAccountDeactivated === true || messages.some(isOpenAiAccountDeactivatedMessage);
         metadata.firstOpenAiEmailAt = mergeFirstOpenAiEmailAt(metadata.firstOpenAiEmailAt, findFirstOpenAiEmailAt(messages));
-        metadata.latestCode = firstCode(result.codes, messages);
-        metadata.latestMessage = messages[0] ? summarizeMessage(messages[0]) : undefined;
+        metadata.latestCode = firstCode(result.codes, fetchedMessages);
+        metadata.latestMessage = fetchedMessages[0] ? summarizeMessage(fetchedMessages[0]) : undefined;
         metadata.messageCount = messages.length;
         if (historyMode === "latest" || historyMode === "recent") {
           metadata.historyMode = historyMode;
@@ -342,13 +350,109 @@ class MailboxPool {
         throw new Error("Mailbox is not in the provider-neutral pool");
       }
 
-      // Remove private material before removing the public index entry. If a
-      // storage operation fails, the account remains visible for recovery.
+      const metadata = this.metadata.accounts[index];
+      const rawSecret = await this.secretStore.get(secretKey(id));
+      const detail = await this.metadataStore.get(detailKey(id));
+      const deletedAt = this.now();
+      const trashEntry = {
+        id,
+        metadata: sanitizeMetadata(metadata),
+        detail: sanitizeDetail(detail, id),
+        deletedAt,
+        expiresAt: deletedAt + TRASH_RETENTION_MS,
+        hasSecret: typeof rawSecret === "string"
+      };
+      const trash = await this.readTrashIndex();
+      trash.entries = trash.entries.filter((entry) => entry.id !== id);
+      trash.entries.push(trashEntry);
+      await this.metadataStore.update(TRASH_INDEX_KEY, trash);
+      if (typeof rawSecret === "string") {
+        await this.secretStore.store(trashSecretKey(id), rawSecret);
+      }
+
+      // Keep the deleted material in the private trash namespace until the
+      // retention window expires, so the UI can undo an accidental deletion.
       await this.secretStore.delete(secretKey(id));
       await this.metadataStore.update(detailKey(id), undefined);
       this.metadata.accounts.splice(index, 1);
       await this.persistMetadata();
+      return {
+        ...sanitizeMetadata(metadata),
+        deletedAt,
+        expiresAt: trashEntry.expiresAt,
+        undoAvailable: trashEntry.hasSecret
+      };
     });
+  }
+
+  async restoreDeletedAccount(id) {
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      if (this.metadata.accounts.some((account) => account.id === id)) {
+        throw new Error("邮箱已经存在，不能重复恢复");
+      }
+      const trash = await this.readTrashIndex();
+      const index = trash.entries.findIndex((entry) => entry.id === id);
+      if (index === -1) throw new Error("邮箱撤销期限已过或记录不存在");
+      const entry = trash.entries[index];
+      if (entry.expiresAt <= this.now()) {
+        await this.purgeExpiredTrash();
+        throw new Error("邮箱撤销期限已过");
+      }
+      const rawSecret = await this.secretStore.get(trashSecretKey(id));
+      if (typeof rawSecret !== "string") {
+        throw new Error("邮箱凭据已不可恢复，请重新导入原始凭据");
+      }
+
+      await this.secretStore.store(secretKey(id), rawSecret);
+      if (entry.detail) await this.metadataStore.update(detailKey(id), entry.detail);
+      this.metadata.accounts.push(sanitizeMetadata(entry.metadata));
+      await this.persistMetadata();
+      trash.entries.splice(index, 1);
+      await this.metadataStore.update(TRASH_INDEX_KEY, trash.entries.length ? trash : undefined);
+      await this.secretStore.delete(trashSecretKey(id));
+      return sanitizeMetadata(entry.metadata);
+    });
+  }
+
+  async listDeletedAccounts() {
+    await this.load();
+    const trash = await this.readTrashIndex();
+    return trash.entries.map((entry) => ({
+      ...sanitizeMetadata(entry.metadata),
+      deletedAt: entry.deletedAt,
+      expiresAt: entry.expiresAt,
+      undoAvailable: entry.hasSecret === true
+    }));
+  }
+
+  async readTrashIndex() {
+    const raw = await this.metadataStore.get(TRASH_INDEX_KEY);
+    if (!raw || typeof raw !== "object" || !Array.isArray(raw.entries)) {
+      return { version: 1, entries: [] };
+    }
+    return {
+      version: 1,
+      entries: raw.entries.map(normalizeTrashEntry).filter(Boolean)
+    };
+  }
+
+  async purgeExpiredTrash() {
+    const trash = await this.readTrashIndex();
+    if (!trash.entries.length) return;
+    const now = this.now();
+    const retained = [];
+    let changed = false;
+    for (const entry of trash.entries) {
+      if (entry.expiresAt > now) {
+        retained.push(entry);
+        continue;
+      }
+      changed = true;
+      if (entry.hasSecret) await this.secretStore.delete(trashSecretKey(entry.id));
+    }
+    if (changed) await this.metadataStore.update(TRASH_INDEX_KEY, retained.length ? { version: 1, entries: retained } : undefined);
   }
 
   async setEnabled(id, enabled) {
@@ -503,6 +607,35 @@ function normalizeStoredMessages(messages) {
   }));
 }
 
+function mergeStoredMessages(currentMessages, previousMessages) {
+  const merged = [];
+  const seen = new Set();
+  const current = normalizeStoredMessages(currentMessages);
+  // Query results replace the ordinary message cache. Keep only historical
+  // deactivation notices so the safety check survives later clean queries
+  // without turning a latest-message provider into an unbounded history feed.
+  const historicalDeactivationMessages = normalizeStoredMessages(previousMessages).filter(
+    isOpenAiAccountDeactivatedMessage
+  );
+  const allMessages = [...current, ...historicalDeactivationMessages];
+  const orderedMessages = [
+    ...allMessages.filter(isOpenAiAccountDeactivatedMessage),
+    ...allMessages.filter((message) => !isOpenAiAccountDeactivatedMessage(message))
+  ];
+  for (const message of orderedMessages) {
+    const key = message.id || message.fingerprint || JSON.stringify(message);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(message);
+    if (merged.length >= MAX_STORED_MESSAGES) {
+      break;
+    }
+  }
+  return merged;
+}
+
 function findFirstOpenAiEmailAt(messages) {
   const timestamps = messages
     .filter(isOpenAiMessage)
@@ -602,14 +735,37 @@ function secretKey(id) {
   return `${SECRET_KEY_PREFIX}${id}`;
 }
 
+function trashSecretKey(id) {
+  return `${TRASH_SECRET_KEY_PREFIX}${id}`;
+}
+
+function normalizeTrashEntry(value) {
+  if (!value || typeof value !== "object" || typeof value.id !== "string" || !value.id) return null;
+  const deletedAt = Number(value.deletedAt);
+  const expiresAt = Number(value.expiresAt);
+  if (!Number.isFinite(deletedAt) || !Number.isFinite(expiresAt)) return null;
+  return {
+    id: value.id,
+    metadata: sanitizeMetadata(value.metadata || { id: value.id, address: "", providerId: "" }),
+    detail: sanitizeDetail(value.detail, value.id),
+    deletedAt,
+    expiresAt,
+    hasSecret: value.hasSecret === true
+  };
+}
+
 module.exports = {
   DETAIL_KEY_PREFIX,
   METADATA_KEY,
   POOL_SCHEMA_VERSION,
   SECRET_KEY_PREFIX,
+  TRASH_INDEX_KEY,
+  TRASH_RETENTION_MS,
+  TRASH_SECRET_KEY_PREFIX,
   MailboxPool,
   detailKey,
   makeMailboxId,
   sanitizeMetadata,
-  secretKey
+  secretKey,
+  trashSecretKey
 };

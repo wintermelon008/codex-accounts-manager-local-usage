@@ -376,6 +376,158 @@ export function registerAutoRefreshScheduler(params: {
   };
 }
 
+export const QUOTA_COUNTDOWN_REFRESH_POLL_INTERVAL_MS = 60_000;
+
+export type ExpiredQuotaCountdownRefreshTarget = {
+  accountId: string;
+  hourlyResetTime?: number;
+  weeklyResetTime?: number;
+};
+
+/**
+ * Hidden accounts are outside the regular visible-page refresh schedule. Once
+ * one of their primary quota windows reaches its stored reset time, refresh it
+ * once so the Dashboard can observe the newly available quota.
+ */
+export function getExpiredQuotaCountdownRefreshTargets(
+  accounts: readonly CodexAccountRecord[],
+  nowMs: number = Date.now()
+): ExpiredQuotaCountdownRefreshTarget[] {
+  const nowSeconds = Math.floor(nowMs / 1000);
+  return accounts.flatMap((account) => {
+    if (!isQuotaCountdownRefreshable(account)) {
+      return [];
+    }
+
+    const quota = account.quotaSummary;
+    const hourlyResetTime = getExpiredResetTime(quota?.hourlyWindowPresent, quota?.hourlyResetTime, nowSeconds);
+    const weeklyResetTime = getExpiredResetTime(quota?.weeklyWindowPresent, quota?.weeklyResetTime, nowSeconds);
+    if (hourlyResetTime === undefined && weeklyResetTime === undefined) {
+      return [];
+    }
+
+    return [{ accountId: account.id, hourlyResetTime, weeklyResetTime }];
+  });
+}
+
+/**
+ * Refresh expired hidden-account countdowns independently of the optional
+ * visible-account auto-refresh setting. The reset-time marker is process-local
+ * and keyed by each primary window, so a stale window is not requested again
+ * while a later primary window can still trigger its own expiry refresh.
+ */
+export function registerQuotaCountdownRefreshScheduler(params: {
+  repo: AccountsRepository;
+  onRefresh: () => void;
+}): vscode.Disposable {
+  let timer: NodeJS.Timeout | undefined;
+  let inFlight = false;
+  let disposed = false;
+  const handledWindows = new Map<string, ExpiredQuotaCountdownRefreshTarget>();
+
+  const hasUnhandledExpiry = (target: ExpiredQuotaCountdownRefreshTarget): boolean => {
+    const handled = handledWindows.get(target.accountId);
+    return (
+      (target.hourlyResetTime !== undefined && target.hourlyResetTime !== handled?.hourlyResetTime) ||
+      (target.weeklyResetTime !== undefined && target.weeklyResetTime !== handled?.weeklyResetTime)
+    );
+  };
+
+  const runRefresh = async (): Promise<void> => {
+    if (disposed || inFlight) {
+      return;
+    }
+
+    inFlight = true;
+    try {
+      const accounts = await params.repo.listAccounts();
+      pruneHandledWindows(accounts);
+      const pending = getExpiredQuotaCountdownRefreshTargets(accounts).filter(hasUnhandledExpiry);
+      if (pending.length === 0) {
+        return;
+      }
+
+      const refreshed = await withSchedulerLease(params.repo, "quota-refresh", async (leaseIsActive) => {
+        if (!leaseIsActive()) {
+          return false;
+        }
+
+        // Another extension host may have refreshed the same hidden account
+        // since the first listAccounts call. Read the shared index again after
+        // acquiring the lease before deciding whether to send a request.
+        params.repo.invalidateExternalStateCaches({ invalidateTokens: false });
+        const currentAccounts = await params.repo.listAccounts();
+        pruneHandledWindows(currentAccounts);
+        const currentPending = getExpiredQuotaCountdownRefreshTargets(currentAccounts).filter(hasUnhandledExpiry);
+        if (currentPending.length === 0 || !leaseIsActive()) {
+          return false;
+        }
+
+        await vscode.commands.executeCommand("codexAccounts.refreshAllQuotas", {
+          silent: true,
+          forceRefresh: true,
+          accountIds: currentPending.map((target) => target.accountId)
+        });
+        currentPending.forEach((target) => handledWindows.set(target.accountId, target));
+        if (!leaseIsActive()) {
+          console.warn("[codexAccounts] expired quota countdown refresh completed after losing its shared lease");
+        }
+        return true;
+      });
+      if (refreshed) {
+        params.onRefresh();
+      }
+    } catch (error) {
+      console.warn(`[codexAccounts] expired quota countdown refresh failed: ${getErrorMessage(error)}`);
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  timer = setInterval(() => {
+    void runRefresh();
+  }, QUOTA_COUNTDOWN_REFRESH_POLL_INTERVAL_MS);
+  void runRefresh();
+
+  return {
+    dispose(): void {
+      disposed = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+      handledWindows.clear();
+    }
+  };
+
+  function pruneHandledWindows(accounts: readonly CodexAccountRecord[]): void {
+    const accountIds = new Set(accounts.map((account) => account.id));
+    handledWindows.forEach((_target, accountId) => {
+      if (!accountIds.has(accountId)) {
+        handledWindows.delete(accountId);
+      }
+    });
+  }
+}
+
+function isQuotaCountdownRefreshable(account: CodexAccountRecord): boolean {
+  return isAutomaticAccount(account) && account.isHidden === true;
+}
+
+function getExpiredResetTime(
+  windowPresent: boolean | undefined,
+  resetTime: number | undefined,
+  nowSeconds: number
+): number | undefined {
+  return windowPresent === true &&
+    typeof resetTime === "number" &&
+    Number.isFinite(resetTime) &&
+    resetTime > 0 &&
+    resetTime <= nowSeconds
+    ? resetTime
+    : undefined;
+}
+
 /**
  * Automatic quota refresh follows the same persisted visibility controls as
  * the Dashboard: hidden accounts and disabled groups are outside the working

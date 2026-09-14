@@ -268,7 +268,7 @@ describe("Dashboard account selection", () => {
     expect(getHighWeeklyQuotaHiddenAccountIds(accounts, 87.5)).toEqual(["show-at-custom-threshold"]);
   });
 
-  it("only targets reauthorized real accounts with a Mailbox deactivation notice", () => {
+  it("targets every real account with a Mailbox deactivation notice", () => {
     const accounts = [
       { id: "eligible", accountKind: "chatgpt", healthKind: "reauthorize", mailboxDeactivated: true },
       { id: "refresh-token", accountKind: "chatgpt", healthKind: "refresh_token_invalid", mailboxDeactivated: true },
@@ -278,7 +278,7 @@ describe("Dashboard account selection", () => {
       { id: "virtual", accountKind: "sub2api", healthKind: "reauthorize", mailboxDeactivated: true }
     ] as DashboardState["accounts"];
 
-    expect(getBlockedAccountIds(accounts)).toEqual(["eligible", "access-token"]);
+    expect(getBlockedAccountIds(accounts)).toEqual(["eligible", "refresh-token", "access-token", "refresh-failed"]);
   });
 
   it("exposes blocked-account removal only while Mailbox is registered and usable", () => {

@@ -401,6 +401,35 @@ describe("accountMetadata helpers", () => {
     });
   });
 
+  it("keeps the earliest known registration time and records the first Manager import time", () => {
+    const draft = buildAccountRecordDraft({
+      storageId: "registered-account",
+      claims: { email: "registered@example.com" },
+      tokens: {},
+      existingAccounts: [],
+      addedVia: "registration",
+      registrationAt: 5,
+      forceActive: false,
+      now: 10
+    });
+
+    expect(draft).toMatchObject({ registrationAt: 5, importedAt: 10, addedVia: "registration" });
+
+    const refreshed = buildAccountRecordDraft({
+      storageId: "registered-account",
+      claims: { email: "registered@example.com" },
+      tokens: {},
+      existing: { ...draft, registrationAt: 8 },
+      existingAccounts: [],
+      registrationAt: 3,
+      forceActive: false,
+      now: 20
+    });
+
+    expect(refreshed.registrationAt).toBe(3);
+    expect(refreshed.importedAt).toBe(10);
+  });
+
   it("preserves status popup selection for existing accounts", () => {
     const draft = buildAccountRecordDraft({
       storageId: "existing-account",

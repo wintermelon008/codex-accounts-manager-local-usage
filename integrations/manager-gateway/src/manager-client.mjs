@@ -19,6 +19,11 @@ export function createManagerClient(options) {
     getStatus: () => request("/api/manager/status"),
     getAccounts: () => request("/api/manager/accounts"),
     getCodexExecProviderConfig: () => request("/api/manager/codex/provider-config"),
+    getProxySettings: () => request("/api/manager/proxy"),
+    reportSessionActivity: (activity) => request("/api/manager/account-concurrency", {
+      method: "POST",
+      body: JSON.stringify(activity)
+    }),
     switchAccount: (accountId, switchOptions = {}) => request("/api/manager/accounts/switch", {
       method: "POST",
       body: JSON.stringify({ accountId, force: switchOptions.force === true })

@@ -62,6 +62,10 @@ export class GatewaySessionManager {
       recoveryPending: false,
       interjectionRequested: false,
       interruptedTurnId: undefined,
+      runStartedAt: undefined,
+      runAccountId: undefined,
+      attemptTokenCount: 0,
+      accountActivityReport: Promise.resolve(),
       workspace: undefined,
       diff: ""
     };
@@ -395,6 +399,9 @@ export class GatewaySessionManager {
     session.status = "running";
     session.updatedAt = this.now();
     session.controller = new AbortController();
+    session.runStartedAt = session.updatedAt;
+    session.runAccountId = undefined;
+    session.attemptTokenCount = 0;
     const turn = currentTurn(session);
     if (turn) {
       turn.status = "running";
@@ -405,6 +412,7 @@ export class GatewaySessionManager {
         const account = await this.manager.getActiveAccount();
         session.accountId = account.id;
         session.accountEmail = account.email;
+        session.runAccountId = account.id;
         session.attemptedAccountIds.add(account.id);
       }
       if (session.mode === "develop" && this.workspaces) {
@@ -432,13 +440,14 @@ export class GatewaySessionManager {
         return;
       }
       this.#emit(session, { type: "session.started", accountId: session.accountId, accountEmail: session.accountEmail });
+      this.#reportAccountActivity(session, true, { accountId: session.runAccountId });
       const result = await this.provider.run({
         session: providerSnapshot(session),
         signal: session.controller.signal,
         emit: (event) => this.#emit(session, event)
       });
       const usage = normalizeTokenUsage(result?.usage);
-      await this.#recordUsage(usage);
+      await this.#recordUsage(session, usage);
       if (session.interjectionRequested) {
         await this.#refreshWorkspace(session);
         this.#queueInterjection(session, turn);
@@ -467,7 +476,7 @@ export class GatewaySessionManager {
       session.resumeThreadId = undefined;
       this.#finish(session, "completed");
     } catch (error) {
-      await this.#recordUsage(normalizeTokenUsage(error?.usage));
+      await this.#recordUsage(session, normalizeTokenUsage(error?.usage));
       if (session.interjectionRequested) {
         await this.#refreshWorkspace(session);
         this.#queueInterjection(session, turn);
@@ -510,7 +519,26 @@ export class GatewaySessionManager {
         turn.result = undefined;
       }
     }
+    this.#settleAccountActivity(session);
     this.#emit(session, { type: "session.terminal", status, error, recoveryPending: session.recoveryPending });
+  }
+
+  #reportAccountActivity(session, active, details = {}) {
+    const accountId = details.accountId ?? session.accountId;
+    if (!this.manager || typeof this.manager.reportSessionActivity !== "function" || !accountId) {
+      return;
+    }
+    const report = {
+      sessionId: session.id,
+      accountId,
+      active,
+      ...(active || details.tokens == null ? {} : { tokens: details.tokens }),
+      ...(active || details.durationMs == null ? {} : { durationMs: details.durationMs })
+    };
+    session.accountActivityReport = session.accountActivityReport
+      .catch(() => undefined)
+      .then(() => this.manager.reportSessionActivity(report))
+      .catch(() => undefined);
   }
 
   #queueInterjection(session, interruptedTurn) {
@@ -532,11 +560,25 @@ export class GatewaySessionManager {
       turn.error = undefined;
     }
     session.updatedAt = this.now();
+    this.#settleAccountActivity(session);
     this.#emit(session, {
       type: "session.interjection_queued",
       turnId: turn?.id,
       resumeThreadId: session.resumeThreadId
     });
+  }
+
+  #settleAccountActivity(session) {
+    const runAccountId = session.runAccountId;
+    const durationMs = session.runStartedAt == null ? 0 : Math.max(0, session.updatedAt - session.runStartedAt);
+    this.#reportAccountActivity(session, false, {
+      accountId: runAccountId,
+      tokens: session.attemptTokenCount,
+      durationMs
+    });
+    session.runStartedAt = undefined;
+    session.runAccountId = undefined;
+    session.attemptTokenCount = 0;
   }
 
   async #refreshWorkspace(session) {
@@ -554,7 +596,10 @@ export class GatewaySessionManager {
     }
   }
 
-  async #recordUsage(usage) {
+  async #recordUsage(session, usage) {
+    if (usage && Number.isFinite(usage.totalTokens) && usage.totalTokens > 0) {
+      session.attemptTokenCount += usage.totalTokens;
+    }
     if (!usage || typeof this.usage?.record !== "function") {
       return;
     }

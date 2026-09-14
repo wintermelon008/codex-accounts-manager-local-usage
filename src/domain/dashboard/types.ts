@@ -443,6 +443,13 @@ export interface DashboardAccountViewModel {
   /** Raw import timestamp used by local Dashboard sorting. */
   createdAt?: number;
   addedAtLabel: string;
+  /** Registration time when known; otherwise the first Manager import time. */
+  accountTimeLabel: string;
+  accountTimeSource: "registration" | "import";
+  /** Historical maximum number of concurrently running sessions in the current quota window. */
+  maxConcurrency?: number;
+  /** Aggregate Token/s over completed sessions in the current quota window. */
+  averageTokenRate?: number;
   statusColor?: string;
   planTypeLabel: string;
   planType?: string;
@@ -633,6 +640,12 @@ export interface DashboardBatchResult {
   failedCount: number;
   overwriteCount?: number;
   failures: DashboardBatchResultFailure[];
+  mailboxCleanup?: {
+    requested: number;
+    removed: number;
+    failed: number;
+    failures: DashboardBatchResultFailure[];
+  };
 }
 
 export interface DashboardState {
@@ -716,6 +729,7 @@ export interface DashboardOAuthSessionDescriptor {
 
 export interface DashboardActionPayload {
   accountIds?: string[];
+  removeLinkedMailboxes?: boolean;
   jsonText?: string;
   text?: string;
   url?: string;

@@ -7,9 +7,12 @@ import {
 import type { HotSwitchStatus } from "../src/codex";
 import {
   getAutomaticQuotaRefreshAccountIds,
+  getExpiredQuotaCountdownRefreshTargets,
   registerAutoRefreshScheduler,
+  registerQuotaCountdownRefreshScheduler,
   registerSeamlessUsageLimitMonitor,
   SCHEDULER_LEASE_RENEW_INTERVAL_MS,
+  QUOTA_COUNTDOWN_REFRESH_POLL_INTERVAL_MS,
   SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS,
   SEAMLESS_USAGE_LIMIT_RETRY_MS
 } from "../src/presentation/workbench/schedulerRegistration";
@@ -356,6 +359,141 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     expect(accountIds).not.toContain("group-a");
     expect(accountIds).toContain("visible-51");
     expect(accountIds).not.toContain("visible-1");
+  });
+
+  it("finds expired primary quota windows only for hidden automatic accounts", () => {
+    const nowSeconds = 1_800_000_000;
+    const accounts = [
+      {
+        id: "hidden-expired",
+        email: "hidden-expired@example.invalid",
+        isActive: false,
+        isHidden: true,
+        createdAt: 1,
+        updatedAt: 1,
+        quotaSummary: {
+          hourlyPercentage: 0,
+          hourlyResetTime: nowSeconds - 1,
+          hourlyWindowPresent: true,
+          weeklyPercentage: 100,
+          weeklyResetTime: nowSeconds + 60,
+          weeklyWindowPresent: true,
+          codeReviewPercentage: 0
+        }
+      },
+      {
+        id: "visible-expired",
+        email: "visible-expired@example.invalid",
+        isActive: false,
+        isHidden: false,
+        createdAt: 1,
+        updatedAt: 1,
+        quotaSummary: {
+          hourlyPercentage: 0,
+          hourlyResetTime: nowSeconds - 1,
+          hourlyWindowPresent: true,
+          weeklyPercentage: 0,
+          weeklyResetTime: nowSeconds - 1,
+          weeklyWindowPresent: true,
+          codeReviewPercentage: 0
+        }
+      },
+      {
+        id: "hidden-no-primary-window",
+        email: "hidden-no-primary-window@example.invalid",
+        isActive: false,
+        isHidden: true,
+        createdAt: 1,
+        updatedAt: 1,
+        quotaSummary: {
+          hourlyPercentage: 0,
+          hourlyResetTime: nowSeconds - 1,
+          hourlyWindowPresent: false,
+          weeklyPercentage: 0,
+          weeklyResetTime: nowSeconds - 1,
+          weeklyWindowPresent: false,
+          codeReviewPercentage: 0
+        }
+      },
+      {
+        id: "hidden-gateway",
+        email: "hidden-gateway@example.invalid",
+        accountKind: "sub2api" as const,
+        manualOnly: true,
+        isActive: false,
+        isHidden: true,
+        createdAt: 1,
+        updatedAt: 1,
+        quotaSummary: {
+          hourlyPercentage: 0,
+          hourlyResetTime: nowSeconds - 1,
+          hourlyWindowPresent: true,
+          weeklyPercentage: 0,
+          weeklyResetTime: nowSeconds - 1,
+          weeklyWindowPresent: true,
+          codeReviewPercentage: 0
+        }
+      }
+    ];
+
+    expect(getExpiredQuotaCountdownRefreshTargets(accounts, nowSeconds * 1000)).toEqual([
+      {
+        accountId: "hidden-expired",
+        hourlyResetTime: nowSeconds - 1,
+        weeklyResetTime: undefined
+      }
+    ]);
+  });
+
+  it("refreshes an expired hidden-account countdown once per reset window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000 * 1000);
+    const release = vi.fn().mockResolvedValue(undefined);
+    const account = {
+      id: "hidden-expired",
+      email: "hidden-expired@example.invalid",
+      isActive: false,
+      isHidden: true,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 0,
+        hourlyResetTime: 1_800_000_000 - 1,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 100,
+        weeklyResetTime: 1_800_003_600,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0
+      }
+    };
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([account]),
+      invalidateExternalStateCaches: vi.fn(),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const onRefresh = vi.fn();
+    vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
+    const registration = registerQuotaCountdownRefreshScheduler({
+      repo: repo as never,
+      onRefresh
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith("codexAccounts.refreshAllQuotas", {
+        silent: true,
+        forceRefresh: true,
+        accountIds: ["hidden-expired"]
+      });
+      expect(onRefresh).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(QUOTA_COUNTDOWN_REFRESH_POLL_INTERVAL_MS);
+      expect(vscode.commands.executeCommand).toHaveBeenCalledOnce();
+      expect(repo.tryAcquireSchedulerLease).toHaveBeenCalledOnce();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("reacts to a new runtime usage-limit failure with only bounded scalar polling", async () => {

@@ -32,6 +32,36 @@ describe("GatewaySessionManager", () => {
     assert.equal(sessions.get(second.id)?.accountId, "account-a");
   });
 
+  it("reports per-account session duration and Token totals for aggregate rates", async () => {
+    let clock = 1_000;
+    const reports = [];
+    const sessions = new GatewaySessionManager({
+      now: () => clock,
+      provider: {
+        async run() {
+          clock = 11_000;
+          return { usage: { input_tokens: 100, output_tokens: 50 } };
+        }
+      },
+      manager: {
+        async getActiveAccount() {
+          return { id: "account-a", email: "a@example.com" };
+        },
+        async reportSessionActivity(activity) {
+          reports.push(activity);
+        }
+      }
+    });
+    const session = sessions.create({ mode: "research", message: "measure me" });
+    await sessions.waitForTerminal(session.id);
+    await waitUntil(() => reports.length === 2);
+
+    assert.deepEqual(reports, [
+      { sessionId: session.id, accountId: "account-a", active: true },
+      { sessionId: session.id, accountId: "account-a", active: false, tokens: 150, durationMs: 10_000 }
+    ]);
+  });
+
   it("cancels a queued session without starting its provider", async () => {
     let calls = 0;
     const provider = {

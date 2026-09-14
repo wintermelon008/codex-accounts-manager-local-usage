@@ -461,6 +461,40 @@ test("registration assistant deletes a mailbox directly and clears all registrat
   integration.dispose();
 });
 
+test("mailbox deletion exposes an undo action that restores the mailbox", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const registrations = [];
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, providerId: "mock", messages: [], codes: [] }; }
+  };
+  const api = { registerDashboardIntegration(value) { registrations.push(value); return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await registrations[0].runAction("open");
+  const [{ id: mailboxId }] = (await integration.pool.importProvider({ provider, input: "undo@example.com|credential" })).imported;
+
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "delete", mailboxId });
+  const deletionToast = vscode.panels[0].webview.messages.find((message) => message.type === "toast" && message.action === "delete");
+  assert.deepEqual(JSON.parse(JSON.stringify(deletionToast.undo)), { action: "undoDeleteMailbox", mailboxId });
+  assert.equal(integration.pool.listMetadata().length, 0);
+
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "undoDeleteMailbox", mailboxId });
+  assert.equal(integration.pool.listMetadata()[0].address, "undo@example.com");
+  assert.equal((await integration.pool.getAccount(mailboxId)).credentials.credential, "credential");
+  assert.equal(vscode.panels[0].webview.messages.some((message) => message.type === "toast" && message.action === "undoDeleteMailbox" && message.message === "邮箱已恢复"), true);
+  integration.dispose();
+});
+
 test("default integration registers the built-in 8t92, boya, cdns and tototo-icloud providers", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -897,7 +931,62 @@ test("bulk deactivated cleanup only removes matched accounts that require reauth
   integration.dispose();
 });
 
-test("deactivated cleanup rechecks the matching mailbox message before deleting", async () => {
+test("Dashboard-linked cleanup removes only the requested historical deactivated mailbox", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const registrations = [];
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      return {
+        entries: String(input).split("\n").filter(Boolean).map((address) => ({ address, credentials: { credential: address } })),
+        failed: []
+      };
+    },
+    async query() { return { ok: true, messages: [], codes: [] }; }
+  };
+  const api = {
+    registerDashboardIntegration(value) {
+      registrations.push(value);
+      return { dispose() {} };
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  const imported = await integration.pool.importProvider({
+    provider,
+    input: "linked@example.com\nuntouched@example.com"
+  });
+  const ids = new Map(imported.imported.map((mailbox) => [mailbox.address, mailbox.id]));
+  const deactivationMessage = {
+    subject: "OpenAI - 访问权限已停用",
+    from: "OpenAI",
+    body: "你的账户已被停用。"
+  };
+  await integration.pool.recordQueryResult(ids.get("linked@example.com"), {
+    ok: true,
+    messages: [{ id: "linked-deactivated", ...deactivationMessage }]
+  });
+  await integration.pool.recordQueryResult(ids.get("untouched@example.com"), {
+    ok: true,
+    messages: [{ id: "untouched-deactivated", ...deactivationMessage }]
+  });
+
+  assert.deepEqual(integration.getDeactivatedMailboxEmails().sort(), [
+    "linked@example.com",
+    "untouched@example.com"
+  ]);
+  const result = await registrations[1].removeDeactivatedMailboxes(["LINKED@example.com"]);
+  assert.deepEqual(result, { requested: 1, removed: 1, failed: 0, failures: [] });
+  assert.deepEqual(integration.pool.listMetadata().map((mailbox) => mailbox.address), ["untouched@example.com"]);
+  integration.dispose();
+});
+
+test("deactivated cleanup keeps the historical message after a later ordinary query", async () => {
   const vscode = createVscode();
   const context = createContext();
   const removedAccountIds = [];
@@ -936,19 +1025,11 @@ test("deactivated cleanup rechecks the matching mailbox message before deleting"
   // Simulate a legacy stale summary marker after replacing the saved detail
   // with an ordinary result. A marker alone must not authorize a destructive action.
   await integration.pool.recordQueryResult(id, { ok: true, messages: [] });
-  integration.pool.metadata.accounts[0].openaiAccountDeactivated = true;
   assert.equal(integration.pool.listMetadata()[0].openaiAccountDeactivated, true);
 
-  await assert.rejects(
-    () => integration.deleteMailboxAndCodex(id),
-    /对应邮箱没有保存的 OpenAI account deactivated 邮件/u
-  );
-  await assert.rejects(
-    () => integration.deleteDeactivatedMailboxes(),
-    /当前没有同时满足失效邮件、邮箱匹配和需要重新授权条件的账号/u
-  );
-  assert.deepEqual(removedAccountIds, []);
-  assert.equal(integration.pool.listMetadata().length, 1);
+  await integration.deleteMailboxAndCodex(id);
+  assert.deepEqual(removedAccountIds, ["codex-stale"]);
+  assert.equal(integration.pool.listMetadata().length, 0);
   integration.dispose();
 });
 

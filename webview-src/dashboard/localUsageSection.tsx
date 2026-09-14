@@ -193,7 +193,6 @@ function UsageBars(props: {
   showPrice: boolean;
   animationKey: string;
 }) {
-  const max = Math.max(...props.rows.map((row) => row.value), 0);
   return (
     <div class="local-usage-panel">
       <div class="local-usage-panel-head">
@@ -212,9 +211,6 @@ function UsageBars(props: {
                 <span class="local-usage-bar-label" title={row.label}>
                   {row.label}
                 </span>
-                <div class="local-usage-bar-track" aria-label={`${row.label}: ${value}`}>
-                  <div class="local-usage-bar-fill" style={{ width: `${barWidth(row.value, max)}%` }}></div>
-                </div>
                 <span class="local-usage-bar-value" title={value}>
                   {value}
                 </span>
@@ -246,19 +242,12 @@ function rangeLabel(copy: DashboardCopy, range: DashboardLocalUsageRange): strin
   }
 }
 
-function barWidth(value: number, max: number): number {
-  if (max <= 0 || value <= 0) {
-    return 0;
-  }
-  return Math.max(2, Math.min(100, (value / max) * 100));
-}
-
 function formatTokenAndPrice(
   tokens: number,
   price: LocalUsagePriceEstimate | undefined,
   showPrice: boolean
 ): string {
-  const tokenText = formatNumber(tokens);
+  const tokenText = formatTokenMillions(tokens);
   if (!showPrice || !price) {
     return tokenText;
   }

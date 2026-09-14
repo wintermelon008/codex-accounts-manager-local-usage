@@ -11,6 +11,7 @@
 - 手动切换强制中断活动 session、清除本次 Gateway 恢复池，并在切换成功后恢复受影响 session。
 - 账号查询、切换和自动恢复通过 Manager loopback control API 完成；普通 session 和 token 统计不要求该可选接口在线。
 - Gateway 每次启动 Codex 任务前从 Manager control API 获取当前 adapter 地址和临时令牌，不依赖重启后可能变化的随机端口。
+- Gateway 每次启动 Codex 任务前从 Manager control API 获取当前 HTTPS 代理；Feishu Helper 通过 Gateway 读取同一代理，并在代理切换后自动重建事件消费者。
 - Gateway 的 Codex executable 必须与 Manager extension 共享的 Codex Home 使用同一版本；否则共享 `models_cache.json` 可能出现 schema 解析错误。
 - Workbench 浏览器数据不经过 Gateway 的数据存储；由独立的 Workbench 数据服务通过 `/api/workbench/*` 持有 SQLite。Gateway 内的 session/事件/恢复状态保存在内存中，token ledger 保存在 `MANAGER_GATEWAY_STATE_DIR/usage-ledger-v1.json`，不保存 prompt、响应正文或凭据。
 
@@ -28,4 +29,4 @@ npm --prefix integrations/manager-gateway start
 
 常用配置包括 `MANAGER_CONTROL_URL`、可选的 `MANAGER_CONTROL_TOKEN`、`MANAGER_GATEWAY_CODEX_HOME`、`MANAGER_GATEWAY_PROJECT_ROOT`、`MANAGER_GATEWAY_STATE_DIR`、`MANAGER_GATEWAY_MAX_SESSIONS` 和 `WORKBENCH_DATA_URL`。无 Manager control 接口的设备如需给共享 Codex CLI 的 usage 指定模型，可配置仅用于统计归属的 `MANAGER_GATEWAY_CODEX_MODEL`（例如官方名称 `gpt-6-astra`）；它不会改变 Codex CLI 实际模型。Feishu 连接使用 `FEISHU_GATEWAY_URL` 及必要时的 `FEISHU_GATEWAY_TOKEN`。Workbench 数据服务的 `WORKBENCH_DATA_DB`、`WORKBENCH_DATA_URL` 和 SSH 转发说明见 Workbench 的 [`macos/docs/gateway-setup.md`](https://github.com/Layman-art/Research-Workbench/blob/main/macos/docs/gateway-setup.md)。
 
-Gateway 默认只监听回环地址。跨设备使用时，优先通过 SSH `-L` 转发；非回环监听必须设置 `MANAGER_GATEWAY_TOKEN` 和合适的 `MANAGER_GATEWAY_CORS_ORIGIN`。
+Gateway 默认只监听回环地址。跨设备使用时，优先通过 SSH `-L` 转发；非回环监听必须设置 `MANAGER_GATEWAY_TOKEN` 和合适的 `MANAGER_GATEWAY_CORS_ORIGIN`。代理读取接口只用于同机服务同步，不把代理配置放入普通账号/状态响应。

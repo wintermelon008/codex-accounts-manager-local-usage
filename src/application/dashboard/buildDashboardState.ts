@@ -20,6 +20,10 @@ import { getActiveManagerIntegrationHost } from "../../integrations";
 import { isQuotaCountdownStartAvailable } from "../accounts/quotaCountdown";
 import { isFreePlanType, resolveLongQuotaLabel } from "../../utils/quotaLabels";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
+import {
+  accountConcurrencyTracker,
+  getPersistedAccountConcurrencySnapshot
+} from "../accounts/accountConcurrency";
 
 const DASHBOARD_TOKEN_READ_CONCURRENCY = 4;
 
@@ -73,13 +77,15 @@ export async function buildDashboardState(
   const accountViewStateById = new Map<string, DashboardAccountViewState>();
   await runWithConcurrencyLimit(accounts, DASHBOARD_TOKEN_READ_CONCURRENCY, async (account) => {
     const tokens = isSub2ApiAccount(account) ? undefined : await repo.getTokens(account.id);
+    const mailboxDeactivated =
+      !isSub2ApiAccount(account) && deactivatedMailboxEmails.has(normalizeDashboardEmail(account.email) ?? "");
     const health: ReturnType<typeof resolveAccountHealth> = isSub2ApiAccount(account)
       ? { kind: "healthy", issueKey: "virtual" }
-      : resolveAccountHealth(account, tokens, tokenAutomation);
+      : resolveAccountHealth(account, tokens, tokenAutomation, { mailboxDeactivated });
     accountViewStateById.set(account.id, {
       tokens,
       health,
-      dismissedHealth: isHealthDismissed(account, health),
+      dismissedHealth: mailboxDeactivated ? false : isHealthDismissed(account, health),
       automationState: getAccountAutomationState(tokenAutomation, account),
       healthPriority: getHealthPriority(health)
     });
@@ -154,13 +160,18 @@ function mapAccount(
   deactivatedMailboxEmails?: ReadonlySet<string>
 ): DashboardAccountViewModel {
   const virtual = isSub2ApiAccount(account);
+  const mailboxDeactivated =
+    !virtual && deactivatedMailboxEmails?.has(normalizeDashboardEmail(account.email) ?? "") === true;
   const canToggleStatusBar = account.isActive || account.providerActive
     ? false
     : Boolean(account.showInStatusBar) || extraSelectedCount < 2;
   const health: ReturnType<typeof resolveAccountHealth> = virtual
     ? { kind: "healthy", issueKey: "virtual" }
-    : viewState?.health ?? resolveAccountHealth(account, viewState?.tokens, getTokenAutomationSnapshot());
-  const dismissedHealth = viewState?.dismissedHealth ?? isHealthDismissed(account, health);
+    : viewState?.health ??
+      resolveAccountHealth(account, viewState?.tokens, getTokenAutomationSnapshot(), { mailboxDeactivated });
+  const dismissedHealth = mailboxDeactivated
+    ? false
+    : viewState?.dismissedHealth ?? isHealthDismissed(account, health);
   const automationState = viewState?.automationState;
   const subscription = virtual
     ? { text: "", title: "" }
@@ -199,6 +210,10 @@ function mapAccount(
     addMethodLabel: virtual ? "Gateway | 手动" : `${formatAddMethod(account.addedVia, lang)} | ${formatAuthProvider(account.authProvider, lang)}`,
     createdAt: account.createdAt,
     addedAtLabel: formatAddedAt(account.createdAt, copy.never),
+    accountTimeLabel: formatAddedAt(account.registrationAt ?? account.importedAt ?? account.createdAt, copy.never),
+    accountTimeSource: account.registrationAt == null ? "import" : "registration",
+    maxConcurrency: resolveAccountConcurrencySnapshot(account)?.max,
+    averageTokenRate: resolveAccountConcurrencySnapshot(account)?.averageTokenRate,
     statusColor: virtual
       ? "var(--accent-blue)"
       : isAccountInvalid(health.kind)
@@ -238,9 +253,7 @@ function mapAccount(
     lastTokenRefreshAt: virtual ? undefined : automationState?.lastRefreshAt,
     lastTokenRefreshError: virtual ? undefined : automationState?.lastError,
     lastQuotaAt: virtual ? undefined : account.lastQuotaAt,
-    mailboxDeactivated: virtual
-      ? undefined
-      : deactivatedMailboxEmails?.has(normalizeDashboardEmail(account.email) ?? "") === true,
+    mailboxDeactivated: virtual ? undefined : mailboxDeactivated,
     resetCreditsAvailable,
     resetCreditsNextExpiresAt,
     quotaCountdownStartAvailable: virtual ? false : isQuotaCountdownStartAvailable(account),
@@ -250,6 +263,13 @@ function mapAccount(
     providerCard: virtual ? providerCard : undefined,
     metrics: virtual ? [] : buildMetrics(account, copy, lang)
   };
+}
+
+function resolveAccountConcurrencySnapshot(account: CodexAccountRecord) {
+  if (account.concurrencyWindows) {
+    return getPersistedAccountConcurrencySnapshot(account);
+  }
+  return accountConcurrencyTracker.get(account.id);
 }
 
 function normalizeDashboardEmail(value: string | undefined): string | undefined {
@@ -635,6 +655,10 @@ function formatAddMethod(value: string | undefined, lang: DashboardState["lang"]
   switch (normalized) {
     case "local":
       return zh ? "本地导入" : "Local import";
+    case "mailbox":
+      return zh ? "邮箱库导入" : "Mailbox import";
+    case "registration":
+      return zh ? "注册助手" : "Registration assistant";
     case "json":
       return zh ? "JSON导入" : "JSON import";
     case "oauth":

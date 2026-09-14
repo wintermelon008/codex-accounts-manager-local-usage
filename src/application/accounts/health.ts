@@ -25,14 +25,27 @@ export type AccountHealthInfo = {
   observedAt?: number;
 };
 
+export type AccountHealthSignals = {
+  mailboxDeactivated?: boolean;
+};
+
 export function resolveAccountHealth(
   account: CodexAccountRecord,
   tokens: CodexTokens | undefined,
-  automation: TokenAutomationSnapshot
+  automation: TokenAutomationSnapshot,
+  signals: AccountHealthSignals = {}
 ): AccountHealthInfo {
   if (isSub2ApiAccount(account)) {
     return { kind: "healthy", issueKey: "virtual" };
   }
+  if (signals.mailboxDeactivated === true) {
+    return {
+      kind: "disabled",
+      issueKey: "disabled:mailbox_deactivated",
+      message: "The linked mailbox received an OpenAI account deactivation notice"
+    };
+  }
+
   restoreAccountRenewalEvidence(account, tokens);
   let availability = readAvailability(account.id, account.accountId ?? tokens?.accountId, tokens);
   const observedAt = availability.observedAt;
@@ -112,7 +125,10 @@ export function getAccountAutomationState(
   };
 }
 
-function hasRuntimeField(state: AccountAutomationState | undefined, field: keyof AccountAutomationState): boolean {
+function hasRuntimeField(
+  state: AccountAutomationState | undefined,
+  field: keyof AccountAutomationState
+): boolean {
   return state !== undefined && Object.prototype.hasOwnProperty.call(state, field);
 }
 

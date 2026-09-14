@@ -18,7 +18,7 @@ const observation = (tokens: ReturnType<typeof credentials>, kind: state.Availab
   runtimeId: "runtime-a", observedAt: Date.now(), sequence, kind
 });
 
-beforeEach(() => { vi.useFakeTimers(); values.clear(); state.clearAccountStates(); });
+beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); values.clear(); state.clearAccountStates(); });
 afterEach(() => { state.clearAccountStates(); vi.useRealTimers(); });
 
 describe("durable local account evidence (no provider requests)", () => {

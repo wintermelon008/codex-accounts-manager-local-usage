@@ -21,12 +21,23 @@ export const MANAGER_INTEGRATION_API_VERSION = 1 as const;
 
 export type IntegrationChangeEvent = (listener: () => void) => vscode.Disposable;
 
+export type DeactivatedMailboxCleanupResult = {
+  requested: number;
+  removed: number;
+  failed: number;
+  failures: Array<{ email?: string; message: string }>;
+};
+
 export type DashboardIntegrationRegistration = {
   id: string;
   getViewModel: () => DashboardIntegrationViewModel;
   runAction: (actionId: string) => void | Promise<void>;
   /** Optional sanitized mailbox addresses that have a persisted OpenAI deactivation notice. */
   getDeactivatedMailboxEmails?: () => readonly string[];
+  /** Removes only the provider-owned mailbox records for already-removed blocked accounts. */
+  removeDeactivatedMailboxes?: (
+    emails: readonly string[]
+  ) => DeactivatedMailboxCleanupResult | Promise<DeactivatedMailboxCleanupResult>;
   onDidChange?: IntegrationChangeEvent;
 };
 
@@ -88,6 +99,10 @@ export type OAuthAccountImportOptions = {
   expectedEmail?: string;
   /** Text copied before the browser flow starts, normally the mailbox address. */
   clipboardText?: string;
+  /** Optional known OpenAI registration timestamp supplied by a trusted local integration. */
+  registrationAt?: number;
+  /** Optional source label for the Manager card. */
+  addedVia?: string;
 };
 
 export type OAuthAccountImportResult = {
@@ -397,6 +412,52 @@ export class ManagerIntegrationHost implements vscode.Disposable {
       }
     }
     return [...emails];
+  }
+
+  async removeDeactivatedMailboxes(emails: readonly string[]): Promise<DeactivatedMailboxCleanupResult | undefined> {
+    this.throwIfDisposed();
+    const requestedEmails = [
+      ...new Set(
+        (Array.isArray(emails) ? emails : [])
+          .filter((email): email is string => typeof email === "string")
+          .map((email) => email.trim())
+          .filter(Boolean)
+      )
+    ];
+    if (requestedEmails.length === 0) {
+      return undefined;
+    }
+
+    const registrations = [...this.dashboardIntegrations.values()].filter(
+      (registration) => typeof registration.removeDeactivatedMailboxes === "function"
+    );
+    if (registrations.length === 0) {
+      return undefined;
+    }
+
+    const result: DeactivatedMailboxCleanupResult = {
+      requested: requestedEmails.length,
+      removed: 0,
+      failed: 0,
+      failures: []
+    };
+    for (const registration of registrations) {
+      const cleanup = await registration.removeDeactivatedMailboxes!(requestedEmails);
+      result.removed += Number.isFinite(cleanup?.removed) ? Math.max(0, Math.floor(cleanup.removed)) : 0;
+      result.failed += Number.isFinite(cleanup?.failed) ? Math.max(0, Math.floor(cleanup.failed)) : 0;
+      if (Array.isArray(cleanup?.failures)) {
+        result.failures.push(
+          ...cleanup.failures
+            .filter((failure) => failure && typeof failure.message === "string")
+            .map((failure) => ({
+              email: typeof failure.email === "string" ? failure.email : undefined,
+              message: failure.message
+            }))
+        );
+      }
+    }
+    this.fireDidChange();
+    return result;
   }
 
   getVirtualAccountCards(): Array<{ accountId: string; card: DashboardProviderAccountCardViewModel }> {

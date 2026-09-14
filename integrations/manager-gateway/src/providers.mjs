@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import readline from "node:readline";
 import { normalizeTokenUsage } from "./usage.mjs";
 
 const DEFAULT_WORKBENCH_DATA_URL = "http://127.0.0.1:43119";
+const FAST_WORKBENCH_AGENTS_URL = new URL("../fast-query/AGENTS.md", import.meta.url);
+let fastWorkbenchAgents;
 
 export class GatewayProviderError extends Error {
   constructor(message, code = "provider_error", details = {}) {
@@ -57,6 +60,7 @@ function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataTok
         throw new GatewayProviderError("开发模式未配置 MANAGER_GATEWAY_PROJECT_ROOT", "project_unconfigured");
       }
       const runtimeProvider = await resolveRuntimeProvider(manager, emit);
+      const runtimeProxy = await resolveRuntimeProxy(manager);
       const providerArgs = runtimeProvider ? buildRuntimeProviderArgs(runtimeProvider) : [];
       const commonArgs = [
         "--json",
@@ -86,6 +90,9 @@ function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataTok
         ...process.env,
         WORKBENCH_DATA_URL: workbenchDataUrl || DEFAULT_WORKBENCH_DATA_URL
       };
+      if (runtimeProxy) {
+        applyRuntimeProxy(environment, runtimeProxy);
+      }
       if (workbenchDataToken) {
         environment.WORKBENCH_DATA_TOKEN = workbenchDataToken;
       }
@@ -124,6 +131,67 @@ function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataTok
       }
     }
   };
+}
+
+async function resolveRuntimeProxy(manager) {
+  if (typeof manager?.getProxySettings !== "function") {
+    return undefined;
+  }
+  try {
+    return normalizeRuntimeProxy(await manager.getProxySettings());
+  } catch {
+    // A proxy lookup must not make an otherwise usable Codex session fail.
+    // Keep the Gateway service environment as the compatibility fallback.
+    return undefined;
+  }
+}
+
+function normalizeRuntimeProxy(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const rawProxy = typeof value.httpsProxy === "string" ? value.httpsProxy.trim() : "";
+  if (rawProxy) {
+    let parsed;
+    try {
+      parsed = new URL(rawProxy);
+    } catch {
+      return undefined;
+    }
+    if (!parsed.hostname || !["http:", "https:"].includes(parsed.protocol)) {
+      return undefined;
+    }
+  }
+  return {
+    httpsProxy: rawProxy || undefined,
+    noProxy: typeof value.noProxy === "string" ? value.noProxy.trim() : undefined
+  };
+}
+
+function applyRuntimeProxy(environment, settings) {
+  for (const key of [
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"
+  ]) {
+    delete environment[key];
+  }
+  if (settings.httpsProxy) {
+    for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) {
+      environment[key] = settings.httpsProxy;
+    }
+  }
+  const noProxy = mergeNoProxy(settings.noProxy);
+  environment.NO_PROXY = noProxy;
+  environment.no_proxy = noProxy;
+}
+
+function mergeNoProxy(value) {
+  const entries = new Set(
+    typeof value === "string" ? value.split(",").map((item) => item.trim()).filter(Boolean) : []
+  );
+  for (const entry of ["127.0.0.1", "localhost", "::1"]) {
+    entries.add(entry);
+  }
+  return [...entries].join(",");
 }
 
 async function resolveRuntimeProvider(manager, emit) {
@@ -216,7 +284,7 @@ function buildSemanticResumePrompt(session) {
     : "";
   return [
     "请继续执行下面的原始任务。原 Codex thread 无法跨账号恢复，因此这是一个新的 session；不要重复已经完成的工作。",
-    workbenchInstructions(),
+    session.context?.fastWorkbench === true ? fastWorkbenchInstructions() : workbenchInstructions(),
     turns ? `此前对话：\n${turns}` : `当前任务：${session.message}`,
     "请先检查当前 worktree 状态，再从未完成的步骤继续。"
   ].join("\n\n");
@@ -466,7 +534,26 @@ function textContent(value) {
 function buildInitialPrompt(session) {
   const history = historyPrompt(session);
   const task = history ? `${history}\n\n当前任务：\n${session.message}` : session.message;
-  return `${workbenchInstructions()}\n\n${task}`;
+  const instructions = session.context?.fastWorkbench === true
+    ? fastWorkbenchInstructions(session.context)
+    : workbenchInstructions();
+  return `${instructions}\n\n${task}`;
+}
+
+function fastWorkbenchInstructions(context = {}) {
+  if (fastWorkbenchAgents === undefined) {
+    try {
+      fastWorkbenchAgents = readFileSync(FAST_WORKBENCH_AGENTS_URL, "utf8").trim();
+    } catch {
+      fastWorkbenchAgents = [
+        "这是简单的只读 Workbench 查询。不要读取仓库源码或 AGENTS.md。",
+        "直接使用 WORKBENCH_DATA_URL 的 /api/workbench/records HTTP API；不要调用写入接口。",
+        "返回简洁中文结果。"
+      ].join("\n");
+    }
+  }
+  const hint = [context.fastWorkbenchKind, context.fastWorkbenchDate].filter(Boolean).join("，");
+  return `${fastWorkbenchAgents}${hint ? `\n本次快速查询提示：${hint}。` : ""}`;
 }
 
 function workbenchInstructions() {

@@ -75,7 +75,6 @@ export function SavedAccountCard(props: {
 }) {
   const { account, copy, settings, now, onAction, privacyMode } = props;
   const virtual = account.accountKind === "sub2api" || account.manualOnly === true;
-  const userIdDisplay = getSensitiveDisplayValue(account.userId, privacyMode, "id", "-");
   const emailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const backEmailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const selectionLabel = props.selected ? copy.deselectAccount : copy.selectAccount;
@@ -100,13 +99,18 @@ export function SavedAccountCard(props: {
   const hasErrorHealth = !account.dismissedHealth && isAccountInvalid(account.healthKind);
   const hasUsableRenewalWarning = !account.dismissedHealth && account.healthKind === "refresh_unavailable";
   const hasWarningHealth =
-    !account.dismissedHealth && !hasUsableRenewalWarning &&
+    !account.dismissedHealth &&
+    !hasUsableRenewalWarning &&
     getAccountHealthCategory(account.healthKind) === "temporary_error";
   const hasUnknownHealth =
     !account.dismissedHealth && getAccountHealthCategory(account.healthKind) === "availability_unknown";
   const showReauthorizeButton =
-    !virtual && !account.dismissedHealth &&
-    (isAccountReauthorizationRequired(account.healthKind) || hasWarningHealth || hasUsableRenewalWarning || hasUnknownHealth);
+    !virtual &&
+    !account.dismissedHealth &&
+    (isAccountReauthorizationRequired(account.healthKind) ||
+      hasWarningHealth ||
+      hasUsableRenewalWarning ||
+      hasUnknownHealth);
   const gatewayActive = virtual && account.providerActive;
   const providerCard = virtual ? account.providerCard : undefined;
   const profileSelectionActions =
@@ -405,7 +409,6 @@ export function SavedAccountCard(props: {
               <span class="saved-back-email">{backEmailDisplay}</span>
             </div>
             <div class="saved-detail-list">
-              <CardDetailRow label={resolveBackLabel("workspace", props.lang)} value={account.workspaceLabel} />
               {providerCard?.details?.map((detail) => (
                 <CardDetailRow
                   key={`${detail.label}:${detail.value}`}
@@ -421,13 +424,23 @@ export function SavedAccountCard(props: {
                 color={account.subscriptionColor}
               /> : null}
               <CardDetailRow label={resolveBackLabel("addMethod", props.lang)} value={account.addMethodLabel} />
-              <CardDetailRow label={resolveBackLabel("createdAt", props.lang)} value={account.addedAtLabel} />
+              <CardDetailRow
+                label={resolveBackLabel(account.accountTimeSource === "registration" ? "registrationAt" : "importedAt", props.lang)}
+                value={account.accountTimeLabel}
+              />
+              <CardDetailRow
+                label={resolveBackLabel("maxConcurrency", props.lang)}
+                value={formatMaxConcurrency(account.maxConcurrency, props.lang)}
+              />
+              <CardDetailRow
+                label={resolveBackLabel("averageTokenRate", props.lang)}
+                value={formatAverageTokenRate(account.averageTokenRate, props.lang)}
+              />
               <CardDetailRow
                 label={resolveBackLabel("status", props.lang)}
                 value={resolveBackStatus(account, props.lang)}
                 color={account.statusColor}
               />
-              {!virtual ? <CardDetailRow label={copy.userId} value={userIdDisplay} /> : null}
             </div>
             <div class="saved-back-tags">
               <div class="account-tag-row">
@@ -469,18 +482,37 @@ function renderProviderActionIcon(actionId: string): ComponentChildren {
 }
 
 function resolveBackLabel(
-  key: "workspace" | "subscription" | "addMethod" | "createdAt" | "status",
+  key: "subscription" | "addMethod" | "registrationAt" | "importedAt" | "maxConcurrency" | "averageTokenRate" | "status",
   lang: DashboardState["lang"]
 ): string {
   const zh = lang === "zh" || lang === "zh-hant";
   const labels = {
-    workspace: zh ? "工作空间" : "Workspace",
     subscription: zh ? "订阅到期" : "Subscription",
     addMethod: zh ? "添加方式" : "Added by",
-    createdAt: zh ? "创建时间" : "Created at",
+    registrationAt: zh ? "注册时间" : "Registered at",
+    importedAt: zh ? "导入时间" : "Imported at",
+    maxConcurrency: zh ? "最大并发" : "Max concurrency",
+    averageTokenRate: zh ? "平均速率" : "Average rate",
     status: zh ? "状态" : "Status"
   };
   return labels[key];
+}
+
+function formatMaxConcurrency(value: number | undefined, lang: DashboardState["lang"]): string {
+  if (value == null || value <= 0) {
+    return lang === "zh" ? "暂无记录" : lang === "zh-hant" ? "暫無記錄" : "No record";
+  }
+  if (lang === "zh" || lang === "zh-hant") {
+    return `${value} 个会话`;
+  }
+  return `${value} session${value === 1 ? "" : "s"}`;
+}
+
+function formatAverageTokenRate(value: number | undefined, lang: DashboardState["lang"]): string {
+  if (value == null || !Number.isFinite(value) || value <= 0) {
+    return lang === "zh" ? "暂无记录" : lang === "zh-hant" ? "暫無記錄" : "No record";
+  }
+  return `${(value / 1_000).toFixed(2)}K Token/s`;
 }
 
 function resolveBackStatus(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {

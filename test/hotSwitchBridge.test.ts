@@ -11,6 +11,7 @@ import {
   type HotSwitchAvailabilityEvent,
   type HotSwitchRefreshRequest
 } from "../src/codex/hotSwitchBridge";
+import { accountConcurrencyTracker } from "../src/application/accounts/accountConcurrency";
 
 type Message = {
   id?: string;
@@ -59,6 +60,7 @@ describe("CodexHotSwitchBridge", () => {
   let bridge: CodexHotSwitchBridge | undefined;
 
   afterEach(async () => {
+    accountConcurrencyTracker.reset();
     bridge?.dispose();
     bridge = undefined;
     const currentShim = shim;
@@ -89,7 +91,7 @@ describe("CodexHotSwitchBridge", () => {
     const observed: HotSwitchAvailabilityEvent[] = [];
     bridge = new CodexHotSwitchBridge(async () => ({ accessToken: "old-token", chatgptAccountId: "account-a", chatgptPlanType: "plus" }),
       async () => undefined, async () => undefined, process.pid, async () => ({ handled: true }),
-      async (event) => { observed.push(event); });
+      undefined, async (event) => { observed.push(event); });
     await waitForSocket(getHotSwitchSocketPath(process.pid));
     await bridge.switchAccount({ accessToken: "access-token-b", accountId: "account-b", localAccountId: "local-b",
       expectedEmail: "b@example.invalid", previousAccountId: "account-a", previousLocalAccountId: "local-a",
@@ -187,6 +189,221 @@ describe("CodexHotSwitchBridge", () => {
       attributionFailureReason: "The app-server reported a different account for usage attribution"
     });
   });
+
+  it.each([
+    { caseName: "structured revocation", error: undefined },
+    {
+      caseName: "reported revoked refresh message",
+      error: {
+        code: -32000,
+        message:
+          "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again."
+      }
+    }
+  ])("observes real-turn results with scoped credentials: $caseName", async ({ error }) => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(JSON.stringify({ id: "availability-init", method: "initialize", params: {} }) + "\n");
+    await messages.next((message) => message.id === "availability-init");
+    const observed: HotSwitchAvailabilityEvent[] = [];
+    bridge = new CodexHotSwitchBridge(
+      async () => ({ accessToken: "old-token", chatgptAccountId: "account-a", chatgptPlanType: "plus" }),
+      async () => undefined,
+      async () => undefined,
+      process.pid,
+      async () => ({ handled: true }),
+      undefined,
+      async (event) => {
+        observed.push(event);
+      }
+    );
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+    await bridge.switchAccount({
+      accessToken: "access-token-b",
+      accountId: "account-b",
+      localAccountId: "local-b",
+      expectedEmail: "b@example.invalid",
+      previousAccountId: "account-a",
+      previousLocalAccountId: "local-a",
+      previousExpectedEmail: "a@example.invalid",
+      planType: "plus",
+      gracePeriodMs: 0,
+      longTurnPolicy: "defer"
+    });
+    shim.stdin.write(
+      JSON.stringify({ id: "availability-turn", method: "turn/start", params: { threadId: "availability-thread", input: [] } }) + "\n"
+    );
+    await messages.next((message) => message.id === "availability-turn");
+    expect(observed).toHaveLength(0);
+    shim.stdin.write(JSON.stringify({ id: "availability-complete", method: "test/complete", params: {} }) + "\n");
+    await messages.next((message) => message.id === "availability-complete");
+    await waitFor(() => observed.length > 0);
+    expect(observed[0]).toMatchObject({
+      localAccountId: "local-b",
+      accountId: "account-b",
+      kind: "usable",
+      runtimeId: expect.any(String),
+      credentialFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u)
+    });
+    expect(JSON.stringify(observed)).not.toContain("access-token-b");
+    shim.stdin.write(
+      JSON.stringify({ id: "availability-revoke", method: "test/failNextTurnStartWithAuthTokenRevoked", params: { error } }) + "\n"
+    );
+    await messages.next((message) => message.id === "availability-revoke");
+    shim.stdin.write(
+      JSON.stringify({ id: "availability-failed-turn", method: "turn/start", params: { threadId: "availability-thread-2", input: [] } }) + "\n"
+    );
+    await messages.next((message) => message.id === "availability-failed-turn");
+    await waitFor(() => observed.some((event) => event.kind === "auth_rejected"));
+    expect(observed.at(-1)?.localAccountId).toBe("local-b");
+  }, 15_000);
+
+  it("reports ordinary Codex turns with token usage through the runtime bridge", async () => {
+    const root = path.resolve(__dirname, "..");
+    const shimPath = path.join(root, "runtime", "codex-app-server-shim.cjs");
+    const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
+    shim = childProcess.spawn(shimPath, ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: fakeCliPath
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "activity-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "activity-initialize");
+
+    const changes: number[] = [];
+    bridge = new CodexHotSwitchBridge(
+      async () => ({ accessToken: "unused-token", chatgptAccountId: "account-a", chatgptPlanType: "plus" }),
+      undefined,
+      undefined,
+      process.pid,
+      undefined,
+      () => changes.push(1)
+    );
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+    await bridge.activateUsageAttribution({
+      localAccountId: "local-a",
+      accountId: "account-a",
+      expectedEmail: "a@example.invalid"
+    });
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "activity-turn-start", method: "turn/start", params: { threadId: "activity-thread", input: [] } })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "activity-thread");
+    shim.stdin.write(`${JSON.stringify({ id: "activity-token-count", method: "test/tokenCount", params: { totalTokens: 150 } })}\n`);
+    await messages.next((message) => message.id === "activity-token-count");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    shim.stdin.write(`${JSON.stringify({ id: "activity-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.method === "turn/completed");
+    await messages.next((message) => message.id === "activity-complete");
+
+    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 0);
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({
+      current: 0,
+      max: 1,
+      totalTokens: 150
+    });
+    expect(accountConcurrencyTracker.get("local-a")?.averageTokenRate).toBeGreaterThan(0);
+    expect(changes.length).toBeGreaterThanOrEqual(2);
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "activity-turn-id-start",
+        method: "turn/start",
+        params: { threadId: "activity-turn-id-thread", input: [], testTurnResponse: "turnId" }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "activity-turn-id-start");
+    shim.stdin.write(`${JSON.stringify({ id: "activity-turn-id-token-count", method: "test/tokenCount", params: { totalTokens: 150 } })}\n`);
+    await messages.next((message) => message.id === "activity-turn-id-token-count");
+    shim.stdin.write(`${JSON.stringify({ id: "activity-turn-id-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.method === "turn/completed");
+    await messages.next((message) => message.id === "activity-turn-id-complete");
+
+    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 0);
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({
+      current: 0,
+      max: 1,
+      totalTokens: 300
+    });
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "activity-thread-token-usage-start",
+        method: "turn/start",
+        params: { threadId: "activity-thread-token-usage", input: [], testTurnResponse: "turnId" }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "activity-thread-token-usage-start");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "activity-thread-token-usage", method: "test/threadTokenUsage", params: { totalTokens: 200 } })}\n`
+    );
+    await messages.next((message) => message.id === "activity-thread-token-usage");
+    shim.stdin.write(`${JSON.stringify({ id: "activity-thread-token-usage-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.method === "turn/completed");
+    await messages.next((message) => message.id === "activity-thread-token-usage-complete");
+
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({
+      current: 0,
+      max: 1,
+      totalTokens: 500
+    });
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "activity-unscoped-start",
+        method: "turn/start",
+        params: { threadId: "activity-unscoped-thread", input: [], testTurnResponse: "turnId" }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "activity-unscoped-start");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "activity-unscoped-token-count", method: "test/tokenCountUnscoped", params: { totalTokens: 100 } })}\n`
+    );
+    await messages.next((message) => message.id === "activity-unscoped-token-count");
+    shim.stdin.write(`${JSON.stringify({ id: "activity-unscoped-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.method === "turn/completed");
+    await messages.next((message) => message.id === "activity-unscoped-complete");
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 0, max: 1, totalTokens: 600 });
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "activity-shared-turn-start-1",
+        method: "turn/start",
+        params: { threadId: "activity-shared-thread", input: [], testTurnResponse: "turnId" }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "activity-shared-turn-start-1");
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "activity-shared-turn-start-2",
+        method: "turn/start",
+        params: { threadId: "activity-shared-thread", input: [], testTurnResponse: "turnId" }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "activity-shared-turn-start-2");
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 1, max: 1 });
+    shim.stdin.write(`${JSON.stringify({ id: "activity-shared-turn-complete-1", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.method === "turn/completed");
+    await messages.next((message) => message.id === "activity-shared-turn-complete-1");
+    shim.stdin.write(`${JSON.stringify({ id: "activity-shared-turn-complete-2", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.method === "turn/completed");
+    await messages.next((message) => message.id === "activity-shared-turn-complete-2");
+    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 0);
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 0, max: 1 });
+  }, 15_000);
 
   it("refuses a second Manager app-server for the same runtime owner", async () => {
     const root = path.resolve(__dirname, "..");
@@ -872,6 +1089,98 @@ describe("CodexHotSwitchBridge", () => {
       shim?.kill("SIGTERM");
       shim = undefined;
       await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("waits for the ChatGPT route credential before forwarding early requests", async () => {
+    const root = path.resolve(__dirname, "..");
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-chatgpt-credential-"));
+    const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
+    let proxyConnections = 0;
+    const proxy = http.createServer();
+    proxy.on("connect", (_request, socket) => {
+      proxyConnections += 1;
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", () => resolve()));
+    const proxyAddress = proxy.address();
+    if (!proxyAddress || typeof proxyAddress === "string") {
+      throw new Error("Test proxy did not receive a TCP port");
+    }
+
+    try {
+      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await writeFile(
+        path.join(runtimeDirectory, "codex-app-server-shim.json"),
+        JSON.stringify({
+          realCliPath: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+          forceHttpTransport: true,
+          gateway: {
+            displayName: "ChatGPT",
+            baseUrl: "https://chatgpt.example.invalid/v1",
+            model: "gpt-5",
+            active: false,
+            autoFallbackToChatGpt: false
+          }
+        }),
+        "utf8"
+      );
+      shim = childProcess.spawn(shimPath, ["app-server"], {
+        cwd: root,
+        env: {
+          ...process.env,
+          HTTPS_PROXY: `http://127.0.0.1:${proxyAddress.port}`,
+          HTTP_PROXY: `http://127.0.0.1:${proxyAddress.port}`,
+          ALL_PROXY: "",
+          https_proxy: `http://127.0.0.1:${proxyAddress.port}`,
+          http_proxy: `http://127.0.0.1:${proxyAddress.port}`,
+          all_proxy: "",
+          NO_PROXY: "",
+          no_proxy: ""
+        },
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const shimStderr: string[] = [];
+      shim.stderr.on("data", (chunk) => shimStderr.push(String(chunk)));
+      const messages = createMessageCollector(shim.stdout);
+      shim.stdin.write(`${JSON.stringify({ id: "early-chatgpt-initialize", method: "initialize", params: {} })}\n`);
+      await messages.next((message) => message.id === "early-chatgpt-initialize");
+
+      bridge = new CodexHotSwitchBridge(async () => ({
+        accessToken: "oauth-token",
+        chatgptAccountId: "oauth-account",
+        chatgptPlanType: "plus"
+      }));
+      await waitForSocket(getHotSwitchSocketPath(process.pid));
+      const provider = await bridge.getCodexExecProviderConfig();
+      expect(provider.ready).toBe(false);
+
+      let responseSettled = false;
+      const responsePromise = requestAdapterModels(provider.baseUrl, provider.token).finally(() => {
+        responseSettled = true;
+      });
+      await waitFor(() => shimStderr.join("").includes("ChatGPT route request is waiting for credential"));
+      expect(responseSettled).toBe(false);
+      expect(proxyConnections).toBe(0);
+
+      await expect(
+        bridge.switchGatewayRoute({
+          route: "chatgpt",
+          chatgptAccessToken: "oauth-token",
+          gracePeriodMs: 0,
+          longTurnPolicy: "defer"
+        })
+      ).resolves.toMatchObject({ status: "switched" });
+
+      await expect(responsePromise).resolves.toBe(502);
+      expect(proxyConnections).toBe(1);
+    } finally {
+      bridge?.dispose();
+      bridge = undefined;
+      shim?.kill("SIGTERM");
+      shim = undefined;
+      await new Promise<void>((resolve) => proxy.close(() => resolve()));
       await rm(runtimeDirectory, { recursive: true, force: true });
     }
   }, 15_000);
@@ -2088,6 +2397,73 @@ describe("CodexHotSwitchBridge", () => {
           message.params?.recoveryMetadata === "true"
       )
     ).resolves.toMatchObject({ params: { runtimeAccountId: "account-b", inputText: "Continue." } });
+  }, 15_000);
+
+  it.each([
+    { label: "a replacement turn", command: "test/replaceActiveTurn", continuedThreads: 1 },
+    { label: "an already inactive turn", command: "test/dropActiveTurn", continuedThreads: 0 }
+  ])("releases the old account activity when interrupting $label", async ({ command, continuedThreads }) => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(JSON.stringify({ id: "activity-leak-initialize", method: "initialize", params: {} }) + "\n");
+    await messages.next((message) => message.id === "activity-leak-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+    await bridge.activateUsageAttribution({
+      localAccountId: "local-a",
+      accountId: "account-a",
+      expectedEmail: "a@example.invalid"
+    });
+
+    shim.stdin.write(
+      JSON.stringify({
+        id: "activity-leak-turn",
+        method: "turn/start",
+        params: { threadId: "activity-leak-thread", input: [] }
+      }) + "\n"
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "activity-leak-thread");
+    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 1);
+
+    shim.stdin.write(JSON.stringify({ id: "activity-leak-arm", method: command, params: {} }) + "\n");
+    await messages.next((message) => message.id === "activity-leak-arm");
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "interruptAndContinue"
+      })
+    ).resolves.toMatchObject({ status: "switched", accountId: "account-b", continuedThreads });
+
+    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 0);
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 0 });
+
+    if (continuedThreads > 0) {
+      shim.stdin.write(JSON.stringify({ id: "activity-leak-recovery-complete", method: "test/complete", params: {} }) + "\n");
+      await messages.next((message) => message.id === "activity-leak-recovery-complete");
+      await waitFor(() => accountConcurrencyTracker.get("local-b")?.current === 0);
+    }
   }, 15_000);
 
   it("continues a recently quota-exhausted ordinary thread after an emergency switch", async () => {
@@ -3436,6 +3812,22 @@ async function postGatewayResponse(baseUrl: string): Promise<{ statusCode: numbe
     );
     request.once("error", reject);
     request.end(body);
+  });
+}
+
+async function requestAdapterModels(baseUrl: string, token: string): Promise<number> {
+  const target = new URL("models?client_version=0.154.0", `${baseUrl.replace(/\/+$/u, "")}/`);
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      target,
+      { headers: { authorization: `Bearer ${token}` } },
+      (response) => {
+        response.resume();
+        response.once("end", () => resolve(response.statusCode ?? 0));
+      }
+    );
+    request.once("error", reject);
+    request.end();
   });
 }
 

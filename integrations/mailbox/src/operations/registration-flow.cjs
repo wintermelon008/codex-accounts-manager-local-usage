@@ -301,6 +301,8 @@ class RegistrationSession {
       operationId: this.oauthOperationId,
       expectedEmail: this.email,
       clipboardText: this.email,
+      registrationAt: this.createdAt,
+      addedVia: "registration"
     });
     if (this.cancelRequested || this.state === STATES.CANCELLED) {
       return;

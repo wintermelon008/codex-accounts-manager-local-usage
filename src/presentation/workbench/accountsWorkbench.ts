@@ -10,11 +10,13 @@ import { registerCommands } from "../../commands";
 import {
   getCodexAccountsConfiguration,
   getExternalControlPort,
+  getDashboardProxyAddress,
   isExternalControlEnabled,
   isForceFastModeEnabled,
   isLocalImportInboxEnabled,
   isSeamlessSwitchEnabled
 } from "../../infrastructure/config/extensionSettings";
+import { getConfiguredProxySettings } from "../../infrastructure/config/proxyEnvironment";
 import { AccountsRepository } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
 import { registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
@@ -32,9 +34,13 @@ import {
   type SharedCodexAccountJson
 } from "../../core/types";
 import { resolveAccountHealth } from "../../application/accounts/health";
-import { observeAccountAvailability } from "../../application/accounts/observeAvailability";
-import { clearAccountStates, initAccountStatePersistence, recordAuthorization } from "../../application/accounts/accountState";
 import { isAccountReauthorizationRequired } from "../../domain/accountHealth";
+import { observeAccountAvailability } from "../../application/accounts/observeAvailability";
+import {
+  clearAccountStates,
+  initAccountStatePersistence,
+  recordAuthorization
+} from "../../application/accounts/accountState";
 import { getErrorMessage } from "../../core/errors";
 import {
   importSharedAccountsIntoBalancePool,
@@ -64,11 +70,18 @@ import { getCurrentWindowRuntimeAccountId } from "./windowRuntimeAccount";
 import { getTokenAutomationSnapshot } from "./tokenAutomationState";
 import {
   registerAutoRefreshScheduler,
+  registerQuotaCountdownRefreshScheduler,
   registerSeamlessUsageLimitMonitor,
   registerTokenRefreshScheduler,
   type SeamlessUsageLimitMonitor
 } from "./schedulerRegistration";
 import { SessionHub, resolveSessionRegistryPath } from "../../sessions";
+import {
+  accountConcurrencyTracker,
+  updatePersistedAccountConcurrencyWindows,
+  type AccountConcurrencySnapshot,
+  type AccountSessionActivity
+} from "../../application/accounts/accountConcurrency";
 
 const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
@@ -92,13 +105,21 @@ export class AccountsWorkbench {
   private readonly oauthImportCancellationSources = new Map<string, vscode.CancellationTokenSource>();
   private readonly authRevokedAccountIds = new Map<string, number>();
   private seamlessUsageLimitMonitor: SeamlessUsageLimitMonitor | undefined;
+  private accountConcurrencyPersistenceQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly context: vscode.ExtensionContext) {
+    accountConcurrencyTracker.reset();
     this.repo = new AccountsRepository(context);
     this.statusBar = new AccountsStatusBarProvider(context, this.repo);
     this.refreshCoordinator = new WorkbenchRefreshCoordinator(context, this.repo, this.statusBar);
-    this.hotSwitchRuntime = new CodexHotSwitchRuntime(context, this.repo,
+    const refreshAccountConcurrency = (activity: AccountSessionActivity, snapshot?: AccountConcurrencySnapshot) => {
+      this.handleAccountConcurrencyChanged(activity, snapshot);
+    };
+    this.hotSwitchRuntime = new CodexHotSwitchRuntime(
+      context,
+      this.repo,
       (event) => this.handleAuthTokenRevoked(event),
+      refreshAccountConcurrency,
       async (event) => {
         await observeAccountAvailability(this.repo, event);
         this.refreshCoordinator.createRefreshView().refresh();
@@ -191,8 +212,17 @@ export class AccountsWorkbench {
       : undefined;
     this.managerControlServer = new ManagerControlServer({
       repo: this.repo,
-      getAccountHealth: async (account) => resolveAccountHealth(account,
-        await this.repo.getTokens(account.id, { syncExternal: false }), getTokenAutomationSnapshot()),
+      getAccountHealth: async (account) => {
+        const tokens = isSub2ApiAccount(account)
+          ? undefined
+          : await this.repo.getTokens(account.id, { syncExternal: false });
+        const deactivatedMailboxEmails = new Set(
+          this.integrationHost.getDeactivatedMailboxEmails().map((email) => normalizeEmail(email)).filter(Boolean)
+        );
+        return resolveAccountHealth(account, tokens, getTokenAutomationSnapshot(), {
+          mailboxDeactivated: deactivatedMailboxEmails.has(normalizeEmail(account.email))
+        });
+      },
       usage: new LocalUsageAnalyticsService({
         globalStoragePath: context.globalStorageUri.fsPath,
         backgroundRefreshEnabled: true
@@ -202,6 +232,15 @@ export class AccountsWorkbench {
       enqueueImport: (accounts) => enqueueLocalImportJob(accounts),
       getImportStatus: (jobId) => readLocalImportStatus(jobId),
       getCodexExecProviderConfig: () => this.hotSwitchRuntime.getCodexExecProviderConfig(),
+      getDeactivatedMailboxEmails: () => this.integrationHost.getDeactivatedMailboxEmails(),
+      onAccountConcurrencyChanged: refreshAccountConcurrency,
+      getProxySettings: async () => {
+        const proxy = await getConfiguredProxySettings(getDashboardProxyAddress() || undefined);
+        return {
+          httpsProxy: proxy.httpsProxy,
+          noProxy: proxy.noProxy
+        };
+      },
       switchAccount: (accountId, options) => this.switchAccountForControl(accountId, options)
     });
   }
@@ -292,6 +331,14 @@ export class AccountsWorkbench {
         })
       );
     });
+    await measureStep("registerQuotaCountdownRefreshScheduler", () => {
+      this.context.subscriptions.push(
+        registerQuotaCountdownRefreshScheduler({
+          repo: this.repo,
+          onRefresh: refreshers.refresh
+        })
+      );
+    });
     await measureStep("registerSeamlessUsageLimitMonitor", () => {
       this.seamlessUsageLimitMonitor = registerSeamlessUsageLimitMonitor({
         context: this.context,
@@ -351,7 +398,6 @@ export class AccountsWorkbench {
   }
 
   dispose(): void {
-    clearAccountStates();
     if (this.managerControlRetryTimer) {
       clearTimeout(this.managerControlRetryTimer);
       this.managerControlRetryTimer = undefined;
@@ -368,6 +414,7 @@ export class AccountsWorkbench {
     this.managerControlServer.dispose();
     setActiveManagerIntegrationHost(undefined);
     this.integrationHost.dispose();
+    clearAccountStates();
     this.repo.dispose();
   }
 
@@ -469,6 +516,28 @@ export class AccountsWorkbench {
     };
   }
 
+  private handleAccountConcurrencyChanged(
+    activity: AccountSessionActivity,
+    snapshot?: AccountConcurrencySnapshot
+  ): void {
+    this.accountConcurrencyPersistenceQueue = this.accountConcurrencyPersistenceQueue
+      .then(async () => {
+        const account = await this.repo.getAccount(activity.accountId);
+        if (!account) {
+          return;
+        }
+        const concurrencyWindows = updatePersistedAccountConcurrencyWindows(account, activity, snapshot);
+        if (concurrencyWindows) {
+          await this.repo.updateConcurrencyWindows(account.id, concurrencyWindows);
+        }
+      })
+      .then(() => refreshQuotaSummaryPanel())
+      .catch((error: unknown) => {
+        console.warn(`[codexAccounts] failed to persist account concurrency statistics: ${getErrorMessage(error)}`);
+        void refreshQuotaSummaryPanel();
+      });
+  }
+
   private async switchAccountForControl(
     accountId: string,
     options: { force?: boolean; gracePeriodMs?: number; longTurnPolicy?: "defer" | "interrupt" | "interruptAndContinue" } = {}
@@ -552,7 +621,10 @@ export class AccountsWorkbench {
       }
 
       throwIfOAuthImportCancelled(cancellationSource);
-      const account = await this.repo.upsertFromTokens(tokens, false);
+      const account = await this.repo.upsertFromTokens(tokens, false, {
+        registrationAt: normalizeTimestamp(options.registrationAt),
+        addedVia: options.addedVia
+      });
       recordAuthorization(account.id, { ...tokens, accountId: account.accountId ?? tokens.accountId });
       throwIfOAuthImportCancelled(cancellationSource);
       const quota = await refreshImportedAccountQuota(this.repo, account.id);
@@ -688,11 +760,6 @@ export class AccountsWorkbench {
       return { handled: false, reason: "the revoked token is not from the current active ChatGPT account" };
     }
 
-    const activeTokens = await this.repo.getTokens(activeAccount.id);
-    if (resolveAccountHealth(activeAccount, activeTokens, getTokenAutomationSnapshot()).availability !== "auth_unavailable") {
-      return { handled: false, reason: "account authentication is recoverable or unconfirmed" };
-    }
-
     this.pruneAuthRevokedAccountIds();
     this.authRevokedAccountIds.set(activeAccount.id, Date.now());
     const candidates = selectAuthRevocationCandidates(
@@ -826,6 +893,10 @@ function throwIfOAuthImportCancelled(source: vscode.CancellationTokenSource | un
 function normalizeEmail(value: string | undefined): string | undefined {
   const normalized = value?.trim().toLowerCase();
   return normalized || undefined;
+}
+
+function normalizeTimestamp(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
 
 function describeControlError(error: unknown): string {

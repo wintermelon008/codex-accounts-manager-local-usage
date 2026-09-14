@@ -147,6 +147,7 @@ export function buildAccountRecordDraft(params: {
   existingAccounts: CodexAccountRecord[];
   remoteProfile?: RemoteAccountProfileLike;
   addedVia?: CodexAccountRecord["addedVia"];
+  registrationAt?: number;
   forceActive: boolean;
   now: number;
 }): CodexAccountRecord {
@@ -185,6 +186,8 @@ export function buildAccountRecordDraft(params: {
     accountName: resolvedAccountName,
     tags: normalizeAccountTagsForAccount(params.existing),
     addedVia: params.existing?.addedVia ?? params.addedVia,
+    registrationAt: earliestTimestamp(params.existing?.registrationAt, params.registrationAt),
+    importedAt: params.existing?.importedAt ?? (params.existing ? params.existing.createdAt : params.now),
     accountStructure: resolveAccountStructure(
       remoteAccountStructure,
       params.existing?.accountStructure,
@@ -200,6 +203,7 @@ export function buildAccountRecordDraft(params: {
     dismissedHealthIssueKey: params.existing?.dismissedHealthIssueKey,
     lastQuotaAt: params.existing?.lastQuotaAt,
     quotaSummary: params.existing?.quotaSummary,
+    concurrencyWindows: params.existing?.concurrencyWindows,
     quotaError: params.existing?.quotaError,
     tokenRefreshLastAttemptAt: params.existing?.tokenRefreshLastAttemptAt,
     tokenRefreshLastSuccessAt: params.existing?.tokenRefreshLastSuccessAt,
@@ -292,4 +296,14 @@ function isPersonalLikePlan(planType?: string): boolean {
   }
 
   return ["free", "plus", "pro", "personal"].includes(normalized);
+}
+
+function earliestTimestamp(left?: number, right?: number): number | undefined {
+  if (left == null) {
+    return right;
+  }
+  if (right == null) {
+    return left;
+  }
+  return Math.min(left, right);
 }

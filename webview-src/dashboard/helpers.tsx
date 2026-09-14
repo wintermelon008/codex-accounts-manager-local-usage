@@ -9,7 +9,7 @@ import {
   type DashboardSettings,
   type DashboardState
 } from "../../src/domain/dashboard/types";
-import { isAccountInvalid, isAccountReauthorizationRequired } from "../../src/domain/accountHealth";
+import { isAccountInvalid } from "../../src/domain/accountHealth";
 import { formatResetRelativeTime } from "../../src/utils/resetTime";
 
 export {
@@ -186,7 +186,6 @@ function compareOptionalNumbers(left: number | undefined, right: number | undefi
 export function getBlockedAccountIds(accounts: readonly DashboardAccountViewModel[]): string[] {
   return accounts.flatMap((account) =>
     account.accountKind !== "sub2api" &&
-    isAccountReauthorizationRequired(account.healthKind) &&
     account.mailboxDeactivated === true
       ? [account.id]
       : []

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
 import type { DashboardActionContext } from "../src/presentation/dashboard/actionHandlers";
+import {
+  getActiveManagerIntegrationHost,
+  ManagerIntegrationHost,
+  setActiveManagerIntegrationHost
+} from "../src/integrations";
 
 const { clearStaleCodexSessionLocksMock, consumeResetCreditMock, startQuotaCountdownMock } = vi.hoisted(() => ({
   clearStaleCodexSessionLocksMock: vi.fn(),
@@ -516,5 +521,62 @@ describe("executeDashboardActionMessage", () => {
       accountIds: ["visible-account"]
     });
     expect(result.status).toBe("completed");
+  });
+
+  it("cleans linked Mailbox records after Dashboard blocked-account removal", async () => {
+    const previousHost = getActiveManagerIntegrationHost();
+    const host = new ManagerIntegrationHost({} as never);
+    const removeDeactivatedMailboxes = vi.fn(async (emails: readonly string[]) => ({
+      requested: emails.length,
+      removed: emails.length,
+      failed: 0,
+      failures: []
+    }));
+    host.api.registerDashboardIntegration({
+      id: "mailbox",
+      getViewModel: () => ({ id: "mailbox", title: "Mailbox", status: "ready", actions: [] }),
+      runAction: vi.fn(),
+      removeDeactivatedMailboxes
+    });
+    setActiveManagerIntegrationHost(host);
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("删除" as never);
+    const removeAccount = vi.fn().mockResolvedValue(undefined);
+
+    try {
+      const result = await executeDashboardActionMessage(
+        {
+          context: {} as DashboardActionContext["context"],
+          repo: {
+            getAccount: vi.fn().mockResolvedValue({ id: "blocked-1", email: "blocked@example.com" }),
+            removeAccount
+          } as unknown as DashboardActionContext["repo"],
+          resolveLanguage: () => "zh",
+          schedulePublishState: vi.fn(),
+          publishState: vi.fn(),
+          oauth: {} as DashboardActionContext["oauth"],
+          announcements: {} as DashboardActionContext["announcements"],
+          getAnnouncementOptions: () => ({ version: "0.1.19", locale: "zh" })
+        },
+        {
+          type: "dashboard:action",
+          action: "batchRemove",
+          requestId: "req-remove-blocked",
+          payload: { accountIds: ["blocked-1"], removeLinkedMailboxes: true }
+        }
+      );
+
+      expect(removeAccount).toHaveBeenCalledWith("blocked-1");
+      expect(removeDeactivatedMailboxes).toHaveBeenCalledWith(["blocked@example.com"]);
+      expect(result.status).toBe("completed");
+      expect(result.payload?.batchResult?.mailboxCleanup).toEqual({
+        requested: 1,
+        removed: 1,
+        failed: 0,
+        failures: []
+      });
+    } finally {
+      host.dispose();
+      setActiveManagerIntegrationHost(previousHost);
+    }
   });
 });

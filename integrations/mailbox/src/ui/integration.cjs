@@ -235,6 +235,7 @@ class MailboxIntegration {
         id: INTEGRATION_ID,
         getViewModel: () => this.getViewModel(),
         getDeactivatedMailboxEmails: () => this.getDeactivatedMailboxEmails(),
+        removeDeactivatedMailboxes: (emails) => this.removeDeactivatedMailboxes(emails),
         runAction: (actionId) => this.runAction(actionId),
         onDidChange: this.events.event
       });
@@ -287,6 +288,47 @@ class MailboxIntegration {
       .listMetadata()
       .filter((mailbox) => mailbox.openaiAccountDeactivated === true)
       .map((mailbox) => mailbox.address);
+  }
+
+  async removeDeactivatedMailboxes(emails) {
+    const requestedEmails = new Set(
+      (Array.isArray(emails) ? emails : [])
+        .filter((email) => typeof email === "string")
+        .map((email) => normalizeEmail(email))
+        .filter(Boolean)
+    );
+    const removed = [];
+    const failed = [];
+    const candidates = this.pool.listMetadata().filter(
+      (mailbox) => mailbox.openaiAccountDeactivated === true && requestedEmails.has(normalizeEmail(mailbox.address))
+    );
+
+    for (const mailbox of candidates) {
+      try {
+        const detail = await this.pool.getDetail(mailbox.id);
+        if (!hasOpenAiAccountDeactivationMessage(detail)) {
+          failed.push({ email: mailbox.address, message: "对应邮箱没有保存的 OpenAI account deactivated 邮件" });
+          continue;
+        }
+        await this.deleteMailboxData(mailbox.id, { updateSelection: false });
+        removed.push(mailbox.id);
+      } catch (error) {
+        failed.push({ email: mailbox.address, message: safeError(error, "Mailbox 删除失败") });
+      }
+    }
+
+    if (removed.includes(this.selectedMailboxId)) {
+      this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
+      await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+    }
+    await this.publishPanelState();
+    this.publish();
+    return {
+      requested: requestedEmails.size,
+      removed: removed.length,
+      failed: failed.length,
+      failures: failed
+    };
   }
 
   async runAction(actionId) {
@@ -385,6 +427,9 @@ class MailboxIntegration {
           return;
         case "delete":
           await this.deleteMailbox(message.mailboxId);
+          return;
+        case "undoDeleteMailbox":
+          await this.undoDeleteMailbox(message.mailboxId);
           return;
         case "deleteMailboxAndCodex":
           await this.deleteMailboxAndCodex(message.mailboxId);
@@ -588,8 +633,7 @@ class MailboxIntegration {
     this.publish();
   }
 
-  async deleteMailbox(id) {
-    const mailboxId = this.requireMailboxId(id);
+  async deleteMailboxData(mailboxId, { updateSelection = true } = {}) {
     if (this.coordinator.isActive(mailboxId) || this.codexImports.has(mailboxId)) {
       const stopped = await this.stopMailbox(mailboxId);
       if (!stopped && (this.coordinator.isActive(mailboxId) || this.codexImports.has(mailboxId))) {
@@ -597,12 +641,42 @@ class MailboxIntegration {
       }
     }
     await this.cancelRegistrationForMailbox(mailboxId);
-    await this.pool.deleteAccount(mailboxId);
-    if (this.selectedMailboxId === mailboxId) {
+    const deleted = await this.pool.deleteAccount(mailboxId);
+    if (updateSelection && this.selectedMailboxId === mailboxId) {
       this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
       await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
     }
-    this.postPanelMessage({ type: "toast", level: "success", action: "delete", mailboxId, message: "邮箱已删除" });
+    return deleted;
+  }
+
+  async deleteMailbox(id) {
+    const mailboxId = this.requireMailboxId(id);
+    const deleted = await this.deleteMailboxData(mailboxId);
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "delete",
+      mailboxId,
+      message: "邮箱已删除",
+      undo: deleted?.undoAvailable === true ? { action: "undoDeleteMailbox", mailboxId } : undefined
+    });
+    await this.publishPanelState();
+    this.publish();
+  }
+
+  async undoDeleteMailbox(id) {
+    const mailboxId = typeof id === "string" && id ? id : "";
+    if (!mailboxId) throw new Error("缺少待恢复邮箱");
+    const restored = await this.pool.restoreDeletedAccount(mailboxId);
+    this.selectedMailboxId = restored.id;
+    await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, restored.id);
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "undoDeleteMailbox",
+      mailboxId,
+      message: "邮箱已恢复"
+    });
     await this.publishPanelState();
     this.publish();
   }
@@ -630,19 +704,8 @@ class MailboxIntegration {
     }
 
     const result = { mailboxDeleted: false, codexDeleted: false };
-    if (this.coordinator.isActive(mailboxId) || this.codexImports.has(mailboxId)) {
-      const stopped = await this.stopMailbox(mailboxId);
-      if (!stopped && (this.coordinator.isActive(mailboxId) || this.codexImports.has(mailboxId))) {
-        throw new Error("请先停止邮箱当前操作");
-      }
-    }
-    await this.cancelRegistrationForMailbox(mailboxId);
-    await this.pool.deleteAccount(mailboxId);
+    await this.deleteMailboxData(mailboxId);
     result.mailboxDeleted = true;
-    if (this.selectedMailboxId === mailboxId) {
-      this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
-      await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
-    }
 
     try {
       await this.api.removeManagedAccount(managedAccount.accountId);
@@ -838,10 +901,12 @@ class MailboxIntegration {
 
   async runCodexImportOperation(mailbox, operationId) {
     try {
+      const registrationAt = resolveMailboxRegistrationAt(mailbox);
       const result = await this.api.startOAuthAccountImport({
         operationId,
         expectedEmail: mailbox.address,
-        clipboardText: mailbox.address
+        clipboardText: mailbox.address,
+        ...(registrationAt == null ? {} : { registrationAt })
       });
       if (this.codexImports.get(mailbox.id) !== operationId) {
         return;
@@ -1976,6 +2041,14 @@ function toPanelMailbox(mailbox) {
 
 function normalizeEmail(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function resolveMailboxRegistrationAt(mailbox) {
+  const firstOpenAiEmailAt = Date.parse(String(mailbox?.firstOpenAiEmailAt || ""));
+  if (Number.isFinite(firstOpenAiEmailAt)) {
+    return firstOpenAiEmailAt;
+  }
+  return Number.isFinite(mailbox?.gptRegisteredAt) ? mailbox.gptRegisteredAt : undefined;
 }
 
 function normalizeManagedAccountDirectory(entries) {

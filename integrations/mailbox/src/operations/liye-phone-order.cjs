@@ -349,7 +349,6 @@ class LIYEPhoneOrderSession {
     sourceId = "liye",
     cardKeyId = "",
     cardMasked = "",
-    maxReplacements = 10,
     pollIntervalMs = 4000,
     orderTimeoutMs = 900000,
     clientFactory,
@@ -361,7 +360,6 @@ class LIYEPhoneOrderSession {
     this.sourceId = text(sourceId).toLowerCase() || "liye";
     this.cardKeyId = text(cardKeyId);
     this.cardMasked = text(cardMasked);
-    this.maxReplacements = clampNumber(maxReplacements, 10, 0, 20);
     this.pollIntervalMs = clampNumber(pollIntervalMs, 4000, 250, 30000);
     this.orderTimeoutMs = clampNumber(orderTimeoutMs, 900000, 10000, 3600000);
     this.clientFactory = clientFactory || (() => new LIYEClient({
@@ -396,7 +394,6 @@ class LIYEPhoneOrderSession {
       order: null,
       humanConfirmed: false,
       replacements: 0,
-      maxReplacements: this.maxReplacements,
       pollIntervalMs: this.pollIntervalMs,
       orderTimeoutMs: this.orderTimeoutMs,
       startedAt: 0,
@@ -482,9 +479,6 @@ class LIYEPhoneOrderSession {
     this.requireOrder();
     if (!this.state.running || !["waiting", "polling"].includes(this.state.phase)) {
       throw new LIYEOrderError("当前号码不在可换号状态");
-    }
-    if (this.state.replacements >= this.state.maxReplacements) {
-      throw new LIYEOrderError("已达到最大换号次数");
     }
     ++this.pollGeneration;
     // 让旧轮询在当前请求完成后退出；新号码必须建立自己的轮询循环。

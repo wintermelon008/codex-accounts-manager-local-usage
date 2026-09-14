@@ -109,6 +109,23 @@ export function clearAccountStates(): void {
   revision += 1;
 }
 
+/** Remove the local evidence belonging to an account that was deleted. */
+export function forgetAccountState(accountId: string): void {
+  if (!accountId) return;
+  availability.delete(accountId);
+  renewals.delete(accountId);
+  renewalConfirmations.delete(accountId);
+  legacySuccessChecked.delete(accountId);
+  revision += 1;
+  const store = persistence;
+  if (!store) return;
+  pendingWrite = pendingWrite
+    .then(() => store.update(STATE_PREFIX + encodeURIComponent(accountId), undefined))
+    .catch(() => {
+      console.warn("[codexAccounts] could not remove local account health evidence");
+    });
+}
+
 export function accessCredentialFingerprint(accountId: string, accessToken: string): string {
   return createHash("sha256")
     .update(JSON.stringify([accountId, accessToken]))

@@ -40,6 +40,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain("@media (max-width: 920px)");
     expect(stylesheet).toContain("@media (max-width: 620px)");
     expect(stylesheet).toContain("@media (max-width: 520px)");
+    expect(stylesheet).toContain("@media (max-width: 460px)");
     expect(stylesheet).toContain(".local-usage-cards");
     expect(stylesheet).toContain(".local-usage-layout");
     expect(stylesheet).toContain(".local-usage-bar-row");
@@ -90,6 +91,17 @@ describe("local usage dashboard placement and responsive guards", () => {
       stylesheet.indexOf("@media (max-width: 920px)")
     );
     expect(mediumWindowStyles).not.toContain(".local-usage-cards");
+    expect(mediumWindowStyles).not.toContain(".local-usage-layout");
+    const compactWindowStyles = stylesheet.slice(
+      stylesheet.lastIndexOf("@media (max-width: 620px)"),
+      stylesheet.indexOf("@media (max-width: 460px)")
+    );
+    expect(compactWindowStyles).toContain(".accounts-grid");
+    expect(compactWindowStyles).toContain("repeat(2, minmax(0, 1fr))");
+    const narrowUsageStyles = stylesheet.slice(stylesheet.indexOf("@media (max-width: 460px)"));
+    expect(narrowUsageStyles).toContain(".accounts-grid");
+    expect(narrowUsageStyles).toContain("grid-template-columns: 1fr");
+    expect(narrowUsageStyles).toContain(".local-usage-layout");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
     expect(main).toContain('sendAction("refreshLocalUsage")');
     expect(main).toContain('id="forceFastModeToggle"');

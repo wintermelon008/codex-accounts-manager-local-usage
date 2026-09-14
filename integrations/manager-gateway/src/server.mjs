@@ -104,6 +104,18 @@ async function handleRequest(request, response, { sessions, config, usage }) {
     }
     return;
   }
+  if (request.method === "GET" && url.pathname === "/v1/manager/proxy") {
+    if (typeof sessions.manager?.getProxySettings !== "function") {
+      sendJson(response, 503, { error: "Manager proxy configuration is unavailable" }, config);
+      return;
+    }
+    try {
+      sendJson(response, 200, await sessions.manager.getProxySettings(), config);
+    } catch (error) {
+      sendJson(response, 503, { error: error instanceof Error ? error.message : String(error) }, config);
+    }
+    return;
+  }
   if (request.method === "GET" && url.pathname === "/v1/recovery") {
     sendJson(response, 200, sessions.getRecoveryStatus(), config);
     return;

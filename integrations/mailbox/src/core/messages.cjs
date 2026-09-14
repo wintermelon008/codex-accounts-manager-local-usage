@@ -12,6 +12,7 @@ const OPENAI_DEACTIVATED_PATTERNS = [
   /(?:账户|帐户|账号)\s*(?:已|被)?\s*停用/iu
 ];
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu;
+const OPENAI_DISPLAY_NAME_PATTERN = /^(?:openai|chatgpt)(?:\s+(?:team|团队))?$/iu;
 
 function normalizeMessages(items) {
   if (!Array.isArray(items)) {
@@ -35,7 +36,7 @@ function normalizeMessage(message) {
     id: fingerprint,
     fingerprint,
     subject,
-    from: sender.address || undefined,
+    from: sender.address || sender.name || undefined,
     senderName: sender.name || undefined,
     receivedAt,
     preview: body.slice(0, MAX_PREVIEW_LENGTH),
@@ -57,13 +58,21 @@ function readBody(message) {
 
 function readSender(message) {
   const sender = message.from ?? message.sender ?? message.author;
+  const fallbackAddress = readText(
+    message.fromEmail ?? message.fromAddress ?? message.senderEmail ?? message.senderAddress ?? message.authorEmail
+  );
   if (sender && typeof sender === "object") {
     return {
-      address: readText(sender.emailAddress?.address ?? sender.address ?? sender.email),
-      name: readText(sender.emailAddress?.name ?? sender.name)
+      address: readText(sender.emailAddress?.address ?? sender.address ?? sender.email) || fallbackAddress,
+      name: readText(sender.emailAddress?.name ?? sender.name) || readText(message.senderName)
     };
   }
-  return { address: readText(sender), name: "" };
+  const text = readText(sender);
+  const embeddedEmail = text.match(EMAIL_PATTERN)?.[0];
+  return {
+    address: embeddedEmail || fallbackAddress,
+    name: text && !embeddedEmail ? text : readText(message.senderName)
+  };
 }
 
 function readText(value) {
@@ -91,11 +100,15 @@ function isOpenAiAccountDeactivatedMessage(message) {
 
 function isOpenAiMessage(message) {
   if (!message || typeof message !== "object") return false;
-  const sender = typeof message.from === "string" ? message.from : "";
-  const email = sender.match(EMAIL_PATTERN)?.[0]?.toLowerCase();
-  if (!email) return false;
-  const domain = email.slice(email.lastIndexOf("@") + 1);
-  return domain === "openai.com" || domain.endsWith(".openai.com");
+  const senderValues = [message.from, message.senderName, message.fromName, message.sender].filter(
+    (value) => typeof value === "string"
+  );
+  const email = senderValues.map((value) => value.match(EMAIL_PATTERN)?.[0]).find(Boolean)?.toLowerCase();
+  if (email) {
+    const domain = email.slice(email.lastIndexOf("@") + 1);
+    return domain === "openai.com" || domain.endsWith(".openai.com");
+  }
+  return senderValues.some((value) => OPENAI_DISPLAY_NAME_PATTERN.test(value.trim()));
 }
 
 function digest(value) {

@@ -2,6 +2,11 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AvailabilityObservation } from "../application/accounts/accountState";
+import {
+  accountConcurrencyTracker,
+  type AccountConcurrencySnapshot,
+  type AccountSessionActivity
+} from "../application/accounts/accountConcurrency";
 
 export type HotSwitchAvailabilityEvent = Omit<AvailabilityObservation, "kind"> & {
   kind: "usable" | "auth_rejected" | "quota_limited";
@@ -307,6 +312,10 @@ export class CodexHotSwitchBridge {
     private readonly handleAuthTokenRevoked: (
       event: HotSwitchAuthTokenRevokedEvent
     ) => Promise<HotSwitchAuthTokenRevokedResult> = () => Promise.resolve({ handled: false }),
+    private readonly onAccountConcurrencyChanged: (
+      activity: AccountSessionActivity,
+      snapshot?: AccountConcurrencySnapshot
+    ) => void = () => undefined,
     private readonly handleAvailability: (event: HotSwitchAvailabilityEvent) => Promise<void> = () => Promise.resolve()
   ) {}
 
@@ -497,13 +506,39 @@ export class CodexHotSwitchBridge {
       return;
     }
 
+    if (message.method === "runtime/account-session-activity") {
+      const activity = readAccountSessionActivity(message.params);
+      if (!activity) {
+        this.writeResponse(socket, message.id, {
+          error: { code: -32602, message: "Missing or invalid account session activity" }
+        });
+        return;
+      }
+      const result = accountConcurrencyTracker.record(activity);
+      if (result.changed) {
+        this.onAccountConcurrencyChanged(activity, result.snapshot);
+      }
+      this.writeResponse(socket, message.id, {
+        result: { ok: true, ...(result.snapshot ? { snapshot: result.snapshot } : {}) }
+      });
+      return;
+    }
+
     if (message.method === "runtime/account-availability") {
       const p = message.params;
-      if (!p || !readBoundedString(p["localAccountId"], 256) || !readBoundedString(p["accountId"], 256) ||
-          !readBoundedString(p["runtimeId"], 128) || typeof p["credentialFingerprint"] !== "string" ||
-          !/^[a-f0-9]{64}$/u.test(p["credentialFingerprint"]) || !Number.isSafeInteger(p["sequence"]) ||
-          Number(p["sequence"]) <= 0 || typeof p["observedAt"] !== "number" || !Number.isFinite(p["observedAt"]) ||
-          !["usable", "auth_rejected", "quota_limited"].includes(String(p["kind"]))) {
+      if (
+        !p ||
+        !readBoundedString(p["localAccountId"], 256) ||
+        !readBoundedString(p["accountId"], 256) ||
+        !readBoundedString(p["runtimeId"], 128) ||
+        typeof p["credentialFingerprint"] !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(p["credentialFingerprint"]) ||
+        !Number.isSafeInteger(p["sequence"]) ||
+        Number(p["sequence"]) <= 0 ||
+        typeof p["observedAt"] !== "number" ||
+        !Number.isFinite(p["observedAt"]) ||
+        !["usable", "auth_rejected", "quota_limited"].includes(String(p["kind"]))
+      ) {
         this.writeResponse(socket, message.id, { error: { code: -32602, message: "Invalid availability observation" } });
         return;
       }
@@ -649,6 +684,27 @@ function readAuthTokenRevokedEvent(
     turnId: readBoundedString(params?.["turnId"], 256),
     localAccountId: readBoundedString(params?.["localAccountId"], 256)
   };
+}
+
+function readAccountSessionActivity(params: Record<string, unknown> | undefined): AccountSessionActivity | undefined {
+  const sessionId = readBoundedString(params?.["sessionId"], 256);
+  const accountId = readBoundedString(params?.["accountId"], 256);
+  if (!sessionId || !accountId || typeof params?.["active"] !== "boolean") {
+    return undefined;
+  }
+  const tokens = readNonNegativeActivityNumber(params?.["tokens"]);
+  const durationMs = readNonNegativeActivityNumber(params?.["durationMs"]);
+  return {
+    sessionId,
+    accountId,
+    active: params["active"],
+    ...(tokens !== undefined ? { tokens } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {})
+  };
+}
+
+function readNonNegativeActivityNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function readBoundedString(value: unknown, maxLength: number): string | undefined {

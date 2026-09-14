@@ -23,7 +23,7 @@ describe("token refresh coordinator", () => {
     clearAccountStates();
   });
 
-  it("a managed OAuth renewal immediately makes the account healthy without a model request", async () => {
+  it("a managed OAuth renewal immediately confirms the account without a model request", async () => {
     const account = {
       id: "managed",
       accountId: "workspace",
@@ -185,7 +185,9 @@ function makeLease() {
   return { release: vi.fn(async () => undefined) };
 }
 
-function makeLeaseRepo(acquire: () => Promise<{ release: () => Promise<void> }> = async () => makeLease()) {
+function makeLeaseRepo(
+  acquire: () => Promise<{ release: () => Promise<void> }> = async () => makeLease()
+) {
   return {
     tryAcquireSchedulerLease: vi.fn(acquire)
   };

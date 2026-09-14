@@ -97,6 +97,16 @@ export interface CodexQuotaSummary {
   rawData?: unknown;
 }
 
+/** Persistent concurrency and rate aggregates for one quota reset window. */
+export interface CodexAccountConcurrencyWindowStats {
+  window: "hourly" | "weekly";
+  resetAt: number;
+  windowMinutes?: number;
+  maxConcurrency: number;
+  totalTokens: number;
+  totalDurationMs: number;
+}
+
 /** Codex 主动重置次数明细 */
 export interface CodexResetCredit {
   id?: string;
@@ -209,6 +219,10 @@ export interface CodexAccountRecord {
   tags?: string[];
   /** 添加来源（用于兼容 Aideck 卡片背面展示） */
   addedVia?: string;
+  /** OpenAI 账号注册时间戳 (毫秒)，未知时为空。 */
+  registrationAt?: number;
+  /** 首次由当前 Manager 导入该账号的时间戳 (毫秒)。 */
+  importedAt?: number;
   /** 账号结构类型 (personal/team/organization) */
   accountStructure?: string;
   /** 是否为当前激活账号 */
@@ -227,6 +241,8 @@ export interface CodexAccountRecord {
   lastQuotaAt?: number;
   /** 配额摘要 */
   quotaSummary?: CodexQuotaSummary;
+  /** 当前/历史额度窗口内的会话并发与速率聚合。 */
+  concurrencyWindows?: CodexAccountConcurrencyWindowStats[];
   /** 配额错误信息 */
   quotaError?: CodexQuotaErrorInfo;
   /** 后台 OAuth 续期最后一次实际尝试时间戳 (毫秒) */

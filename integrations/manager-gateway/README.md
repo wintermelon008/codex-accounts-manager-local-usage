@@ -16,12 +16,14 @@ Manager 侧的独立 task/session Gateway。Research Workbench 只需配置 Gate
 - `GET /v1/capabilities`、`GET /healthz`：能力和健康检查。
 - `GET /v1/usage/today`：读取 Gateway 自己记录的今日 token 用量和按模型统计。
 - `GET /v1/manager/accounts`、`GET /v1/manager/status`：向受控客户端提供脱敏的 Manager 账号/状态摘要。
+- `GET /v1/manager/proxy`：向同机 Feishu Helper 提供当前 Manager 有效的 HTTPS 代理和 `NO_PROXY`；该接口仍受 Gateway/Manager 本机令牌保护。
 - 多 session 并行，使用 `MANAGER_GATEWAY_MAX_SESSIONS` 限制并发数。
 - 同一活动账号的 session 在额度耗尽时先等待该批次相关任务终态；只对明确因额度耗尽结束的 session 切换一次并恢复，其他已结束 session 不会被重复执行，并优先使用原 Codex thread 恢复。
 - 自动恢复会记录本 session 已尝试的账号，全部候选不可用时进入可解释的 `recovery_failed` 状态，不循环切号。
 - develop session 使用独立 Git worktree；Codex 不直接写入 `MANAGER_GATEWAY_PROJECT_ROOT`，结果必须由客户端显式 apply 或 discard。
+- Feishu Helper 对简单的只读 Workbench 查询会标记 fast context；Gateway 使用 `fast-query/AGENTS.md` 的轻量约束，直接查询 `/api/workbench/records`，避免扫描整个仓库。写入、开发和复杂任务仍使用完整 Workbench 指令。
 
-Manager 账号切换通过 Manager loopback control API 完成；Gateway 本身不持有账号凭据。每次 Codex 任务启动前，Gateway 会从 Manager control API 读取当前 resident Codex adapter 的临时地址和令牌，因此不会写死 Manager 重启后可能变化的随机端口。Feishu Helper 与 Workbench 浏览器都只需连接 Gateway 的固定外部端口；Feishu 不再直接依赖本机 Codex app-server thread。
+Manager 账号切换通过 Manager loopback control API 完成；Gateway 本身不持有账号凭据。每次 Codex 任务启动前，Gateway 会从 Manager control API 读取当前 resident Codex adapter 的临时地址、令牌和 HTTPS 代理，因此不会写死 Manager 重启后可能变化的随机端口。Feishu Helper 也会在启动及运行期间读取同一代理；代理切换时只重建 Feishu 事件消费者，不影响已经运行的 Gateway session。Workbench 浏览器都只需连接 Gateway 的固定外部端口；Feishu 不再直接依赖本机 Codex app-server thread。
 
 账号查询、切换和自动额度恢复依赖 Manager extension 在线及其外部控制接口；普通 session、最终 token 统计和 `/v1/usage/today` 不依赖这些可选接口。Gateway 会在 Codex `turn.completed` 或 OpenAI-compatible provider 的最终 usage 中读取输入、缓存输入、输出、推理输出和总 token，并以脱敏的按日 ledger 保存到 `MANAGER_GATEWAY_STATE_DIR/usage-ledger-v1.json`。Workbench 与 Feishu 通过同一个 Gateway 创建的 session 会进入同一份 ledger；缺少 Manager 接口的设备仍可运行和统计 session，只是不提供账号查询、切换和额度恢复。
 

@@ -8,6 +8,7 @@
  * - 添加配额刷新缓存，避免短时间内重复 API 调用
  */
 
+import { randomUUID } from "node:crypto";
 import {
   CodexAdditionalQuotaLimit,
   CodexAccountRecord,
@@ -772,7 +773,7 @@ export async function fetchResetCredits(
 export async function consumeResetCredit(
   accessToken: string,
   accountId?: string,
-  redeemRequestId = crypto.randomUUID()
+  redeemRequestId = randomUUID()
 ): Promise<void> {
   const headers = new Headers({
     Authorization: `Bearer ${accessToken}`,

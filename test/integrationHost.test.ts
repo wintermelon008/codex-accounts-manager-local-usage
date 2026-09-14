@@ -87,6 +87,32 @@ describe("ManagerIntegrationHost", () => {
     expect(host.getDeactivatedMailboxEmails()).toEqual([]);
   });
 
+  it("delegates Dashboard blocked-account mailbox cleanup to the owning integration", async () => {
+    const gateway = createGateway();
+    const host = new ManagerIntegrationHost(gateway.operations);
+    const removeDeactivatedMailboxes = vi.fn(async (emails: readonly string[]) => ({
+      requested: emails.length,
+      removed: emails.length,
+      failed: 0,
+      failures: []
+    }));
+    host.api.registerDashboardIntegration({
+      id: "mailbox",
+      getViewModel: () => ({ id: "mailbox", title: "Mailbox", status: "ready", actions: [] }),
+      runAction: vi.fn(),
+      removeDeactivatedMailboxes
+    });
+
+    await expect(host.removeDeactivatedMailboxes([" blocked@example.com "])).resolves.toEqual({
+      requested: 1,
+      removed: 1,
+      failed: 0,
+      failures: []
+    });
+    expect(removeDeactivatedMailboxes).toHaveBeenCalledWith(["blocked@example.com"]);
+    host.dispose();
+  });
+
   it("does not expose unavailable account-directory capabilities", () => {
     const gateway = createGateway();
     const host = new ManagerIntegrationHost(gateway.operations, undefined, {

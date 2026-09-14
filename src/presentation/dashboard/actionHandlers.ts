@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { randomUUID } from "node:crypto";
 import { refreshSingleQuota } from "../../application/accounts/quota";
 import { runAuthenticatedAccountRequest } from "../../application/accounts/authenticatedAccountRequest";
 import { fetchResetCredits, consumeResetCredit } from "../../services/quota";
@@ -22,7 +23,7 @@ import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchStat
 import { promptForTags } from "../tagEditor";
 import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from "./actionUtils";
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
-import { getActiveManagerIntegrationHost } from "../../integrations";
+import { getActiveManagerIntegrationHost, type DeactivatedMailboxCleanupResult } from "../../integrations";
 import { startQuotaCountdownForAccount } from "../../application/accounts/quotaCountdown";
 import { buildCodexImportFile } from "../../codex/authFile";
 import { clearStaleCodexSessionLocks } from "../../sessions";
@@ -192,7 +193,7 @@ async function runDashboardAction(
     case "batchResyncProfile":
       return handleBatchResync(ctx.repo, ctx.schedulePublishState, payload, translate);
     case "batchRemove":
-      return handleBatchRemove(ctx.repo, payload, translate, ctx.schedulePublishState);
+      return handleBatchRemove(ctx.repo, payload, translate, ctx.schedulePublishState, ctx.resolveLanguage());
     case "reloadPrompt":
       return handleReloadPrompt(account);
     case "reauthorize":
@@ -920,7 +921,8 @@ async function handleBatchRemove(
   repo: AccountsRepository,
   payload: DashboardActionPayload | undefined,
   translate: ReturnType<typeof t>,
-  schedulePublishState: () => void
+  schedulePublishState: () => void,
+  language: DashboardLanguage
 ) {
   const targetIds = payload?.accountIds ?? [];
   if (!targetIds.length) {
@@ -940,10 +942,17 @@ async function handleBatchRemove(
   let removed = 0;
   let failed = 0;
   const failures: DashboardBatchResultFailure[] = [];
+  const removedMailboxEmails: string[] = [];
   for (const id of targetIds) {
     try {
       await repo.removeAccount(id);
       removed += 1;
+      if (payload?.removeLinkedMailboxes === true) {
+        const email = accountsById.get(id)?.email;
+        if (email) {
+          removedMailboxEmails.push(email);
+        }
+      }
     } catch (error) {
       failed += 1;
       failures.push({
@@ -954,24 +963,92 @@ async function handleBatchRemove(
       console.warn(`[codexAccounts] batch remove failed for ${id}: ${toFailureMessage(error)}`);
     }
   }
+  let mailboxCleanup: DeactivatedMailboxCleanupResult | undefined;
+  if (payload?.removeLinkedMailboxes === true && removedMailboxEmails.length > 0) {
+    const integrationHost = getActiveManagerIntegrationHost();
+    if (integrationHost) {
+      try {
+        mailboxCleanup = await integrationHost.removeDeactivatedMailboxes(removedMailboxEmails);
+      } catch (error) {
+        const message = toFailureMessage(error);
+        mailboxCleanup = {
+          requested: removedMailboxEmails.length,
+          removed: 0,
+          failed: removedMailboxEmails.length,
+          failures: [{ message }]
+        };
+        console.warn(`[codexAccounts] linked Mailbox cleanup failed: ${message}`);
+      }
+    }
+    mailboxCleanup ??= {
+      requested: removedMailboxEmails.length,
+      removed: 0,
+      failed: removedMailboxEmails.length,
+      failures: [{
+        message: language === "zh"
+          ? "Mailbox 未提供封禁邮箱清理能力，请更新 Mailbox 扩展"
+          : language === "zh-hant"
+            ? "Mailbox 未提供封禁郵箱清理能力，請更新 Mailbox 擴充功能"
+            : "The installed Mailbox extension does not provide blocked-mailbox cleanup"
+      }]
+    };
+  }
   schedulePublishState();
   const message = translate("message.batchRemoveSummary", {
     count: removed,
     failed
   });
-  if (failed > 0) {
-    void vscode.window.showWarningMessage(message);
+  const mailboxMessage = describeMailboxCleanup(language, mailboxCleanup);
+  if (failed > 0 || mailboxCleanup?.failed) {
+    void vscode.window.showWarningMessage([message, mailboxMessage].filter(Boolean).join(" "));
   } else {
-    void vscode.window.showInformationMessage(message);
+    void vscode.window.showInformationMessage([message, mailboxMessage].filter(Boolean).join(" "));
   }
   return {
     batchResult: {
       kind: "batch_remove" as const,
       successCount: removed,
       failedCount: failed,
-      failures
+      failures,
+      mailboxCleanup: mailboxCleanup
+        ? {
+            requested: mailboxCleanup.requested,
+            removed: mailboxCleanup.removed,
+            failed: mailboxCleanup.failed,
+            failures: mailboxCleanup.failures.map((failure) => ({
+              email: failure.email,
+              message: failure.message
+            }))
+          }
+        : undefined
     }
   };
+}
+
+function describeMailboxCleanup(
+  language: DashboardLanguage,
+  cleanup: DeactivatedMailboxCleanupResult | undefined
+): string {
+  if (!cleanup) {
+    return "";
+  }
+  if (cleanup.failed > 0) {
+    const detail = cleanup.failures[0]?.message;
+    if (language === "zh") {
+      return `Mailbox 邮箱清理失败 ${cleanup.failed} 个${detail ? `：${detail}` : "。"}`;
+    }
+    if (language === "zh-hant") {
+      return `Mailbox 郵箱清理失敗 ${cleanup.failed} 個${detail ? `：${detail}` : "。"}`;
+    }
+    return `Mailbox cleanup failed for ${cleanup.failed} mailbox(es)${detail ? `: ${detail}` : "."}`;
+  }
+  if (language === "zh") {
+    return `已同步清理 Mailbox ${cleanup.removed} 个邮箱。`;
+  }
+  if (language === "zh-hant") {
+    return `已同步清理 Mailbox ${cleanup.removed} 個郵箱。`;
+  }
+  return `Mailbox cleanup completed for ${cleanup.removed} mailbox(es).`;
 }
 
 async function handleReloadPrompt(account: CodexAccountRecord | undefined) {
@@ -1039,7 +1116,7 @@ async function handleConsumeResetCredit(
   }
 
   const accountId = account.accountId ?? undefined;
-  const redeemRequestId = crypto.randomUUID();
+  const redeemRequestId = randomUUID();
   await runAuthenticatedAccountRequest(repo, account.id, (tokens) =>
     consumeResetCredit(tokens.accessToken, accountId, redeemRequestId)
   );

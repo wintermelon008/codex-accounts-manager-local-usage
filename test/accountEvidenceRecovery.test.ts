@@ -15,7 +15,7 @@ const automation = { enabled: false, intervalMs: 0, skewSeconds: 300, accounts: 
 const values = new Map<string, unknown>();
 const store = { keys: () => [...values.keys()], get: <T>(key: string) => structuredClone(values.get(key)) as T,
   update: async (key: string, value: unknown) => { values.set(key, structuredClone(value)); } };
-beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(now); values.clear(); state.initAccountStatePersistence(store); });
+beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now); values.clear(); state.initAccountStatePersistence(store); });
 afterEach(() => { state.clearAccountStates(); vi.useRealTimers(); });
 
 describe("existing local renewal evidence", () => {

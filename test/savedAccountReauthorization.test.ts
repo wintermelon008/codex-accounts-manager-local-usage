@@ -6,8 +6,6 @@ import { ActionButton } from "../webview-src/dashboard/primitives";
 import { SavedAccountCard } from "../webview-src/dashboard/savedAccountCard";
 import { renderHealthPill } from "../webview-src/dashboard/accountMetricPrimitives";
 
-// Inspect the actual card's rendered VNodes without mounting a browser. The
-// flip state is irrelevant to action visibility; no authorization is started.
 vi.mock("preact/hooks", () => ({ useState: () => [false, vi.fn()] }));
 
 type CardProps = Parameters<typeof SavedAccountCard>[0];
@@ -68,45 +66,49 @@ function renderCard(
 }
 
 describe("saved account reauthorization key", () => {
-  it.each<AccountHealthKind>([
-    "refresh_failed",
-    "refresh_token_invalid"
-  ])("offers the existing key on yellow %s cards without making them red", (kind) => {
-    const { tree, button, onAction } = renderCard(kind);
-    expect(tree.props.class).toContain("health-warning");
-    expect(tree.props.class).not.toContain("health-error");
-    expect(button?.props.iconOnly).toBe(true);
-    expect(button?.props.icon).toBeTruthy();
-    expect(button?.props.disabled).toBe(false);
-    button?.props.onClick();
-    expect(onAction).toHaveBeenCalledExactlyOnceWith("reauthorize", "selected-account");
-  });
+  it.each<AccountHealthKind>(["refresh_failed", "refresh_token_invalid"])(
+    "offers the existing key on yellow %s cards without making them red",
+    (kind) => {
+      const { tree, button, onAction } = renderCard(kind);
+      expect(tree.props.class).toContain("health-warning");
+      expect(tree.props.class).not.toContain("health-error");
+      expect(button?.props.disabled).toBe(false);
+      button?.props.onClick();
+      expect(onAction).toHaveBeenCalledExactlyOnceWith("reauthorize", "selected-account");
+    }
+  );
 
-  it.each([{}, { isActive: true }, { isHidden: true }])("uses cyan for confirmed-usable renewal failure without changing its key: %j", (overrides) => {
-    const { tree, button, onAction } = renderCard("refresh_unavailable", overrides);
-    expect(tree.props.class).toContain("health-usable");
-    expect(tree.props.class).not.toContain("health-warning");
-    expect(tree.props.class).not.toContain("health-unknown");
-    expect(button?.props.disabled).toBe(false);
-    button?.props.onClick();
-    expect(onAction).toHaveBeenCalledExactlyOnceWith("reauthorize", "selected-account");
-  });
+  it.each([{}, { isActive: true }, { isHidden: true }])(
+    "uses cyan for confirmed-usable renewal failure: %j",
+    (overrides) => {
+      const { tree, button, onAction } = renderCard("refresh_unavailable", overrides);
+      expect(tree.props.class).toContain("health-usable");
+      expect(tree.props.class).not.toContain("health-warning");
+      expect(tree.props.class).not.toContain("health-unknown");
+      expect(button?.props.disabled).toBe(false);
+      button?.props.onClick();
+      expect(onAction).toHaveBeenCalledExactlyOnceWith("reauthorize", "selected-account");
+    }
+  );
 
-  it.each([{}, { isActive: true }, { isHidden: true }])("gives unknown availability its own yellow card and an account-bound key: %j", (overrides) => {
-    const { tree, button, onAction } = renderCard("refresh_unavailable_unverified", overrides);
-    expect(tree.props.class).toContain("health-unknown");
-    expect(tree.props.class).not.toContain("health-warning");
-    expect(tree.props.class).not.toContain("health-error");
-    expect(button?.props.disabled).toBe(false);
-    button?.props.onClick();
-    expect(onAction).toHaveBeenCalledExactlyOnceWith("reauthorize", "selected-account");
-  });
+  it.each([{}, { isActive: true }, { isHidden: true }])(
+    "gives unknown availability its own yellow card and an account-bound key: %j",
+    (overrides) => {
+      const { tree, button, onAction } = renderCard("refresh_unavailable_unverified", overrides);
+      expect(tree.props.class).toContain("health-unknown");
+      expect(tree.props.class).not.toContain("health-warning");
+      expect(tree.props.class).not.toContain("health-error");
+      expect(button?.props.disabled).toBe(false);
+      button?.props.onClick();
+      expect(onAction).toHaveBeenCalledExactlyOnceWith("reauthorize", "selected-account");
+    }
+  );
 
   it.each<AccountHealthKind>(["reauthorize", "access_token_invalid"])("keeps the existing key for %s", (kind) => {
     expect(renderCard(kind).button).toBeDefined();
   });
 
-  it("never renders a separate gray unknown state: unknown renewal also uses yellow and an account-bound key", () => {
+  it("never renders a separate gray unknown state", () => {
     const { tree, button, onAction } = renderCard("unverified", { isHidden: true });
     expect(tree.props.class).toContain("health-unknown");
     expect(button?.props.disabled).toBe(false);
@@ -119,7 +121,7 @@ describe("saved account reauthorization key", () => {
     ["refresh_unavailable_unverified", "pill health-unknown"],
     ["unverified", "pill health-unknown"],
     ["refresh_failed", "pill warning"]
-  ] as const)("keeps the label but maps %s to its updated color class", (kind, className) => {
+  ] as const)("maps %s to its updated color class", (kind, className) => {
     const pill = renderHealthPill({ healthKind: kind, healthLabel: "原中文标签" } as DashboardAccountViewModel);
     expect(pill?.props.class).toBe(className);
     expect(pill?.props.children).toBe("原中文标签");

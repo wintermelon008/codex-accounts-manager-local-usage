@@ -4,7 +4,7 @@ const DEFAULT_BASE_URL = "https://5sim.net/v1";
 const DEFAULT_PRODUCT = "openai";
 const DEFAULT_POLL_INTERVAL_MS = 4000;
 const DEFAULT_ORDER_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_MAX_REPLACEMENTS = 10;
+const SUCCESS_RATE_WINDOW_KEYS = ["rate1", "rate3", "rate24", "rate72", "rate168", "rate720"];
 
 class FiveSimOrderError extends Error {
   constructor(message, { status, code } = {}) {
@@ -156,7 +156,6 @@ class FiveSimPhoneOrderSession {
     sourceId = "fivesim",
     cardKeyId = "",
     cardMasked = "",
-    maxReplacements = DEFAULT_MAX_REPLACEMENTS,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     orderTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS,
     clientFactory,
@@ -168,7 +167,6 @@ class FiveSimPhoneOrderSession {
     this.sourceId = text(sourceId).toLowerCase() || "fivesim";
     this.cardKeyId = text(cardKeyId);
     this.cardMasked = text(cardMasked);
-    this.maxReplacements = clampNumber(maxReplacements, DEFAULT_MAX_REPLACEMENTS, 0, 20);
     this.pollIntervalMs = clampNumber(pollIntervalMs, DEFAULT_POLL_INTERVAL_MS, 250, 30000);
     this.orderTimeoutMs = clampNumber(orderTimeoutMs, DEFAULT_ORDER_TIMEOUT_MS, 10000, 15 * 60 * 1000);
     this.clientFactory = clientFactory || ((token) => new FiveSimClient({
@@ -208,7 +206,6 @@ class FiveSimPhoneOrderSession {
       order: null,
       humanConfirmed: false,
       replacements: 0,
-      maxReplacements: this.maxReplacements,
       pollIntervalMs: this.pollIntervalMs,
       orderTimeoutMs: this.orderTimeoutMs,
       startedAt: 0,
@@ -306,9 +303,6 @@ class FiveSimPhoneOrderSession {
     this.requireOrder();
     if (!this.state.running || !["waiting", "polling"].includes(this.state.phase)) {
       throw new FiveSimOrderError("当前号码不在可换号状态");
-    }
-    if (this.state.replacements >= this.state.maxReplacements) {
-      throw new FiveSimOrderError("已达到最大换号次数");
     }
     const previousPhase = this.state.phase;
     ++this.pollGeneration;
@@ -635,6 +629,8 @@ function flattenCatalog(prices, countries, product = DEFAULT_PRODUCT) {
       if (!raw || typeof raw !== "object") continue;
       const price = finiteOrNull(raw.cost ?? raw.price ?? raw.Price);
       const count = integerOrZero(raw.count ?? raw.qty ?? raw.Qty);
+      const instantRate = instantSuccessRate(raw);
+      const averageRate = averageSuccessRate(raw);
       rows.push({
         country,
         countryName: info.name,
@@ -644,13 +640,16 @@ function flattenCatalog(prices, countries, product = DEFAULT_PRODUCT) {
         product: productName,
         price,
         count,
-        successRate: normalizeSuccessRate(raw.rate ?? raw.successRate ?? raw.success_rate)
+        instantSuccessRate: instantRate,
+        averageSuccessRate: averageRate,
+        // Keep the old field as the filtering/sorting value for consumers that
+        // do not yet know about the two explicit display fields.
+        successRate: effectiveSuccessRate(raw)
       });
     }
   }
-  // 5SIM omits `rate` for offers with insufficient/low delivery history. Such
-  // entries must not be presented as selectable offers when the UI promises a
-  // minimum usable success rate.
+  // Keep only offers with at least 1% historical average delivery. The raw
+  // instantaneous rate remains available on each row for transparent display.
   return rows.filter((offer) => offer.successRate !== null && offer.successRate >= 1).sort(compareOffers);
 }
 
@@ -696,6 +695,28 @@ function normalizeSuccessRate(value) {
   // 5SIM documents `rate` as a percentage (for example 59.38), not a
   // fractional ratio. Preserve values below 1 so the UI can remove them.
   return parsed;
+}
+
+function effectiveSuccessRate(offer) {
+  if (!offer || typeof offer !== "object") return null;
+  return averageSuccessRate(offer) ?? instantSuccessRate(offer);
+}
+
+function instantSuccessRate(offer) {
+  if (!offer || typeof offer !== "object") return null;
+  return normalizeSuccessRate(offer.rate ?? offer.instantRate ?? offer.instantSuccessRate ?? offer.successRate ?? offer.success_rate ?? offer.success_rate_percent);
+}
+
+function averageSuccessRate(offer) {
+  if (!offer || typeof offer !== "object") return null;
+  const windowRates = SUCCESS_RATE_WINDOW_KEYS
+    .map((key) => normalizeSuccessRate(offer[key]))
+    .filter((value) => value !== null);
+  if (!windowRates.length) return null;
+  // These windows overlap, so this is a display/filter heuristic rather than
+  // a weighted statistical estimate. It gives the panel a stable historical
+  // average while preserving the API's instantaneous `rate` separately.
+  return Number((windowRates.reduce((sum, value) => sum + value, 0) / windowRates.length).toFixed(2));
 }
 
 function compareOffers(left, right) {
@@ -783,7 +804,10 @@ module.exports = {
   FiveSimClient,
   FiveSimOrderError,
   FiveSimPhoneOrderSession,
+  averageSuccessRate,
   flattenCatalog,
+  effectiveSuccessRate,
+  instantSuccessRate,
   normalizeSuccessRate,
   orderHasCode,
   orderSmsCode,

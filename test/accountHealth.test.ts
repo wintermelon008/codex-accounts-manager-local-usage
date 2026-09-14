@@ -42,6 +42,21 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("independent account availability and renewal", () => {
+  it("keeps the local Mailbox deactivation signal as an explicit disabled state", () => {
+    const health = resolveAccountHealth(
+      {
+        ...base,
+        email: "blocked@example.invalid"
+      },
+      tokens,
+      automation,
+      { mailboxDeactivated: true }
+    );
+    expect(health).toMatchObject({
+      kind: "disabled",
+      issueKey: "disabled:mailbox_deactivated"
+    });
+  });
   it.each([
     { code: "unauthorized", message: "401 token expired" },
     { code: "deactivated_workspace", message: "API returned 402" },
@@ -121,7 +136,7 @@ describe("independent account availability and renewal", () => {
   );
 
   it("renewal confirmation lasts until the issued access credential expires, not just fifteen minutes", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const exp = Math.floor(Date.now() / 1000) + 3_600;
     const issued = {
       ...tokens,
@@ -135,7 +150,7 @@ describe("independent account availability and renewal", () => {
   });
 
   it("an old delayed rejection cannot undo renewal success, but a newer real rejection can", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const old = observation("auth_unavailable");
     recordAvailability(old);
     vi.advanceTimersByTime(1);
@@ -156,7 +171,7 @@ describe("independent account availability and renewal", () => {
   });
 
   it("a newer unresolved authentication rejection invalidates the older renewal confirmation", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const exp = Math.floor(Date.now() / 1000) + 3_600;
     const issued = {
       ...tokens,
@@ -175,7 +190,7 @@ describe("independent account availability and renewal", () => {
   });
 
   it("uses still-valid renewal evidence after a known quota window resets", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     recordAvailability(observation("quota_limited"));
     vi.advanceTimersByTime(2_000);
     recordRenewal(base.id, tokens, "succeeded");
