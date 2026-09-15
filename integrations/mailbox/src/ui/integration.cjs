@@ -28,6 +28,7 @@ const {
   FiveSimTokenStore
 } = require("../operations/fivesim-token-store.cjs");
 const { RegistrationExchangeRateStore } = require("../operations/registration-exchange-rate.cjs");
+const { TwoFactorManager, resolveTotpConfigFilePath } = require("../totp/manager.cjs");
 const {
   getRegistrationPhoneSource,
   listRegistrationPhoneSources
@@ -71,6 +72,12 @@ class MailboxIntegration {
       metadataStore: this.sharedMailboxStores.metadataStore,
       secretStore: this.sharedMailboxStores.secretStore
     });
+    this.twoFactor = new TwoFactorManager({
+      metadataStore: this.sharedMailboxStores.metadataStore,
+      secretStore: this.sharedMailboxStores.secretStore,
+      configFilePath: resolveTotpConfigFilePath()
+    });
+    this.totpLoadError = undefined;
     this.registrationSessionStore = createServerRegistrationSessionStore({
       storageUri: context.globalStorageUri,
       legacyStore: context.globalState
@@ -85,6 +92,7 @@ class MailboxIntegration {
     this.managerChangeSubscription = undefined;
     this.panel = undefined;
     this.registrationPanel = undefined;
+    this.registrationTotpQueries = new Map();
     this.selectedMailboxId = undefined;
     // mailbox id -> opaque Manager OAuth operation id. Keeping this separate
     // from provider operations lets mailbox query/renewal continue in parallel
@@ -192,6 +200,11 @@ class MailboxIntegration {
     try {
       await this.sharedMailboxStores.migrateLegacy();
       await this.pool.load();
+      try {
+        await this.twoFactor.load();
+      } catch (error) {
+        this.totpLoadError = safeError(error, "2FAuth 本地状态不可用");
+      }
       this.selectedMailboxId = await this.sharedMailboxStores.metadataStore.get(SELECTED_MAILBOX_KEY);
       if (!this.selectedMailboxId || !this.pool.listMetadata().some((mailbox) => mailbox.id === this.selectedMailboxId)) {
         this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
@@ -310,8 +323,17 @@ class MailboxIntegration {
           failed.push({ email: mailbox.address, message: "对应邮箱没有保存的 OpenAI account deactivated 邮件" });
           continue;
         }
+        const totpLookup = await this.lookupDeactivatedTotpLink(mailbox.id);
         await this.deleteMailboxData(mailbox.id, { updateSelection: false });
         removed.push(mailbox.id);
+        if (totpLookup.error) {
+          failed.push({ email: mailbox.address, message: `邮箱已删除，但 2FAuth 记录未处理：${totpLookup.error}` });
+        } else {
+          const totpDeletion = await this.deleteDeactivatedTotpLink(totpLookup.link);
+          if (totpDeletion.error) {
+            failed.push({ email: mailbox.address, message: `邮箱已删除，但 2FAuth 记录删除失败：${totpDeletion.error}` });
+          }
+        }
       } catch (error) {
         failed.push({ email: mailbox.address, message: safeError(error, "Mailbox 删除失败") });
       }
@@ -412,6 +434,24 @@ class MailboxIntegration {
           return;
         case "copyText":
           await this.copyText(message.text, message.successMessage);
+          return;
+        case "totpOpen":
+          await this.openTotp(message.mailboxId);
+          return;
+        case "totpQuery":
+          await this.queryTotp(message.mailboxId, { registrationAuto: message.registrationAuto === true });
+          return;
+        case "registrationTotpStop":
+          this.stopRegistrationTotpQueries();
+          return;
+        case "totpLink":
+          await this.linkTotp(message);
+          return;
+        case "registrationTotpCreateAndLink":
+          await this.createAndLinkTotp(message);
+          return;
+        case "totpUnlink":
+          await this.unlinkTotp(message.mailboxId);
           return;
         case "select":
           await this.selectMailbox(message.mailboxId);
@@ -574,6 +614,9 @@ class MailboxIntegration {
           throw new Error("Unsupported Mailbox panel action.");
       }
     } catch (error) {
+      if (error?.message === "2FAuth 请求已取消") {
+        return;
+      }
       this.postPanelMessage({
         type: "toast",
         level: "error",
@@ -594,6 +637,73 @@ class MailboxIntegration {
     await this.publishPanelState();
   }
 
+  async openTotp(mailboxId) {
+    const id = this.requireMailboxId(mailboxId);
+    const mailbox = this.pool.listMetadata().find((item) => item.id === id);
+    const state = await this.twoFactor.getMailboxState(id, { address: mailbox.address });
+    this.postPanelMessage({ type: "totp-state", mailboxId: id, state });
+  }
+
+  async queryTotp(mailboxId, { registrationAuto = false } = {}) {
+    const id = this.requireMailboxId(mailboxId);
+    const mailbox = this.pool.listMetadata().find((item) => item.id === id);
+    let controller;
+    if (registrationAuto && typeof AbortController === "function") {
+      this.registrationTotpQueries.get(id)?.abort();
+      controller = new AbortController();
+      this.registrationTotpQueries.set(id, controller);
+    }
+    try {
+      const state = await this.twoFactor.queryMailbox(id, { address: mailbox.address, signal: controller?.signal });
+      this.postPanelMessage({ type: "totp-state", mailboxId: id, state });
+    } finally {
+      if (controller && this.registrationTotpQueries.get(id) === controller) {
+        this.registrationTotpQueries.delete(id);
+      }
+    }
+  }
+
+  async linkTotp(message) {
+    const id = this.requireMailboxId(message.mailboxId);
+    const mailbox = this.pool.listMetadata().find((item) => item.id === id);
+    await this.twoFactor.linkMailbox(id, message.accountId, { address: mailbox.address });
+    this.postPanelMessage({ type: "toast", level: "success", action: "totpLink", mailboxId: id, message: "2FAuth 条目已绑定到邮箱" });
+    await this.publishPanelState();
+    await this.openTotp(id);
+  }
+
+  async createAndLinkTotp(message) {
+    const id = this.requireMailboxId(message.mailboxId);
+    const mailbox = this.pool.listMetadata().find((item) => item.id === id);
+    const input = typeof message.input === "string" ? message.input.trim() : "";
+    if (!input) throw new Error("请粘贴 otpauth URI 或 Base32 secret");
+    const isUri = /^otpauth:\/\/(?:totp|hotp)\//iu.test(input);
+    await this.twoFactor.createAndLink(id, {
+      uri: isUri ? input : undefined,
+      secret: isUri ? undefined : input,
+      label: typeof message.label === "string" ? message.label.trim() : "",
+      address: mailbox.address
+    });
+    this.postPanelMessage({ type: "toast", level: "success", action: "registrationTotpCreateAndLink", mailboxId: id, message: "新的 2FAuth 条目已创建并绑定" });
+    await this.publishPanelState();
+    await this.openTotp(id);
+  }
+
+  async unlinkTotp(mailboxId) {
+    const id = this.requireMailboxId(mailboxId);
+    await this.twoFactor.unlinkMailbox(id);
+    this.postPanelMessage({ type: "toast", level: "success", action: "totpUnlink", mailboxId: id, message: "2FAuth 条目已解除绑定（未删除远端条目）" });
+    await this.publishPanelState();
+    await this.openTotp(id);
+  }
+
+  stopRegistrationTotpQueries() {
+    for (const controller of this.registrationTotpQueries.values()) {
+      controller.abort();
+    }
+    this.registrationTotpQueries.clear();
+  }
+
   async importMailbox(message) {
     const provider = this.providers.get(typeof message.providerId === "string" ? message.providerId : "");
     if (!provider) {
@@ -604,10 +714,25 @@ class MailboxIntegration {
       input: typeof message.input === "string" ? message.input : "",
       displayName: typeof message.displayName === "string" ? message.displayName : ""
     });
+    let autoBoundTotpCount = 0;
+    if (result.imported.length > 0 && typeof this.twoFactor.autoBindLatestMailboxes === "function") {
+      try {
+        const bindings = await this.twoFactor.autoBindLatestMailboxes(result.imported);
+        autoBoundTotpCount = bindings.filter((binding) => binding.existing !== true).length;
+      } catch (error) {
+        this.postPanelMessage({
+          type: "toast",
+          level: "warning",
+          action: "totpAutoBind",
+          message: `邮箱已导入，但同邮箱 2FA 自动绑定失败：${safeError(error, "2FAuth 查询失败")}`
+        });
+      }
+    }
     if (result.imported.length > 0) {
       this.selectedMailboxId = result.imported[0].id;
       await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
-    this.postPanelMessage({ type: "toast", level: "success", mailboxId: this.selectedMailboxId, message: `已导入 ${result.imported.length} 个邮箱` });
+      const autoBindMessage = autoBoundTotpCount > 0 ? `，自动绑定 ${autoBoundTotpCount} 条同邮箱 2FA` : "";
+      this.postPanelMessage({ type: "toast", level: "success", mailboxId: this.selectedMailboxId, message: `已导入 ${result.imported.length} 个邮箱${autoBindMessage}` });
     }
     if (result.failed.length > 0) {
       this.postPanelMessage({ type: "toast", level: "warning", mailboxId: this.selectedMailboxId, message: `有 ${result.failed.length} 行未导入：${result.failed[0].message}` });
@@ -641,6 +766,7 @@ class MailboxIntegration {
       }
     }
     await this.cancelRegistrationForMailbox(mailboxId);
+    await this.twoFactor.unlinkMailbox(mailboxId).catch(() => undefined);
     const deleted = await this.pool.deleteAccount(mailboxId);
     if (updateSelection && this.selectedMailboxId === mailboxId) {
       this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
@@ -649,16 +775,47 @@ class MailboxIntegration {
     return deleted;
   }
 
+  async lookupDeactivatedTotpLink(mailboxId) {
+    try {
+      return { link: await this.twoFactor.getLink(mailboxId) };
+    } catch (error) {
+      return { error: safeError(error, "2FAuth 记录读取失败") };
+    }
+  }
+
+  async deleteDeactivatedTotpLink(link) {
+    if (!link?.accountId) return { deleted: false, skipped: true };
+    try {
+      await this.twoFactor.deleteRemoteAccount(link.accountId);
+      return { deleted: true };
+    } catch (error) {
+      return { deleted: false, error: safeError(error, "2FAuth 记录删除失败") };
+    }
+  }
+
   async deleteMailbox(id) {
     const mailboxId = this.requireMailboxId(id);
+    const mailbox = this.pool.listMetadata().find((item) => item.id === mailboxId);
+    const deactivated = mailbox?.openaiAccountDeactivated === true;
+    const totpLookup = deactivated
+      ? await this.lookupDeactivatedTotpLink(mailboxId)
+      : { link: undefined };
     const deleted = await this.deleteMailboxData(mailboxId);
+    const totpDeletion = deactivated && !totpLookup.error
+      ? await this.deleteDeactivatedTotpLink(totpLookup.link)
+      : { deleted: false, skipped: true };
+    const totpError = totpLookup.error || totpDeletion.error;
     this.postPanelMessage({
       type: "toast",
-      level: "success",
+      level: totpError ? "warning" : "success",
       action: "delete",
       mailboxId,
-      message: "邮箱已删除",
-      undo: deleted?.undoAvailable === true ? { action: "undoDeleteMailbox", mailboxId } : undefined
+      message: totpError
+        ? `邮箱已删除，但 2FAuth 记录删除失败：${totpError}`
+        : deactivated && totpDeletion.deleted
+          ? "被 OpenAI 封禁的邮箱及对应 2FAuth 记录已删除"
+          : "邮箱已删除",
+      undo: !deactivated && deleted?.undoAvailable === true ? { action: "undoDeleteMailbox", mailboxId } : undefined
     });
     await this.publishPanelState();
     this.publish();
@@ -704,6 +861,7 @@ class MailboxIntegration {
     }
 
     const result = { mailboxDeleted: false, codexDeleted: false };
+    const totpLookup = await this.lookupDeactivatedTotpLink(mailboxId);
     await this.deleteMailboxData(mailboxId);
     result.mailboxDeleted = true;
 
@@ -726,13 +884,23 @@ class MailboxIntegration {
     }
 
     result.codexDeleted = true;
+    if (totpLookup.error) {
+      result.totpDeleteError = totpLookup.error;
+    } else {
+      const totpDeletion = await this.deleteDeactivatedTotpLink(totpLookup.link);
+      result.totpDeleted = totpDeletion.deleted === true;
+      if (totpDeletion.error) result.totpDeleteError = totpDeletion.error;
+    }
     if (notify) {
+      const hasTotpError = Boolean(result.totpDeleteError);
       this.postPanelMessage({
         type: "toast",
-        level: "success",
+        level: hasTotpError ? "warning" : "success",
         action: "deleteMailboxAndCodex",
         mailboxId,
-        message: "邮箱与 Codex 账号已删除"
+        message: hasTotpError
+          ? `邮箱与 Codex 账号已删除，但 2FAuth 记录删除失败：${result.totpDeleteError}`
+          : "邮箱、Codex 账号及对应 2FAuth 记录已删除"
       });
       await this.publishPanelState();
       this.publish();
@@ -753,6 +921,7 @@ class MailboxIntegration {
         const result = await this.deleteMailboxAndCodex(candidate.mailbox.id, { notify: false });
         if (result.codexDeleted === true) {
           removed.push(candidate.mailbox.id);
+          if (result.totpDeleteError) failed.push(`邮箱 ${candidate.mailbox.address} 的 2FAuth 记录删除失败：${result.totpDeleteError}`);
         } else {
           failed.push(result.error || "Codex 账号删除失败");
         }
@@ -764,7 +933,7 @@ class MailboxIntegration {
     const total = candidates.length;
     const level = failed.length === 0 ? "success" : removed.length > 0 ? "warning" : "error";
     const message = failed.length === 0
-      ? `已删除 ${removed.length} 个失效邮箱及对应 Codex 账号`
+      ? `已删除 ${removed.length} 个失效邮箱、对应 Codex 账号及 2FAuth 记录`
       : `已完成 ${removed.length}/${total} 个联删，${failed.length} 个失败：${failed[0]}`;
     this.postPanelMessage({
       type: "toast",
@@ -1763,8 +1932,15 @@ class MailboxIntegration {
     const registrationKeyPool = await this.getRegistrationKeyPoolState();
     const registrationFiveSimToken = await this.getRegistrationFiveSimTokenState();
     const registrationFiveSimExchangeRate = await this.getRegistrationExchangeRateState();
+    let totpSummary = { configured: false, baseUrl: "", links: {}, error: this.totpLoadError || "" };
+    try {
+      totpSummary = await this.twoFactor.getSummary();
+    } catch (error) {
+      totpSummary.error = safeError(error, "2FAuth 本地状态不可用");
+    }
+    const totpLinks = totpSummary.links || {};
     return {
-      mailboxes: mailboxes.map(toPanelMailbox),
+      mailboxes: mailboxes.map((mailbox) => toPanelMailbox(mailbox, totpLinks)),
       selectedMailboxId: selectedMailbox?.id,
       selected: selectedMailbox ? { mailbox: selectedMailbox, detail } : undefined,
       operations: this.coordinator.getActiveOperations(),
@@ -1781,6 +1957,12 @@ class MailboxIntegration {
       registrationKeyPool,
       registrationFiveSimToken,
       registrationFiveSimExchangeRate,
+      totp: {
+        configured: totpSummary.configured,
+        baseUrl: totpSummary.baseUrl,
+        error: totpSummary.error || ""
+      },
+      totpLinks,
       registrationSessions: this.registrationManager.getAllSessions().map((session) =>
         this.registrationManager.getSessionState(session.id)
       )
@@ -1923,6 +2105,7 @@ class MailboxIntegration {
   }
 
   closeRegistrationPanel() {
+    this.stopRegistrationTotpQueries();
     for (const disposable of this.registrationPanelDisposables.splice(0)) {
       disposable?.dispose?.();
     }
@@ -1986,6 +2169,7 @@ class MailboxIntegration {
       return;
     }
     this.disposed = true;
+    this.stopRegistrationTotpQueries();
     this.coordinator.stop();
     if (typeof this.api?.cancelOAuthAccountImport === "function") {
       for (const operationId of this.codexImports.values()) {
@@ -2032,11 +2216,16 @@ function sanitizeProvider(provider) {
   };
 }
 
-function toPanelMailbox(mailbox) {
+function toPanelMailbox(mailbox, totpLinks = {}) {
   // The list receives only identity and summary fields. Full message bodies
   // are fetched from the local detail key for the selected mailbox alone.
   const { latestMessage: _latestMessage, ...summary } = mailbox;
-  return summary;
+  const totpLink = totpLinks[mailbox.id];
+  return {
+    ...summary,
+    totpLinked: Boolean(totpLink),
+    totpLabel: totpLink?.service || totpLink?.account || ""
+  };
 }
 
 function normalizeEmail(value) {

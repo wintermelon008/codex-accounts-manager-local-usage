@@ -5,6 +5,108 @@ const test = require("node:test");
 const vm = require("node:vm");
 const { createMailboxPanelHtml, createRegistrationPanelHtml } = require("../../src/ui/panel.cjs");
 
+test("Mailbox and registration panels expose the shared 2FAuth binding and code entry points", () => {
+  const mailboxHtml = createMailboxPanelHtml();
+  const registrationHtml = createRegistrationPanelHtml();
+  assert.match(mailboxHtml, /data-action="open-totp"/u);
+  assert.match(mailboxHtml, /2FA 绑定与查询/u);
+  assert.doesNotMatch(mailboxHtml, /Personal Access Token|totpBaseUrl/u);
+  assert.match(registrationHtml, /registration-totp-card/u);
+  assert.match(registrationHtml, /data-action="registration-totp-create"/u);
+  assert.doesNotMatch(registrationHtml, /data-action="registration-totp-query"/u);
+  assert.match(registrationHtml, /otpauth:\/\/totp/u);
+  assert.match(registrationHtml, /data-registration-totp-countdown/u);
+  assert.doesNotMatch(registrationHtml, /registration-totp-link|registrationTotpAccount/u);
+  const emailCard = registrationHtml.indexOf("emailCodeHtml +");
+  const totpCard = registrationHtml.indexOf("totpHtml +");
+  const phoneCard = registrationHtml.indexOf("phoneOrderHtml +");
+  assert.ok(emailCard >= 0 && emailCard < totpCard && totpCard < phoneCard);
+});
+
+test("registration 2FA block creates a new entry and shows the live code expiry state", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const messages = [];
+  const windowListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? { style: {} } : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
+    console
+  });
+
+  const state = {
+    mailboxes: [{ id: "mailbox:one", address: "one@example.com", displayName: "one@example.com", providerId: "mock" }],
+    providers: [],
+    totp: { configured: true, error: "" },
+    totpLinks: {},
+    registrationSessions: [{
+      id: "session:totp",
+      email: "one@example.com",
+      mode: "manual-browser",
+      state: "awaiting_manual_registration",
+      emailCode: { phase: "idle" },
+      phoneOrder: { phase: "idle", running: false }
+    }]
+  };
+  windowListeners.get("message")({ data: { type: "state", state } });
+  assert.match(renderedHtml, /data-action="registration-totp-create"/u);
+  assert.match(renderedHtml, /otpauth:\/\/totp/u);
+  assert.doesNotMatch(renderedHtml, /registration-totp-link|registrationTotpAccount/u);
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "mailbox:action",
+    action: "totpOpen",
+    mailboxId: "mailbox:one"
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "totp-state",
+    mailboxId: "mailbox:one",
+    state: {
+      configured: true,
+      link: { mailboxId: "mailbox:one", accountId: "7", service: "OpenAI", account: "one@example.com" },
+      account: { id: "7", service: "OpenAI", account: "one@example.com" },
+      otp: { code: "123456", generatedAt: Math.floor(Date.now() / 1000) - 31, period: 30 },
+      accounts: [],
+      error: ""
+    }
+  } });
+  assert.match(renderedHtml, /123456/u);
+  assert.doesNotMatch(renderedHtml, /data-action="registration-totp-query"/u);
+  assert.match(renderedHtml, /data-registration-totp-countdown/u);
+  assert.match(renderedHtml, /剩余/u);
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "mailbox:action",
+    action: "totpQuery",
+    mailboxId: "mailbox:one",
+    registrationAuto: true
+  });
+  messages.length = 0;
+  windowListeners.get("pagehide")({});
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "mailbox:action",
+    action: "registrationTotpStop"
+  });
+});
+
 test("standalone registration panel provides mailbox-library selection and direct email entry", () => {
   const html = createRegistrationPanelHtml();
   assert.match(html, /<title>注册助手<\/title>/u);

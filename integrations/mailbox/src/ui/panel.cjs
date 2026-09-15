@@ -156,6 +156,37 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     @keyframes mailbox-spin { to { transform: rotate(360deg); } }
     .modal-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; background: color-mix(in srgb, #000 48%, transparent); }
     .modal { width: min(700px, 100%); max-height: calc(100vh - 40px); overflow: auto; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--vscode-editorWidget-background); box-shadow: 0 18px 60px #0008; }
+    .totp-modal { width: min(760px, 100%); }
+    .totp-modal-section { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--accent) 3%, transparent); }
+    .totp-modal-section h3 { margin-bottom: 7px; }
+    .totp-account-list { display: grid; gap: 6px; max-height: 190px; margin-top: 9px; overflow: auto; }
+    .totp-account-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 10px; text-align: left; }
+    .totp-account-option.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
+    .totp-account-option-main { min-width: 0; display: grid; gap: 2px; }
+    .totp-account-option-main strong, .totp-account-option-main span { overflow-wrap: anywhere; }
+    .totp-account-option-main span { color: var(--muted); font-size: 11px; }
+    .totp-code-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-top: 9px; }
+    .totp-code { color: var(--accent); font-family: var(--vscode-editor-font-family); font-size: 25px; font-weight: 800; letter-spacing: .1em; }
+    .totp-link-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+    .registration-totp-card { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--accent) 3%, transparent); }
+    .registration-totp-card-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px 10px; }
+    .registration-totp-card-head strong { font-size: 13px; }
+    .registration-totp-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; color: var(--muted); font-size: 11px; }
+    .registration-totp-create-form { display: grid; gap: 10px; margin-top: 10px; }
+    .registration-totp-create-fields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(180px, .6fr); gap: 8px; align-items: end; }
+    .registration-totp-create-field { min-width: 0; }
+    .registration-totp-create-field label { display: block; margin-bottom: 6px; font-weight: 600; }
+    .registration-totp-create-field textarea { min-height: 72px; height: 72px; resize: vertical; }
+    .registration-totp-create-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .registration-totp-status-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .8fr); gap: 8px; margin-top: 10px; }
+    .registration-totp-status-card { min-width: 0; min-height: 82px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--vscode-editor-background); }
+    .registration-totp-status-card label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; }
+    .registration-totp-status-card strong { display: block; min-height: 20px; overflow-wrap: anywhere; }
+    .registration-totp-code-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .registration-totp-code-row .totp-code { flex: 0 0 auto; }
+    .registration-totp-code-row button { margin-top: 0; }
+    .registration-totp-expiry { color: var(--muted); font-size: 11px; }
+    .registration-totp-card .field-note { margin-top: 8px; }
     .modal h2 { margin-bottom: 16px; }
     .field { margin-top: 13px; }
     .field label { display: block; margin-bottom: 6px; font-weight: 600; }
@@ -291,6 +322,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       .layout > .box.detail { min-height: 520px; }
       .mailbox-row-action { padding-inline: 5px; }
       .registration-phone-config { grid-template-columns: 1fr; }
+      .registration-totp-create-fields { grid-template-columns: 1fr; }
+      .registration-totp-status-grid { grid-template-columns: 1fr; }
       .registration-fivesim-account-grid { grid-template-columns: 1fr; }
       .registration-fivesim-offer { grid-template-columns: minmax(80px, 1.1fr) minmax(50px, .7fr) repeat(3, minmax(42px, .6fr)); gap: 4px; padding: 7px 5px; }
       .registration-fivesim-operator-card { grid-template-columns: minmax(0, 1fr) auto; padding-inline: 8px; }
@@ -358,8 +391,19 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationFiveSimFilters = {};
       let registrationInputValues = {};
       let modalFormValues = { importForm: {}, editForm: {} };
+      let totpModalMailboxId = "";
+      let totpModalState;
+      let totpFormValues = { accountId: "" };
+      let registrationTotpStates = {};
+      let registrationTotpRequested = new Set();
+      let registrationTotpFormValues = {};
+      let registrationTotpPending = new Set();
+      let registrationTotpQueryPending = new Set();
+      let registrationTotpNextQueryAt = {};
+      let registrationTotpFetchedAt = {};
       let pendingRenderWhileSelect = false;
       let registrationCountdownTimer;
+      let registrationTotpCountdownTimer;
       let pendingRegistrationPhoneShortcut = null;
 
       window.addEventListener("message", (event) => {
@@ -387,6 +431,17 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             selectedMessageId = state.selected.detail.messages[0]?.id || "";
           }
           render();
+          requestRegistrationTotpStates();
+        }
+        if (message.type === "totp-state" && message.mailboxId) {
+          registrationTotpStates[message.mailboxId] = message.state || {};
+          if (message.state?.otp?.code) registrationTotpFetchedAt[message.mailboxId] = Date.now();
+          else delete registrationTotpFetchedAt[message.mailboxId];
+          registrationTotpQueryPending.delete(message.mailboxId);
+          registrationTotpNextQueryAt[message.mailboxId] = 0;
+          if (totpModalMailboxId === message.mailboxId) totpModalState = message.state || {};
+          render();
+          requestRegistrationTotpQuery(message.mailboxId);
         }
         if (message.type === "operation-complete") {
           if (shouldClearBatchSelection(message)) selectedMailboxIds.clear();
@@ -407,6 +462,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
               cleanupButton.disabled = false;
               cleanupButton.textContent = "清除所有记录";
             }
+          }
+          if (message.action === "registrationTotpCreateAndLink" && message.mailboxId) {
+            registrationTotpPending.delete(message.mailboxId);
+            if (message.level === "success") delete registrationTotpFormValues[message.mailboxId];
+          }
+          if (message.action === "totpQuery" && message.mailboxId) {
+            registrationTotpQueryPending.delete(message.mailboxId);
+            registrationTotpNextQueryAt[message.mailboxId] = Date.now() + 5000;
           }
           if (message.level === "success" || message.level === "warning" || message.level === "error") {
             const mailboxId = message.mailboxId || state.selectedMailboxId;
@@ -466,6 +529,16 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         clearPressedButtons();
       });
       window.addEventListener("blur", clearPressedButtons);
+      window.addEventListener("pagehide", releaseRegistrationTotpResources);
+      window.addEventListener("beforeunload", releaseRegistrationTotpResources);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") {
+          releaseRegistrationTotpResources();
+          return;
+        }
+        updateRegistrationTotpCountdowns();
+        ensureRegistrationTotpCountdownTimer();
+      });
       document.addEventListener("blur", (event) => {
         if (!pendingRenderWhileSelect || String(event.target?.tagName || "").toUpperCase() !== "SELECT") return;
         pendingRenderWhileSelect = false;
@@ -501,6 +574,28 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         }
         else if (action === "close-import") { importOpen = false; modalFormValues.importForm = {}; render(); }
         else if (action === "close-edit") { editOpenMailboxId = ""; modalFormValues.editForm = {}; render(); }
+        else if (action === "open-totp") openTotpModal(target.dataset.mailboxId || "");
+        else if (action === "close-totp") closeTotpModal();
+        else if (action === "totp-query") sendTotpAction("totpQuery");
+        else if (action === "totp-link") linkTotpAccount();
+        else if (action === "totp-unlink") sendTotpAction("totpUnlink");
+        else if (action === "totp-select-account") {
+          totpFormValues.accountId = target.dataset.accountId || "";
+          render();
+        }
+        else if (action === "registration-totp-create") {
+          const mailboxId = target.dataset.mailboxId || "";
+          const input = registrationTotpFormValues[mailboxId]?.input?.trim() || document.getElementById("registrationTotpInput-" + mailboxId)?.value?.trim() || "";
+          const label = registrationTotpFormValues[mailboxId]?.label?.trim() || document.getElementById("registrationTotpLabel-" + mailboxId)?.value?.trim() || "";
+          if (!mailboxId || !input) {
+            showNotice("请先粘贴 otpauth URI 或 Base32 secret", "warning");
+            return;
+          }
+          if (registrationTotpPending.has(mailboxId)) return;
+          registrationTotpPending.add(mailboxId);
+          render();
+          send("registrationTotpCreateAndLink", { mailboxId, input, label });
+        }
         else if (action === "cancel-delete") { deleteConfirm = undefined; render(); }
         else if (action === "confirm-delete") confirmDelete();
         else if (action === "edit-mailbox") openEditModal(target.dataset.mailboxId || "");
@@ -521,7 +616,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           for (const session of state.registrationSessions || []) clearRegistrationSessionClientState(session.id);
           send("registrationCleanupAll");
         }
-        else if (action === "copy-code") copyCode(target.dataset.code || "");
+        else if (action === "copy-code" || action === "totp-copy-code") copyCode(target.dataset.code || "");
         else if (action === "registration-refresh-email-code") {
           const sessionId = target.dataset.sessionId;
           if (sessionId) send("registrationRefreshEmailCode", { sessionId });
@@ -787,6 +882,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         if (event.target.id.startsWith("registrationFiveSimTokenInput-")) {
           registrationFiveSimTokenInputs[event.target.id.slice("registrationFiveSimTokenInput-".length)] = event.target.value || "";
         }
+        if (event.target.id.startsWith("registrationTotpInput-")) {
+          const mailboxId = event.target.id.slice("registrationTotpInput-".length);
+          registrationTotpFormValues[mailboxId] = { ...(registrationTotpFormValues[mailboxId] || {}), input: event.target.value || "" };
+        }
+        if (event.target.id.startsWith("registrationTotpLabel-")) {
+          const mailboxId = event.target.id.slice("registrationTotpLabel-".length);
+          registrationTotpFormValues[mailboxId] = { ...(registrationTotpFormValues[mailboxId] || {}), label: event.target.value || "" };
+        }
         if (event.target.id.startsWith("phoneInput-")) {
           const sessionId = event.target.id.slice("phoneInput-".length);
           registrationInputValues[sessionId] = { ...(registrationInputValues[sessionId] || {}), phone: event.target.value || "" };
@@ -866,6 +969,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         if (importOpen) document.body.insertAdjacentHTML("beforeend", renderImportModal());
         if (editOpenMailboxId) document.body.insertAdjacentHTML("beforeend", renderEditModal());
         if (deleteConfirm) document.body.insertAdjacentHTML("beforeend", renderDeleteConfirmModal());
+        if (totpModalMailboxId) document.body.insertAdjacentHTML("beforeend", renderTotpModal());
         restorePanelScrollPositions(panelScrollPositions);
         const nextMailboxList = document.querySelector(".mailbox-list");
         const nextLayout = document.querySelector(".layout");
@@ -903,6 +1007,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         }
         updateRegistrationCountdowns();
         ensureRegistrationCountdownTimer();
+        updateRegistrationTotpCountdowns();
+        ensureRegistrationTotpCountdownTimer();
       }
 
       function refreshMailboxList() {
@@ -1063,7 +1169,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function renderRegistrationMailboxOption(mailbox) {
         const selected = mailbox.id === selectedRegistrationMailboxId;
         const provider = (state.providers || []).find((item) => item.id === mailbox.providerId);
-        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + renderGptRegisteredTag(mailbox) + (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + '</div></button>';
+        const totpTag = mailbox.totpLinked ? '<span class="tag success">2FA 已绑定</span>' : '';
+        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + renderGptRegisteredTag(mailbox) + totpTag + (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + '</div></button>';
       }
 
       function filterRegistrationMailboxes() {
@@ -1114,6 +1221,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const inputHtml = renderRegistrationInputs(session, registrationMailbox);
         const phoneOrderHtml = renderPhoneOrder(session);
         const emailCodeHtml = renderRegistrationEmailCode(session);
+        const totpHtml = renderRegistrationTotp(session, registrationMailbox);
         const errorHtml = session.error ? '<div class="tag" style="margin-top:8px;color:var(--danger)">' + esc(session.error) + '</div>' : "";
         const feedbackHtml = session.feedback && session.feedback !== session.error
           ? session.feedbackLevel === "error"
@@ -1133,6 +1241,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           errorHtml +
           feedbackHtml +
           emailCodeHtml +
+          totpHtml +
           phoneOrderHtml +
           inputHtml +
         '</div>';
@@ -1197,6 +1306,91 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '<div class="field-note" aria-live="polite">' + esc(emailCode.message || (manualBrowser ? "进入 GPT 注册网页后自动查询一次；之后可点击“查询邮件”查询最近 30 分钟的邮件" : "注册开始后自动查询最近 30 分钟的邮件")) + detail + '</div>' +
           (emailCode.error ? '<div class="tag error" style="margin-top:8px">' + esc(emailCode.error) + '</div>' : "") +
         '</div>';
+      }
+
+      function requestRegistrationTotpStates() {
+        if (!registrationOnly || state.totp?.configured !== true) return;
+        const visibleMailboxIds = new Set();
+        for (const session of state.registrationSessions || []) {
+          const mailbox = (state.mailboxes || []).find((item) => normalizeEmail(item.address) === normalizeEmail(session.email));
+          if (!mailbox) continue;
+          visibleMailboxIds.add(mailbox.id);
+          if (registrationTotpRequested.has(mailbox.id)) continue;
+          registrationTotpRequested.add(mailbox.id);
+          send("totpOpen", { mailboxId: mailbox.id });
+        }
+        for (const mailboxId of Object.keys(registrationTotpStates)) {
+          if (!visibleMailboxIds.has(mailboxId)) delete registrationTotpStates[mailboxId];
+        }
+        for (const mailboxId of Object.keys(registrationTotpFormValues)) {
+          if (!visibleMailboxIds.has(mailboxId)) delete registrationTotpFormValues[mailboxId];
+        }
+        for (const mailboxId of Object.keys(registrationTotpFetchedAt)) {
+          if (!visibleMailboxIds.has(mailboxId)) delete registrationTotpFetchedAt[mailboxId];
+        }
+        for (const mailboxId of Object.keys(registrationTotpNextQueryAt)) {
+          if (!visibleMailboxIds.has(mailboxId)) delete registrationTotpNextQueryAt[mailboxId];
+        }
+        registrationTotpQueryPending = new Set([...registrationTotpQueryPending].filter((mailboxId) => visibleMailboxIds.has(mailboxId)));
+        registrationTotpRequested = new Set([...registrationTotpRequested].filter((mailboxId) => visibleMailboxIds.has(mailboxId)));
+      }
+
+      function requestRegistrationTotpQuery(mailboxId) {
+        if (!registrationOnly || document.visibilityState === "hidden" || state.totp?.configured !== true || !mailboxId) return;
+        const view = registrationTotpStates[mailboxId];
+        if (!view?.link || registrationTotpQueryPending.has(mailboxId)) return;
+        const now = Date.now();
+        if (Number(registrationTotpNextQueryAt[mailboxId] || 0) > now) return;
+        const remaining = getTotpRemainingMilliseconds(view.otp, registrationTotpFetchedAt[mailboxId]);
+        if (view.otp?.code && remaining > 0) return;
+        registrationTotpQueryPending.add(mailboxId);
+        registrationTotpNextQueryAt[mailboxId] = now + 5000;
+        send("totpQuery", { mailboxId, registrationAuto: true });
+      }
+
+      function renderRegistrationTotp(session, registrationMailbox) {
+        if (!registrationMailbox) {
+          return '<section class="registration-totp-card"><div class="registration-totp-card-head"><strong>2FA 新建条目与收码</strong><span class="tag neutral">需先导入邮箱</span></div><div class="field-note">请先把注册邮箱导入 Mailbox，再在这里创建并绑定新的 2FAuth 条目。</div></section>';
+        }
+        const mailboxId = registrationMailbox.id;
+        const fallbackLink = state.totpLinks?.[mailboxId];
+        const view = registrationTotpStates[mailboxId] || {
+          configured: state.totp?.configured === true,
+          link: fallbackLink,
+          accounts: [],
+          account: undefined,
+          otp: undefined,
+          error: state.totp?.error || ""
+        };
+        const link = view.link || fallbackLink;
+        const account = view.account || {};
+        const otp = view.otp || {};
+        const configured = view.configured === true;
+        const code = String(otp.code || "").trim();
+        const linkedLabel = link
+          ? [account.service || link.service || "2FA", account.account || link.account || registrationMailbox.address].filter(Boolean).join(" · ")
+          : "尚未绑定";
+        const linkedStatus = link ? '<span class="tag success">已绑定</span>' : '<span class="tag neutral">未绑定</span>';
+        const values = registrationTotpFormValues[mailboxId] || {};
+        const pending = registrationTotpPending.has(mailboxId);
+        const fetchedAt = registrationTotpFetchedAt[mailboxId] || 0;
+        const codeHtml = code
+          ? '<strong class="totp-code">' + esc(code) + '</strong><button type="button" class="secondary small" data-action="totp-copy-code" data-code="' + esc(code) + '">复制验证码</button><span class="registration-totp-expiry">剩余 <strong data-registration-totp-countdown data-generated-at="' + esc(otp.generatedAt) + '" data-fetched-at="' + esc(fetchedAt) + '" data-period="' + esc(otp.period || 30) + '">' + esc(formatTotpRemaining(otp, fetchedAt)) + '</strong></span>'
+          : '<strong>— — —</strong><span class="registration-totp-expiry">绑定后自动收码</span>';
+        const configuredHtml = configured
+          ? '<div class="registration-totp-create-form"><div class="registration-totp-create-fields"><div class="registration-totp-create-field"><label for="registrationTotpInput-' + esc(mailboxId) + '">新建条目：otpauth URI 或 Base32 secret</label><textarea id="registrationTotpInput-' + esc(mailboxId) + '" placeholder="otpauth://totp/... 或 ABCDEFGH..." autocomplete="off" spellcheck="false">' + esc(values.input || "") + '</textarea></div><div class="registration-totp-create-field"><label for="registrationTotpLabel-' + esc(mailboxId) + '">显示标签（可选）</label><input id="registrationTotpLabel-' + esc(mailboxId) + '" value="' + esc(values.label || "") + '" placeholder="默认使用邮箱地址" autocomplete="off"></div></div><div class="registration-totp-create-actions"><button type="button" class="primary" data-action="registration-totp-create" data-mailbox-id="' + esc(mailboxId) + '"' + (pending ? ' disabled' : '') + '>' + (pending ? '创建并绑定中…' : '创建并绑定') + '</button></div></div>'
+          : '<div class="notice visible error" style="margin-top:10px">未读取到 2FAuth 配置文件，请在扩展宿主服务器配置后重新加载扩展。</div>';
+        const errorHtml = view.error ? '<div class="tag error" style="margin-top:8px">' + esc(view.error) + '</div>' : '';
+        return '<section class="registration-totp-card" data-registration-totp-mailbox-id="' + esc(mailboxId) + '">' +
+          '<div class="registration-totp-card-head"><strong>2FA 新建条目与收码</strong><span class="registration-totp-card-meta"><span>' + esc(registrationMailbox.address) + '</span>' + linkedStatus + '</span></div>' +
+          '<div class="registration-totp-status-grid">' +
+            '<div class="registration-totp-status-card"><label>当前绑定</label><strong>' + esc(linkedLabel) + '</strong></div>' +
+            '<div class="registration-totp-status-card"><label>当前验证码</label><div class="registration-totp-code-row">' + codeHtml + '</div></div>' +
+          '</div>' +
+          configuredHtml +
+          '<div class="field-note">在 GPT 官方安全设置中取得二维码对应的 otpauth URI 或手动密钥后粘贴到上方；创建后会自动收码，验证码旁会实时显示剩余有效期。</div>' +
+          errorHtml +
+        '</section>';
       }
 
       function renderRegistrationInputs(session, registrationMailbox) {
@@ -1590,11 +1784,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const statusClass = mailbox.lastStatus === "error" ? "error" : "";
         const statusTag = status ? '<span class="tag ' + statusClass + '">' + esc(status) + '</span>' : '';
         const accountStatusTag = renderAccountStatusTag(mailbox);
+        const totpTag = mailbox.totpLinked ? '<span class="tag success">2FA 已绑定</span>' : '';
         const blockedTag = mailbox.openaiAccountDeactivated === true ? '<span class="tag blocked">OpenAI 封禁</span>' : '';
         return '<div class="mailbox-row-wrap ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '"><label class="mailbox-select"><input class="mailbox-checkbox" type="checkbox" value="' + esc(mailbox.id) + '" ' + (selectedMailboxIds.has(mailbox.id) ? "checked" : "") + ' aria-label="选择 ' + esc(mailbox.address) + '"></label><button class="mailbox-row ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '" data-action="select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">' +
           '<div class="row-title"><span class="row-number">' + (index + 1) + '</span><span class="address">' + esc(mailbox.displayName || mailbox.address) + '</span></div>' +
           '<div class="row-meta"><span class="address">' + esc(mailbox.address) + '</span><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span>' + statusTag + accountStatusTag +
-          (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + blockedTag + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "错误") + '</span>' : '') + '</div><div class="mailbox-card-time">' + esc(mailboxActivityLabel(mailbox)) + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action" data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制邮箱">复制邮箱</button><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
+          (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + totpTag + blockedTag + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "错误") + '</span>' : '') + '</div><div class="mailbox-card-time">' + esc(mailboxActivityLabel(mailbox)) + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action" data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制邮箱">复制邮箱</button><button class="mailbox-row-action" data-action="open-totp" data-mailbox-id="' + esc(mailbox.id) + '" title="打开 2FA 设置与查询">2FA</button><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
       }
 
       function renderSelected(selected) {
@@ -1625,6 +1820,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           state.managedAccountRemovalAvailable === true
         );
         const accountStatusTag = renderAccountStatusTag(mailbox);
+        const totpTag = mailbox.totpLinked ? '<span class="tag success">2FA 已绑定</span>' : '';
         const blockedTag = mailbox.openaiAccountDeactivated === true ? '<span class="tag blocked">OpenAI 封禁</span>' : '';
         const mailboxError = mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "错误") + '</span>' : '';
         const actionLabel = (action, label) => busyAction === action ? '<span class="button-spinner" aria-hidden="true"></span>' + ({ query: "查询中…", wait: "监听中…", renewal: "续期中…", stop: "停止中…", codexImport: "导入中…" }[action] || label) : label;
@@ -1634,8 +1830,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const deleteMailboxAndCodexButton = canDeleteMailboxAndCodex
           ? '<button class="danger" data-action="delete-mailbox-and-codex" data-mailbox-id="' + esc(mailbox.id) + '">删除邮箱与 Codex 账号</button>'
           : '';
-        const copyMailboxButton = '<button data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制账号">复制账号</button>';
-        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag neutral">' + capability + '</span><span class="tag neutral">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + accountStatusTag + blockedTag + mailboxError + '</div></div>' +
+        const copyMailboxButton = '<button data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制账号">复制账号</button><button data-action="open-totp" data-mailbox-id="' + esc(mailbox.id) + '" title="打开 2FA 设置与查询">2FA 设置/查询</button>';
+        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag neutral">' + capability + '</span><span class="tag neutral">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + accountStatusTag + totpTag + blockedTag + mailboxError + '</div></div>' +
           '<div class="detail-action-row"><div class="detail-header-actions">' + copyMailboxButton + codexImportButton + '<button data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">编辑账号</button><button class="danger" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">删除账号</button>' + deleteMailboxAndCodexButton + '</div>' +
           '<div class="detail-actions"><div class="actions">' +
           '<button class="' + (busyAction === "query" ? 'is-pending' : '') + '" data-action="submit-query" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "query") + '">' + actionLabel("query", "查询邮件") + '</button>' +
@@ -1772,6 +1968,28 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const minutes = Math.floor(totalSeconds / 60);
         const seconds = totalSeconds % 60;
         return String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
+      }
+
+      function formatTotpRemaining(otp, fallbackAt = 0) {
+        return formatTotpRemainingWithFallback(otp, fallbackAt);
+      }
+
+      function formatTotpRemainingWithFallback(otp, fallbackAt) {
+        const remaining = getTotpRemainingMilliseconds(otp, fallbackAt);
+        return remaining == null ? "—" : Math.max(0, Math.ceil(remaining / 1000)) + " 秒";
+      }
+
+      function getTotpRemainingMilliseconds(otp, fallbackAt = 0) {
+        const generatedAt = Number(otp?.generatedAt);
+        const period = Number(otp?.period || 30);
+        if (!Number.isFinite(period) || period <= 0) return undefined;
+        const generatedAtMs = Number.isFinite(generatedAt) && generatedAt > 0
+          ? generatedAt < 100000000000 ? generatedAt * 1000 : generatedAt
+          : Number(fallbackAt) > 0 ? Number(fallbackAt) : 0;
+        if (!generatedAtMs) return undefined;
+        const periodMs = period * 1000;
+        const elapsed = Math.max(0, Date.now() - generatedAtMs);
+        return Math.max(0, periodMs - elapsed);
       }
 
       function formatPhoneSuccessRate(value) {
@@ -1980,6 +2198,20 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         }
       }
 
+      function updateRegistrationTotpCountdowns() {
+        if (!registrationOnly) return;
+        const elements = document.querySelectorAll("[data-registration-totp-countdown]");
+        for (const element of elements) {
+          element.textContent = formatTotpRemainingWithFallback({
+            generatedAt: element.dataset.generatedAt,
+            period: element.dataset.period
+          }, element.dataset.fetchedAt);
+        }
+        for (const mailboxId of Object.keys(registrationTotpStates)) {
+          requestRegistrationTotpQuery(mailboxId);
+        }
+      }
+
       function ensureRegistrationCountdownTimer() {
         if (registrationCountdownTimer || typeof setInterval !== "function") return;
         registrationCountdownTimer = setInterval(() => {
@@ -1991,6 +2223,35 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           }
           updateRegistrationCountdowns();
         }, 1000);
+      }
+
+      function ensureRegistrationTotpCountdownTimer() {
+        if (!registrationOnly || document.visibilityState === "hidden") return;
+        if (registrationTotpCountdownTimer || typeof setInterval !== "function") return;
+        registrationTotpCountdownTimer = setInterval(() => {
+          const elements = document.querySelectorAll("[data-registration-totp-countdown]");
+          if (!elements.length) {
+            clearInterval(registrationTotpCountdownTimer);
+            registrationTotpCountdownTimer = undefined;
+            return;
+          }
+          updateRegistrationTotpCountdowns();
+        }, 1000);
+      }
+
+      function stopRegistrationTotpAutoRefresh() {
+        if (registrationTotpCountdownTimer) {
+          clearInterval(registrationTotpCountdownTimer);
+          registrationTotpCountdownTimer = undefined;
+        }
+        registrationTotpQueryPending.clear();
+        registrationTotpNextQueryAt = {};
+      }
+
+      function releaseRegistrationTotpResources() {
+        if (!registrationOnly) return;
+        stopRegistrationTotpAutoRefresh();
+        send("registrationTotpStop");
       }
 
       async function copyCode(code) {
@@ -2097,6 +2358,79 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         }
         input.focus();
         showNotice("已填入识别内容，请检查后点击提交", "success");
+      }
+
+      function openTotpModal(mailboxId) {
+        if (!(state.mailboxes || []).some((mailbox) => mailbox.id === mailboxId)) return;
+        importOpen = false;
+        editOpenMailboxId = "";
+        deleteConfirm = undefined;
+        totpModalMailboxId = mailboxId;
+        totpModalState = undefined;
+        totpFormValues = { accountId: "" };
+        render();
+        send("totpOpen", { mailboxId });
+      }
+
+      function closeTotpModal() {
+        totpModalMailboxId = "";
+        totpModalState = undefined;
+        totpFormValues = { accountId: "" };
+        render();
+      }
+
+      function sendTotpAction(action) {
+        if (!totpModalMailboxId) return;
+        send(action, { mailboxId: totpModalMailboxId });
+      }
+
+      function linkTotpAccount() {
+        const accountId = totpFormValues.accountId || document.getElementById("totpAccountId")?.value || "";
+        if (!accountId) {
+          showNotice("请先选择一个 2FAuth 条目", "warning");
+          return;
+        }
+        send("totpLink", { mailboxId: totpModalMailboxId, accountId });
+      }
+
+      function renderTotpModal() {
+        const mailbox = (state.mailboxes || []).find((item) => item.id === totpModalMailboxId);
+        if (!mailbox) return "";
+        const view = totpModalState || {
+          mailboxId: mailbox.id,
+          address: mailbox.address,
+          configured: state.totp?.configured === true,
+          baseUrl: state.totp?.baseUrl || "",
+          accounts: [],
+          link: state.totpLinks?.[mailbox.id],
+          account: undefined,
+          otp: undefined,
+          error: state.totp?.error || ""
+        };
+        const account = view.account;
+        const otp = view.otp || {};
+        const linkedAccountHtml = view.link
+          ? '<div class="totp-modal-section"><h3>当前绑定</h3>' +
+            (account
+              ? '<div class="totp-link-meta"><span class="tag source">' + esc(account.service || view.link.service || "2FA") + '</span><span class="tag neutral">' + esc(account.account || view.link.account || mailbox.address) + '</span></div>'
+              : '<p class="field-note">绑定的 2FAuth 条目当前未返回，可能已被删除或无权访问。</p>') +
+            (otp.code ? '<div class="totp-code-row"><strong class="totp-code">' + esc(otp.code) + '</strong><button type="button" class="primary" data-action="totp-copy-code" data-code="' + esc(otp.code) + '">复制验证码</button><span class="field-note">' + (otp.period ? '有效期约 ' + esc(String(otp.period)) + ' 秒' : '来自 2FAuth') + '</span></div>' : '<div class="totp-code-row"><span class="field-note">尚未查询当前验证码。</span></div>') +
+            '<div class="registration-session-actions"><button type="button" class="secondary small" data-action="totp-query">刷新验证码</button><button type="button" class="secondary small danger" data-action="totp-unlink">解除绑定</button></div>' +
+          '</div>'
+          : '<div class="totp-modal-section"><h3>当前绑定</h3><p class="field-note">该邮箱尚未绑定 2FAuth 条目。</p></div>';
+        const accounts = Array.isArray(view.accounts) ? view.accounts : [];
+        const accountListHtml = accounts.length
+          ? '<div class="totp-account-list" aria-label="可绑定的 2FAuth 条目">' + accounts.map((item) => {
+            const selected = item.id === (totpFormValues.accountId || view.link?.accountId);
+            return '<button type="button" class="totp-account-option' + (selected ? ' selected' : '') + '" data-action="totp-select-account" data-account-id="' + esc(item.id) + '"><span class="totp-account-option-main"><strong>' + esc(item.service || item.id) + '</strong><span>' + esc(item.account || '未标记账号') + '</span></span><span class="tag neutral">' + esc(item.otpType || 'totp') + '</span></button>';
+          }).join("") + '</div>'
+          : '<p class="field-note">2FAuth 中暂无可绑定条目，或当前配置文件中的 PAT 无读取权限。</p>';
+        const body = view.configured
+          ? linkedAccountHtml + '<div class="totp-modal-section"><h3>绑定已有 2FAuth 条目</h3>' + accountListHtml + '<div class="modal-actions"><button type="button" class="secondary" data-action="totp-link">绑定选中条目</button></div></div>' +
+            '<p class="field-note">新 2FA 条目请在 2FAuth 网页中创建；这里仅负责绑定已有条目和查询验证码。</p>'
+          : '<div class="notice visible error" style="margin-top:12px">未读取到 2FAuth 配置文件，请在扩展宿主服务器配置后重新加载扩展。</div>';
+        const error = view.error ? '<div class="notice visible error" style="margin-top:12px">' + esc(view.error) + '</div>' : '';
+        return '<div class="modal-backdrop"><section class="modal totp-modal" role="dialog" aria-modal="true" aria-labelledby="totpTitle"><h2 id="totpTitle">2FA 绑定与查询</h2><p class="muted">邮箱：' + esc(mailbox.address) + '</p>' + error + body + '<div class="modal-actions"><button type="button" data-action="close-totp">关闭</button></div></section></div>';
       }
 
       function openEditModal(mailboxId) {
@@ -2216,7 +2550,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           : isDeactivatedBatch
             ? '将删除 ' + deleteConfirm.mailboxIds.length + ' 个已收到 OpenAI account deactivated 邮件、且对应 Codex 账号需要重新授权的邮箱和账号。此操作不可恢复，确定继续吗？'
           : isMailboxAndCodex
-            ? '将同时删除邮箱凭据、邮件详情和对应 Codex 账号。此操作不可恢复，确定继续吗？'
+            ? '将同时删除邮箱凭据、邮件详情、对应 Codex 账号及其当前 2FAuth 记录。此操作不可恢复，确定继续吗？'
           : '确定删除邮箱 ' + esc(deleteConfirm.address) + ' 吗？本地凭据和邮件详情也会一并清理。';
         return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle"><h2 id="deleteConfirmTitle">' + title + '</h2><p class="muted">' + body + '</p><div class="modal-actions"><button type="button" data-action="cancel-delete">取消</button><button type="button" class="danger" data-action="confirm-delete">确认删除</button></div></section></div>';
       }

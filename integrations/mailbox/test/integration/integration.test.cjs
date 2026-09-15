@@ -34,6 +34,155 @@ test("activation loads local state, registers a generic Manager card, and does n
   integration.dispose();
 });
 
+test("importing a mailbox asks 2FAuth to auto-bind the newest matching entry", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let registration;
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, providerId: "mock", messages: [], codes: [] }; }
+  };
+  const api = { registerDashboardIntegration(value) { registration = value; return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  const autoBound = [];
+  integration.twoFactor = {
+    async getSummary() { return { configured: true, links: {} }; },
+    async autoBindLatestMailboxes(mailboxes) {
+      autoBound.push(...mailboxes);
+      return mailboxes.map((mailbox) => ({ mailboxId: mailbox.id, accountId: "9", existing: false }));
+    }
+  };
+  await registration.runAction("open");
+  await vscode.panels[0].webview.emit({ type: "mailbox:action", action: "import", providerId: "mock", input: "same@example.com|credential" });
+
+  assert.equal(autoBound.length, 1);
+  assert.equal(autoBound[0].address, "same@example.com");
+  assert.equal(
+    vscode.panels[0].webview.messages.some((message) => message.type === "toast" && /自动绑定 1 条同邮箱 2FA/u.test(message.message || "")),
+    true
+  );
+  integration.dispose();
+});
+
+test("Mailbox exposes the same linked 2FA state to the main and registration panels", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, providerId: "mock", messages: [], codes: [] }; }
+  };
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; }
+  };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await integration.pool.importProvider({ provider, input: "twofa@example.com|credential" });
+  const mailboxId = integration.pool.listMetadata()[0].id;
+  integration.twoFactor = {
+    async getSummary() {
+      return {
+        configured: true,
+        baseUrl: "http://127.0.0.1:8000",
+        links: { [mailboxId]: { mailboxId, address: "twofa@example.com", accountId: "7", service: "OpenAI", account: "twofa@example.com" } }
+      };
+    },
+    async getMailboxState(id, { address }) {
+      return {
+        mailboxId: id,
+        address,
+        configured: true,
+        baseUrl: "http://127.0.0.1:8000",
+        link: { mailboxId: id, address, accountId: "7", service: "OpenAI", account: address },
+        account: { id: "7", service: "OpenAI", account: address, otpType: "totp" },
+        accounts: [],
+        otp: { code: "123456", nextCode: "654321", generatedAt: 1, period: 30 },
+        error: ""
+      };
+    }
+  };
+  await integration.openPanel();
+  await integration.openRegistrationPanel();
+  await integration.handlePanelMessage({ action: "totpOpen", mailboxId });
+
+  assert.equal(vscode.panels[0].webview.messages.at(-1).type, "totp-state");
+  assert.equal(vscode.panels[0].webview.messages.at(-1).state.otp.code, "123456");
+  assert.equal(vscode.panels[1].webview.messages.at(-1).state.link.accountId, "7");
+  integration.dispose();
+});
+
+test("registration assistant creates and binds a new 2FAuth entry", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const provider = {
+    apiVersion: 1,
+    id: "mock",
+    displayName: "Mock provider",
+    capabilities: { history: "latest", maxMessages: 1, manualRenewal: false },
+    importSchema: { label: "Mock row", placeholder: "address|credential" },
+    parseImport(input) {
+      const [address, credential] = String(input).split("|");
+      return { entries: [{ address, credentials: { credential } }], failed: [] };
+    },
+    async query() { return { ok: true, providerId: "mock", messages: [], codes: [] }; }
+  };
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  await integration.pool.importProvider({ provider, input: "new-twofa@example.com|credential" });
+  const mailboxId = integration.pool.listMetadata()[0].id;
+  let created;
+  integration.twoFactor = {
+    async getSummary() { return { configured: true, links: {} }; },
+    async createAndLink(id, options) {
+      created = { id, options };
+      return { mailboxId: id, accountId: "7" };
+    },
+    async getMailboxState(id, { address }) {
+      return { mailboxId: id, address, configured: true, link: { mailboxId: id, accountId: "7" }, account: undefined, accounts: [], otp: undefined, error: "" };
+    }
+  };
+  await integration.openRegistrationPanel();
+
+  await integration.handlePanelMessage({
+    action: "registrationTotpCreateAndLink",
+    mailboxId,
+    input: "otpauth://totp/OpenAI%3Anew-twofa%40example.com?secret=JBSWY3DPEHPK3PXP",
+    label: "OpenAI"
+  });
+
+  assert.deepEqual(created, {
+    id: mailboxId,
+    options: {
+      uri: "otpauth://totp/OpenAI%3Anew-twofa%40example.com?secret=JBSWY3DPEHPK3PXP",
+      secret: undefined,
+      label: "OpenAI",
+      address: "new-twofa@example.com"
+    }
+  });
+  assert.equal(
+    vscode.panels.some((panel) => panel.webview.messages.some((message) => message.type === "toast" && message.action === "registrationTotpCreateAndLink")),
+    true
+  );
+  integration.dispose();
+});
+
 test("Manager account directory changes refresh the open Mailbox panel", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -805,6 +954,7 @@ test("an OpenAI-deactivated mailbox can remove its reauthorization-required Code
   const vscode = createVscode();
   const context = createContext();
   const removedAccountIds = [];
+  const deletedTotpAccountIds = [];
   const provider = {
     apiVersion: 1,
     id: "mock",
@@ -840,6 +990,12 @@ test("an OpenAI-deactivated mailbox can remove its reauthorization-required Code
   };
   const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
   await integration.initialize();
+  integration.twoFactor = {
+    async getSummary() { return { configured: true, links: {} }; },
+    async getLink() { return { accountId: "2fauth-7" }; },
+    async deleteRemoteAccount(accountId) { deletedTotpAccountIds.push(accountId); },
+    async unlinkMailbox() {}
+  };
   await integration.openPanel();
   await vscode.panels[0].webview.emit({
     type: "mailbox:action",
@@ -865,6 +1021,7 @@ test("an OpenAI-deactivated mailbox can remove its reauthorization-required Code
     mailboxId
   });
   assert.deepEqual(removedAccountIds, ["codex-account-1"]);
+  assert.deepEqual(deletedTotpAccountIds, ["2fauth-7"]);
   assert.equal(integration.pool.listMetadata().length, 0);
   assert.equal(
     vscode.panels[0].webview.messages.some(
@@ -879,6 +1036,7 @@ test("bulk deactivated cleanup only removes matched accounts that require reauth
   const vscode = createVscode();
   const context = createContext();
   const removedAccountIds = [];
+  const deletedTotpAccountIds = [];
   const provider = {
     apiVersion: 1,
     id: "mock",
@@ -908,6 +1066,12 @@ test("bulk deactivated cleanup only removes matched accounts that require reauth
   };
   const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
   await integration.initialize();
+  integration.twoFactor = {
+    async getSummary() { return { configured: true, links: {} }; },
+    async getLink(mailboxId) { return { accountId: `2fa-${mailboxId}` }; },
+    async deleteRemoteAccount(accountId) { deletedTotpAccountIds.push(accountId); },
+    async unlinkMailbox() {}
+  };
   const imported = await integration.pool.importProvider({
     provider,
     input: "eligible@example.com\nhealthy@example.com\nunflagged@example.com"
@@ -924,6 +1088,7 @@ test("bulk deactivated cleanup only removes matched accounts that require reauth
   await integration.deleteDeactivatedMailboxes();
 
   assert.deepEqual(removedAccountIds, ["codex-eligible"]);
+  assert.deepEqual(deletedTotpAccountIds, [`2fa-${ids.get("eligible@example.com")}`]);
   assert.deepEqual(integration.pool.listMetadata().map((mailbox) => mailbox.address).sort(), [
     "healthy@example.com",
     "unflagged@example.com"
@@ -935,6 +1100,7 @@ test("Dashboard-linked cleanup removes only the requested historical deactivated
   const vscode = createVscode();
   const context = createContext();
   const registrations = [];
+  const deletedTotpAccountIds = [];
   const provider = {
     apiVersion: 1,
     id: "mock",
@@ -957,6 +1123,12 @@ test("Dashboard-linked cleanup removes only the requested historical deactivated
   };
   const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
   await integration.initialize();
+  integration.twoFactor = {
+    async getSummary() { return { configured: true, links: {} }; },
+    async getLink(mailboxId) { return { accountId: `2fa-${mailboxId}` }; },
+    async deleteRemoteAccount(accountId) { deletedTotpAccountIds.push(accountId); },
+    async unlinkMailbox() {}
+  };
   const imported = await integration.pool.importProvider({
     provider,
     input: "linked@example.com\nuntouched@example.com"
@@ -982,6 +1154,7 @@ test("Dashboard-linked cleanup removes only the requested historical deactivated
   ]);
   const result = await registrations[1].removeDeactivatedMailboxes(["LINKED@example.com"]);
   assert.deepEqual(result, { requested: 1, removed: 1, failed: 0, failures: [] });
+  assert.deepEqual(deletedTotpAccountIds, [`2fa-${ids.get("linked@example.com")}`]);
   assert.deepEqual(integration.pool.listMetadata().map((mailbox) => mailbox.address), ["untouched@example.com"]);
   integration.dispose();
 });
