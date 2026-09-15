@@ -564,16 +564,11 @@ export class AccountsWorkbench {
       "external"
     );
     if (runtimeOutcome.status !== "unavailable") {
-      if (options.force && runtimeOutcome.status === "switched") {
-        await this.resetControlSwitchRecoveryState();
-      }
       return runtimeOutcome;
     }
 
     const switched = await this.repo.switchAccount(accountId);
-    if (options.force) {
-      await this.resetControlSwitchRecoveryState();
-    }
+    await this.resetControlSwitchRecoveryState();
     return {
       status: "switched",
       accountId: switched.id,
@@ -849,9 +844,10 @@ export class AccountsWorkbench {
       if (source !== "manual") {
         return { status: "suppressed", reason: "gatewayActive" };
       }
-      return this.runtimeSwitchCoordinator.runProviderSwitch(options, (transactionOptions) =>
+      const outcome = await this.runtimeSwitchCoordinator.runProviderSwitch(options, (transactionOptions) =>
         this.integrationHost.switchVirtualAccount(accountId, transactionOptions)
       );
+      return this.resetRecoveryStateAfterExplicitSwitch(outcome, source);
     }
     if (source === "manual" && this.hotSwitchRuntime.isGatewayActive()) {
       const gatewayAccount = (await this.repo.listAccounts()).find(
@@ -863,11 +859,36 @@ export class AccountsWorkbench {
           message: "The Gateway route is active, but its selected virtual account is unavailable"
         };
       }
-      return this.runtimeSwitchCoordinator.returnFromGatewayAndSwitchAccount(accountId, options, (transactionOptions) =>
-        this.integrationHost.deactivateVirtualAccount(gatewayAccount.id, transactionOptions)
+      const outcome = await this.runtimeSwitchCoordinator.returnFromGatewayAndSwitchAccount(
+        accountId,
+        options,
+        (transactionOptions) => this.integrationHost.deactivateVirtualAccount(gatewayAccount.id, transactionOptions)
+      );
+      return this.resetRecoveryStateAfterExplicitSwitch(outcome, source);
+    }
+    const outcome = await this.runtimeSwitchCoordinator.switchAccount(accountId, options, source);
+    return this.resetRecoveryStateAfterExplicitSwitch(outcome, source);
+  }
+
+  private async resetRecoveryStateAfterExplicitSwitch(
+    outcome: RuntimeAccountSwitchOutcome,
+    source: RuntimeSwitchSource
+  ): Promise<RuntimeAccountSwitchOutcome> {
+    if (source === "automatic" || outcome.status !== "switched") {
+      return outcome;
+    }
+
+    try {
+      // A user- or control-plane initiated switch establishes a new runtime
+      // boundary. Do not let a quota batch or retry from the previous account
+      // trigger another switch after this commit.
+      await this.resetSeamlessSwitchRuntime();
+    } catch (error) {
+      console.warn(
+        `[codexAccounts] explicit account switch completed but recovery state reset failed: ${getErrorMessage(error)}`
       );
     }
-    return this.runtimeSwitchCoordinator.switchAccount(accountId, options, source);
+    return outcome;
   }
 
   private async notifyIndexHealth(): Promise<void> {

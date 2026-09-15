@@ -405,6 +405,186 @@ describe("CodexHotSwitchBridge", () => {
     expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 0, max: 1 });
   }, 15_000);
 
+  it("does not count ephemeral aliases or subagent threads as separate account concurrency", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "activity-filter-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "activity-filter-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "unused-token",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+    await bridge.activateUsageAttribution({
+      localAccountId: "local-a",
+      accountId: "account-a",
+      expectedEmail: "a@example.invalid"
+    });
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "activity-filter-visible-start",
+        method: "turn/start",
+        params: { threadId: "visible-thread", input: [] }
+      })}\n`
+    );
+    await messages.next((message) => message.method === "turn/started" && message.params?.threadId === "visible-thread");
+
+    for (const [id, method, params] of [
+      ["activity-filter-ephemeral-create", "thread/start", { testThreadId: "ephemeral-thread", ephemeral: true }],
+      [
+        "activity-filter-alias-create",
+        "thread/fork",
+        { threadId: "visible-thread", testThreadId: "alias-thread", ephemeral: true, testSuppressThreadStarted: true }
+      ],
+      [
+        "activity-filter-subagent-create",
+        "thread/start",
+        { testThreadId: "subagent-thread", testSubagent: true, testHideThreadMetadata: true }
+      ]
+    ] as const) {
+      shim.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
+      await messages.next((message) => message.id === id);
+    }
+
+    shim.stdin.write(
+      `${JSON.stringify({ id: "activity-filter-mark-subagent", method: "test/markSubagent", params: { threadId: "subagent-thread" } })}\n`
+    );
+    await messages.next((message) => message.id === "activity-filter-mark-subagent");
+    shim.stdin.write(
+      `${JSON.stringify({ id: "activity-filter-read-subagent", method: "thread/read", params: { threadId: "subagent-thread" } })}\n`
+    );
+    await messages.next((message) => message.id === "activity-filter-read-subagent");
+
+    for (const [id, threadId] of [
+      ["activity-filter-ephemeral-turn", "ephemeral-thread"],
+      ["activity-filter-alias-turn", "alias-thread"],
+      ["activity-filter-subagent-turn", "subagent-thread"]
+    ] as const) {
+      shim.stdin.write(
+        `${JSON.stringify({ id, method: "turn/start", params: { threadId, input: [] } })}\n`
+      );
+      await messages.next((message) => message.method === "turn/started" && message.params?.threadId === threadId);
+    }
+
+    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 1);
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 1, max: 1 });
+
+    for (const id of [
+      "activity-filter-visible-complete",
+      "activity-filter-ephemeral-complete",
+      "activity-filter-alias-complete",
+      "activity-filter-subagent-complete"
+    ]) {
+      shim.stdin.write(`${JSON.stringify({ id, method: "test/complete", params: {} })}\n`);
+      await messages.next((message) => message.id === id);
+    }
+    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 0);
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 0, max: 1 });
+  }, 15_000);
+
+  it("does not let a classified hidden turn block all-conversations exhaustion recovery", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "hidden-exhaustion-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "hidden-exhaustion-initialize");
+
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "hidden-exhaustion-create",
+        method: "thread/start",
+        params: { testThreadId: "hidden-exhaustion-thread", testSubagent: true }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "hidden-exhaustion-create");
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "hidden-exhaustion-visible-turn",
+        method: "turn/start",
+        params: { threadId: "visible-exhaustion-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "visible-exhaustion-thread"
+    );
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "hidden-exhaustion-hidden-turn",
+        method: "turn/start",
+        params: { threadId: "hidden-exhaustion-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "hidden-exhaustion-thread"
+    );
+
+    // The fake server completes the first (visible) turn with a quota error;
+    // the hidden turn remains active and must not keep the batch pending.
+    shim.stdin.write(`${JSON.stringify({ id: "hidden-exhaustion-fail", method: "test/failUsageLimit", params: {} })}\n`);
+    await messages.next((message) => message.id === "hidden-exhaustion-fail");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      activeTurns: 1,
+      recentUsageLimitedThreads: 1,
+      usageLimitExhaustionReady: true,
+      usageLimitExhaustionBatchId: 1
+    });
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 0,
+        longTurnPolicy: "defer",
+        recoverRecentUsageLimitedTurns: true
+      })
+    ).resolves.toMatchObject({
+      status: "switched",
+      continuedThreads: 1,
+      activeTurns: 1
+    });
+    await messages.next(
+      (message) =>
+        message.method === "test/received" &&
+        message.params?.method === "turn/start" &&
+        message.params?.threadId === "visible-exhaustion-thread" &&
+        message.params?.recoveryMetadata === "true"
+    );
+    shim.stdin.write(`${JSON.stringify({ id: "hidden-exhaustion-recovery-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "hidden-exhaustion-recovery-complete");
+  }, 15_000);
+
   it("refuses a second Manager app-server for the same runtime owner", async () => {
     const root = path.resolve(__dirname, "..");
     const parentDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-runtime-owner-"));
@@ -2146,6 +2326,77 @@ describe("CodexHotSwitchBridge", () => {
       interruptedTurns: 0,
       continuedThreads: 0
     });
+  }, 15_000);
+
+  it("ignores a missing hidden thread during goal preparation", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs")
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "missing-goal-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "missing-goal-initialize");
+    bridge = new CodexHotSwitchBridge(async () => ({
+      accessToken: "rollback-token-a",
+      chatgptAccountId: "account-a",
+      chatgptPlanType: "plus"
+    }));
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "missing-goal-turn",
+        method: "turn/start",
+        params: { threadId: "missing-hidden-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "missing-hidden-thread"
+    );
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "mark-missing-goal-thread",
+        method: "test/markGoalThreadNotFound",
+        params: { threadId: "missing-hidden-thread" }
+      })}\n`
+    );
+    await messages.next((message) => message.id === "mark-missing-goal-thread");
+    shim.stdin.write(`${JSON.stringify({ id: "forget-missing-goal-active", method: "test/forget-active", params: {} })}\n`);
+    await messages.next((message) => message.id === "forget-missing-goal-active");
+
+    await expect(
+      bridge.switchAccount({
+        accessToken: "access-token-b",
+        accountId: "account-b",
+        localAccountId: "local-b",
+        previousAccountId: "account-a",
+        previousLocalAccountId: "local-a",
+        previousExpectedEmail: "a@example.invalid",
+        expectedEmail: "b@example.invalid",
+        planType: "plus",
+        gracePeriodMs: 25,
+        longTurnPolicy: "defer"
+      })
+    ).resolves.toMatchObject({
+      status: "switched",
+      accountId: "account-b",
+      activeTurns: 0,
+      interruptedTurns: 0,
+      continuedThreads: 0
+    });
+    expect(
+      messages.all.some(
+        (message) =>
+          message.method === "test/received" &&
+          message.params?.method === "thread/goal/get" &&
+          message.params?.threadId === "missing-hidden-thread"
+      )
+    ).toBe(true);
   }, 15_000);
 
   it("interrupts and continues an ordinary thread on the new account when explicitly enabled", async () => {

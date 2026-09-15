@@ -342,7 +342,12 @@ export class ManagerControlServer {
       }
       const result = accountConcurrencyTracker.record(activity);
       if (result.changed) {
-        this.options.onAccountConcurrencyChanged?.(activity, result.snapshot);
+        this.options.onAccountConcurrencyChanged?.(
+          result.accountId && result.accountId !== activity.accountId
+            ? { ...activity, accountId: result.accountId }
+            : activity,
+          result.snapshot
+        );
       }
       sendJson(response, 200, { ok: true, ...(result.snapshot ? { snapshot: result.snapshot } : {}) });
       return;

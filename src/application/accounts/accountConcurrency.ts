@@ -16,6 +16,12 @@ export type AccountConcurrencySnapshot = {
   averageTokenRate?: number;
 };
 
+export type AccountConcurrencyRecordResult = {
+  changed: boolean;
+  accountId?: string;
+  snapshot?: AccountConcurrencySnapshot;
+};
+
 export type AccountConcurrencyWindowDescriptor = Pick<
   CodexAccountConcurrencyWindowStats,
   "window" | "resetAt" | "windowMinutes"
@@ -109,7 +115,7 @@ export class AccountConcurrencyTracker {
   private readonly maxByAccount = new Map<string, number>();
   private readonly totalsByAccount = new Map<string, { tokens: number; durationMs: number }>();
 
-  record(activity: AccountSessionActivity): { changed: boolean; snapshot?: AccountConcurrencySnapshot } {
+  record(activity: AccountSessionActivity): AccountConcurrencyRecordResult {
     const sessionId = activity.sessionId.trim();
     const accountId = activity.accountId.trim();
     if (!sessionId || !accountId) {
@@ -119,7 +125,7 @@ export class AccountConcurrencyTracker {
     if (activity.active) {
       const previousAccountId = this.activeSessions.get(sessionId);
       if (previousAccountId === accountId) {
-        return { changed: false, snapshot: this.snapshot(accountId) };
+        return { changed: false, accountId, snapshot: this.snapshot(accountId) };
       }
       if (previousAccountId) {
         this.decrement(previousAccountId);
@@ -130,12 +136,12 @@ export class AccountConcurrencyTracker {
       const previousMax = this.maxByAccount.get(accountId) ?? 0;
       const max = Math.max(previousMax, current);
       this.maxByAccount.set(accountId, max);
-      return { changed: max !== previousMax, snapshot: this.snapshot(accountId) };
+      return { changed: max !== previousMax, accountId, snapshot: this.snapshot(accountId) };
     }
 
     const previousAccountId = this.activeSessions.get(sessionId);
     if (!previousAccountId) {
-      return { changed: false, snapshot: this.snapshot(accountId) };
+      return { changed: false, accountId, snapshot: this.snapshot(accountId) };
     }
     this.activeSessions.delete(sessionId);
     this.decrement(previousAccountId);
@@ -148,7 +154,11 @@ export class AccountConcurrencyTracker {
         durationMs: previousTotals.durationMs + durationMs
       });
     }
-    return { changed: tokens > 0 || durationMs > 0, snapshot: this.snapshot(previousAccountId) };
+    return {
+      changed: tokens > 0 || durationMs > 0,
+      accountId: previousAccountId,
+      snapshot: this.snapshot(previousAccountId)
+    };
   }
 
   get(accountId: string): AccountConcurrencySnapshot | undefined {

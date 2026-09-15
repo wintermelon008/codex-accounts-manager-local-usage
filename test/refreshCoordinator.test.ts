@@ -574,6 +574,55 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     }
   });
 
+  it("does not replay an in-flight stale poll after an explicit reset", async () => {
+    vi.useFakeTimers();
+    const configurationDisposable = { dispose: vi.fn() };
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({
+        hotSwitchEnabled: true,
+        seamlessSwitchEnabled: true,
+        seamlessSwitchQuotaBandsEnabled: true,
+        seamlessSwitchLowQuotaEnabled: true,
+        seamlessSwitchThreshold: 0
+      })
+    );
+    vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
+
+    let resolveStaleStatus: ((status: HotSwitchStatus) => void) | undefined;
+    const staleStatus = new Promise<HotSwitchStatus>((resolve) => {
+      resolveStaleStatus = resolve;
+    });
+    const runtime = {
+      isEnabled: vi.fn(() => true),
+      getStatus: vi.fn().mockImplementationOnce(() => staleStatus).mockResolvedValue(runtimeStatus()),
+      getIdentity: vi.fn().mockResolvedValue({ managedLocalAccountId: "free-active" }),
+      resetUsageLimitObservation: vi.fn().mockResolvedValue(true)
+    };
+    const onUsageLimitExceeded = vi.fn().mockResolvedValue(true);
+    const registration = registerSeamlessUsageLimitMonitor({
+      context: { subscriptions: [] } as never,
+      runtime: runtime as never,
+      onUsageLimitExceeded
+    });
+
+    try {
+      const reset = registration.reset();
+      resolveStaleStatus?.(
+        runtimeStatus({
+          usageLimitExhaustionReady: true,
+          usageLimitExhaustionBatchId: 1,
+          recentUsageLimitedThreads: 1
+        })
+      );
+      await reset;
+      await vi.advanceTimersByTimeAsync(SEAMLESS_USAGE_LIMIT_POLL_INTERVAL_MS);
+      expect(onUsageLimitExceeded).not.toHaveBeenCalled();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("backs off a deferred usage-limit selection instead of retrying every poll", async () => {
     vi.useFakeTimers();
     const configurationDisposable = { dispose: vi.fn() };

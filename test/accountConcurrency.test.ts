@@ -55,6 +55,21 @@ describe("AccountConcurrencyTracker", () => {
     expect(tracker.get("account-a")).toMatchObject({ current: 0, max: 1, totalTokens: 50, totalDurationMs: 5_000 });
   });
 
+  it("returns the account that owns a late inactive report", () => {
+    tracker.record({ sessionId: "session-1", accountId: "account-a", active: true });
+
+    const result = tracker.record({
+      sessionId: "session-1",
+      accountId: "account-b",
+      active: false,
+      tokens: 25,
+      durationMs: 2_500
+    });
+
+    expect(result).toMatchObject({ changed: true, accountId: "account-a" });
+    expect(result.snapshot).toMatchObject({ current: 0, totalTokens: 25, totalDurationMs: 2_500 });
+  });
+
   it("persists quota-window aggregates as sum(tokens) divided by sum(time)", () => {
     const account = {
       id: "account-a",

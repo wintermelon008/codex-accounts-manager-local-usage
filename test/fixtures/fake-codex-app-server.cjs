@@ -11,6 +11,7 @@ const activeTurns = [];
 const goals = new Map();
 const threadSettings = new Map();
 const subagentThreadIds = new Set();
+const goalNotFoundThreadIds = new Set();
 let turnSequence = 0;
 let goalSequence = 0;
 let reorderNextTurnStartResponse = false;
@@ -99,6 +100,24 @@ function handleLine(line) {
       break;
     case "initialized":
       break;
+    case "thread/start":
+    case "thread/fork": {
+      const threadId =
+        (message.params && (message.params.testThreadId || message.params.threadId)) ||
+        `thread-${++turnSequence}`;
+      const thread = {
+        id: threadId,
+        ...(message.params && message.params.ephemeral === true ? { ephemeral: true } : {}),
+        ...(message.params && message.params.testSubagent === true && message.params.testHideThreadMetadata !== true
+          ? { parentThreadId: "parent-thread", source: { subagent: "test" } }
+          : {})
+      };
+      if (!(message.params && message.params.testSuppressThreadStarted === true)) {
+        emit({ method: "thread/started", params: { thread } });
+      }
+      respond(message.id, { thread });
+      break;
+    }
     case "turn/start": {
       if (failNextTurnStartWithUsageLimit) {
         failNextTurnStartWithUsageLimit = false;
@@ -178,7 +197,14 @@ function handleLine(line) {
       break;
     }
     case "thread/goal/get":
-      respond(message.id, { goal: goals.get(message.params.threadId) || null });
+      if (goalNotFoundThreadIds.has(message.params.threadId)) {
+        emit({
+          id: message.id,
+          error: { code: -32000, message: `thread not found: ${message.params.threadId}` }
+        });
+      } else {
+        respond(message.id, { goal: goals.get(message.params.threadId) || null });
+      }
       break;
     case "thread/read": {
       const isSubagent = subagentThreadIds.has(message.params.threadId);
@@ -465,6 +491,12 @@ function handleLine(line) {
     case "test/markSubagent":
       if (typeof message.params.threadId === "string") {
         subagentThreadIds.add(message.params.threadId);
+      }
+      respond(message.id, {});
+      break;
+    case "test/markGoalThreadNotFound":
+      if (typeof message.params.threadId === "string") {
+        goalNotFoundThreadIds.add(message.params.threadId);
       }
       respond(message.id, {});
       break;

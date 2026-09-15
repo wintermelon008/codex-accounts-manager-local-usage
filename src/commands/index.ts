@@ -24,7 +24,13 @@ export function registerCommands(
   hotSwitchRuntime: CodexHotSwitchRuntime,
   options: { resetSeamlessSwitchRuntime?: () => void | Promise<void> } = {}
 ): void {
-  const service = new AccountsCommandService(context, repo, view, hotSwitchRuntime);
+  const service = new AccountsCommandService(
+    context,
+    repo,
+    view,
+    hotSwitchRuntime,
+    options.resetSeamlessSwitchRuntime
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexAccounts.addAccount", () => service.addAccount()),

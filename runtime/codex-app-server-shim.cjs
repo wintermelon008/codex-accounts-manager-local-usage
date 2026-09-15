@@ -54,6 +54,7 @@ const AUTH_TOKEN_REVOKED_RETRY_DELAY_MS = 5_000;
 const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
+const MAX_RUNTIME_THREAD_METADATA = 4_096;
 const RUNTIME_PROTOCOL_VERSION = 15;
 const availabilityRuntimeId = randomUUID();
 let availabilitySequence = 0;
@@ -163,6 +164,9 @@ const recentUsageLimitedThreads = new Map();
 const recentAuthTokenRevokedThreads = new Map();
 const initializeRequests = new Set();
 const controlSockets = new Set();
+const pendingThreadCreationRequests = new Map();
+const pendingThreadReadRequests = new Map();
+const runtimeThreadMetadata = new Map();
 const lastUsageAttributionByThread = new Map();
 const runtimeTurnActivities = new Map();
 const runtimeThreadTokenTotals = new Map();
@@ -536,6 +540,20 @@ function handleOfficialLine(line) {
     line = JSON.stringify(message);
   }
 
+  if (isThreadCreationMethod(message.method) && Object.prototype.hasOwnProperty.call(message, "id")) {
+    rememberPendingThreadCreation(message);
+  }
+  if (message.method === "thread/read" && Object.prototype.hasOwnProperty.call(message, "id")) {
+    rememberPendingThreadRead(message);
+  }
+
+  if (message.method === "turn/start" && isPlainObject(message.params) && message.params.ephemeral === true) {
+    rememberRuntimeThreadMetadata(
+      { id: readThreadId(message.params), ephemeral: true },
+      { ephemeral: true }
+    );
+  }
+
   if (isWorkStartMethod(message.method)) {
     const threadId = readThreadId(message.params);
     // New work demonstrates that the current runtime is still usable (or that
@@ -694,6 +712,17 @@ function handleCodexLine(line) {
   if (!message) {
     writeOfficialLine(line);
     return;
+  }
+
+  if (message.method === "thread/started") {
+    rememberRuntimeThreadMetadata(readRuntimeThreadMetadata(message.params));
+  }
+  if (Object.prototype.hasOwnProperty.call(message, "id") && !message.method) {
+    if (!message.error) {
+      rememberRuntimeThreadMetadata(readRuntimeThreadMetadata(message.result));
+    }
+    rememberThreadCreationResponse(message);
+    rememberThreadReadResponse(message);
   }
 
   recordRuntimeTurnTokenUsage(message);
@@ -1415,7 +1444,16 @@ async function prepareGoalsForSwitch(request) {
       if (request.canceled) {
         return;
       }
-      const goalResult = await sendInternalRequest("thread/goal/get", { threadId });
+      let goalResult;
+      try {
+        goalResult = await sendInternalRequest("thread/goal/get", { threadId });
+      } catch (error) {
+        if (!isThreadNotFoundError(error)) {
+          throw error;
+        }
+        reconcileMissingThreadForSwitch(request, threadId);
+        continue;
+      }
       if (request.canceled) {
         return;
       }
@@ -1448,7 +1486,16 @@ async function prepareGoalsForSwitch(request) {
         }
         continue;
       }
-      const pauseResult = await sendInternalRequest("thread/goal/set", { threadId, status: "paused" });
+      let pauseResult;
+      try {
+        pauseResult = await sendInternalRequest("thread/goal/set", { threadId, status: "paused" });
+      } catch (error) {
+        if (!isThreadNotFoundError(error)) {
+          throw error;
+        }
+        reconcileMissingThreadForSwitch(request, threadId);
+        continue;
+      }
       const pausedGoal = readGoal(pauseResult);
       if (!pausedGoal || pausedGoal.status !== "paused") {
         throw new Error("Codex did not pause an active goal before account switch");
@@ -1493,6 +1540,29 @@ async function prepareGoalsForSwitch(request) {
   }
 }
 
+function reconcileMissingThreadForSwitch(request, threadId) {
+  for (const [turnId, activeThreadId] of [...activeTurns]) {
+    if (activeThreadId !== threadId) {
+      continue;
+    }
+    finishRuntimeTurnActivity(turnId, threadId);
+    activeTurns.delete(turnId);
+    request.interruptedTurnIds.delete(turnId);
+    rememberTerminalTurnId(turnId);
+  }
+
+  request.pausedGoalThreadIds.delete(threadId);
+  request.recoveryThreadIds.delete(threadId);
+  request.recentUsageLimitedThreadIds.delete(threadId);
+  request.recentUsageLimitedGoalThreadIds.delete(threadId);
+  request.recentAuthTokenRevokedThreadIds.delete(threadId);
+  request.recentAuthTokenRevokedGoalThreadIds.delete(threadId);
+  clearRecentUsageLimitedThread(threadId);
+  clearAuthTokenRevokedThread(threadId);
+  clearCapacityRecoveryThread(threadId, { force: true });
+  runtimeThreadMetadata.delete(threadId);
+}
+
 function armSwitchGraceTimer(request) {
   if (request.graceTimer || getActiveTurnCount() === 0) {
     return;
@@ -1530,7 +1600,9 @@ async function handleSwitchGraceExpired(request) {
     await deferPendingSwitch(request, "uninterruptibleTurns");
     return;
   }
-  const ordinaryEntries = activeEntries.filter(([, threadId]) => !request.pausedGoalThreadIds.has(threadId));
+  const ordinaryEntries = activeEntries.filter(
+    ([, threadId]) => !request.pausedGoalThreadIds.has(threadId) && !isRuntimeThreadExcluded(threadId)
+  );
   if (ordinaryEntries.length > 0 && request.params.longTurnPolicy === "defer") {
     await deferPendingSwitch(request, "activeOrdinaryTurns");
     return;
@@ -1615,7 +1687,7 @@ async function startRecoveryTurns(request) {
   for (const threadId of request.recoveryThreadIds) {
     const capacityEntry = request.capacityRecoveryEntries.get(threadId);
     try {
-      if (await isSubagentThread(threadId)) {
+      if (isRuntimeThreadExcluded(threadId) || (await isSubagentThread(threadId))) {
         if (capacityEntry) {
           settleClaimedCapacityRecoveryEntry(request, threadId, capacityEntry);
         }
@@ -1894,24 +1966,31 @@ async function handleAuthRefreshRequest(message) {
 
 function sendInternalRequest(method, params, options = {}) {
   const id = `${INTERNAL_ID_PREFIX}:${++internalSequence}`;
+  const requestKey = requestIdKey(id);
+  if (method === "thread/read") {
+    rememberPendingThreadRead({ id, params });
+  }
   return new Promise((resolve, reject) => {
     const timeoutMs =
       typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
         ? options.timeoutMs
         : INTERNAL_REQUEST_TIMEOUT_MS;
     const timer = setTimeout(() => {
-      pendingInternalRequests.delete(requestIdKey(id));
+      pendingInternalRequests.delete(requestKey);
+      pendingThreadReadRequests.delete(requestKey);
       reject(new Error(`${method} timed out`));
     }, timeoutMs);
-    pendingInternalRequests.set(requestIdKey(id), { resolve, reject, timer, ...options });
+    pendingInternalRequests.set(requestKey, { resolve, reject, timer, ...options });
     try {
       if (!writeChildMessage(applyFastModeToRequest({ id, method, params }))) {
-        pendingInternalRequests.delete(requestIdKey(id));
+        pendingInternalRequests.delete(requestKey);
+        pendingThreadReadRequests.delete(requestKey);
         clearTimeout(timer);
         reject(new Error("Codex app-server stdin is closed"));
       }
     } catch (error) {
-      pendingInternalRequests.delete(requestIdKey(id));
+      pendingInternalRequests.delete(requestKey);
+      pendingThreadReadRequests.delete(requestKey);
       clearTimeout(timer);
       reject(error);
     }
@@ -2490,6 +2569,193 @@ function getActiveThreadIds() {
   return threadIds;
 }
 
+function getQuotaTrackedActiveThreadIds() {
+  const threadIds = getActiveThreadIds();
+  for (const threadId of threadIds) {
+    if (isRuntimeThreadExcluded(threadId)) {
+      threadIds.delete(threadId);
+    }
+  }
+  return threadIds;
+}
+
+function getQuotaTrackedActiveTurnCount() {
+  let count = anonymousActiveTurnCount;
+  for (const threadId of submittedTurnStarts.values()) {
+    if (!isRuntimeThreadExcluded(threadId)) {
+      count += 1;
+    }
+  }
+  for (const threadId of activeTurns.values()) {
+    if (!isRuntimeThreadExcluded(threadId)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function isThreadCreationMethod(method) {
+  return method === "thread/start" || method === "thread/fork";
+}
+
+function rememberPendingThreadCreation(message) {
+  const key = requestIdKey(message.id);
+  const params = isPlainObject(message.params) ? message.params : {};
+  pendingThreadCreationRequests.delete(key);
+  pendingThreadCreationRequests.set(key, {
+    ephemeral: params.ephemeral === true,
+    parentThreadId: readThreadId(params),
+    subagent:
+      isSubagentThreadSource(params.source) ||
+      isSubagentThreadSource(params.threadSource) ||
+      params.subagent === true
+  });
+  while (pendingThreadCreationRequests.size > MAX_RUNTIME_THREAD_METADATA) {
+    const oldestKey = pendingThreadCreationRequests.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    pendingThreadCreationRequests.delete(oldestKey);
+  }
+}
+
+function rememberPendingThreadRead(message) {
+  const threadId = readThreadId(message.params);
+  if (!threadId) {
+    return;
+  }
+  const key = requestIdKey(message.id);
+  pendingThreadReadRequests.delete(key);
+  pendingThreadReadRequests.set(key, threadId);
+  while (pendingThreadReadRequests.size > MAX_RUNTIME_THREAD_METADATA) {
+    const oldestKey = pendingThreadReadRequests.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    pendingThreadReadRequests.delete(oldestKey);
+  }
+}
+
+function rememberThreadCreationResponse(message) {
+  const key = requestIdKey(message.id);
+  const pending = pendingThreadCreationRequests.get(key);
+  if (!pending) {
+    return;
+  }
+  pendingThreadCreationRequests.delete(key);
+  if (message.error) {
+    return;
+  }
+  const thread = readThread(message.result);
+  const threadId = readBoundedRuntimeString(thread?.id) || readThreadIdFromResult(message.result);
+  if (!threadId) {
+    return;
+  }
+  rememberRuntimeThreadMetadata(thread || { id: threadId }, {
+    threadId,
+    ephemeral: pending.ephemeral,
+    parentThreadId: pending.parentThreadId,
+    subagent: pending.subagent
+  });
+}
+
+function rememberThreadReadResponse(message) {
+  const key = requestIdKey(message.id);
+  const threadId = pendingThreadReadRequests.get(key);
+  if (!threadId) {
+    return;
+  }
+  pendingThreadReadRequests.delete(key);
+  if (message.error) {
+    return;
+  }
+  rememberRuntimeThreadMetadata(readRuntimeThreadMetadata(message.result), { threadId });
+}
+
+function rememberRuntimeThreadMetadata(thread, fallback = {}) {
+  if (!isPlainObject(thread) && !isPlainObject(fallback)) {
+    return;
+  }
+  const threadId =
+    readBoundedRuntimeString(thread?.id) ||
+    readBoundedRuntimeString(fallback.threadId);
+  if (!threadId) {
+    return;
+  }
+  const parentThreadId =
+    readBoundedRuntimeString(thread?.parentThreadId) ||
+    readBoundedRuntimeString(thread?.parent_thread_id) ||
+    readBoundedRuntimeString(fallback.parentThreadId);
+  const subagent =
+    isSubagentThreadSource(thread?.source) ||
+    isSubagentThreadSource(thread?.threadSource) ||
+    (parentThreadId !== undefined && thread?.source === undefined) ||
+    fallback.subagent === true;
+  const excluded = thread?.ephemeral === true || fallback.ephemeral === true || subagent;
+  const previous = runtimeThreadMetadata.get(threadId);
+  runtimeThreadMetadata.delete(threadId);
+  runtimeThreadMetadata.set(threadId, {
+    excluded: Boolean(previous?.excluded || excluded)
+  });
+  while (runtimeThreadMetadata.size > MAX_RUNTIME_THREAD_METADATA) {
+    const oldestThreadId = runtimeThreadMetadata.keys().next().value;
+    if (oldestThreadId === undefined) {
+      break;
+    }
+    runtimeThreadMetadata.delete(oldestThreadId);
+  }
+
+  if (excluded) {
+    // Hidden/ephemeral work is not an independent user conversation for
+    // quota-exhaustion switching. If its metadata arrived after a batch was
+    // captured, cancel that ambiguous batch instead of allowing the hidden
+    // thread to block or trigger a switch based on stale classification.
+    const wasInExhaustionBatch = usageLimitExhaustionBatch?.threadIds.has(threadId) === true;
+    clearRecentUsageLimitedThread(threadId);
+    clearCapacityRecoveryThread(threadId, { force: true });
+    if (wasInExhaustionBatch) {
+      suppressUsageLimitExhaustionObservation();
+    }
+    for (const activity of runtimeTurnActivities.values()) {
+      if (activity.threadId !== threadId || !activity.reported) {
+        continue;
+      }
+      // Classification can arrive after turn/start for server-created
+      // subagents. Close the provisional slot without attributing hidden
+      // work to the account's visible concurrency totals.
+      reportRuntimeAccountSessionActivity({
+        sessionId: runtimeActivitySessionId(activity.threadId),
+        accountId: activity.accountId,
+        active: false
+      });
+      activity.reported = false;
+    }
+  }
+}
+
+function isRuntimeThreadExcluded(threadId) {
+  return runtimeThreadMetadata.get(threadId)?.excluded === true;
+}
+
+function readThreadIdFromResult(value) {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+  return (
+    readBoundedRuntimeString(value.threadId) ||
+    readBoundedRuntimeString(value.thread_id)
+  );
+}
+
+function readRuntimeThreadMetadata(value) {
+  const thread = readThread(value);
+  if (thread) {
+    return thread;
+  }
+  const threadId = readBoundedRuntimeString(value?.threadId) || readBoundedRuntimeString(value?.thread_id);
+  return threadId ? { id: threadId, ...value } : undefined;
+}
+
 function recordActiveUsageAttribution() {
   for (const threadId of getActiveThreadIds()) {
     recordUsageAttribution(threadId);
@@ -2537,18 +2803,22 @@ function beginRuntimeTurnActivity(turnId, threadId) {
   ) {
     return;
   }
+  const excluded = isRuntimeThreadExcluded(threadId);
   runtimeTurnActivities.set(turnId, {
     turnId,
     threadId,
     accountId: account.localAccountId,
     startedAt: Date.now(),
-    tokens: 0
+    tokens: 0,
+    reported: !excluded
   });
-  reportRuntimeAccountSessionActivity({
-    sessionId: runtimeActivitySessionId(threadId),
-    accountId: account.localAccountId,
-    active: true
-  });
+  if (!excluded) {
+    reportRuntimeAccountSessionActivity({
+      sessionId: runtimeActivitySessionId(threadId),
+      accountId: account.localAccountId,
+      active: true
+    });
+  }
 }
 
 function finishRuntimeTurnActivity(turnId, threadId, params) {
@@ -2563,13 +2833,15 @@ function finishRuntimeTurnActivity(turnId, threadId, params) {
   }
   const directTokens = readDirectTurnTokenCount(params);
   const tokens = Math.max(activity.tokens, directTokens ?? 0);
-  reportRuntimeAccountSessionActivity({
-    sessionId: runtimeActivitySessionId(activity.threadId),
-    accountId: activity.accountId,
-    active: false,
-    tokens,
-    durationMs: Math.max(0, Date.now() - activity.startedAt)
-  });
+  if (activity.reported) {
+    reportRuntimeAccountSessionActivity({
+      sessionId: runtimeActivitySessionId(activity.threadId),
+      accountId: activity.accountId,
+      active: false,
+      tokens,
+      durationMs: Math.max(0, Date.now() - activity.startedAt)
+    });
+  }
 }
 
 function finishAllRuntimeTurnActivities() {
@@ -3131,6 +3403,10 @@ function scheduleCapacityRecovery(threadId, options = {}) {
   if (typeof threadId !== "string" || threadId.length === 0 || childExited) {
     return;
   }
+  if (isRuntimeThreadExcluded(threadId)) {
+    clearCapacityRecoveryThread(threadId, { force: true });
+    return;
+  }
   const workGeneration = options.workGeneration ?? ensureWorkGeneration(threadId);
   if (workGeneration === undefined || latestWorkGenerations.get(threadId) !== workGeneration) {
     return;
@@ -3277,6 +3553,10 @@ function rememberRecentUsageLimitedThread(threadId) {
 
 function captureUsageLimitedThread(threadId, options = {}) {
   if (!usageLimitObservationEnabled || typeof threadId !== "string" || threadId.length === 0) {
+    return;
+  }
+  if (isRuntimeThreadExcluded(threadId)) {
+    clearRecentUsageLimitedThread(threadId);
     return;
   }
   rememberRecentUsageLimitedThread(threadId);
@@ -3476,6 +3756,13 @@ function observeUsageLimitExhaustionUsageLimited(threadId, terminal) {
   if (typeof threadId !== "string" || threadId.length === 0) {
     return;
   }
+  if (isRuntimeThreadExcluded(threadId)) {
+    clearRecentUsageLimitedThread(threadId);
+    if (usageLimitExhaustionBatch?.threadIds.has(threadId)) {
+      suppressUsageLimitExhaustionObservation();
+    }
+    return;
+  }
 
   let batch = usageLimitExhaustionBatch;
   if (!batch) {
@@ -3489,7 +3776,7 @@ function observeUsageLimitExhaustionUsageLimited(threadId, terminal) {
       suppressUsageLimitExhaustionObservation();
       return;
     }
-    const threadIds = getActiveThreadIds();
+    const threadIds = getQuotaTrackedActiveThreadIds();
     threadIds.add(threadId);
     const observedAt = Date.now();
     batch = {
@@ -3520,6 +3807,11 @@ function observeUsageLimitExhaustionUsageLimited(threadId, terminal) {
 function observeUsageLimitExhaustionTerminal(threadId, status, reportedUsageLimit) {
   const batch = usageLimitExhaustionBatch;
   if (!batch || typeof threadId !== "string" || threadId.length === 0 || !batch.threadIds.has(threadId)) {
+    return;
+  }
+
+  if (isRuntimeThreadExcluded(threadId)) {
+    suppressUsageLimitExhaustionObservation();
     return;
   }
 
@@ -3565,7 +3857,7 @@ function maybeFinalizeUsageLimitExhaustionBatch() {
     return;
   }
 
-  if (getActiveTurnCount() > 0) {
+  if (getQuotaTrackedActiveTurnCount() > 0) {
     return;
   }
 
@@ -3628,6 +3920,10 @@ function getRecoverableRecentUsageLimitedThreadIds() {
   const cutoff = Date.now() - RECENT_USAGE_LIMITED_RECOVERY_MAX_AGE_MS;
   let newest;
   for (const [threadId, recordedAt] of recentUsageLimitedThreads) {
+    if (isRuntimeThreadExcluded(threadId)) {
+      recentUsageLimitedThreads.delete(threadId);
+      continue;
+    }
     if (recordedAt < cutoff) {
       continue;
     }
@@ -3681,6 +3977,10 @@ function pruneRecentUsageLimitedThreads() {
 function isAlreadyInactiveTurnError(error) {
   const message = safeErrorMessage(error).trim().toLowerCase();
   return message.includes("no active turn to interrupt") || message.includes("turn is not active");
+}
+
+function isThreadNotFoundError(error) {
+  return safeErrorMessage(error).trim().toLowerCase().includes("thread not found");
 }
 
 function readReplacementActiveTurnId(error) {

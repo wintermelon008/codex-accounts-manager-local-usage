@@ -108,6 +108,7 @@ export function registerSeamlessUsageLimitMonitor(params: {
   let disposed = false;
   let inFlight = false;
   let generation = 0;
+  let observationGeneration = 0;
   let lastShimPid: number | undefined;
   let lastObservedUsageLimitFailures: number | undefined;
   let lastUsageLimitExhaustionBatchId: number | undefined;
@@ -142,6 +143,12 @@ export function registerSeamlessUsageLimitMonitor(params: {
   };
 
   const resetRuntimeObservation = (): void => {
+    // A status/identity request may still be awaiting the runtime while an
+    // explicit account switch resets the observation. Invalidate that
+    // request's snapshot as well as the scalar retry state; otherwise its
+    // response can recreate a stale exhaustion decision immediately after the
+    // reset has completed.
+    observationGeneration += 1;
     lastShimPid = undefined;
     lastObservedUsageLimitFailures = undefined;
     lastUsageLimitExhaustionBatchId = undefined;
@@ -155,10 +162,15 @@ export function registerSeamlessUsageLimitMonitor(params: {
       return;
     }
 
+    const pollObservationGeneration = observationGeneration;
     inFlight = true;
     try {
       const status = await params.runtime.getStatus();
-      if (disposed || pollGeneration !== generation) {
+      if (
+        disposed ||
+        pollGeneration !== generation ||
+        pollObservationGeneration !== observationGeneration
+      ) {
         return;
       }
       statusErrorReported = false;
@@ -186,13 +198,24 @@ export function registerSeamlessUsageLimitMonitor(params: {
       // Identity is a fixed-size response too. Supplying it lets a remote
       // window converge its stopped conversation to a decision made elsewhere.
       const identity = await params.runtime.getIdentity().catch(() => undefined);
-      if (disposed || pollGeneration !== generation) {
+      if (
+        disposed ||
+        pollGeneration !== generation ||
+        pollObservationGeneration !== observationGeneration
+      ) {
         return;
       }
       const switched = await params.onUsageLimitExceeded(
         getManagedLocalAccountId(identity),
         exhaustionOnly ? "runtimeUsageLimitExhaustion" : "runtimeUsageLimit"
       );
+      if (
+        disposed ||
+        pollGeneration !== generation ||
+        pollObservationGeneration !== observationGeneration
+      ) {
+        return;
+      }
       retryPending = !switched;
       nextAttemptAt = switched ? 0 : Date.now() + SEAMLESS_USAGE_LIMIT_RETRY_MS;
     } catch (error) {

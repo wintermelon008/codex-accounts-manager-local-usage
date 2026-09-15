@@ -516,7 +516,12 @@ export class CodexHotSwitchBridge {
       }
       const result = accountConcurrencyTracker.record(activity);
       if (result.changed) {
-        this.onAccountConcurrencyChanged(activity, result.snapshot);
+        this.onAccountConcurrencyChanged(
+          result.accountId && result.accountId !== activity.accountId
+            ? { ...activity, accountId: result.accountId }
+            : activity,
+          result.snapshot
+        );
       }
       this.writeResponse(socket, message.id, {
         result: { ok: true, ...(result.snapshot ? { snapshot: result.snapshot } : {}) }

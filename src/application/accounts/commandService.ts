@@ -36,7 +36,8 @@ export class AccountsCommandService {
     private readonly context: vscode.ExtensionContext,
     private readonly repo: AccountsRepository,
     private readonly view: RefreshView,
-    private readonly hotSwitchRuntime: CodexHotSwitchRuntime
+    private readonly hotSwitchRuntime: CodexHotSwitchRuntime,
+    private readonly resetSeamlessSwitchRuntime?: () => void | Promise<void>
   ) {}
 
   async enableHotSwitch(): Promise<void> {
@@ -231,6 +232,13 @@ export class AccountsCommandService {
         };
         if (outcome.status === "unavailable" && !virtualAccount && !gatewayRouteActive) {
           await this.repo.switchAccount(account.id);
+          try {
+            await this.resetSeamlessSwitchRuntime?.();
+          } catch (error) {
+            console.warn(
+              `[codexAccounts] fallback account switch completed but recovery state reset failed: ${getErrorMessage(error)}`
+            );
+          }
         }
         return outcome;
       }
