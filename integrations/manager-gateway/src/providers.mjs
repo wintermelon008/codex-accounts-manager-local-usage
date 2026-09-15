@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import readline from "node:readline";
 import { normalizeTokenUsage } from "./usage.mjs";
 
@@ -62,30 +65,58 @@ function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataTok
       const runtimeProvider = await resolveRuntimeProvider(manager, emit);
       const runtimeProxy = await resolveRuntimeProxy(manager);
       const providerArgs = runtimeProvider ? buildRuntimeProviderArgs(runtimeProvider) : [];
+      const literatureChartScan = session.context?.literatureChartScan === true;
+      const literatureImages = await prepareLiteratureChartImages(session);
       const commonArgs = [
         "--json",
         "--color",
         "never",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--config",
-        'approval_policy="never"',
-        "--config",
-        'web_search="disabled"',
+        ...(literatureChartScan
+          ? [
+              "--sandbox",
+              "read-only",
+              "--skip-git-repo-check",
+              "--ignore-rules",
+              "--ephemeral"
+            ]
+          : [
+              "--dangerously-bypass-approvals-and-sandbox",
+              "--config",
+              'approval_policy="never"',
+              "--config",
+              'web_search="disabled"'
+            ]),
         ...providerArgs
       ];
       const resumeArgs = [
         "--json",
-        "--dangerously-bypass-approvals-and-sandbox",
-        ...providerArgs,
-        "--config",
-        'approval_policy="never"',
-        "--config",
-        'web_search="disabled"'
+        ...(literatureChartScan
+          ? [
+              "--sandbox",
+              "read-only",
+              "--skip-git-repo-check",
+              "--ignore-rules",
+              "--ephemeral"
+            ]
+          : [
+              "--dangerously-bypass-approvals-and-sandbox",
+              "--config",
+              'approval_policy="never"',
+              "--config",
+              'web_search="disabled"'
+            ]),
+        ...providerArgs
       ];
       const resumeThreadId = session.resumeThreadId ?? session.threadId;
+      const runRoot = literatureImages.workspacePath ?? root;
+      const initialPrompt = buildInitialPrompt(session);
       const args = resumeThreadId
-        ? ["exec", "resume", ...resumeArgs, resumeThreadId, session.message]
-        : ["exec", ...commonArgs, "--cd", root, buildInitialPrompt(session)];
+        ? literatureChartScan
+          ? ["exec", "resume", ...resumeArgs, ...literatureImages.args, "--", resumeThreadId, session.message]
+          : ["exec", "resume", ...resumeArgs, resumeThreadId, session.message]
+        : literatureChartScan
+          ? ["exec", ...commonArgs, "--cd", runRoot, ...literatureImages.args, "--", initialPrompt]
+          : ["exec", ...commonArgs, "--cd", root, initialPrompt];
       const environment = {
         ...process.env,
         WORKBENCH_DATA_URL: workbenchDataUrl || DEFAULT_WORKBENCH_DATA_URL
@@ -120,7 +151,9 @@ function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataTok
         emit({ type: "session.resume_fallback", message: "原 Codex thread 无法恢复，改用任务上下文启动新 session" });
         return runCodexProcess({
           binary: config.binary,
-          args: ["exec", ...commonArgs, "--cd", root, buildSemanticResumePrompt(session)],
+          args: literatureChartScan
+            ? ["exec", ...commonArgs, "--cd", runRoot, ...literatureImages.args, "--", buildSemanticResumePrompt(session)]
+            : ["exec", ...commonArgs, "--cd", root, buildSemanticResumePrompt(session)],
           cwd: root,
           env: environment,
           timeoutSeconds: config.timeoutSeconds,
@@ -128,9 +161,52 @@ function createCodexProvider(config, manager, workbenchDataUrl, workbenchDataTok
           emit,
           signal
         });
+      } finally {
+        await literatureImages.cleanup();
       }
     }
   };
+}
+
+async function prepareLiteratureChartImages(session) {
+  const rawImages = session.context?.literatureChartScan === true && Array.isArray(session.context?.literatureChartImages)
+    ? session.context.literatureChartImages
+    : [];
+  if (rawImages.length === 0 && session.context?.literatureChartScan !== true) {
+    return { args: [], workspacePath: null, cleanup: async () => undefined };
+  }
+
+  const directory = await mkdtemp(path.join(os.tmpdir(), "codex-literature-chart-"));
+  const paths = [];
+  try {
+    for (const [index, value] of rawImages.slice(0, 8).entries()) {
+      if (!value || typeof value.dataUrl !== "string") continue;
+      const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)$/iu.exec(value.dataUrl);
+      if (!match) continue;
+      const bytes = Buffer.from(match[2], "base64");
+      if (bytes.length === 0 || bytes.length > 2 * 1024 * 1024) continue;
+      const extension = match[1].toLocaleLowerCase() === "image/jpeg"
+        ? ".jpg"
+        : match[1].toLocaleLowerCase() === "image/webp"
+          ? ".webp"
+          : ".png";
+      const pageNumber = Number.isInteger(value.page) && value.page > 0 ? value.page : index + 1;
+      const imagePath = path.join(directory, `pdf-page-${pageNumber}${extension}`);
+      await writeFile(imagePath, bytes);
+      paths.push(imagePath);
+    }
+    return {
+      args: paths.flatMap((imagePath) => ["--image", imagePath]),
+      workspacePath: directory,
+      cleanup: async () => rm(directory, { recursive: true, force: true }).catch(() => undefined)
+    };
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    throw new GatewayProviderError(
+      `文献图表预览准备失败：${error instanceof Error ? error.message : String(error)}`,
+      "literature_image_prepare_failed"
+    );
+  }
 }
 
 async function resolveRuntimeProxy(manager) {
@@ -284,10 +360,15 @@ function buildSemanticResumePrompt(session) {
     : "";
   return [
     "请继续执行下面的原始任务。原 Codex thread 无法跨账号恢复，因此这是一个新的 session；不要重复已经完成的工作。",
-    session.context?.fastWorkbench === true ? fastWorkbenchInstructions() : workbenchInstructions(),
+    session.context?.literatureChartScan === true
+      ? literatureChartScanInstructions()
+      : session.context?.fastWorkbench === true
+        ? fastWorkbenchInstructions()
+        : workbenchInstructions(),
     turns ? `此前对话：\n${turns}` : `当前任务：${session.message}`,
+    literatureChartPromptContext(session),
     "请先检查当前 worktree 状态，再从未完成的步骤继续。"
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
 }
 
 function runCodexProcess({ binary, args, cwd, env, timeoutSeconds, modelHint, emit, signal }) {
@@ -534,10 +615,25 @@ function textContent(value) {
 function buildInitialPrompt(session) {
   const history = historyPrompt(session);
   const task = history ? `${history}\n\n当前任务：\n${session.message}` : session.message;
-  const instructions = session.context?.fastWorkbench === true
-    ? fastWorkbenchInstructions(session.context)
-    : workbenchInstructions();
-  return `${instructions}\n\n${task}`;
+  const instructions = session.context?.literatureChartScan === true
+    ? literatureChartScanInstructions()
+    : session.context?.fastWorkbench === true
+      ? fastWorkbenchInstructions(session.context)
+      : workbenchInstructions();
+  return `${instructions}\n\n${task}${literatureChartPromptContext(session)}`;
+}
+
+function literatureChartPromptContext(session) {
+  if (session.context?.literatureChartScan !== true || !session.context?.paper) return "";
+  const imagePages = Array.isArray(session.context.literatureChartImages)
+    ? session.context.literatureChartImages
+        .map((image) => image && Number.isInteger(image.page) ? image.page : null)
+        .filter((page) => page !== null)
+    : [];
+  const imageHint = imagePages.length > 0
+    ? `\n附加页面图像按传入顺序对应 PDF 页码：${imagePages.join(", ")}。请直接查看这些图像。`
+    : "";
+  return `\n\n论文资料（JSON）：\n${JSON.stringify(session.context.paper)}${imageHint}`;
 }
 
 function fastWorkbenchInstructions(context = {}) {
@@ -554,6 +650,15 @@ function fastWorkbenchInstructions(context = {}) {
   }
   const hint = [context.fastWorkbenchKind, context.fastWorkbenchDate].filter(Boolean).join("，");
   return `${fastWorkbenchAgents}${hint ? `\n本次快速查询提示：${hint}。` : ""}`;
+}
+
+function literatureChartScanInstructions() {
+  return [
+    "这是一次只读的文献图表候选抽取任务，不是代码开发或 Workbench 数据查询。",
+    "论文标题、摘要、逐页 PDF 文本和 Figure/Table caption 已经直接放在当前任务中；如果收到附加的页面图像，直接查看图像核对布局、图表类型和表格结构；只使用这些输入，不要自行假设未提供的图片内容。",
+    "不要读取仓库根目录、AGENTS.md、README、源码或 Git 状态；不要执行 shell 命令，不要访问 Workbench 数据服务，不要创建、修改或删除任何文件。",
+    "直接分析当前任务中的论文资料，严格按照任务要求只返回 JSON 数组，不要返回 Markdown、分析过程或额外解释。"
+  ].join("\n");
 }
 
 function workbenchInstructions() {

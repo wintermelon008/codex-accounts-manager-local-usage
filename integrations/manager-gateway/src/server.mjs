@@ -1,6 +1,7 @@
 import http from "node:http";
 
 const MAX_BODY_BYTES = 1_000_000;
+const MAX_SESSION_BODY_BYTES = 8_000_000;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "quota_exhausted"]);
 
 export function createGatewayServer({ sessions, config, usage }) {
@@ -147,9 +148,9 @@ async function handleRequest(request, response, { sessions, config, usage }) {
   if (request.method === "POST" && url.pathname === "/v1/sessions") {
     let body;
     try {
-      body = await readJsonBody(request);
+      body = await readJsonBody(request, MAX_SESSION_BODY_BYTES);
     } catch {
-      sendJson(response, 400, { error: "session request must be valid JSON and no larger than 1 MB" }, config);
+      sendJson(response, 400, { error: "session request must be valid JSON and no larger than 8 MB" }, config);
       return;
     }
     let session;

@@ -36,6 +36,34 @@ describe("manager gateway Codex provider", () => {
     assert.doesNotMatch(prompt, /请先阅读仓库根目录 AGENTS\.md/u);
   });
 
+  it("uses a no-tools prompt for literature chart extraction", async () => {
+    const harness = await createHarness("success");
+    const provider = createProvider(harness.config);
+
+    await provider.run({
+      session: sessionFor(harness.root, {
+        mode: "research",
+        message: "只返回图表候选 JSON",
+        context: {
+          literatureChartScan: true,
+          paper: { title: "TeLLMe", pdf: { extractedText: "Figure 4: dataflow" } },
+          literatureChartImages: [{ page: 5, dataUrl: "data:image/png;base64,AA==" }]
+        }
+      }),
+      emit() {}
+    });
+    const [{ argv }] = await readInvocations(harness.logPath);
+    const prompt = argv.at(-1);
+    assert.match(prompt, /文献图表候选抽取/u);
+    assert.match(prompt, /逐页 PDF 文本和 Figure\/Table caption/u);
+    assert.match(prompt, /不要执行 shell 命令/u);
+    assert.match(prompt, /TeLLMe/u);
+    assert.ok(argv.includes("--image"));
+    assert.match(argv[argv.indexOf("--image") + 1], /codex-literature-chart/u);
+    assert.doesNotMatch(prompt, /请先阅读仓库根目录 AGENTS\.md/u);
+    assert.doesNotMatch(prompt, /WORKBENCH_DATA_URL/u);
+  });
+
   it("applies the current Manager HTTPS proxy to each Codex child process", async () => {
     const harness = await createHarness("success");
     const provider = createProvider(harness.config, {
