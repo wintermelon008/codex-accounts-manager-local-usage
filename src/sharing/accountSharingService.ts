@@ -53,6 +53,11 @@ const SHARING_HEALTH_FILE = "sharing-health.json";
 const SHARING_REQUEST_TIMEOUT_MS = 10_000;
 const SHARING_GET_RETRY_DELAYS_MS = [500, 1_500, 3_000] as const;
 const SHARING_REGISTRATION_VALIDATION_TTL_MS = 5 * 60 * 1_000;
+// A return is already durable in the Relay after the recipient's POST. Check
+// the owner acknowledgement a few times promptly so a second button click is
+// never needed just to trigger the next confirmation read. The regular
+// sharing poll remains the long-lived fallback after these targeted checks.
+const SHARING_RETURN_CONFIRMATION_RETRY_DELAYS_MS = [500, 1_500, 3_000, 5_000, 10_000] as const;
 
 type SwitchAway = (accountId: string) => Promise<boolean>;
 
@@ -83,6 +88,8 @@ export class AccountSharingService implements vscode.Disposable {
   private lastSyncAt: number | undefined;
   private lastSyncError: string | undefined;
   private localStatePath: string | undefined;
+  private readonly returnConfirmationTimers = new Map<string, NodeJS.Timeout>();
+  private readonly returnConfirmationAttempts = new Map<string, number>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -127,6 +134,11 @@ export class AccountSharingService implements vscode.Disposable {
       return;
     }
     void this.poll();
+    for (const lease of this.state?.leases ?? []) {
+      if (lease.direction === "incoming" && lease.state === "return_pending") {
+        this.scheduleReturnConfirmationPolling(lease.leaseId);
+      }
+    }
     this.pollTimer = setInterval(() => {
       void this.poll();
     }, SHARING_POLL_INTERVAL_MS);
@@ -140,6 +152,11 @@ export class AccountSharingService implements vscode.Disposable {
     }
     this.accountChangeSubscription?.dispose();
     this.accountChangeSubscription = undefined;
+    for (const timer of this.returnConfirmationTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.returnConfirmationTimers.clear();
+    this.returnConfirmationAttempts.clear();
   }
 
   getProfile(): SharingPublicProfile {
@@ -575,6 +592,7 @@ export class AccountSharingService implements vscode.Disposable {
     lease.returnReason = reason;
     await this.markLeaseAccounts(lease, "return_pending", targetIds);
     await this.persistState();
+    this.scheduleReturnConfirmationPolling(lease.leaseId);
     let transfer: SharingTransfer;
     try {
       transfer = await this.request<SharingTransfer>(
@@ -889,6 +907,66 @@ export class AccountSharingService implements vscode.Disposable {
     }
   }
 
+  private scheduleReturnConfirmationPolling(leaseId: string): void {
+    if (this.disposed || this.returnConfirmationTimers.has(leaseId)) {
+      return;
+    }
+    const lease = this.state?.leases?.find((candidate) => candidate.leaseId === leaseId);
+    if (!lease || lease.direction !== "incoming" || lease.state !== "return_pending") {
+      this.clearReturnConfirmationPolling(leaseId);
+      return;
+    }
+    const attempt = this.returnConfirmationAttempts.get(leaseId) ?? 0;
+    const delayMs = SHARING_RETURN_CONFIRMATION_RETRY_DELAYS_MS[attempt];
+    if (delayMs === undefined) {
+      return;
+    }
+    this.returnConfirmationAttempts.set(leaseId, attempt + 1);
+    const timer = setTimeout(() => {
+      this.returnConfirmationTimers.delete(leaseId);
+      void this.pollSingleReturnConfirmation(leaseId).catch((error: unknown) => {
+        console.warn(`[codexAccounts] targeted account return confirmation failed: ${describeError(error)}`);
+      });
+    }, delayMs);
+    this.returnConfirmationTimers.set(leaseId, timer);
+  }
+
+  private async pollSingleReturnConfirmation(leaseId: string): Promise<void> {
+    const lease = this.state?.leases?.find((candidate) => candidate.leaseId === leaseId);
+    if (!lease || lease.direction !== "incoming" || lease.state !== "return_pending") {
+      this.clearReturnConfirmationPolling(leaseId);
+      return;
+    }
+    try {
+      const before = JSON.stringify({ state: lease.state, accountIds: lease.accountIds });
+      const transfer = await this.request<SharingTransfer>(
+        `/v1/sharing/transfers/${encodeURIComponent(lease.transferId)}`
+      );
+      await this.applyIncomingReturnConfirmation(lease, transfer.ownerConfirmedAccountIds);
+      if (before !== JSON.stringify({ state: lease.state, accountIds: lease.accountIds })) {
+        await this.persistState();
+        this.onChanged();
+      }
+    } catch (error) {
+      console.warn(`[codexAccounts] targeted account return confirmation failed: ${describeError(error)}`);
+    }
+    const current = this.state?.leases?.find((candidate) => candidate.leaseId === leaseId);
+    if (current?.direction === "incoming" && current.state === "return_pending") {
+      this.scheduleReturnConfirmationPolling(leaseId);
+    } else {
+      this.clearReturnConfirmationPolling(leaseId);
+    }
+  }
+
+  private clearReturnConfirmationPolling(leaseId: string): void {
+    const timer = this.returnConfirmationTimers.get(leaseId);
+    if (timer) {
+      clearTimeout(timer);
+      this.returnConfirmationTimers.delete(leaseId);
+    }
+    this.returnConfirmationAttempts.delete(leaseId);
+  }
+
   private async pollSentTransfers(): Promise<boolean> {
     let changed = false;
     const response = await this.request<{ transfers: SharingTransfer[] }>("/v1/sharing/transfers/sent");
@@ -1133,6 +1211,7 @@ export class AccountSharingService implements vscode.Disposable {
     if (lease.accountIds.length === 0) {
       lease.state = "returned";
       lease.returnedAt = this.now();
+      this.clearReturnConfirmationPolling(lease.leaseId);
     } else {
       lease.state = "return_pending";
     }
