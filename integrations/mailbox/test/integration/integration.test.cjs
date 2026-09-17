@@ -334,7 +334,7 @@ test("registration assistant starts the GPT-only route without OAuth and queries
     },
     async openRegistrationBrowser(options) {
       browserOptions = options;
-      return { opened: true };
+      return { opened: true, incognito: true };
     }
   };
   const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
@@ -350,7 +350,7 @@ test("registration assistant starts the GPT-only route without OAuth and queries
   assert.equal(session.importCodex, false);
   assert.equal(session.mode, "manual-browser");
   assert.equal(oauthCalls, 0);
-  assert.deepEqual(browserOptions, { clipboardText: "gpt-only@example.com" });
+  assert.deepEqual(browserOptions, { clipboardText: "gpt-only@example.com", incognito: true });
   await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.emailCode?.phase === "received");
   assert.equal(queryCalls, 1);
   assert.equal(integration.registrationManager.getSessionState(sessionId).emailCode.code, "246810");
@@ -644,7 +644,7 @@ test("mailbox deletion exposes an undo action that restores the mailbox", async 
   integration.dispose();
 });
 
-test("default integration registers the built-in 8t92, boya, cdns and tototo-icloud providers", async () => {
+test("default integration registers the built-in remote and local Outlook providers", async () => {
   const vscode = createVscode();
   const context = createContext();
   const api = { registerDashboardIntegration() { return { dispose() {} }; } };
@@ -652,8 +652,9 @@ test("default integration registers the built-in 8t92, boya, cdns and tototo-icl
   await integration.initialize();
 
   const providers = await integration.getPanelState();
-  assert.deepEqual(providers.providers.map((provider) => provider.id), ["8t92", "boya", "cdns", "tototo-icloud"]);
+  assert.deepEqual(providers.providers.map((provider) => provider.id), ["8t92", "outlook-local", "boya", "cdns", "tototo-icloud"]);
   assert.equal(providers.providers.find((provider) => provider.id === "8t92").displayName, "tototo-outlook");
+  assert.equal(providers.providers.find((provider) => provider.id === "outlook-local").capabilities.manualRenewal, true);
   assert.equal(providers.providers.find((provider) => provider.id === "boya").displayName, "boya");
   assert.equal(providers.providers.find((provider) => provider.id === "cdns").displayName, "cdns");
   integration.dispose();

@@ -276,17 +276,20 @@ class RegistrationSession {
       feedback: "正在打开 GPT 注册网页；邮箱、密码、手机号、验证码和最终确认均由你在网页中手动完成。",
       feedbackLevel: "info",
     });
-    const result = await this.openRegistrationBrowser({ clipboardText: this.email });
+    const result = await this.openRegistrationBrowser({ clipboardText: this.email, incognito: true });
     if (this.cancelRequested || [STATES.CANCELLED, STATES.COMPLETED].includes(this.state)) {
       return;
     }
     if (!result || result.opened !== true) {
       throw new Error("GPT 注册网页未能打开");
     }
+    const browserFeedback = result.incognito === true
+      ? "已打开无痕 GPT 注册网页。已自动查询一次邮箱验证码；取号和接码仍由下方按钮手动控制，网页注册完成后点击“完成 GPT 注册”。"
+      : "GPT 注册网页已打开，但当前环境未确认无痕模式；请手动确认浏览器处于无痕/隐私窗口。已自动查询一次邮箱验证码；取号和接码仍由下方按钮手动控制，网页注册完成后点击“完成 GPT 注册”。";
     this.setState(STATES.AWAITING_MANUAL_REGISTRATION, {
       browserOpened: true,
-      feedback: "GPT 注册网页已打开。已自动查询一次邮箱验证码；取号和接码仍由下方按钮手动控制，网页注册完成后点击“完成 GPT 注册”。",
-      feedbackLevel: "success",
+      feedback: browserFeedback,
+      feedbackLevel: result.incognito === true ? "success" : "warning",
     });
     this.log("ok", "已打开 GPT 注册网页，等待用户手动完成");
   }

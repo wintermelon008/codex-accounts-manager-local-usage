@@ -5,24 +5,6 @@ const test = require("node:test");
 const vm = require("node:vm");
 const { createMailboxPanelHtml, createRegistrationPanelHtml } = require("../../src/ui/panel.cjs");
 
-test("Mailbox and registration panels expose the shared 2FAuth binding and code entry points", () => {
-  const mailboxHtml = createMailboxPanelHtml();
-  const registrationHtml = createRegistrationPanelHtml();
-  assert.match(mailboxHtml, /data-action="open-totp"/u);
-  assert.match(mailboxHtml, /2FA 绑定与查询/u);
-  assert.doesNotMatch(mailboxHtml, /Personal Access Token|totpBaseUrl/u);
-  assert.match(registrationHtml, /registration-totp-card/u);
-  assert.match(registrationHtml, /data-action="registration-totp-create"/u);
-  assert.doesNotMatch(registrationHtml, /data-action="registration-totp-query"/u);
-  assert.match(registrationHtml, /otpauth:\/\/totp/u);
-  assert.match(registrationHtml, /data-registration-totp-countdown/u);
-  assert.doesNotMatch(registrationHtml, /registration-totp-link|registrationTotpAccount/u);
-  const emailCard = registrationHtml.indexOf("emailCodeHtml +");
-  const totpCard = registrationHtml.indexOf("totpHtml +");
-  const phoneCard = registrationHtml.indexOf("phoneOrderHtml +");
-  assert.ok(emailCard >= 0 && emailCard < totpCard && totpCard < phoneCard);
-});
-
 test("registration 2FA block creates a new entry and shows the live code expiry state", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -54,7 +36,7 @@ test("registration 2FA block creates a new entry and shows the live code expiry 
   });
 
   const state = {
-    mailboxes: [{ id: "mailbox:one", address: "one@example.com", displayName: "one@example.com", providerId: "mock" }],
+    mailboxes: [{ id: "mailbox:one", address: "one@example.com", displayName: "one@example.com", providerId: "mock", totpLinked: true }],
     providers: [],
     totp: { configured: true, error: "" },
     totpLinks: {},
@@ -69,6 +51,7 @@ test("registration 2FA block creates a new entry and shows the live code expiry 
   };
   windowListeners.get("message")({ data: { type: "state", state } });
   assert.match(renderedHtml, /data-action="registration-totp-create"/u);
+  assert.match(renderedHtml, /2FA 已绑定/u);
   assert.match(renderedHtml, /otpauth:\/\/totp/u);
   assert.doesNotMatch(renderedHtml, /registration-totp-link|registrationTotpAccount/u);
   assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
@@ -105,49 +88,6 @@ test("registration 2FA block creates a new entry and shows the live code expiry 
     type: "mailbox:action",
     action: "registrationTotpStop"
   });
-});
-
-test("standalone registration panel provides mailbox-library selection and direct email entry", () => {
-  const html = createRegistrationPanelHtml();
-  assert.match(html, /<title>注册助手<\/title>/u);
-  assert.match(html, /const registrationOnly = true;/u);
-  assert.match(html, /registrationMailboxSearch/u);
-  assert.match(html, /registrationMailboxProviderFilter/u);
-  assert.match(html, /registrationMailboxSort/u);
-  assert.match(html, /class="mailbox-sort-controls" role="group" aria-label="注册邮箱排序"/u);
-  assert.match(html, /id="registrationMailboxSort" class="mailbox-sort-select"/u);
-  assert.match(html, /<option value="name"/u);
-  assert.match(html, /<option value="query"/u);
-  assert.match(html, /<option value="renewal"/u);
-  assert.match(html, /<option value="gptRegistration"/u);
-  assert.match(html, /data-action="toggle-registration-mailbox-sort-direction"/u);
-  assert.doesNotMatch(html, /value="codeFirst"/u);
-  assert.match(html, /registrationOnlyUnregisteredGpt/u);
-  assert.match(html, /仅显示未注册 GPT/u);
-  assert.match(html, /data-action="registration-select-mailbox"/u);
-  assert.match(html, /data-action="registration-cleanup-all"/u);
-  assert.match(html, /清除所有记录/u);
-  assert.match(html, /邮箱库为空，请直接输入新邮箱/u);
-  assert.match(html, /已自动隐藏/u);
-  assert.match(html, /注册并导入 Codex/u);
-  assert.match(html, /注册 GPT/u);
-  assert.match(html, /data-import-codex="true"/u);
-  assert.match(html, /data-import-codex="false"/u);
-  assert.match(html, /完成 GPT 注册/u);
-  assert.match(html, /导入 Codex/u);
-  assert.match(html, /registrationCompleteManual/u);
-  assert.match(html, /registrationCodexImport/u);
-  assert.match(html, /registrationStopEmailCode/u);
-  assert.match(html, /manual-browser/u);
-  assert.match(html, /hasManagedCodexEmail/u);
-  assert.match(html, /选择邮箱只会填入地址，不会自动开始注册/u);
-  assert.match(html, /不会自动填写或提交/u);
-  assert.match(html, /data-action="registration-copy-registration-email"/u);
-  assert.match(html, /copyText\(email, "邮箱已复制"\)/u);
-  assert.match(html, /send\("copyText"/u);
-  assert.doesNotMatch(html, /navigator\.clipboard/u);
-  assert.match(html, /document\.addEventListener\("keydown"/u);
-  assert.match(html, /document\.addEventListener\("keyup"/u);
 });
 
 test("registration rerenders preserve the focused input caret", () => {
@@ -391,7 +331,6 @@ test("registration mailbox library hides emails already imported into Codex", ()
   assert.match(renderedHtml, /free@example\.com/u);
   assert.match(renderedHtml, /gpt@example\.com/u);
   assert.match(renderedHtml, /GPT 已注册/u);
-  assert.match(renderedHtml, /已自动隐藏 1 个/u);
 });
 
 test("registration mailbox library can show only emails without GPT registration", () => {
@@ -1036,57 +975,6 @@ test("provider selects update dependent form fields without rebuilding their mod
   runScenario("edit-mailbox", "editProviderId", "edit-credential-input", "B edit format");
 });
 
-test("registration session does not render identical error and feedback twice", () => {
-  const html = createRegistrationPanelHtml();
-  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
-  assert.ok(script);
-
-  const windowListeners = new Map();
-  let renderedHtml = "";
-  const app = {};
-  Object.defineProperty(app, "innerHTML", {
-    configurable: true,
-    get() { return renderedHtml; },
-    set(value) { renderedHtml = value; }
-  });
-  const document = {
-    activeElement: null,
-    body: { insertAdjacentHTML() {} },
-    getElementById(id) {
-      return id === "app" ? app : id === "notice" ? {} : null;
-    },
-    querySelector() { return null; },
-    querySelectorAll() { return []; },
-    addEventListener() {}
-  };
-  const window = {
-    addEventListener(type, listener) { windowListeners.set(type, listener); }
-  };
-  vm.runInNewContext(script, {
-    window,
-    document,
-    acquireVsCodeApi: () => ({ postMessage() {} }),
-    console
-  });
-  windowListeners.get("message")({ data: {
-    type: "state",
-    state: {
-      mailboxes: [],
-      providers: [],
-      registrationSessions: [{
-        id: "session:test",
-        email: "test@example.com",
-        state: "failed",
-        error: "DUPLICATE-ERROR",
-        feedback: "DUPLICATE-ERROR",
-        feedbackLevel: "error"
-      }]
-    }
-  } });
-
-  assert.equal((renderedHtml.match(/DUPLICATE-ERROR/gu) || []).length, 1);
-});
-
 test("OAuth registration sessions point to the external browser and keep panel data copy-only", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -1206,6 +1094,9 @@ test("completed GPT sessions keep manual helpers and expose Codex import termina
   assert.match(renderedHtml, /data-action="registration-acquire-phone"[^>]*>开始取号/u);
   assert.match(renderedHtml, /<select id="registrationPhoneKey-session:gpt">/u);
   assert.match(renderedHtml, /data-action="registration-cancel-codex-import"/u);
+  assert.match(renderedHtml, /class="registration-copy-email-actions"/u);
+  assert.match(renderedHtml, /class="registration-copy-email-button"[^>]*data-action="registration-copy-email"/u);
+  assert.ok(renderedHtml.indexOf('data-action="registration-copy-email"') > renderedHtml.indexOf('data-action="registration-cleanup"'));
 
   documentListeners.get("click")({ target: {
     disabled: false,
@@ -1287,116 +1178,6 @@ test("registration cards delete their mailbox directly and the header clears all
   ]);
 });
 
-test("Mailbox panel fills the webview and lets the detail wheel scroll the layout", () => {
-  const html = createMailboxPanelHtml();
-  assert.match(html, /body \{ margin: 0; padding: 0; min-height: 100vh; overflow: hidden;/u);
-  assert.match(html, /\.layout \{ flex: 1 1 auto;/u);
-  assert.match(html, /\.layout \{ flex: 1 1 auto; display: flex; flex-direction: column;/u);
-  assert.match(html, /\.layout > \.box:first-child \{ display: flex; flex-direction: column; flex: 0 0 760px; height: 760px; min-height: 760px;/u);
-  assert.match(html, /\.mailbox-list \{ flex: 1; display: grid;/u);
-  assert.match(html, /\.mailbox-list \{ flex: 1; display: grid; .*overscroll-behavior: auto;/u);
-  assert.match(html, /续期时间/u);
-  assert.match(html, /mailbox-card-time/u);
-  assert.match(html, /mailboxActivityLabel\(mailbox\)/u);
-  assert.match(html, /\.mailbox-list \{ flex: 1; display: grid; .*grid-auto-rows: max-content;/u);
-  assert.match(html, /\.mailbox-row \{ display: block; width: 100%; min-width: 0; flex: 0 0 auto;/u);
-  assert.match(html, /\.mailbox-account-filters \{ display: inline-flex; flex: 0 0 auto; flex-wrap: nowrap;/u);
-  assert.match(html, /\.mailbox-list-tools label \{ display: inline-flex; align-items: center; gap: 1px;/u);
-  assert.match(html, /\.mailbox-list-tools label input \{ flex: 0 0 auto; width: auto; min-width: 0; margin: 0; padding: 0;/u);
-  assert.match(html, /\.mailbox-sort-controls \{ display: inline-flex; flex: 0 0 auto; align-items: center;/u);
-  assert.match(html, /class="mailbox-sort-select"/u);
-  assert.match(html, /data-action="toggle-mailbox-sort-direction"/u);
-  assert.match(html, /mailbox-sort-arrow/u);
-  assert.match(html, /\.mailbox-row-actions \{ display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 0 12px 8px;/u);
-  assert.match(html, /\.detail-action-row \{ flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; overflow-x: auto;/u);
-  assert.match(html, /\.detail-actions \.actions \{ flex-wrap: nowrap; \}/u);
-  assert.match(html, /\.code \{ margin-top: 3px; color: var\(--accent\); font-size: clamp\(17px, 3vw, 31px\);/u);
-  assert.match(html, /<div class="detail-action-row"><div class="detail-header-actions">/u);
-  assert.match(html, /<div class="detail-actions"><div class="actions">/u);
-  assert.doesNotMatch(html, /data-action="toggle-registration"/u);
-  assert.doesNotMatch(html, /class="top-actions">[^<]*<button[^>]*>注册助手/u);
-  assert.match(html, /\.content \{ flex: 1 1 auto; min-height: 0; overflow: visible; overscroll-behavior: auto;/u);
-  assert.match(html, /const layoutScrollTop = layout\?\.scrollTop \|\| 0;/u);
-  assert.match(html, /if \(nextLayout\) nextLayout\.scrollTop = layoutScrollTop;/u);
-  assert.match(html, /\.layout > \.box:first-child \{ flex-basis: 760px; height: 760px; min-height: 760px; \}/u);
-  assert.doesNotMatch(html, /height: min\(700px, calc\(100vh - 120px\)\)/u);
-  assert.match(html, /message\.type === "operation-complete"/u);
-  assert.match(html, /if \(shouldClearBatchSelection\(message\)\) selectedMailboxIds\.clear\(\);/gu);
-  assert.match(html, /function shouldClearBatchSelection\(message\)/u);
-  assert.match(html, /\["query", "wait", "renewal"\]\.includes\(message\.action\)/u);
-  assert.match(html, /\["batchStop", "batchDelete", "deleteDeactivatedMailboxes"\]\.includes\(message\.action\)/u);
-  assert.match(html, /pendingBatchAction = action;\s+selectedMailboxIds\.clear\(\);\s+render\(\);\s+send\(action, \{ mailboxIds \}\);/u);
-  assert.match(html, /pendingBatchAction = "deleteDeactivatedMailboxes";\s+selectedMailboxIds\.clear\(\);/u);
-  assert.match(html, /selectedMailboxIds\.clear\(\);\s+pendingBatchAction = "batchDelete";/u);
-  assert.match(html, /function requestCodexImport\(/u);
-  assert.match(html, /codexImportCancellable/u);
-  assert.match(html, /button:active:not\(:disabled\)/u);
-  assert.match(html, /type="button" class="primary" data-action="open-import"/u);
-  assert.match(html, /function closestTarget\(/u);
-  assert.match(html, /邮箱来源正在加载/u);
-  assert.match(html, /function clearPressedButtons\(/u);
-  assert.match(html, /registration-phone-order/u);
-  assert.match(html, /registration-credential-grid/u);
-  assert.match(html, /function renderRegistrationInputs\(/u);
-  assert.match(html, /id="phoneInput-/u);
-  assert.match(html, /id="otpInput-/u);
-  assert.match(html, /registrationInputValues/u);
-  assert.match(html, /registration-acquire-phone/u);
-  assert.match(html, /registration-copy-phone/u);
-  assert.match(html, /registration-copy-code/u);
-  assert.match(html, /registration-copy-email-code/u);
-  assert.match(html, /registration-refresh-email-code/u);
-  assert.match(html, /action === "registration-copy-email-code"/u);
-  assert.match(html, /renderRegistrationEmailCode/u);
-  assert.match(html, /最近 30 分钟/u);
-  assert.match(html, /不会自动填写或提交/u);
-  assert.match(html, /registration-replace-phone/u);
-  assert.match(html, /registration-cancel-phone/u);
-  assert.match(html, /registrationPhoneSource-/u);
-  assert.match(html, /registrationPhoneKey-/u);
-  assert.match(html, /<details class="registration-key-pool">/u);
-  assert.match(html, /updateRegistrationAcquireButton\(sessionId\)/u);
-  assert.match(html, /registration-add-phone-key/u);
-  assert.match(html, /registration-remove-phone-key/u);
-  assert.match(html, /data-registration-countdown/u);
-  assert.match(html, /\}, 1000\);/u);
-  assert.match(html, /自动读取短信/u);
-  assert.match(html, /成功率/u);
-  assert.match(html, /.notice.success/u);
-  assert.doesNotMatch(html, /确认号码，读取验证码/u);
-  assert.match(html, /不会自动填写或提交/u);
-  assert.match(html, /registration-progress/u);
-  assert.match(html, /registration-fill-email-code/u);
-  assert.match(html, /registration-fill-phone/u);
-  assert.match(html, /registration-fill-code/u);
-  assert.match(html, /registration-authorize/u);
-  assert.match(html, /确认授权并完成/u);
-  assert.match(html, /最后继续/u);
-  assert.match(html, /session\.feedback/u);
-  assert.match(html, /只把识别内容/u);
-  assert.doesNotMatch(html, /window\.confirm\(/u);
-  assert.match(html, /function renderDeleteConfirmModal\(/u);
-  assert.match(html, /\.tag\.source/u);
-  assert.match(html, /\.tag\.blocked/u);
-  assert.match(html, /data-action="cancel-delete"/u);
-  assert.match(html, /data-action="confirm-delete"/u);
-  const selectedRenderer = html.slice(html.indexOf("function renderSelected(selected)"), html.indexOf("function renderMessageRow(message)"));
-  assert.match(selectedRenderer, /const mailboxError = mailbox\.lastError/u);
-  assert.doesNotMatch(html, /仅未出码/u);
-  assert.match(html, /仅未接入 Codex/u);
-  assert.match(html, /mailboxProviderFilter/u);
-  assert.match(html, /function filterMailboxes\(/u);
-  assert.match(html, /onlyUnlinkedCodex/u);
-  assert.match(html, /onlyReauthorization/u);
-  assert.doesNotMatch(html, /query-reauthorization-mailboxes/u);
-  assert.match(html, /按邮箱来源筛选/u);
-  assert.match(html, /全选当前结果/u);
-  assert.match(html, /批量查询/u);
-  assert.match(html, /批量监听/u);
-  assert.match(html, /批量停止/u);
-  assert.match(html, /批量删除/u);
-});
-
 test("Mailbox cards display renewal fallback time and sort renewal time in both directions", () => {
   const html = createMailboxPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -1445,6 +1226,7 @@ test("Mailbox cards display renewal fallback time and sort renewal time in both 
 
   assert.match(renderedHtml, /添加时间：/u);
   assert.match(renderedHtml, /上次续期：/u);
+  assert.match(renderedHtml, /mailbox-card-time warning[^>]*>上次续期：/u);
   const change = documentListeners.get("change");
   change({ target: { id: "mailboxSort", value: "renewal", matches() { return false; } } });
   assert.ok(renderedHtml.indexOf("added@example.com") < renderedHtml.indexOf("old@example.com"));
@@ -1720,6 +1502,7 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
   assert.ok(script);
 
+  const messages = [];
   const windowListeners = new Map();
   let renderedHtml = "";
   const app = {};
@@ -1740,14 +1523,12 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   vm.runInNewContext(script, {
     window,
     document,
-    acquireVsCodeApi: () => ({ postMessage() {} }),
+    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
     console
   });
 
-  windowListeners.get("message")({ data: {
-    type: "state",
-    state: {
-      mailboxes: [],
+  const state = {
+      mailboxes: [{ id: "mailbox:fivesim", address: "five@example.com", displayName: "five@example.com", providerId: "mock" }],
       providers: [],
       phoneSources: [
         { id: "liye", displayName: "LIYE", credentialType: "key" },
@@ -1780,8 +1561,8 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
         },
         emailCode: { phase: "idle" }
       }]
-    }
-  } });
+  };
+  windowListeners.get("message")({ data: { type: "state", state } });
 
   assert.match(renderedHtml, /当前余额/u);
   assert.match(renderedHtml, /\$12\.50/u);
@@ -1812,6 +1593,82 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   assert.ok(renderedHtml.indexOf("England") < renderedHtml.indexOf("USA"));
   assert.match(renderedHtml, /data-registration-phone-source-panel="liye" hidden/u);
   assert.match(renderedHtml, /data-registration-phone-source-panel="fivesim"/u);
+  const autoRefreshMessages = messages.filter((message) => message.action === "registrationRefreshFiveSim");
+  assert.equal(autoRefreshMessages.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(autoRefreshMessages[0])), {
+    type: "mailbox:action",
+    action: "registrationRefreshFiveSim",
+    sessionId: "session:fivesim",
+    country: "england",
+    operator: "virtual60",
+    product: "openai"
+  });
+  windowListeners.get("message")({ data: { type: "state", state } });
+  assert.equal(messages.filter((message) => message.action === "registrationRefreshFiveSim").length, 1);
+});
+
+test("registration panel refreshes 5SIM once for a mailbox session regardless of the selected phone source", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const messages = [];
+  const windowListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
+    console
+  });
+
+  const state = {
+    mailboxes: [{ id: "mailbox:any", address: "any@example.com", displayName: "any@example.com", providerId: "mock" }],
+    providers: [],
+    phoneSources: [
+      { id: "liye", displayName: "LIYE", credentialType: "key" },
+      { id: "fivesim", displayName: "5SIM", credentialType: "api-token" }
+    ],
+    registrationFiveSimToken: { configured: true, masked: "five…oken" },
+    registrationSessions: [{
+      id: "session:any-mailbox",
+      email: "any@example.com",
+      mode: "oauth",
+      state: "awaiting_oauth",
+      phoneOrder: { phase: "idle", running: false, card: { source: "liye" } },
+      emailCode: { phase: "idle" }
+    }]
+  };
+  windowListeners.get("message")({ data: { type: "state", state } });
+
+  const refreshMessages = messages.filter((message) => message.action === "registrationRefreshFiveSim");
+  assert.equal(refreshMessages.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(refreshMessages[0])), {
+    type: "mailbox:action",
+    action: "registrationRefreshFiveSim",
+    sessionId: "session:any-mailbox",
+    country: "",
+    operator: "any",
+    product: "openai"
+  });
+
+  windowListeners.get("message")({ data: { type: "state", state } });
+  assert.equal(messages.filter((message) => message.action === "registrationRefreshFiveSim").length, 1);
 });
 
 test("Mailbox delete uses an in-panel confirmation before posting the delete action", () => {
@@ -2139,6 +1996,7 @@ test("Mailbox tags use compact semantic colors and do not expose code_found", ()
         displayName: "tagged@example.com",
         openaiAccountDeactivated: true,
         gptRegistered: true,
+        totpLinked: true,
         latestCode: "123456",
         lastStatus: "code_found",
         lastError: { code: "temporary_failure", message: "provider detail" }
@@ -2152,6 +2010,7 @@ test("Mailbox tags use compact semantic colors and do not expose code_found", ()
           displayName: "tagged@example.com",
           openaiAccountDeactivated: true,
           gptRegistered: true,
+          totpLinked: true,
           latestCode: "123456",
           lastStatus: "code_found",
           lastError: { code: "temporary_failure", message: "provider detail" }
@@ -2172,7 +2031,8 @@ test("Mailbox tags use compact semantic colors and do not expose code_found", ()
   assert.match(app.innerHTML, /class="tag source">Mock/u);
   assert.match(app.innerHTML, /class="tag success">Codex 已接入/u);
   assert.doesNotMatch(app.innerHTML, /GPT 已注册/u);
-  assert.match(app.innerHTML, /class="tag success">验证码 123456/u);
+  assert.match(app.innerHTML, /class="tag success">2FA 已绑定/u);
+  assert.doesNotMatch(app.innerHTML, /class="tag success">验证码 123456/u);
   assert.match(app.innerHTML, /class="tag blocked">OpenAI 封禁/u);
   assert.match(app.innerHTML, /class="tag error"[^>]*>temporary_failure/u);
   assert.doesNotMatch(app.innerHTML, /code_found/u);

@@ -104,9 +104,10 @@ class MailboxPool {
     const accounts = includeDisabled
       ? this.metadata.accounts
       : this.metadata.accounts.filter((account) => account.enabled !== false);
+    const secrets = await readStoreValues(this.secretStore, accounts.map((account) => secretKey(account.id)));
     const result = [];
     for (const metadata of accounts) {
-      const account = await this.readAccount(metadata.id);
+      const account = readAccountFromSecret(metadata, secrets.get(secretKey(metadata.id)));
       if (account) {
         result.push(account);
       }
@@ -224,6 +225,74 @@ class MailboxPool {
     });
   }
 
+  async recordQueryResults(entries, { credentialRefreshes = [] } = {}) {
+    const normalizedEntries = normalizeQueryResultEntries(entries);
+    if (normalizedEntries.length === 0) return [];
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const normalizedRefreshes = normalizeCredentialRefreshEntries(credentialRefreshes);
+      const secretUpdates = [];
+      for (const entry of normalizedRefreshes) {
+        const metadata = this.requireMetadata(entry.id);
+        const normalized = normalizeImportedEntry(entry.account);
+        if (normalized.address.toLowerCase() !== metadata.address.toLowerCase()) {
+          throw new Error("Provider credential refresh changed the mailbox address");
+        }
+        secretUpdates.push([
+          secretKey(entry.id),
+          JSON.stringify({ providerId: metadata.providerId, address: metadata.address, credentials: normalized.credentials })
+        ]);
+        const timestamp = this.now();
+        metadata.updatedAt = timestamp;
+        metadata.lastRenewalAt = timestamp;
+        metadata.lastStatus = "renewed";
+        metadata.lastError = undefined;
+      }
+      const detailKeys = normalizedEntries.map((entry) => detailKey(entry.id));
+      const previousDetails = await readStoreValues(this.metadataStore, detailKeys);
+      const detailUpdates = [];
+      const updated = [];
+
+      for (const entry of normalizedEntries) {
+        const metadata = this.requireMetadata(entry.id);
+        const result = entry.result || {};
+        const timestamp = this.now();
+        metadata.lastQueryAt = timestamp;
+        metadata.updatedAt = timestamp;
+        metadata.lastStatus = result.ok ? (result.codes?.length ? "code_found" : "ready") : "error";
+        metadata.lastError = result.ok ? undefined : sanitizeError(result.error);
+        if (result.ok) {
+          const fetchedMessages = normalizeStoredMessages(result.messages);
+          const previousDetail = previousDetails.get(detailKey(entry.id));
+          const messages = mergeStoredMessages(fetchedMessages, previousDetail?.messages);
+          metadata.openaiAccountDeactivated =
+            metadata.openaiAccountDeactivated === true || messages.some(isOpenAiAccountDeactivatedMessage);
+          metadata.firstOpenAiEmailAt = mergeFirstOpenAiEmailAt(metadata.firstOpenAiEmailAt, findFirstOpenAiEmailAt(messages));
+          metadata.latestCode = firstCode(result.codes, fetchedMessages);
+          metadata.latestMessage = fetchedMessages[0] ? summarizeMessage(fetchedMessages[0]) : undefined;
+          metadata.messageCount = messages.length;
+          if (entry.historyMode === "latest" || entry.historyMode === "recent") {
+            metadata.historyMode = entry.historyMode;
+          }
+          detailUpdates.push([detailKey(entry.id), {
+            mailboxId: entry.id,
+            providerId: metadata.providerId,
+            fetchedAt: result.fetchedAt ?? new Date(timestamp).toISOString(),
+            codes: normalizeCodes(result.codes),
+            messages
+          }]);
+        }
+        updated.push(sanitizeMetadata(metadata));
+      }
+
+      await updateStoreValues(this.secretStore, secretUpdates);
+      await updateStoreValues(this.metadataStore, detailUpdates);
+      await this.persistMetadata();
+      return updated;
+    });
+  }
+
   async recordRenewalResult(id, result) {
     return this.enqueueMetadataOperation(async () => {
       await this.loadFromStore();
@@ -258,6 +327,42 @@ class MailboxPool {
 
       await this.persistMetadata();
       return sanitizeMetadata(metadata);
+    });
+  }
+
+  async recordCredentialRefresh(id, account) {
+    const [updated] = await this.recordCredentialRefreshes([{ id, account }]);
+    return updated;
+  }
+
+  async recordCredentialRefreshes(entries) {
+    const normalizedEntries = normalizeCredentialRefreshEntries(entries);
+    if (normalizedEntries.length === 0) return [];
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const secretUpdates = [];
+      const updated = [];
+      for (const entry of normalizedEntries) {
+        const metadata = this.requireMetadata(entry.id);
+        const normalized = normalizeImportedEntry(entry.account);
+        if (normalized.address.toLowerCase() !== metadata.address.toLowerCase()) {
+          throw new Error("Provider credential refresh changed the mailbox address");
+        }
+        const timestamp = this.now();
+        secretUpdates.push([
+          secretKey(entry.id),
+          JSON.stringify({ providerId: metadata.providerId, address: metadata.address, credentials: normalized.credentials })
+        ]);
+        metadata.updatedAt = timestamp;
+        metadata.lastRenewalAt = timestamp;
+        metadata.lastStatus = "renewed";
+        metadata.lastError = undefined;
+        updated.push(sanitizeMetadata(metadata));
+      }
+      await updateStoreValues(this.secretStore, secretUpdates);
+      await this.persistMetadata();
+      return updated;
     });
   }
 
@@ -301,16 +406,22 @@ class MailboxPool {
         if (!provider || provider.id !== nextProviderId || typeof provider.parseImport !== "function") {
           throw new Error("Mailbox provider is unavailable for credential editing");
         }
-        if (!replacement) {
-          throw new Error("切换邮箱来源 / 格式时必须填写凭据");
+        let normalized;
+        if (replacement) {
+          const parsed = provider.parseImport(replacement);
+          const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
+          const failed = Array.isArray(parsed?.failed) ? parsed.failed : [];
+          if (failed.length > 0 || entries.length !== 1) {
+            throw new Error("替换凭据时必须提供一行有效的邮箱来源格式");
+          }
+          normalized = normalizeImportedEntry(entries[0]);
+        } else {
+          const current = await this.readAccount(id);
+          normalized = migrateStoredCredentials(metadata.providerId, nextProviderId, current);
+          if (!normalized) {
+            throw new Error("切换邮箱来源 / 格式时必须填写凭据；当前仅支持从 tototo-outlook 自动迁移到 Outlook（本地 OAuth）");
+          }
         }
-        const parsed = provider.parseImport(replacement);
-        const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
-        const failed = Array.isArray(parsed?.failed) ? parsed.failed : [];
-        if (failed.length > 0 || entries.length !== 1) {
-          throw new Error("替换凭据时必须提供一行有效的邮箱来源格式");
-        }
-        const normalized = normalizeImportedEntry(entries[0]);
         if (normalized.address.toLowerCase() !== metadata.address.toLowerCase()) {
           throw new Error("编辑凭据不能更改邮箱地址；如需新增地址，请重新导入");
         }
@@ -473,25 +584,7 @@ class MailboxPool {
       return undefined;
     }
     const raw = await this.secretStore.get(secretKey(id));
-    if (typeof raw !== "string") {
-      return undefined;
-    }
-    try {
-      const stored = JSON.parse(raw);
-      const credentials = stored?.credentials && typeof stored.credentials === "object"
-        ? stored.credentials
-        : stored;
-      return {
-        id,
-        providerId: metadata.providerId,
-        enabled: metadata.enabled !== false,
-        address: metadata.address,
-        displayName: metadata.displayName,
-        credentials: { ...credentials }
-      };
-    } catch {
-      return undefined;
-    }
+    return readAccountFromSecret(metadata, raw);
   }
 
   async persistMetadata() {
@@ -520,12 +613,103 @@ class MailboxPool {
   }
 }
 
+function readAccountFromSecret(metadata, raw) {
+  if (!metadata || typeof raw !== "string") {
+    return undefined;
+  }
+  try {
+    const stored = JSON.parse(raw);
+    const credentials = stored?.credentials && typeof stored.credentials === "object"
+      ? stored.credentials
+      : stored;
+    return {
+      id: metadata.id,
+      providerId: metadata.providerId,
+      enabled: metadata.enabled !== false,
+      address: metadata.address,
+      displayName: metadata.displayName,
+      credentials: { ...credentials }
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeImportedEntry(entry) {
   if (!entry || typeof entry !== "object") {
     throw new TypeError("Mailbox import entry must be an object");
   }
   const normalized = normalizeMailboxAccount({ address: entry.address ?? entry.email, credentials: entry.credentials });
   return normalized;
+}
+
+function normalizeQueryResultEntries(entries) {
+  const seen = new Set();
+  const normalized = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const id = typeof entry?.id === "string" ? entry.id : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    normalized.push({
+      id,
+      result: entry.result && typeof entry.result === "object" ? entry.result : {},
+      historyMode: entry.historyMode === "latest" ? "latest" : "recent"
+    });
+  }
+  return normalized;
+}
+
+function normalizeCredentialRefreshEntries(entries) {
+  const byId = new Map();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const id = typeof entry?.id === "string" ? entry.id : "";
+    if (id) byId.set(id, { id, account: entry.account });
+  }
+  return [...byId.values()];
+}
+
+async function readStoreValues(store, keys) {
+  if (typeof store?.getMany === "function") {
+    const values = await store.getMany(keys);
+    if (values instanceof Map) return values;
+    if (values && typeof values === "object") return new Map(Object.entries(values));
+  }
+  const values = new Map();
+  for (const key of keys) {
+    values.set(key, await store.get(key));
+  }
+  return values;
+}
+
+async function updateStoreValues(store, entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return;
+  if (typeof store?.updateMany === "function") {
+    await store.updateMany(entries);
+    return;
+  }
+  for (const [key, value] of entries) {
+    if (typeof store?.update === "function") await store.update(key, value);
+    else await store.store(key, value);
+  }
+}
+
+function migrateStoredCredentials(fromProviderId, toProviderId, account) {
+  if (fromProviderId !== "8t92" || toProviderId !== "outlook-local" || !account) {
+    return undefined;
+  }
+  const clientId = readCredential(account.credentials, ["clientId", "client_id"]);
+  const refreshToken = readCredential(account.credentials, ["refreshToken", "refresh_token"]);
+  if (!clientId || !refreshToken) {
+    throw new Error("当前 tototo-outlook 凭据缺少 client id 或 refresh token，无法自动迁移");
+  }
+  return {
+    address: account.address,
+    credentials: {
+      email: account.address,
+      clientId,
+      refreshToken
+    }
+  };
 }
 
 function emptyMetadata() {
@@ -687,6 +871,16 @@ function stringOrUndefined(value) {
 
 function numberOrUndefined(value) {
   return Number.isFinite(value) ? value : undefined;
+}
+
+function readCredential(credentials, keys) {
+  if (!credentials || typeof credentials !== "object") return "";
+  for (const key of keys) {
+    if (typeof credentials[key] === "string" && credentials[key].trim()) {
+      return credentials[key].trim();
+    }
+  }
+  return "";
 }
 
 function sanitizeImportFailure(value) {

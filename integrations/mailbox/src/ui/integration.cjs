@@ -2,6 +2,7 @@
 
 const { createServerMailboxStores, createServerRegistrationSessionStore } = require("../mailbox/server-storage.cjs");
 const { Eight92Provider } = require("../core/providers/eight92.cjs");
+const { OutlookLocalProvider } = require("../core/providers/outlook-local.cjs");
 const { BoyaProvider } = require("../core/providers/boya.cjs");
 const { CdnsProvider } = require("../core/providers/cdns.cjs");
 const { TototoIcloudProvider } = require("../core/providers/tototo-icloud.cjs");
@@ -43,6 +44,7 @@ const OPERATION_LABELS = {
   renewal: "人工续期"
 };
 const CLIPBOARD_RETRY_DELAYS_MS = [0, 250, 750];
+const OPERATION_STATE_PUBLISH_DEBOUNCE_MS = 250;
 const REGISTRATION_CLIPBOARD_MESSAGES = {
   emailCode: "邮箱验证码已自动复制",
   phone: "手机号已自动复制",
@@ -57,6 +59,7 @@ class MailboxIntegration {
     this.events = new vscode.EventEmitter();
     this.providerInstances = providers ?? [
       new Eight92Provider().asProvider(),
+      new OutlookLocalProvider().asProvider(),
       new BoyaProvider().asProvider(),
       new CdnsProvider().asProvider(),
       new TototoIcloudProvider().asProvider()
@@ -85,7 +88,7 @@ class MailboxIntegration {
     this.coordinator = new MailboxOperationCoordinator({
       pool: this.pool,
       providers: this.providers,
-      onOperationChange: () => { void this.publishPanelState().catch(() => undefined); }
+      onOperationChange: () => this.scheduleOperationStatePublish()
     });
     this.registration = undefined;
     this.registrationAssistantRegistration = undefined;
@@ -112,6 +115,7 @@ class MailboxIntegration {
     });
     this.registrationDiagnostics = createRegistrationDiagnostics(vscode, context);
     this.registrationEmailWatchers = new Map();
+    this.operationStatePublishTimer = undefined;
     this.registrationGptStatusSync = Promise.resolve();
     this.registrationSessionsPersistence = Promise.resolve();
     this.registrationSessionsOperation = Promise.resolve();
@@ -2087,6 +2091,14 @@ class MailboxIntegration {
     this.postPanelMessage({ type: "state", state: await this.getPanelState() });
   }
 
+  scheduleOperationStatePublish() {
+    if (this.operationStatePublishTimer || this.disposed) return;
+    this.operationStatePublishTimer = setTimeout(() => {
+      this.operationStatePublishTimer = undefined;
+      void this.publishPanelState().catch(() => undefined);
+    }, OPERATION_STATE_PUBLISH_DEBOUNCE_MS);
+  }
+
   postPanelMessage(message) {
     if (this.panel) {
       void this.panel.webview.postMessage(message);
@@ -2169,6 +2181,10 @@ class MailboxIntegration {
       return;
     }
     this.disposed = true;
+    if (this.operationStatePublishTimer) {
+      clearTimeout(this.operationStatePublishTimer);
+      this.operationStatePublishTimer = undefined;
+    }
     this.stopRegistrationTotpQueries();
     this.coordinator.stop();
     if (typeof this.api?.cancelOAuthAccountImport === "function") {

@@ -2,7 +2,7 @@
 
 const { assertMailboxProvider } = require("../core/provider.cjs");
 
-const DEFAULT_MAX_CONCURRENT_OPERATIONS = 10;
+const DEFAULT_MAX_CONCURRENT_OPERATIONS = 20;
 
 class MailboxOperationCoordinator {
   constructor({
@@ -45,11 +45,19 @@ class MailboxOperationCoordinator {
   }
 
   async queryOnce(ids, options = {}) {
+    const credentialRefreshes = new Map();
     return this.run("query", ids, async (account, provider, signal) => {
-      const result = await provider.query(account, { ...options, signal });
+      const result = await provider.query(account, {
+        ...options,
+        signal,
+        onCredentialRefresh: (nextAccount) => {
+          credentialRefreshes.set(account.id, nextAccount);
+        }
+      });
       throwIfAborted(signal);
-      await this.pool.recordQueryResult(account.id, result, { historyMode: provider.capabilities?.history });
       return withMailboxId(account, result);
+    }, {
+      persistBatch: (accounts, results) => this.persistQueryBatch(accounts, results, credentialRefreshes)
     });
   }
 
@@ -58,7 +66,11 @@ class MailboxOperationCoordinator {
     const interval = normalizePositive(pollMs, 5_000);
     return this.run("wait", ids, async (account, provider, signal) => {
       const startedAt = this.now();
-      const queryOptions = { maxMessages: maxMessages ?? provider.capabilities?.maxMessages, signal };
+      const queryOptions = {
+        maxMessages: maxMessages ?? provider.capabilities?.maxMessages,
+        signal,
+        onCredentialRefresh: (nextAccount) => this.persistCredentialRefresh(account, nextAccount)
+      };
       const first = await provider.query(account, queryOptions);
       throwIfAborted(signal);
       await this.pool.recordQueryResult(account.id, first, { historyMode: provider.capabilities?.history });
@@ -153,7 +165,7 @@ class MailboxOperationCoordinator {
     return stopped;
   }
 
-  async run(operation, ids, worker) {
+  async run(operation, ids, worker, { persistBatch } = {}) {
     const accounts = await this.pool.listAccounts({ includeDisabled: false });
     const selected = selectAccounts(accounts, ids);
     if (selected.length === 0) {
@@ -198,8 +210,13 @@ class MailboxOperationCoordinator {
           return withMailboxId(account, abortedResult(operation));
         }
         active.started = true;
-        return this.runOne(operation, account, worker, active);
+        return this.runOne(operation, account, worker, active, {
+          persistResult: typeof persistBatch !== "function"
+        });
       });
+      if (typeof persistBatch === "function") {
+        await persistBatch(selected, results);
+      }
       return {
         operation,
         results,
@@ -220,7 +237,7 @@ class MailboxOperationCoordinator {
     }
   }
 
-  async runOne(operation, account, worker, active) {
+  async runOne(operation, account, worker, active, { persistResult = true } = {}) {
     const provider = this.providers.get(account.providerId);
     try {
       if (!provider) {
@@ -241,10 +258,12 @@ class MailboxOperationCoordinator {
         return withMailboxId(account, failure);
       }
       try {
-        if (operation === "renewal") {
-          await this.pool.recordRenewalResult(account.id, failure);
-        } else {
-          await this.pool.recordQueryResult(account.id, failure);
+        if (persistResult) {
+          if (operation === "renewal") {
+            await this.pool.recordRenewalResult(account.id, failure);
+          } else {
+            await this.pool.recordQueryResult(account.id, failure);
+          }
         }
       } catch {
         // A status-write failure must not hide the provider result or stop siblings.
@@ -256,6 +275,58 @@ class MailboxOperationCoordinator {
         this.operations.delete(account.id);
         this.notifyOperationChange();
       }
+    }
+  }
+
+  async persistCredentialRefresh(account, nextAccount) {
+    if (typeof this.pool.recordCredentialRefresh !== "function") {
+      return;
+    }
+    await this.pool.recordCredentialRefresh(account.id, nextAccount);
+  }
+
+  async persistQueryBatch(accounts, results, credentialRefreshes) {
+    const accountById = new Map(accounts.map((account) => [account.id, account]));
+    const refreshEntries = [...credentialRefreshes.entries()].map(([id, account]) => ({ id, account }));
+    const queryEntries = results
+      .filter((result) => result?.error?.code !== "request_aborted")
+      .map((result) => {
+        const account = accountById.get(result.mailboxId);
+        const provider = account ? this.providers.get(account.providerId) : undefined;
+        return {
+          id: result.mailboxId,
+          result,
+          historyMode: provider?.capabilities?.history
+        };
+      })
+      .filter((entry) => typeof entry.id === "string" && entry.id);
+    if (queryEntries.length === 0) {
+      if (refreshEntries.length > 0) {
+        if (typeof this.pool.recordCredentialRefreshes === "function") {
+          await this.pool.recordCredentialRefreshes(refreshEntries);
+        } else {
+          for (const entry of refreshEntries) {
+            await this.persistCredentialRefresh(accountById.get(entry.id), entry.account);
+          }
+        }
+      }
+      return;
+    }
+    if (typeof this.pool.recordQueryResults === "function") {
+      await this.pool.recordQueryResults(queryEntries, { credentialRefreshes: refreshEntries });
+      return;
+    }
+    if (refreshEntries.length > 0) {
+      if (typeof this.pool.recordCredentialRefreshes === "function") {
+        await this.pool.recordCredentialRefreshes(refreshEntries);
+      } else {
+        for (const entry of refreshEntries) {
+          await this.persistCredentialRefresh(accountById.get(entry.id), entry.account);
+        }
+      }
+    }
+    for (const entry of queryEntries) {
+      await this.pool.recordQueryResult(entry.id, entry.result, { historyMode: entry.historyMode });
     }
   }
 

@@ -274,7 +274,12 @@ class RegistrationEmailCodeWatcher {
     const provider = assertMailboxProvider(this.providers.get(account.providerId));
     const result = await provider.query(account, {
       maxMessages: provider.capabilities?.maxMessages,
-      signal
+      signal,
+      onCredentialRefresh: (nextAccount) => (
+        typeof this.pool.recordCredentialRefresh === "function"
+          ? this.pool.recordCredentialRefresh(mailboxId, nextAccount)
+          : undefined
+      )
     });
     if (!result || typeof result !== "object") {
       throw new Error("邮箱来源返回了无效结果");

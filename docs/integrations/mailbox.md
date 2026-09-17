@@ -1,6 +1,6 @@
 # Mailbox 可选集成
 
-`integrations/mailbox` 是 Manager 的独立可选 VSIX。它定义通用 Mailbox/provider 边界，当前内置 `tototo-outlook`、`boya`、`cdns` 和 `tototo-icloud` provider；界面使用显示名称，内部 provider ID 保持兼容，后续第三方只需要实现同一 provider 合约。
+`integrations/mailbox` 是 Manager 的独立可选 VSIX。它定义通用 Mailbox/provider 边界，当前内置远端 `tototo-outlook`、本地 `outlook-local`、`boya`、`cdns` 和 `tototo-icloud` provider；界面使用显示名称，内部 provider ID 保持兼容，后续第三方只需要实现同一 provider 合约。
 
 ## 边界
 
@@ -9,6 +9,18 @@
 Manager 仅通过现有 `registerDashboardIntegration` API 渲染一个轻量入口卡片，并可选提供脱敏的账号邮箱目录、账号健康状态、账号删除、无界面 OAuth 导入能力和已标记为收到 OpenAI `account deactivated` 邮件的邮箱地址；Mailbox 不读取 Manager 账号 token、不读取 Sub2API SecretStorage，也不把邮件正文或邮箱凭据带入核心公共 API。邮箱列表和当前选中邮箱详情由扩展自有 Webview Panel 提供；从 Dashboard 打开时面板进入当前主编辑器组，与 Dashboard 使用同一标签栏。
 
 因此新设备可以只安装 Manager；未安装 Mailbox VSIX 时，核心账号管理、额度刷新、Sub2API 和无感切号路径不应该因为邮箱组件缺失而改变。
+
+## 本地 Outlook OAuth/IMAP 来源
+
+Mailbox 内置 `outlook-local` 来源，供需要在本机直接读取 Outlook/Hotmail 收件箱的场景使用。它不把凭据提交给 `email.nloop.cc`：扩展宿主先用 `client_id + refresh_token` 向微软 token endpoint 换取短期 access token，再通过 `outlook.office365.com:993` 的 IMAP XOAUTH2 只读查询 `INBOX`。access token 只在内存中缓存，并在预计过期前 5 分钟重新获取；批量操作默认最多并行 20 个邮箱，网络查询完成后集中写入结果并节流面板刷新。单邮箱默认只搜索最近 30 天、读取最近最多 3 封邮件，并使用一次多 UID FETCH。
+
+导入格式支持：
+
+```text
+email@example.com----client-id----refresh-token
+```
+
+也兼容旧的四段行 `email----legacy-value----client-id----refresh-token`，但第二段不会被本地来源使用或保存。查询过程中如果微软返回新的 refresh token，Mailbox 会通过私有凭据存储自动回写；详情面板的“人工续期”按钮可以单独触发一次 token exchange。编辑已有 `tototo-outlook` 邮箱时切换到本地来源并留空凭据栏，会直接复用已保存的 client id 和 refresh token。access token 不进入邮箱池元数据、邮件详情或持久化文件。
 
 ## 2FAuth 集成
 
@@ -71,7 +83,7 @@ Mailbox 面板中的邮箱地址、邮箱验证码、手机号和短信验证码
 
 注册助手的 GPT 路线在外部注册网页成功打开后会自动查询一次最近 30 分钟的邮箱验证码，不启动持续监听；后续仍可在注册卡片中手动查询、刷新或停止查询。邮箱库支持“仅 GPT 注册 ≥ 7 天”筛选；已注册标签按保存记录中第一封来自 `openai.com`（含子域名）邮件的 `receivedAt` 计算完整天数，显示为“GPT 已注册 x 天”。缺少明确邮件时间的历史记录保留普通“GPT 已注册”标签，不会进入该筛选。
 
-续期结果中只有明确的新凭据才会写入该 provider 的服务器侧秘密存储；旧凭据可用但没有变化、失败、取消或响应异常都会保留原凭据。续期仍是人工动作，不做后台自动续期。
+续期结果中只有明确的新凭据才会写入该 provider 的服务器侧秘密存储；旧凭据可用但没有变化、失败、取消或响应异常都会保留原凭据。Mailbox 不做后台定时续期；`outlook-local` 在用户主动查询/监听时按缓存状态完成必要的 token exchange，并在微软轮换 refresh token 时自动回写，详情面板的人工续期仍可单独触发。上次续期超过 7 天时，邮箱列表和详情中的“上次续期”提示会变为橙色。
 
 邮箱池面板默认按显示名称升序显示，支持名称升/降序、最近查询、已出码优先、按来源筛选、“仅未接入 Codex”“仅需重新授权”“仅 OpenAI 封禁”和“仅显示未注册 GPT”筛选。“仅未接入 Codex”和“仅需重新授权”依据当前 Manager 返回的账号目录判断；当 Manager 不提供该目录时，这两项筛选会禁用；“仅 OpenAI 封禁”依据已保存的封禁邮件标记判断。Manager 账号目录发生变化时会主动推送状态，面板不再依赖手动查询按钮同步。标签按来源、账号接入状态、验证码、封禁和错误信息区分颜色。用户可以勾选邮箱并全选当前筛选结果，然后批量查询、批量监听、批量停止或批量删除；Coordinator 继续为每个邮箱维护独立操作和结果。
 

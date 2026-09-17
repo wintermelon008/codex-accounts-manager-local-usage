@@ -99,6 +99,28 @@ class JsonFileKeyValueStore {
     return cloneValue(legacyValue);
   }
 
+  async getMany(keys) {
+    const normalizedKeys = [...new Set((Array.isArray(keys) ? keys : []).map((key) => String(key || "")).filter(Boolean))];
+    const state = await this.readLocalState();
+    const values = new Map();
+    for (const key of normalizedKeys) {
+      if (Object.prototype.hasOwnProperty.call(state.values, key)) {
+        values.set(key, cloneValue(state.values[key]));
+      }
+    }
+    if (state.exists || !this.fallback) {
+      return values;
+    }
+    for (const key of normalizedKeys) {
+      if (values.has(key)) continue;
+      const legacyValue = await this.fallback.get(key);
+      if (legacyValue === undefined) continue;
+      values.set(key, cloneValue(legacyValue));
+      await this.update(key, legacyValue);
+    }
+    return values;
+  }
+
   async update(key, value) {
     const normalizedKey = String(key || "");
     if (!normalizedKey) {
@@ -110,6 +132,19 @@ class JsonFileKeyValueStore {
         delete state.values[normalizedKey];
       } else {
         state.values[normalizedKey] = cloneValue(value);
+      }
+      await writeJsonAtomically(this.filePath, { version: 1, values: state.values });
+    });
+  }
+
+  async updateMany(entries) {
+    const updates = normalizeStoreUpdates(entries);
+    if (updates.length === 0) return;
+    return this.exclusive(async () => {
+      const state = await this.readLocalState();
+      for (const [key, value] of updates) {
+        if (value === undefined) delete state.values[key];
+        else state.values[key] = cloneValue(value);
       }
       await writeJsonAtomically(this.filePath, { version: 1, values: state.values });
     });
@@ -301,6 +336,13 @@ function cloneValue(value) {
     return structuredClone(value);
   }
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function normalizeStoreUpdates(entries) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => Array.isArray(entry) ? entry : [entry?.key, entry?.value])
+    .map(([key, value]) => [String(key || ""), value])
+    .filter(([key]) => key);
 }
 
 async function writeJsonAtomically(filePath, value) {

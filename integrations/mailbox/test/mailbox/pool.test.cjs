@@ -5,6 +5,7 @@ const test = require("node:test");
 const { BoyaProvider } = require("../../src/core/providers/boya.cjs");
 const { CdnsProvider } = require("../../src/core/providers/cdns.cjs");
 const { Eight92Provider } = require("../../src/core/providers/eight92.cjs");
+const { OutlookLocalProvider } = require("../../src/core/providers/outlook-local.cjs");
 const { createMailboxProvider } = require("../../src/core/provider.cjs");
 const {
   MailboxPool,
@@ -94,6 +95,45 @@ test("query details are persisted separately and only selected details need to b
   assert.equal(stores.metadata.values.has(detailKey(id)), true);
   assert.equal((await pool.getDetail(id)).messages[0].from, "sender@example.com");
   assert.equal(pool.listMetadata()[0].latestCode, "123456");
+});
+
+test("batch query results and rotated credentials share one persistence pass", async () => {
+  let clock = 500;
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore, now: () => ++clock });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const imported = (await pool.importProvider({
+    provider,
+    input: [
+      "one@example.com----password-one----client-one----refresh-one",
+      "two@example.com----password-two----client-two----refresh-two"
+    ].join("\n")
+  })).imported;
+
+  const results = await pool.recordQueryResults([
+    {
+      id: imported[0].id,
+      historyMode: "recent",
+      result: { ok: true, messages: [{ id: "one-message", subject: "One", body: "123456" }], codes: ["123456"] }
+    },
+    {
+      id: imported[1].id,
+      historyMode: "recent",
+      result: { ok: true, messages: [{ id: "two-message", subject: "Two", body: "654321" }], codes: ["654321"] }
+    }
+  ], {
+    credentialRefreshes: [{
+      id: imported[0].id,
+      account: { address: "one@example.com", credentials: { clientId: "client-one", refreshToken: "refresh-rotated" } }
+    }]
+  });
+
+  assert.equal(results.length, 2);
+  assert.equal((await pool.getAccount(imported[0].id)).credentials.refreshToken, "refresh-rotated");
+  assert.equal(pool.listMetadata().find((item) => item.id === imported[0].id).lastRenewalAt, 503);
+  assert.equal((await pool.getDetail(imported[1].id)).messages[0].id, "two-message");
+  assert.equal("credentials" in stores.metadata.values.get(METADATA_KEY).accounts[0], false);
 });
 
 test("tracks the earliest received OpenAI email for GPT age across queries and reload", async () => {
@@ -309,6 +349,28 @@ test("renewal writes a new secret only after the provider reports changed creden
   assert.equal(pool.listMetadata()[0].lastRenewalAt, 103);
 });
 
+test("silent provider credential refresh replaces only the private credential record", async () => {
+  let clock = 200;
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore, now: () => ++clock });
+  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "one@example.com----password-one----client-one----refresh-one"
+  })).imported;
+
+  const refreshed = await pool.recordCredentialRefresh(id, {
+    address: "one@example.com",
+    credentials: { email: "one@example.com", clientId: "client-one", refreshToken: "refresh-rotated" }
+  });
+
+  assert.equal((await pool.getAccount(id)).credentials.refreshToken, "refresh-rotated");
+  assert.equal((await pool.getAccount(id)).credentials.password, undefined);
+  assert.equal(refreshed.lastRenewalAt, 202);
+  assert.equal("credentials" in stores.metadata.values.get(METADATA_KEY).accounts[0], false);
+});
+
 test("overlapping successful renewals preserve every mailbox timestamp", async () => {
   let clock = 100;
   const stores = memoryStores();
@@ -499,6 +561,30 @@ test("editing can switch the provider format while keeping the mailbox address",
   assert.equal(updated.address, "one@example.com");
   assert.equal(updated.openaiAccountDeactivated, false);
   assert.equal((await pool.getAccount(id)).credentials.token, "replacement-token");
+});
+
+test("switching tototo-outlook to local Outlook can reuse saved OAuth credentials", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const sourceProvider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  const localProvider = new OutlookLocalProvider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider: sourceProvider,
+    input: "one@example.com----legacy-password----client-one----refresh-one"
+  })).imported;
+
+  const updated = await pool.updateAccount(id, {
+    provider: localProvider,
+    providerId: localProvider.id,
+    displayName: "本地 Outlook",
+    input: ""
+  });
+
+  assert.equal(updated.providerId, "outlook-local");
+  assert.equal((await pool.getAccount(id)).credentials.clientId, "client-one");
+  assert.equal((await pool.getAccount(id)).credentials.refreshToken, "refresh-one");
+  assert.equal((await pool.getAccount(id)).credentials.password, undefined);
 });
 
 function memoryStores() {

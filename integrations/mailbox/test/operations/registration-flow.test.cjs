@@ -278,7 +278,7 @@ test("GPT-only registration opens the external browser without Playwright or Cod
     },
     openRegistrationBrowser: async (options) => {
       browserOptions = options;
-      return { opened: true };
+      return { opened: true, incognito: true };
     }
   });
   session._launchBrowser = async () => {
@@ -293,7 +293,7 @@ test("GPT-only registration opens the external browser without Playwright or Cod
   assert.equal(session.state, STATES.AWAITING_MANUAL_REGISTRATION);
   assert.equal(oauthCalls, 0);
   assert.equal(playwrightCalled, false);
-  assert.deepEqual(browserOptions, { clipboardText: "gpt-only@example.com" });
+  assert.deepEqual(browserOptions, { clipboardText: "gpt-only@example.com", incognito: true });
 
   let phoneOrderCancelled = false;
   session.phoneOrder = {

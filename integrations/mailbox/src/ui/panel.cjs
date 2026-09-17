@@ -115,6 +115,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .row-title { font-weight: 650; line-height: 1.4; }
     .row-meta { display: flex; flex-wrap: wrap; gap: 6px 9px; margin-top: 7px; color: var(--muted); font-size: 12px; }
     .mailbox-card-time { margin-top: 9px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .mailbox-card-time.warning { color: var(--warning); font-weight: 650; }
     .tag { display: inline-flex; align-items: center; width: fit-content; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); font-size: 11px; }
     .tag.source { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
     .tag.neutral { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
@@ -211,6 +212,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-progress-step.current { color: var(--accent); font-weight: 650; }
     .registration-progress-step.failed .registration-progress-bar { background: var(--danger); }
     .registration-session-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .registration-copy-email-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
     .registration-session-input { margin-top: 10px; }
     .registration-session-input input { width: 100%; }
     .registration-input-with-action { display: flex; gap: 6px; align-items: flex-start; }
@@ -293,8 +295,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-email-code-result strong { display: block; min-height: 20px; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); }
     .registration-email-code-result button { margin-top: 7px; }
     .registration-email-code .field-note { margin-top: 8px; }
-    .registration-standalone { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 20px 22px; }
-    .registration-standalone-card { max-width: 980px; margin: 0 auto; padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--vscode-editorWidget-background); }
+    .registration-standalone { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 0 22px; }
+    .registration-standalone-card { width: 100%; max-width: none; margin: 0; padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--vscode-editorWidget-background); }
     .registration-standalone-card + .registration-standalone-card { margin-top: 14px; }
     .registration-standalone-card h2 { margin-bottom: 6px; }
     .registration-mailbox-picker { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--accent) 3%, transparent); }
@@ -389,6 +391,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationFiveSimSelections = {};
       let registrationFiveSimCountrySelections = {};
       let registrationFiveSimFilters = {};
+      let registrationFiveSimAutoRefreshRequested = new Set();
       let registrationInputValues = {};
       let modalFormValues = { importForm: {}, editForm: {} };
       let totpModalMailboxId = "";
@@ -421,6 +424,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           if (selectedRegistrationMailboxId && !(state.mailboxes || []).some((mailbox) => mailbox.id === selectedRegistrationMailboxId)) {
             selectedRegistrationMailboxId = "";
           }
+          const registrationSessionIds = new Set((state.registrationSessions || []).map((session) => session.id));
+          registrationFiveSimAutoRefreshRequested = new Set([...registrationFiveSimAutoRefreshRequested].filter((sessionId) => registrationSessionIds.has(sessionId)));
           const selectedRegistrationMailbox = (state.mailboxes || []).find((mailbox) => mailbox.id === selectedRegistrationMailboxId);
           if (selectedRegistrationMailbox && hasManagedCodexEmail(selectedRegistrationMailbox.address)) {
             selectedRegistrationMailboxId = "";
@@ -838,6 +843,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const sourceId = target.value || "liye";
           registrationPhoneSourceSelections[sessionId] = sourceId;
           if (!updateRegistrationPhoneSourcePanels(sessionId, sourceId)) render();
+          if (sourceId === "fivesim") requestRegistrationFiveSimRefresh(sessionId);
         }
         if (target.id.startsWith("registrationPhoneKey-")) {
           const sessionId = target.id.slice("registrationPhoneKey-".length);
@@ -1118,7 +1124,6 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         return '<div class="registration-form">' +
           '<div class="field"><label for="registrationEmailInput">邮箱</label><div class="registration-input-with-action"><input id="registrationEmailInput" type="email" value="' + esc(registrationEmail) + '" placeholder="your-email@example.com"><button type="button" class="secondary" data-action="registration-copy-registration-email">复制</button></div></div>' +
           '<div class="actions" style="justify-content:flex-start"><button type="button" data-action="registration-create" data-import-codex="true" class="primary">注册并导入 Codex</button><button type="button" data-action="registration-create" data-import-codex="false">注册 GPT</button></div>' +
-          '<p class="field-note">“注册并导入 Codex”保持原有 Manager OAuth 注册/导入流程；“注册 GPT”只打开独立网页，不等待 OAuth 回调、不写入 Manager 账号库。GPT 路线会自动复制邮箱，邮箱查询和接码均由下方按钮手动控制。</p>' +
         '</div>';
       }
 
@@ -1138,15 +1143,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const registrationMailboxView = getRegistrationMailboxView();
         const allMailboxes = registrationMailboxView.allMailboxes;
         const mailboxes = registrationMailboxView.mailboxes;
-        const managedCount = registrationMailboxView.managedCount;
         const providerOptions = (state.providers || []).map((provider) =>
           '<option value="' + esc(provider.id) + '" ' + (registrationMailboxProviderFilter === provider.id ? "selected" : "") + '>' +
           esc(provider.displayName || provider.id) + '</option>'
         ).join("");
         const mailboxRows = registrationMailboxView.rows;
-        const managedNote = managedCount
-          ? '<div class="field-note">已自动隐藏 ' + managedCount + ' 个已经导入 Codex 的邮箱；标记为“GPT 已注册”但尚未接入 Codex 的邮箱仍可选择。</div>'
-          : '';
         const sessions = [...(state.registrationSessions || [])].reverse();
         const sessionsHtml = sessions.length
           ? sessions.map(renderRegistrationSession).join("")
@@ -1154,11 +1155,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         return '<div class="registration-standalone">' +
           '<section class="registration-standalone-card">' +
             '<h2>选择注册邮箱</h2>' +
-            '<p class="muted">可按邮箱库筛选并点击选择，也可以在下方直接输入一个新邮箱。选择邮箱只会填入地址，不会自动开始注册。</p>' +
+            '<p class="muted">可按邮箱库筛选并点击选择，也可以在下方直接输入一个新邮箱。</p>' +
             '<div class="registration-mailbox-picker">' +
               '<div class="registration-mailbox-picker-head"><strong>已导入邮箱库</strong><span class="tag" data-role="registration-mailbox-count">' + mailboxes.length + '/' + allMailboxes.length + '</span></div>' +
               '<div class="registration-mailbox-picker-tools"><input id="registrationMailboxSearch" type="search" value="' + esc(registrationMailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索注册邮箱"><select id="registrationMailboxProviderFilter" aria-label="按邮箱来源筛选注册邮箱"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="注册邮箱排序"><label class="mailbox-sort-label" for="registrationMailboxSort">邮箱排序</label><select id="registrationMailboxSort" class="mailbox-sort-select" aria-label="选择注册邮箱排序字段"><option value="name" ' + (registrationMailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (registrationMailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="renewal" ' + (registrationMailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option><option value="gptRegistration" ' + (registrationMailboxSortKey === "gptRegistration" ? "selected" : "") + '>GPT注册时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-registration-mailbox-sort-direction" title="' + (registrationMailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (registrationMailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (registrationMailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div><label title="只显示尚未标记为已注册 GPT 的邮箱"><input id="registrationOnlyUnregisteredGpt" type="checkbox" ' + (registrationOnlyUnregisteredGpt ? "checked" : "") + '> 仅显示未注册 GPT</label><label title="只显示从第一封 OpenAI 邮件起已注册至少 7 天的邮箱"><input id="registrationOnlyGptSevenDays" type="checkbox" ' + (registrationOnlyGptSevenDays ? "checked" : "") + '> 仅 GPT 注册 ≥ 7 天</label></div>' +
-              '<div class="registration-mailbox-list">' + mailboxRows + '</div>' + managedNote +
+              '<div class="registration-mailbox-list">' + mailboxRows + '</div>' +
             '</div>' +
             '<div class="registration-standalone-content">' + renderRegistrationCreateForm() + '</div>' +
           '</section>' +
@@ -1169,8 +1170,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function renderRegistrationMailboxOption(mailbox) {
         const selected = mailbox.id === selectedRegistrationMailboxId;
         const provider = (state.providers || []).find((item) => item.id === mailbox.providerId);
-        const totpTag = mailbox.totpLinked ? '<span class="tag success">2FA 已绑定</span>' : '';
-        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + renderGptRegisteredTag(mailbox) + totpTag + (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + '</div></button>';
+        const totpTag = renderTotpLinkedTag(mailbox);
+        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + renderGptRegisteredTag(mailbox) + totpTag + '</div></button>';
       }
 
       function filterRegistrationMailboxes() {
@@ -1213,11 +1214,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             : "GPT 注册完成"
           : REGISTRATION_STATE_LABELS[session.state] || session.state;
         const sessionStatusClass = session.state === "completed" ? " success" : session.state === "failed" ? " error" : "";
-        const progressHtml = session.mode === "oauth"
-          ? '<div class="field-note" role="status">当前路线：注册并导入 Codex（Manager OAuth）。注册页面由外部浏览器承载，完成后结果会自动回传并导入 Manager。</div>'
-          : session.mode === "manual-browser"
-            ? '<div class="field-note" role="status">当前路线：注册 GPT（外部浏览器人工操作）。网页打开后会自动查询一次邮箱验证码；本面板还提供手动邮箱查询、手机号/短信接码和复制，不调用 OAuth 回调，也不会自动填写网页。</div>'
-            : renderRegistrationProgress(session.state);
+        const progressHtml = ["oauth", "manual-browser"].includes(session.mode)
+          ? ""
+          : renderRegistrationProgress(session.state);
         const inputHtml = renderRegistrationInputs(session, registrationMailbox);
         const phoneOrderHtml = renderPhoneOrder(session);
         const emailCodeHtml = renderRegistrationEmailCode(session);
@@ -1233,9 +1232,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const mailboxDeleteButton = registrationMailbox
           ? '<button type="button" class="secondary small danger" data-action="registration-delete-mailbox" data-mailbox-id="' + esc(registrationMailbox.id) + '" title="直接从邮箱库删除该邮箱">删除邮箱</button>'
           : "";
+        const totpTag = renderTotpLinkedTag(registrationMailbox);
         const routeLabel = importCodex ? (session.mode === "oauth" ? "Codex OAuth" : "注册并导入 Codex（需手动导入）") : "注册 GPT";
         return '<div class="registration-session">' +
-          '<div class="registration-session-header"><span class="registration-session-email">' + esc(session.email) + '</span><span class="registration-session-header-actions"><span class="tag">' + routeLabel + (session.mode === "oauth" ? "" : ' · 已尝试号码 ' + (session.phoneInputCount || 0) + ' 次') + '</span>' + mailboxDeleteButton + '</span></div>' +
+          '<div class="registration-session-header"><span class="registration-session-email">' + esc(session.email) + '</span><span class="registration-session-header-actions"><span class="tag">' + routeLabel + (session.mode === "oauth" ? "" : ' · 已尝试号码 ' + (session.phoneInputCount || 0) + ' 次') + '</span>' + totpTag + mailboxDeleteButton + '</span></div>' +
           '<div class="registration-session-status' + sessionStatusClass + '">' + esc(label) + '</div>' +
           progressHtml +
           errorHtml +
@@ -1309,12 +1309,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       }
 
       function requestRegistrationTotpStates() {
-        if (!registrationOnly || state.totp?.configured !== true) return;
+        if (!registrationOnly) return;
         const visibleMailboxIds = new Set();
         for (const session of state.registrationSessions || []) {
           const mailbox = (state.mailboxes || []).find((item) => normalizeEmail(item.address) === normalizeEmail(session.email));
           if (!mailbox) continue;
           visibleMailboxIds.add(mailbox.id);
+          requestRegistrationFiveSimRefresh(session.id);
+          if (state.totp?.configured !== true) continue;
           if (registrationTotpRequested.has(mailbox.id)) continue;
           registrationTotpRequested.add(mailbox.id);
           send("totpOpen", { mailboxId: mailbox.id });
@@ -1370,7 +1372,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const linkedLabel = link
           ? [account.service || link.service || "2FA", account.account || link.account || registrationMailbox.address].filter(Boolean).join(" · ")
           : "尚未绑定";
-        const linkedStatus = link ? '<span class="tag success">已绑定</span>' : '<span class="tag neutral">未绑定</span>';
+        const linkedStatus = link ? '<span class="tag success">2FA 已绑定</span>' : '<span class="tag neutral">2FA 未绑定</span>';
         const values = registrationTotpFormValues[mailboxId] || {};
         const pending = registrationTotpPending.has(mailboxId);
         const fetchedAt = registrationTotpFetchedAt[mailboxId] || 0;
@@ -1421,11 +1423,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const actionHtml = terminal
             ? '<div class="registration-session-actions">' + importButton + cancelImportButton + '<button type="button" data-action="registration-cleanup" data-session-id="' + esc(session.id) + '">清除记录</button></div>'
             : '<div class="registration-session-actions">' + completeButton + '<button type="button" data-action="registration-cancel" data-session-id="' + esc(session.id) + '">关闭/取消助手</button></div>';
-          const copyEmailButton = '<button type="button" class="secondary small" data-action="registration-copy-email" data-session-id="' + esc(session.id) + '" data-value="' + esc(session.email) + '">再次复制邮箱</button>';
-          const handoffNote = session.state === "completed"
-            ? '<div class="field-note">GPT 注册完成后，邮箱查询和接码会继续保持手动可用，供下方 Codex 导入使用。</div>'
-            : "";
-          return '<div class="field-note">网页已由 Manager 打开。请在网页中手动填写并提交密码、邮箱码、手机号、短信码和最终确认；此助手不会读取或提交网页表单。' + copyEmailButton + '</div>' + handoffNote + actionHtml;
+          const copyEmailButton = '<button type="button" class="registration-copy-email-button" data-action="registration-copy-email" data-session-id="' + esc(session.id) + '" data-value="' + esc(session.email) + '">再次复制邮箱</button>';
+          return '<div class="field-note">网页已由 Manager 打开。请在网页中手动填写并提交密码、邮箱码、手机号、短信码和最终确认；此助手不会读取或提交网页表单。</div>' + actionHtml + '<div class="registration-copy-email-actions">' + copyEmailButton + '</div>';
         }
         const emailCodeReady = session.state === "awaiting_email_code";
         const phoneReady = session.state === "awaiting_phone_input";
@@ -1657,6 +1656,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '<button type="button" class="secondary danger" data-action="registration-cancel-phone" data-session-id="' + esc(session.id) + '"' + (canCancel ? "" : " disabled") + '>取消取号</button>' +
           (canAcquire ? '<button type="button" class="primary" data-action="registration-acquire-phone" data-session-id="' + esc(session.id) + '"' + (acquireReady ? "" : " disabled") + '>开始取号</button>' : '') +
           '</div>';
+        const phoneNote = registrationOnly
+          ? ""
+          : (isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "");
         return '<div class="registration-phone-order" data-registration-phone-order-session-id="' + esc(session.id) + '" aria-keyshortcuts="N">' +
           '<div class="registration-phone-order-head"><strong>接码平台（' + (manualBrowser ? "手动控制" : "手动确认，自动读取短信") + '）</strong><span class="registration-phone-order-source">' + sourceLink + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' ' + esc(successRateLabel) + selectedOfferLabel + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
           acquireHtml +
@@ -1664,7 +1666,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             '<div class="registration-phone-result"><label>当前手机号</label><strong>' + esc(phone || "— — —") + '</strong>' + phoneButton + '</div>' +
             '<div class="registration-phone-result"><label>验证码</label><strong>' + esc(code || "— — —") + '</strong>' + codeButton + '</div>' +
           '</div>' +
-          '<div class="field-note">' + (manualBrowser ? "只有点击开始取号/重新取号后才会访问接码来源；手机号和验证码只显示/复制，不会自动填写或提交到注册网页。" : isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "") + (registrationOnly ? " · 取号界面按 N 可重新取号并自动复制新号码" : "") + '</div>' +
+          (phoneNote ? '<div class="field-note">' + phoneNote + '</div>' : "") +
           actionHtml +
           (orderState.message ? '<div class="field-note" aria-live="polite">' + esc(orderState.message) + '</div>' : "") +
           (orderState.error ? '<div class="tag" style="margin-top:8px;color:var(--danger)">' + esc(orderState.error) + '</div>' : "") +
@@ -1752,6 +1754,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         return (renewed ? "上次续期" : "添加时间") + "：" + formatDate(value);
       }
 
+      function mailboxRenewalNeedsAttention(mailbox) {
+        const renewedAt = timestampValue(mailbox?.lastRenewalAt);
+        return renewedAt > 0 && Date.now() - renewedAt > 7 * 24 * 60 * 60 * 1000;
+      }
+
       function compareText(left, right) {
         return String(left.displayName || left.address || "").localeCompare(String(right.displayName || right.address || ""), "zh-CN", { numeric: true, sensitivity: "base" }) || String(left.address || "").localeCompare(String(right.address || ""), "en", { numeric: true, sensitivity: "base" });
       }
@@ -1784,12 +1791,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const statusClass = mailbox.lastStatus === "error" ? "error" : "";
         const statusTag = status ? '<span class="tag ' + statusClass + '">' + esc(status) + '</span>' : '';
         const accountStatusTag = renderAccountStatusTag(mailbox);
-        const totpTag = mailbox.totpLinked ? '<span class="tag success">2FA 已绑定</span>' : '';
+        const totpTag = renderTotpLinkedTag(mailbox);
         const blockedTag = mailbox.openaiAccountDeactivated === true ? '<span class="tag blocked">OpenAI 封禁</span>' : '';
+        const activityClass = mailboxRenewalNeedsAttention(mailbox) ? ' warning' : '';
         return '<div class="mailbox-row-wrap ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '"><label class="mailbox-select"><input class="mailbox-checkbox" type="checkbox" value="' + esc(mailbox.id) + '" ' + (selectedMailboxIds.has(mailbox.id) ? "checked" : "") + ' aria-label="选择 ' + esc(mailbox.address) + '"></label><button class="mailbox-row ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '" data-action="select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">' +
           '<div class="row-title"><span class="row-number">' + (index + 1) + '</span><span class="address">' + esc(mailbox.displayName || mailbox.address) + '</span></div>' +
           '<div class="row-meta"><span class="address">' + esc(mailbox.address) + '</span><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span>' + statusTag + accountStatusTag +
-          (mailbox.latestCode ? '<span class="tag success">验证码 ' + esc(mailbox.latestCode) + '</span>' : '') + totpTag + blockedTag + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "错误") + '</span>' : '') + '</div><div class="mailbox-card-time">' + esc(mailboxActivityLabel(mailbox)) + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action" data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制邮箱">复制邮箱</button><button class="mailbox-row-action" data-action="open-totp" data-mailbox-id="' + esc(mailbox.id) + '" title="打开 2FA 设置与查询">2FA</button><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
+          totpTag + blockedTag + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "错误") + '</span>' : '') + '</div><div class="mailbox-card-time' + activityClass + '">' + esc(mailboxActivityLabel(mailbox)) + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action" data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制邮箱">复制邮箱</button><button class="mailbox-row-action" data-action="open-totp" data-mailbox-id="' + esc(mailbox.id) + '" title="打开 2FA 设置与查询">2FA</button><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending === "delete" ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
       }
 
       function renderSelected(selected) {
@@ -1820,9 +1828,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           state.managedAccountRemovalAvailable === true
         );
         const accountStatusTag = renderAccountStatusTag(mailbox);
-        const totpTag = mailbox.totpLinked ? '<span class="tag success">2FA 已绑定</span>' : '';
+        const totpTag = renderTotpLinkedTag(mailbox);
         const blockedTag = mailbox.openaiAccountDeactivated === true ? '<span class="tag blocked">OpenAI 封禁</span>' : '';
         const mailboxError = mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "错误") + '</span>' : '';
+        const activityTagClass = mailboxRenewalNeedsAttention(mailbox) ? "warning" : "neutral";
         const actionLabel = (action, label) => busyAction === action ? '<span class="button-spinner" aria-hidden="true"></span>' + ({ query: "查询中…", wait: "监听中…", renewal: "续期中…", stop: "停止中…", codexImport: "导入中…" }[action] || label) : label;
         const codexImportButton = state.codexImportAvailable && !codexLinked
           ? '<button class="primary ' + (codexImportPending ? 'is-pending' : '') + '" data-action="codex-import" data-mailbox-id="' + esc(mailbox.id) + '" ' + ((codexImportPending || operation || (requestedAction && !codexImportPending)) ? 'disabled' : '') + ' aria-busy="' + codexImportPending + '">' + (codexImportPending ? '<span class="button-spinner" aria-hidden="true"></span>导入中…' : 'Codex 导入') + '</button>'
@@ -1831,7 +1840,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           ? '<button class="danger" data-action="delete-mailbox-and-codex" data-mailbox-id="' + esc(mailbox.id) + '">删除邮箱与 Codex 账号</button>'
           : '';
         const copyMailboxButton = '<button data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制账号">复制账号</button><button data-action="open-totp" data-mailbox-id="' + esc(mailbox.id) + '" title="打开 2FA 设置与查询">2FA 设置/查询</button>';
-        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag neutral">' + capability + '</span><span class="tag neutral">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + accountStatusTag + totpTag + blockedTag + mailboxError + '</div></div>' +
+        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag neutral">' + capability + '</span><span class="tag neutral">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span><span class="tag ' + activityTagClass + '">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + accountStatusTag + totpTag + blockedTag + mailboxError + '</div></div>' +
           '<div class="detail-action-row"><div class="detail-header-actions">' + copyMailboxButton + codexImportButton + '<button data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">编辑账号</button><button class="danger" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">删除账号</button>' + deleteMailboxAndCodexButton + '</div>' +
           '<div class="detail-actions"><div class="actions">' +
           '<button class="' + (busyAction === "query" ? 'is-pending' : '') + '" data-action="submit-query" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "query") + '">' + actionLabel("query", "查询邮件") + '</button>' +
@@ -1902,6 +1911,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         return '<span class="tag success">' + esc(label) + '</span>';
       }
 
+      function renderTotpLinkedTag(mailbox) {
+        return mailbox?.totpLinked === true ? '<span class="tag success">2FA 已绑定</span>' : "";
+      }
+
       function requiresReauthorization(mailbox) {
         return getManagedAccountForMailbox(mailbox)?.requiresReauthorization === true;
       }
@@ -1948,7 +1961,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const draft = modalFormValues.editForm || {};
         const displayName = draft.displayName?.value ?? mailbox.displayName ?? mailbox.address;
         const credentialInput = draft.input?.value ?? "";
-        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>编辑邮箱</h2><p class="muted">' + esc(mailbox.address) + '</p><form id="editForm"><div class="field"><label for="editProviderId">邮箱来源 / 格式</label><select id="editProviderId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider?.id ? 'selected' : '') + '>' + esc(item.displayName) + '</option>').join('') + '</select></div><div class="field"><label for="displayName">显示名称</label><input id="displayName" name="displayName" value="' + esc(displayName) + '" required></div><div class="field"><label for="input">替换来源凭据（可选）</label><textarea id="input" name="input" data-role="edit-credential-input" placeholder="留空只修改显示名称；填写时请输入：' + esc(placeholder) + '">' + esc(credentialInput) + '</textarea><div class="field-note">当前凭据不会回显。切换邮箱来源 / 格式时必须填写凭据；邮箱地址保持不变。</div></div><div class="modal-actions"><button type="button" data-action="close-edit">取消</button><button class="primary" type="submit">保存修改</button></div></form></section></div>';
+        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>编辑邮箱</h2><p class="muted">' + esc(mailbox.address) + '</p><form id="editForm"><div class="field"><label for="editProviderId">邮箱来源 / 格式</label><select id="editProviderId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider?.id ? 'selected' : '') + '>' + esc(item.displayName) + '</option>').join('') + '</select></div><div class="field"><label for="displayName">显示名称</label><input id="displayName" name="displayName" value="' + esc(displayName) + '" required></div><div class="field"><label for="input">替换来源凭据（可选）</label><textarea id="input" name="input" data-role="edit-credential-input" placeholder="留空只修改显示名称；填写时请输入：' + esc(placeholder) + '">' + esc(credentialInput) + '</textarea><div class="field-note">当前凭据不会回显。切换到 Outlook（本地 OAuth）并留空时，会从已保存的 tototo-outlook 凭据自动迁移 client id 和 refresh token；其他来源切换仍需填写新格式凭据。邮箱地址保持不变。</div></div><div class="modal-actions"><button type="button" data-action="close-edit">取消</button><button class="primary" type="submit">保存修改</button></div></form></section></div>';
       }
 
       function clearRegistrationSessionClientState(sessionId) {
@@ -1961,6 +1974,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         delete registrationFiveSimSelections[sessionId];
         delete registrationFiveSimCountrySelections[sessionId];
         delete registrationFiveSimFilters[sessionId];
+        registrationFiveSimAutoRefreshRequested.delete(sessionId);
       }
 
       function formatRemainingDuration(milliseconds) {
@@ -2324,6 +2338,18 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         }
         if (updated) updateRegistrationAcquireButton(sessionId);
         return updated;
+      }
+
+      function requestRegistrationFiveSimRefresh(sessionId) {
+        if (!registrationOnly || !sessionId || state.registrationFiveSimToken?.configured !== true) return;
+        if (registrationFiveSimAutoRefreshRequested.has(sessionId)) return;
+        const session = (state.registrationSessions || []).find((item) => item.id === sessionId);
+        if (!session) return;
+        registrationFiveSimAutoRefreshRequested.add(sessionId);
+        const orderState = session?.phoneOrder || {};
+        if (orderState.running === true || orderState.phase === "logging_in") return;
+        const selection = getFiveSimSelection(sessionId);
+        send("registrationRefreshFiveSim", { sessionId, country: selection.country, operator: selection.operator, product: "openai" });
       }
 
       function updateRegistrationAcquireButton(sessionId) {

@@ -36,6 +36,31 @@ test("query runs selected mailboxes independently and records one failure withou
   assert.deepEqual(pool.queryUpdates.sort(), ["one", "two"]);
 });
 
+test("query persists provider refresh-token rotation without returning credentials", async () => {
+  const pool = fakePool([{ id: "one", providerId: "8t92", email: "one@example.com" }]);
+  const coordinator = new MailboxOperationCoordinator({
+    pool,
+    provider: {
+      apiVersion: 1,
+      id: "8t92",
+      async query(_account, { onCredentialRefresh }) {
+        await onCredentialRefresh({
+          address: "one@example.com",
+          credentials: { clientId: "client-id", refreshToken: "rotated-refresh" }
+        });
+        return { ok: true, providerId: "8t92", messages: [], codes: [] };
+      },
+      async renew() {
+        throw new Error("unused");
+      }
+    }
+  });
+
+  const result = await coordinator.queryOnce(["one"]);
+  assert.equal(result.results[0].credentials, undefined);
+  assert.deepEqual(pool.refreshUpdates, [{ id: "one", refreshToken: "rotated-refresh" }]);
+});
+
 test("reports completed progress for a batch query", async () => {
   const progress = [];
   const pool = fakePool([
@@ -142,8 +167,8 @@ test("limits concurrent provider operations for a large batch", async () => {
   assert.deepEqual(pool.queryUpdates.sort(), accounts.map((account) => account.id).sort());
 });
 
-test("defaults large batch concurrency to ten", async () => {
-  const accounts = Array.from({ length: 12 }, (_, index) => ({
+test("defaults large batch concurrency to twenty", async () => {
+  const accounts = Array.from({ length: 24 }, (_, index) => ({
     id: `mailbox-${index + 1}`,
     providerId: "8t92",
     email: `mailbox-${index + 1}@example.com`
@@ -171,7 +196,7 @@ test("defaults large batch concurrency to ten", async () => {
 
   await coordinator.queryOnce(accounts.map((account) => account.id));
 
-  assert.equal(maximumActive, 10);
+  assert.equal(maximumActive, 20);
 });
 
 test("stopping a queued batch mailbox prevents it from starting", async () => {
@@ -304,6 +329,7 @@ function fakePool(accounts) {
   return {
     queryUpdates: [],
     renewalUpdates: [],
+    refreshUpdates: [],
     async listAccounts() {
       return accounts;
     },
@@ -312,6 +338,9 @@ function fakePool(accounts) {
     },
     async recordRenewalResult(id) {
       this.renewalUpdates.push(id);
+    },
+    async recordCredentialRefresh(id, account) {
+      this.refreshUpdates.push({ id, refreshToken: account.credentials.refreshToken });
     }
   };
 }
