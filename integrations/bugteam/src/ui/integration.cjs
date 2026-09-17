@@ -781,7 +781,10 @@ function normalizeAccountBalance(value) {
     email: readString(value.email),
     planType: readString(value.planType),
     hourlyPercentage: percentageOrUndefined(value.hourlyPercentage),
+    hourlyWindowPresent: booleanOrUndefined(value.hourlyWindowPresent),
     weeklyPercentage: percentageOrUndefined(value.weeklyPercentage),
+    weeklyWindowPresent: booleanOrUndefined(value.weeklyWindowPresent),
+    weeklyWindowMinutes: numberOrUndefined(value.weeklyWindowMinutes),
     creditsBalance: readString(value.creditsBalance),
     poolEnabled: value.poolEnabled === true,
     status
@@ -792,6 +795,16 @@ function percentageOrUndefined(value) {
   if (value === null || value === undefined) return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : undefined;
+}
+
+function numberOrUndefined(value) {
+  if (value === null || value === undefined) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function booleanOrUndefined(value) {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function normalizeEmail(value) {

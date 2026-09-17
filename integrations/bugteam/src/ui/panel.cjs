@@ -431,8 +431,19 @@ function createBugTeamPanelHtml() {
           unique.push(account);
         }
         accountBalances.innerHTML = unique.length
-          ? unique.map((account) => '<article class="account-balance"><div class="account-balance-head"><div><strong>' + esc(account.email || account.accountId || '未知账号') + '</strong><div class="hint">' + esc(account.planType || '未知套餐') + '</div></div><span class="status ' + (account.poolEnabled || account.status === 'already_exists' ? 'completed' : 'error') + '">' + esc(account.poolEnabled ? '已入无感池' : accountResultState(account.status)) + '</span></div><div class="account-balance-grid"><div><span>5h 额度</span><strong>' + esc(percentage(account.hourlyPercentage)) + '</strong></div><div><span>周额度</span><strong>' + esc(percentage(account.weeklyPercentage)) + '</strong></div><div><span>Credits 余额</span><strong>' + esc(account.creditsBalance || '—') + '</strong></div></div></article>').join('')
+          ? unique.map((account) => '<article class="account-balance"><div class="account-balance-head"><div><strong>' + esc(account.email || account.accountId || '未知账号') + '</strong><div class="hint">' + esc(account.planType || '未知套餐') + '</div></div><span class="status ' + (account.poolEnabled || account.status === 'already_exists' ? 'completed' : 'error') + '">' + esc(account.poolEnabled ? '已入无感池' : accountResultState(account.status)) + '</span></div><div class="account-balance-grid">' + renderAccountQuotaMetric(account) + '<div><span>' + esc(longQuotaLabel(account)) + '</span><strong>' + esc(percentage(account.weeklyPercentage)) + '</strong></div><div><span>Credits 余额</span><strong>' + esc(account.creditsBalance || '—') + '</strong></div></div></article>').join('')
           : '<div class="empty">购买并完成额度刷新后显示每个账号的额度。</div>';
+      }
+
+      function renderAccountQuotaMetric(account) {
+        if (account.hourlyWindowPresent === false) return '';
+        return '<div><span>5h 额度</span><strong>' + esc(percentage(account.hourlyPercentage)) + '</strong></div>';
+      }
+
+      function longQuotaLabel(account) {
+        const plan = String(account.planType || '').toLowerCase();
+        const minutes = Number(account.weeklyWindowMinutes);
+        return plan.includes('free') || (Number.isFinite(minutes) && minutes >= 28 * 24 * 60) ? '月额度' : '周额度';
       }
 
       function renderShelves() {

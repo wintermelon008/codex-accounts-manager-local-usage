@@ -236,6 +236,37 @@ test("BugTeam panel renders each imported account quota without credentials", ()
   assert.doesNotMatch(html, /access.token|id.token/iu);
 });
 
+test("BugTeam panel does not show a fake 5h quota for a monthly-only account", () => {
+  const panel = runPanelScript(createBugTeamPanelHtml());
+  panel.message({
+    type: "state",
+    state: {
+      order: {
+        importResult: {
+          accounts: [{
+            accountId: "free-account",
+            email: "free@example.test",
+            planType: "free",
+            hourlyPercentage: 100,
+            hourlyWindowPresent: false,
+            weeklyPercentage: 78,
+            weeklyWindowPresent: true,
+            weeklyWindowMinutes: 43200,
+            poolEnabled: true,
+            status: "ready"
+          }]
+        }
+      }
+    }
+  });
+
+  const html = panel.element("account-balances").innerHTML;
+  assert.doesNotMatch(html, /5h 额度/iu);
+  assert.match(html, /月额度/u);
+  assert.match(html, /78%/u);
+  assert.doesNotMatch(html, /100%/u);
+});
+
 function runPanelScript(html) {
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
   assert.ok(script, "panel script should exist");

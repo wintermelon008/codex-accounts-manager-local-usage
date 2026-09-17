@@ -210,7 +210,10 @@ test("BugTeam creates one idempotent order, downloads Sub2, and imports the acco
           email: "one@example.test",
           planType: "team",
           hourlyPercentage: 82,
+          hourlyWindowPresent: true,
           weeklyPercentage: 94,
+          weeklyWindowPresent: true,
+          weeklyWindowMinutes: 10080,
           creditsBalance: "12.50",
           poolEnabled: true,
           status: "ready"
@@ -239,7 +242,10 @@ test("BugTeam creates one idempotent order, downloads Sub2, and imports the acco
     email: "one@example.test",
     planType: "team",
     hourlyPercentage: 82,
+    hourlyWindowPresent: true,
     weeklyPercentage: 94,
+    weeklyWindowPresent: true,
+    weeklyWindowMinutes: 10080,
     creditsBalance: "12.50",
     poolEnabled: true,
     status: "ready"
