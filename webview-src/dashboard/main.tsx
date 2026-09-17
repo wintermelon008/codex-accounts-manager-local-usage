@@ -47,6 +47,7 @@ import {
   InfoIcon,
   AccountHealthFilterIcon,
   MailIcon,
+  SharingIcon,
   UnlockIcon
 } from "./icons";
 import {
@@ -596,6 +597,27 @@ function App() {
                 </span>
                 <span class="button-tip" aria-hidden="true">
                   {resolveAboutTitle(snapshot.lang)}
+                </span>
+              </button>
+              <button
+                id="accountSharingButton"
+                class="settings-btn action-btn icon-only"
+                type="button"
+                title={resolveAccountSharingLabel(snapshot.lang)}
+                aria-label={resolveAccountSharingLabel(snapshot.lang)}
+                disabled={hasGlobalPendingAction}
+                onClick={() => {
+                  setSharingAccountIds([]);
+                  setSharingOpen(true);
+                }}
+              >
+                <span class="button-face">
+                  <span class="button-icon">
+                    <SharingIcon />
+                  </span>
+                </span>
+                <span class="button-tip" aria-hidden="true">
+                  {resolveAccountSharingLabel(snapshot.lang)}
                 </span>
               </button>
               {topButtonIntegrations.map(({ integration, topButton, action }) => (
@@ -1255,6 +1277,16 @@ function resolveAboutTitle(lang: string): string {
     return "關於";
   }
   return "About";
+}
+
+function resolveAccountSharingLabel(lang: string): string {
+  if (lang === "zh") {
+    return "账号共享";
+  }
+  if (lang === "zh-hant") {
+    return "帳號共享";
+  }
+  return "Account sharing";
 }
 
 function resolveHiddenAccountsToggleLabel(lang: string, visible: boolean, count: number): string {

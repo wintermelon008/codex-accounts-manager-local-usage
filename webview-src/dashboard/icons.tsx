@@ -179,6 +179,28 @@ export function EyeOffIcon() {
   );
 }
 
+export function SharingIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M7 7h10m0 0-2.8-2.8M17 7l-2.8 2.8M17 17H7m0 0 2.8-2.8M7 17l2.8 2.8"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+      <path
+        d="M5 7.2A2.2 2.2 0 0 1 7.2 5h1.1M19 16.8a2.2 2.2 0 0 1-2.2 2.2h-1.1"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+    </svg>
+  );
+}
+
 export function InvalidAccountsIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">

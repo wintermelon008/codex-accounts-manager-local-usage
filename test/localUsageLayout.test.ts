@@ -164,6 +164,15 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(settings).not.toContain('patchAndSend("hotSwitchEnabled"');
   });
 
+  it("keeps a standalone account-sharing entry point for the management modal", () => {
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+
+    expect(main).toContain('id="accountSharingButton"');
+    expect(main).toContain("setSharingAccountIds([])");
+    expect(main).toContain("setSharingOpen(true)");
+    expect(main).toContain("<SharingModal");
+  });
+
   it("exposes a batch action for removing selected accounts from the seamless-switch pool", () => {
     const accountViews = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/accountViews.tsx"), "utf8");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
