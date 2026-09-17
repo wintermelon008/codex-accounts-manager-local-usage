@@ -63,7 +63,7 @@
 - [飞书私聊 M+/S+ 导入包](docs/integrations/feishu-private-import.md)：仅接收管理员一对一文本消息；M+ 写入 Manager 的显式本地收件箱，S+ 只写入独立私有队列。
 - [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；Gateway 默认隐藏已保存账号中的“手动 / Gateway”虚拟账号卡片，开启后可在卡片内显示 tracker 用量/估算价格和配置动作，但不伪造 OAuth 账号或进入任何自动账号池。
 - [Manager Gateway](docs/integrations/manager-gateway.md)：独立 task/session companion，承载浏览器入口、并行 Codex exec 和额度批次恢复；Workbench 数据由独立数据服务负责；需要 Manager extension 在线。
-- [Manager 账号共享](docs/ACCOUNT_SHARING.md)：基于 Manager 用户 ID、好友接受、加密 Relay、租约期限和自动归还的跨网络共享。
+- [Manager 账号共享与好友端配置](docs/ACCOUNT_SHARING.md)：基于 Manager 用户 ID、好友接受、加密 Relay、租约期限和自动归还的跨网络共享；包含 Ubuntu/Windows、Tailscale、首次注册令牌和故障排查流程。
 
 ## 安装与更新
 
