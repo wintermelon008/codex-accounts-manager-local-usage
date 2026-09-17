@@ -17,6 +17,7 @@ Manager 侧的独立 task/session Gateway。Research Workbench 只需配置 Gate
 - `GET /v1/usage/today`：读取 Gateway 自己记录的今日 token 用量和按模型统计。
 - `GET /v1/manager/accounts`、`GET /v1/manager/status`：向受控客户端提供脱敏的 Manager 账号/状态摘要。
 - `GET /v1/manager/proxy`：向同机 Feishu Helper 提供当前 Manager 有效的 HTTPS 代理和 `NO_PROXY`；该接口仍受 Gateway/Manager 本机令牌保护。
+- `/v1/sharing/*`：可选的跨网络账号共享 Relay；只保存公开用户资料、请求状态和端到端加密的共享包，不读取 OAuth token 明文。
 - 多 session 并行，使用 `MANAGER_GATEWAY_MAX_SESSIONS` 限制并发数。
 - 同一活动账号的 session 在额度耗尽时先等待该批次相关任务终态；只对明确因额度耗尽结束的 session 切换一次并恢复，其他已结束 session 不会被重复执行，并优先使用原 Codex thread 恢复。
 - 自动恢复会记录本 session 已尝试的账号，全部候选不可用时进入可解释的 `recovery_failed` 状态，不循环切号。
@@ -50,6 +51,10 @@ WORKBENCH_DATA_URL=http://127.0.0.1:43119
 MANAGER_GATEWAY_RESEARCH_BASE_URL=http://127.0.0.1:11434/v1
 MANAGER_GATEWAY_RESEARCH_MODEL=<local-model>
 MANAGER_GATEWAY_MAX_SESSIONS=4
+# 可选：启用 Manager 账号共享 Relay。Relay 只保存公开用户目录和密文包。
+MANAGER_GATEWAY_SHARING_BOOTSTRAP_TOKEN=<private-enrollment-token>
+# 可选：默认位于 MANAGER_GATEWAY_STATE_DIR/sharing
+MANAGER_GATEWAY_SHARING_STATE_DIR=<absolute-sharing-state-dir>
 # Feishu Helper 可选：配置后普通飞书私聊会通过同一 Gateway 创建/继续 AI session
 FEISHU_GATEWAY_URL=http://127.0.0.1:43118
 # 如果 Gateway 不是回环地址，填写其 MANAGER_GATEWAY_TOKEN
@@ -65,6 +70,10 @@ FEISHU_GATEWAY_URL=http://127.0.0.1:43118
 `MANAGER_CONTROL_TOKEN` 未设置时，Gateway 也会读取 `CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN`；这样可以直接复用 Manager 的私有 control env 文件，不必复制令牌。若两个令牌都没有，Gateway 仍可运行共享 `CODEX_HOME` 的 Codex session 和 token ledger，但账号查询、切换、自动恢复及 `/v1/manager/*` 会不可用。control API 返回的 adapter 信息只用于同机 Gateway 的短生命周期任务，不应保存到 Workbench 配置或提交到仓库。
 
 如果监听地址不是回环地址，必须配置 `MANAGER_GATEWAY_TOKEN`。Gateway 调用 Manager 时需要 `MANAGER_CONTROL_TOKEN`；Manager extension 使用同一个控制面令牌。真实令牌只放在目标设备的私有环境文件，不提交到仓库。
+
+账号共享的客户端协议与 Gateway 的部署方式无关：Linux 裸机、Docker、Windows 和 macOS 都运行同一个 `src/cli.mjs`，客户端只配置 Relay 的 HTTP(S) URL。Docker 需要将容器内端口发布到宿主机的 Tailscale 可达端口，并为 `MANAGER_GATEWAY_STATE_DIR` 挂载持久卷；多个设备或实例不得共用该卷。裸机上的 systemd、macOS 的 launchd、Windows 的 Task Scheduler 只是进程托管适配，不应改变 `/v1/sharing/*` 的行为。
+
+仓库提供 `integrations/manager-gateway/Dockerfile`，可直接作为 Relay 容器镜像基础。跨网络部署示例、Tailscale 端口映射和扩展宿主身份文件要求见 [`docs/ACCOUNT_SHARING.md`](../../docs/ACCOUNT_SHARING.md)。
 
 Feishu Helper 配置 `FEISHU_GATEWAY_URL=http://127.0.0.1:43118` 后，普通管理员私聊会通过本 Gateway 创建或继续 AI session，并与 Workbench session 共用 token ledger。Gateway 启动 Codex exec 时会注入 `WORKBENCH_DATA_URL` 和可选的 `WORKBENCH_DATA_TOKEN`，并把 Workbench HTTP API 约定加入 Codex 指令；因此飞书自然语言任务与 Workbench 网页端 AI 使用同一数据服务边界。Feishu 侧没有 Manager control 接口时，`账号`、`状态`、`健康`、`用量` 仍可按可用接口降级，其中 token 用量优先来自 Gateway；刷新额度、导入状态等 Manager 专属操作会明确提示未接入。
 

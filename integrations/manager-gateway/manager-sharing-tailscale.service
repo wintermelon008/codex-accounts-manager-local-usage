@@ -1,0 +1,14 @@
+[Unit]
+Description=Manager sharing Relay Tailscale TCP bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/socat TCP-LISTEN:43120,bind=100.114.125.9,reuseaddr,fork TCP:127.0.0.1:43118
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

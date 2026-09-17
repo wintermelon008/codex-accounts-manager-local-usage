@@ -1,12 +1,14 @@
 import http from "node:http";
+import { appendFile } from "node:fs/promises";
+import path from "node:path";
 
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_SESSION_BODY_BYTES = 8_000_000;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "quota_exhausted"]);
 
-export function createGatewayServer({ sessions, config, usage }) {
+export function createGatewayServer({ sessions, config, usage, sharingRelay }) {
   return http.createServer((request, response) => {
-    void handleRequest(request, response, { sessions, config, usage }).catch((error) => {
+    void handleRequest(request, response, { sessions, config, usage, sharingRelay }).catch((error) => {
       if (!response.headersSent) {
         sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }, config);
       } else if (!response.destroyed) {
@@ -37,7 +39,7 @@ export function listen(server, host, port) {
   });
 }
 
-async function handleRequest(request, response, { sessions, config, usage }) {
+async function handleRequest(request, response, { sessions, config, usage, sharingRelay }) {
   const url = new URL(request.url ?? "/", `http://${config.server.host}`);
   applyCors(response, config);
   if (request.method === "OPTIONS") {
@@ -47,6 +49,10 @@ async function handleRequest(request, response, { sessions, config, usage }) {
   }
   if (request.method === "GET" && url.pathname === "/healthz") {
     sendJson(response, 200, { ok: true, service: "codex-accounts-manager-gateway", api: "v1" }, config);
+    return;
+  }
+  if (url.pathname === "/v1/sharing" || url.pathname.startsWith("/v1/sharing/")) {
+    await handleSharingRequest(request, response, url, sharingRelay, config);
     return;
   }
   if (!isAuthorized(request, config.server.token)) {
@@ -246,6 +252,206 @@ async function handleRequest(request, response, { sessions, config, usage }) {
     return;
   }
   sendJson(response, 405, { error: "method not allowed" }, config);
+}
+
+async function handleSharingRequest(request, response, url, sharingRelay, config) {
+  if (!sharingRelay) {
+    sendJson(response, 503, { error: "account sharing relay is not configured" }, config);
+    return;
+  }
+
+  try {
+    await sharingRelay.init();
+    const token = readBearerToken(request);
+    const pathname = url.pathname;
+
+    if (pathname === "/v1/sharing/register" && request.method === "POST") {
+      let body;
+      try {
+        body = await readJsonBody(request, 32 * 1024);
+      } catch {
+        sendJson(response, 400, { error: "sharing profile must be valid JSON" }, config);
+        return;
+      }
+      const bootstrapAccepted = sharingRelay.isBootstrapToken(token);
+      writeSharingAudit(config, `register bootstrap=${bootstrapAccepted ? "accepted" : "rejected"}`);
+      if (!bootstrapAccepted) {
+        sendJson(response, 401, { error: "sharing relay enrollment token is invalid" }, config);
+        return;
+      }
+      sendJson(response, 201, await sharingRelay.registerProfile(body, token), config);
+      return;
+    }
+
+    const auth = await authenticateSharingRequest(sharingRelay, token);
+    if (!auth) {
+      writeSharingAudit(config, `auth-rejected method=${request.method} path=${pathname}`);
+      sendJson(response, 401, { error: "sharing relay authentication is invalid" }, config);
+      return;
+    }
+
+    if (pathname === "/v1/sharing/me" && request.method === "GET") {
+      if (!auth.userId) {
+        sendJson(response, 401, { error: "a registered sharing user token is required" }, config);
+        return;
+      }
+      sendJson(response, 200, auth, config);
+      return;
+    }
+
+    const userMatch = /^\/v1\/sharing\/users\/([^/]+)$/u.exec(pathname);
+    if (request.method === "GET" && userMatch?.[1]) {
+      const userId = decodeURIComponent(userMatch[1]);
+      const profile = await sharingRelay.lookupUser(userId, token);
+      if (!profile) {
+        sendJson(response, 404, { error: "sharing user not found" }, config);
+        return;
+      }
+      sendJson(response, 200, profile, config);
+      return;
+    }
+
+    if (!auth.userId) {
+      sendJson(response, 401, { error: "a registered sharing user token is required" }, config);
+      return;
+    }
+
+    if (pathname === "/v1/sharing/requests" && request.method === "POST") {
+      const body = await readJsonBody(request, 32 * 1024);
+      sendJson(response, 201, await sharingRelay.createRequest(auth.userId, body?.toUserId, token), config);
+      return;
+    }
+    if (pathname === "/v1/sharing/requests/inbox" && request.method === "GET") {
+      sendJson(response, 200, { requests: await sharingRelay.listIncomingRequests(auth.userId, token) }, config);
+      return;
+    }
+    if (pathname === "/v1/sharing/requests/mine" && request.method === "GET") {
+      sendJson(response, 200, { requests: await sharingRelay.listRequestsForUser(auth.userId, token) }, config);
+      return;
+    }
+    const peerRemoveMatch = /^\/v1\/sharing\/peers\/([^/]+)\/remove$/u.exec(pathname);
+    if (request.method === "POST" && peerRemoveMatch?.[1]) {
+      sendJson(
+        response,
+        200,
+        await sharingRelay.removePeer(auth.userId, decodeURIComponent(peerRemoveMatch[1]), token),
+        config
+      );
+      return;
+    }
+    const requestMatch = /^\/v1\/sharing\/requests\/([^/]+)\/(accept|reject)$/u.exec(pathname);
+    if (request.method === "POST" && requestMatch?.[1] && requestMatch[2]) {
+      sendJson(
+        response,
+        200,
+        await sharingRelay.updateRequest(
+          decodeURIComponent(requestMatch[1]),
+          auth.userId,
+          requestMatch[2] === "accept",
+          token
+        ),
+        config
+      );
+      return;
+    }
+
+    if (pathname === "/v1/sharing/transfers" && request.method === "POST") {
+      const body = await readJsonBody(request, 4 * 1024 * 1024);
+      sendJson(response, 201, await sharingRelay.createTransfer(auth.userId, body, token), config);
+      return;
+    }
+    if (pathname === "/v1/sharing/transfers/inbox" && request.method === "GET") {
+      const transfers = await sharingRelay.listIncomingTransfers(auth.userId, token);
+      writeSharingAudit(
+        config,
+        `inbox user=${auth.userId} count=${transfers.length} ids=${transfers.map((transfer) => transfer.id).join(",")}`
+      );
+      sendJson(response, 200, { transfers }, config);
+      return;
+    }
+    if (pathname === "/v1/sharing/transfers/sent" && request.method === "GET") {
+      const transfers = await sharingRelay.listSentTransfers(auth.userId, token);
+      writeSharingAudit(
+        config,
+        `sent user=${auth.userId} count=${transfers.length} states=${transfers
+          .map((transfer) => `${transfer.id}:${transfer.state}`)
+          .join(",")}`
+      );
+      sendJson(response, 200, { transfers }, config);
+      return;
+    }
+    const transferStatusMatch = /^\/v1\/sharing\/transfers\/([^/]+)$/u.exec(pathname);
+    if (request.method === "GET" && transferStatusMatch?.[1]) {
+      sendJson(
+        response,
+        200,
+        await sharingRelay.getTransferForRecipient(decodeURIComponent(transferStatusMatch[1]), auth.userId, token),
+        config
+      );
+      return;
+    }
+    const transferMatch = /^\/v1\/sharing\/transfers\/([^/]+)\/(ack|return|confirm-return|cancel)$/u.exec(pathname);
+    if (request.method === "POST" && transferMatch?.[1] && transferMatch[2]) {
+      const transferId = decodeURIComponent(transferMatch[1]);
+      if (transferMatch[2] === "return") {
+        const body = await readJsonBody(request, 4 * 1024 * 1024).catch(() => undefined);
+        sendJson(
+          response,
+          200,
+          await sharingRelay.returnTransfer(transferId, auth.userId, body, token),
+          config
+        );
+        return;
+      }
+      if (transferMatch[2] === "confirm-return") {
+        const body = await readJsonBody(request, 32 * 1024);
+        sendJson(
+          response,
+          200,
+          await sharingRelay.confirmReturn(transferId, auth.userId, body?.accountIds, token),
+          config
+        );
+        return;
+      }
+      if (transferMatch[2] === "cancel") {
+        sendJson(response, 200, await sharingRelay.cancelTransfer(transferId, auth.userId, token), config);
+        return;
+      }
+      const body = await readJsonBody(request, 32 * 1024);
+      sendJson(response, 200, await sharingRelay.acknowledgeTransfer(transferId, auth.userId, body, token), config);
+      return;
+    }
+
+    sendJson(response, 404, { error: "not found" }, config);
+  } catch (error) {
+    const status = typeof error?.statusCode === "number" ? error.statusCode : 400;
+    writeSharingAudit(config, `request-failed method=${request.method} path=${url.pathname} status=${status}`);
+    sendJson(response, status, { error: error instanceof Error ? error.message : String(error) }, config);
+  }
+}
+
+function writeSharingAudit(config, message) {
+  const stateDir = config?.sharing?.stateDir;
+  if (typeof stateDir !== "string" || !stateDir) {
+    return;
+  }
+  void appendFile(
+    path.join(stateDir, "sharing-relay-audit.log"),
+    `${new Date().toISOString()} ${message}\n`,
+    { encoding: "utf8", mode: 0o600 }
+  ).catch(() => undefined);
+}
+
+async function authenticateSharingRequest(sharingRelay, token) {
+  if (sharingRelay.isBootstrapToken(token)) {
+    return { userId: undefined, bootstrap: true };
+  }
+  return sharingRelay.authenticate(token);
+}
+
+function readBearerToken(request) {
+  const value = request.headers.authorization;
+  return typeof value === "string" && value.startsWith("Bearer ") ? value.slice("Bearer ".length).trim() : "";
 }
 
 function unavailableUsage() {

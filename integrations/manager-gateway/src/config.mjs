@@ -49,6 +49,10 @@ export function loadConfig(env = process.env) {
     workbenchDataUrl: optional(env.MANAGER_GATEWAY_WORKBENCH_DATA_URL) ?? optional(env.WORKBENCH_DATA_URL),
     workbenchDataToken:
       optional(env.MANAGER_GATEWAY_WORKBENCH_DATA_TOKEN) ?? optional(env.WORKBENCH_DATA_TOKEN),
+    sharing: {
+      bootstrapToken: optional(env.MANAGER_GATEWAY_SHARING_BOOTSTRAP_TOKEN),
+      stateDir: optional(env.MANAGER_GATEWAY_SHARING_STATE_DIR) ?? path.join(stateDir, "sharing")
+    },
     research: {
       baseUrl: optional(env.MANAGER_GATEWAY_RESEARCH_BASE_URL)
         ? normalizeBaseUrl(env.MANAGER_GATEWAY_RESEARCH_BASE_URL, "MANAGER_GATEWAY_RESEARCH_BASE_URL")

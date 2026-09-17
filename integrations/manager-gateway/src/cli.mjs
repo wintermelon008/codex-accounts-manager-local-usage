@@ -6,6 +6,7 @@ import { GatewaySessionManager } from "./session-manager.mjs";
 import { createGatewayServer, listen } from "./server.mjs";
 import { WorktreeManager } from "./worktree-manager.mjs";
 import { GatewayUsageLedger } from "./usage.mjs";
+import { createSharingRelay } from "./sharing-relay.mjs";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   printHelp();
@@ -24,6 +25,13 @@ async function start() {
     : undefined;
   const usage = new GatewayUsageLedger({ stateDir: config.server.stateDir });
   await usage.init();
+  const sharingRelay = config.sharing.bootstrapToken
+    ? createSharingRelay({
+        stateDir: config.sharing.stateDir,
+        bootstrapToken: config.sharing.bootstrapToken
+      })
+    : undefined;
+  await sharingRelay?.init();
   const sessions = new GatewaySessionManager({
     provider: createProvider(config, { manager }),
     manager,
@@ -34,7 +42,7 @@ async function start() {
     }),
     maxSessions: config.maxSessions
   });
-  const server = createGatewayServer({ sessions, config, usage });
+  const server = createGatewayServer({ sessions, config, usage, sharingRelay });
   const address = await listen(server, config.server.host, config.server.port);
   console.log(`[manager-gateway] listening on ${address.host}:${address.port}`);
 
@@ -70,5 +78,7 @@ function printHelp() {
   MANAGER_GATEWAY_RESEARCH_BASE_URL research 模式 OpenAI-compatible 地址
   MANAGER_GATEWAY_RESEARCH_API_KEY  research provider key
   MANAGER_GATEWAY_MAX_SESSIONS      并行 session 上限，默认 4
+  MANAGER_GATEWAY_SHARING_BOOTSTRAP_TOKEN  账号共享 Relay 注册令牌（可选）
+  MANAGER_GATEWAY_SHARING_STATE_DIR        账号共享 Relay 状态目录（可选）
 `);
 }
