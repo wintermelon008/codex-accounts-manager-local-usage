@@ -13,7 +13,11 @@ vi.mock("../src/auth/oauth", async () => {
   };
 });
 
-import { ensureFreshAccountTokens, ensureFreshTokensWithLease } from "../src/auth/tokenRefreshCoordinator";
+import {
+  ensureFreshAccountTokens,
+  ensureFreshTokensWithLease,
+  invalidateFreshAccountTokenRefresh
+} from "../src/auth/tokenRefreshCoordinator";
 import { clearAccountStates } from "../src/application/accounts/accountState";
 import { resolveAccountHealth } from "../src/application/accounts/health";
 
@@ -87,6 +91,45 @@ describe("token refresh coordinator", () => {
     expect(stored).toEqual(newTokens);
   });
 
+  it("does not reuse or overwrite an in-flight refresh after OAuth replaces credentials", async () => {
+    const oldTokens = makeTokens("old", 1);
+    const newTokens = makeTokens("oauth", 3_600);
+    let stored = oldTokens;
+    let releaseRefresh!: () => void;
+    const refreshFinished = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    refreshTokensMock.mockImplementation(async () => {
+      await refreshFinished;
+      return makeTokens("stale-refresh-result", 3_600);
+    });
+
+    const save = vi.fn(async (tokens: CodexTokens) => {
+      stored = tokens;
+    });
+    const source = {
+      key: "account:reauthorization-race",
+      load: async () => stored,
+      save
+    };
+    const repo = makeLeaseRepo();
+    const oldRefresh = ensureFreshTokensWithLease(repo, source);
+    for (let index = 0; index < 8; index += 1) {
+      await Promise.resolve();
+    }
+
+    expect(refreshTokensMock).toHaveBeenCalledOnce();
+    stored = newTokens;
+    invalidateFreshAccountTokenRefresh("reauthorization-race");
+
+    await expect(ensureFreshTokensWithLease(repo, source)).resolves.toEqual(newTokens);
+    releaseRefresh();
+
+    await expect(oldRefresh).resolves.toEqual(newTokens);
+    expect(save).not.toHaveBeenCalled();
+    expect(stored).toEqual(newTokens);
+  });
+
   it("re-reads after acquiring the lease and adopts a refresh done by another process", async () => {
     const oldTokens = makeTokens("old", 1);
     const newTokens = makeTokens("new", 3_600);
@@ -128,7 +171,7 @@ describe("token refresh coordinator", () => {
 
     expect(result).toEqual(newTokens);
     expect(refreshTokensMock).toHaveBeenCalledWith(oldTokens.refreshToken, oldTokens.idToken);
-    expect(save).toHaveBeenCalledWith(newTokens);
+    expect(save).toHaveBeenCalledWith(newTokens, oldTokens);
   });
 
   it("adopts a changed token pair instead of forcing a second refresh", async () => {

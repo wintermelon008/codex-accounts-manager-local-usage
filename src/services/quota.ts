@@ -59,6 +59,8 @@ export interface QuotaRefreshResult {
   updatedTokens?: CodexTokens;
   updatedPlanType?: string;
   updatedSubscriptionActiveUntil?: string;
+  /** The result belongs to credentials superseded while the request was in flight. */
+  stale?: boolean;
   /** The refresh failed, but the existing access token was used successfully. */
   tokenRefreshFailure?: {
     kind: TokenRefreshErrorKind;
@@ -169,11 +171,15 @@ export async function refreshQuota(
     };
   })();
 
-  inflightQuotaRefreshes.set(account.id, refreshTask);
+  const guardedRefreshTask = refreshTask.then((result) =>
+    generation === getQuotaCacheGeneration(account.id) ? result : { ...result, stale: true }
+  );
+
+  inflightQuotaRefreshes.set(account.id, guardedRefreshTask);
   try {
-    return await refreshTask;
+    return await guardedRefreshTask;
   } finally {
-    if (inflightQuotaRefreshes.get(account.id) === refreshTask) {
+    if (inflightQuotaRefreshes.get(account.id) === guardedRefreshTask) {
       inflightQuotaRefreshes.delete(account.id);
     }
   }

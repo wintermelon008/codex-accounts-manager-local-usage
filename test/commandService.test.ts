@@ -43,6 +43,30 @@ describe("account-bound reauthorization (simulated OAuth, no network)", () => {
     expect(repo.switchAccount).not.toHaveBeenCalled();
   });
 
+  it("commits the freshly authorized tokens when reauthorizing the active account", async () => {
+    const activeAccount = { ...account, isActive: true };
+    const replacement = { ...old, accessToken: token(account.email), refreshToken: "oauth-refresh" };
+    const repo = {
+      upsertFromTokens: vi.fn(async () => activeAccount),
+      switchAccount: vi.fn(async () => activeAccount)
+    };
+    const service = new AccountsCommandService(
+      {} as vscode.ExtensionContext,
+      repo as never,
+      { refresh: vi.fn() },
+      {} as never
+    );
+    Object.assign(service, {
+      withProgress: (_title: unknown, callback: (progress: unknown, cancellation: unknown) => Promise<unknown>) =>
+        callback({}, {})
+    });
+    vi.mocked(loginWithOAuth).mockResolvedValue(replacement);
+
+    await service.reauthorizeAccount(activeAccount);
+
+    expect(repo.switchAccount).toHaveBeenCalledWith(activeAccount.id, { tokens: replacement });
+  });
+
   it("does not clear cyan or write credentials when another account signs in", async () => {
     const { repo, service, health } = setup();
     vi.mocked(loginWithOAuth).mockResolvedValue({ ...old, idToken: token("other@example.invalid"), accessToken: token("other@example.invalid") });

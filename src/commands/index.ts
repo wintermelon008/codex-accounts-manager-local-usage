@@ -5,6 +5,7 @@ import { CodexAccountRecord } from "../core/types";
 import { AccountsRepository } from "../storage";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../codex";
 import type { RuntimeSwitchSource } from "../application/accounts/runtimeSwitchCoordinator";
+import type { AccountSharingService } from "../sharing";
 
 /**
  * 注册所有命令
@@ -22,14 +23,18 @@ export function registerCommands(
     ) => Promise<RuntimeAccountSwitchOutcome>;
   },
   hotSwitchRuntime: CodexHotSwitchRuntime,
-  options: { resetSeamlessSwitchRuntime?: () => void | Promise<void> } = {}
+  options: {
+    resetSeamlessSwitchRuntime?: () => void | Promise<void>;
+    accountSharing?: AccountSharingService;
+  } = {}
 ): void {
   const service = new AccountsCommandService(
     context,
     repo,
     view,
     hotSwitchRuntime,
-    options.resetSeamlessSwitchRuntime
+    options.resetSeamlessSwitchRuntime,
+    options.accountSharing
   );
 
   context.subscriptions.push(

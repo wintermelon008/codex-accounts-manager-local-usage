@@ -25,20 +25,37 @@ export type TokenRefreshAccountRepository = TokenRefreshLeaseRepository & {
   updateTokens(
     accountId: string,
     tokens: CodexTokens,
-    options?: { notifyTokenChange?: boolean }
+    options?: { notifyTokenChange?: boolean; expectedTokens?: CodexTokens }
   ): Promise<unknown>;
 };
 
 type CoordinatedTokenSource = {
   key: string;
   load(): Promise<CodexTokens | undefined>;
-  save(tokens: CodexTokens): Promise<void>;
+  save(tokens: CodexTokens, expectedTokens?: CodexTokens): Promise<void>;
   fallbackTokens?: CodexTokens;
   /** Refresh a still-valid token after an authenticated endpoint rejects it. */
   forceRefresh?: boolean;
 };
 
 const inFlightRefreshes = new Map<string, Promise<CodexTokens | undefined>>();
+/**
+ * Credential replacement generations. OAuth reauthorization can replace a
+ * credential while an older refresh request is still waiting on the provider;
+ * that older request must not be reused for the new credential pair.
+ */
+const refreshGenerations = new Map<string, number>();
+
+export function invalidateFreshAccountTokenRefresh(accountId: string): void {
+  const normalized = accountId.trim();
+  if (!normalized) {
+    return;
+  }
+
+  const key = `account:${normalized}`;
+  refreshGenerations.set(key, getRefreshGeneration(key) + 1);
+  inFlightRefreshes.delete(key);
+}
 
 /**
  * Read the latest account tokens and refresh them through a per-account
@@ -70,8 +87,11 @@ export function ensureFreshAccountTokens(
         accountId: current.accountId ?? options.providerAccountId ?? options.fallbackTokens?.accountId
       };
     },
-    save: async (tokens) => {
-      await repo.updateTokens(accountId, tokens, { notifyTokenChange: options.notifyTokenChange });
+    save: async (tokens, expectedTokens) => {
+      await repo.updateTokens(accountId, tokens, {
+        notifyTokenChange: options.notifyTokenChange,
+        expectedTokens
+      });
     }
   });
 }
@@ -84,12 +104,13 @@ export function ensureFreshTokensWithLease(
   repo: TokenRefreshLeaseRepository,
   source: CoordinatedTokenSource
 ): Promise<CodexTokens | undefined> {
+  const generation = getRefreshGeneration(source.key);
   const existing = inFlightRefreshes.get(source.key);
   if (existing) {
     return existing;
   }
 
-  const operation = refreshTokensWithLease(repo, source);
+  const operation = refreshTokensWithLease(repo, source, generation);
   const taskRef: { current?: Promise<CodexTokens | undefined> } = {};
   const clearInFlight = (): void => {
     if (inFlightRefreshes.get(source.key) === taskRef.current) {
@@ -113,9 +134,14 @@ export function ensureFreshTokensWithLease(
 
 async function refreshTokensWithLease(
   repo: TokenRefreshLeaseRepository,
-  source: CoordinatedTokenSource
+  source: CoordinatedTokenSource,
+  generation: number
 ): Promise<CodexTokens | undefined> {
-  const initial = (await source.load()) ?? source.fallbackTokens;
+  const loadLatest = async (): Promise<CodexTokens | undefined> => (await source.load()) ?? source.fallbackTokens;
+  const initial = await loadLatest();
+  if (!isRefreshGenerationCurrent(source.key, generation)) {
+    return loadLatest();
+  }
   if (!initial?.accessToken || (!source.forceRefresh && !needsTokenRefresh(initial))) {
     return initial;
   }
@@ -137,7 +163,7 @@ async function refreshTokensWithLease(
     TOKEN_REFRESH_LEASE_WAIT_MS
   );
   if (!lease) {
-    const afterWait = (await source.load()) ?? source.fallbackTokens;
+    const afterWait = await loadLatest();
     if (
       afterWait &&
       !needsTokenRefresh(afterWait) &&
@@ -149,7 +175,11 @@ async function refreshTokensWithLease(
   }
 
   try {
-    const current = (await source.load()) ?? source.fallbackTokens;
+    if (!isRefreshGenerationCurrent(source.key, generation)) {
+      return loadLatest();
+    }
+
+    const current = await loadLatest();
     const refreshedByAnotherProcess = Boolean(initial && current && hasCredentialChanged(initial, current));
     if (
       !current?.accessToken ||
@@ -166,14 +196,21 @@ async function refreshTokensWithLease(
     try {
       if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), current, "refreshing");
       const refreshed = await refreshTokens(current.refreshToken, current.idToken);
+      if (!isRefreshGenerationCurrent(source.key, generation)) {
+        return loadLatest();
+      }
       const effectiveTokens: CodexTokens = {
         ...refreshed,
         accountId: refreshed.accountId ?? current.accountId
       };
-      await source.save(effectiveTokens);
-      if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), effectiveTokens, "succeeded");
-      return effectiveTokens;
+      await source.save(effectiveTokens, current);
+      const persistedTokens = (await loadLatest()) ?? effectiveTokens;
+      if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), persistedTokens, "succeeded");
+      return persistedTokens;
     } catch (error) {
+      if (!isRefreshGenerationCurrent(source.key, generation)) {
+        return loadLatest();
+      }
       if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), current, classifyRenewalFailure(error));
       if (!isRefreshTokenReusedError(error)) {
         throw error;
@@ -191,6 +228,14 @@ async function refreshTokensWithLease(
   } finally {
     await lease.release();
   }
+}
+
+function getRefreshGeneration(key: string): number {
+  return refreshGenerations.get(key) ?? 0;
+}
+
+function isRefreshGenerationCurrent(key: string, generation: number): boolean {
+  return getRefreshGeneration(key) === generation;
 }
 
 export class TokenRefreshCoordinationError extends Error {

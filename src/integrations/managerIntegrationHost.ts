@@ -20,6 +20,9 @@ const INTEGRATION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 export const MANAGER_INTEGRATION_API_VERSION = 1 as const;
 
 export type IntegrationChangeEvent = (listener: () => void) => vscode.Disposable;
+export type AccountDirectoryChangeEvent = (
+  listener: (accountIds?: readonly string[]) => void
+) => vscode.Disposable;
 
 export type DeactivatedMailboxCleanupResult = {
   requested: number;
@@ -115,10 +118,14 @@ export type OAuthAccountImportResult = {
 export type RegistrationBrowserOptions = {
   /** Text copied before opening the standalone registration page. */
   clipboardText?: string;
+  /** Request a private/incognito browser window for the standalone GPT registration flow. */
+  incognito?: boolean;
 };
 
 export type RegistrationBrowserResult = {
   opened: boolean;
+  /** True only when the Manager verified that it launched a private/incognito window. */
+  incognito?: boolean;
 };
 
 export type BalancePoolImportResult = {
@@ -138,7 +145,10 @@ export type BalancePoolAccountResult = {
   email?: string;
   planType?: string;
   hourlyPercentage?: number;
+  hourlyWindowPresent?: boolean;
   weeklyPercentage?: number;
+  weeklyWindowPresent?: boolean;
+  weeklyWindowMinutes?: number;
   creditsBalance?: string;
   poolEnabled: boolean;
   status: "ready" | "refresh_failed" | "not_eligible" | "import_failed";
@@ -173,7 +183,7 @@ export type CodexAccountsIntegrationApi = {
   registerGateway: (integrationId: string) => GatewayRuntimeLease;
   registerVirtualAccount: (registration: VirtualAccountRegistration) => Promise<vscode.Disposable>;
   /** Optional notification that the sanitized Manager account directory changed. */
-  onDidChange?: IntegrationChangeEvent;
+  onDidChange?: AccountDirectoryChangeEvent;
   /** Optional sanitized account-directory capability for integrations such as Mailbox. */
   getManagedAccountEmails?: () => Promise<readonly string[]>;
   /** Optional sanitized account directory with the current reauthorization state. */
@@ -234,7 +244,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
   private readonly gatewayLeases = new Map<string, GatewayRuntimeLeaseState>();
   private readonly virtualAccounts = new Map<string, RegisteredVirtualAccount>();
   private readonly changeListeners = new Set<() => void>();
-  private readonly accountDirectoryChangeListeners = new Set<() => void>();
+  private readonly accountDirectoryChangeListeners = new Set<(accountIds?: readonly string[]) => void>();
   private virtualSwitchInFlight: Promise<RuntimeAccountSwitchOutcome> | undefined;
   private configuredGatewayOwner: string | undefined;
   private activeGatewayOwner: string | undefined;
@@ -357,11 +367,11 @@ export class ManagerIntegrationHost implements vscode.Disposable {
   }
 
   /** Notify optional integrations that the current Manager account directory may have changed. */
-  notifyAccountDirectoryChanged(): void {
+  notifyAccountDirectoryChanged(accountIds?: readonly string[]): void {
     this.fireDidChange();
     for (const listener of [...this.accountDirectoryChangeListeners]) {
       try {
-        listener();
+        listener(accountIds);
       } catch {
         // An optional integration must not break the Manager host event loop.
       }

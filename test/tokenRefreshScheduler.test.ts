@@ -45,7 +45,10 @@ describe("token refresh scheduler", () => {
           ...refreshed,
           accountId: "provider-account-a"
         },
-        { notifyTokenChange: false }
+        {
+          notifyTokenChange: false,
+          expectedTokens: { ...tokens, accountId: "provider-account-a" }
+        }
       );
     } finally {
       registration.dispose();
@@ -348,6 +351,35 @@ describe("token refresh scheduler", () => {
 
       expect(repo.getTokens).toHaveBeenCalledWith(account.id);
       expect(refreshTokensMock).toHaveBeenCalledOnce();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not refresh an owner account while it is leased to another host", async () => {
+    vi.useFakeTimers();
+    const account = {
+      ...makeAccount("account-a"),
+      sharing: {
+        leaseId: "lease-a",
+        direction: "outgoing" as const,
+        state: "shared" as const,
+        peerUserId: "rw_peer_1234567890",
+        expiresAt: Date.now() + 60_000,
+        sharedAt: Date.now()
+      }
+    };
+    const repo = makeRepo([account], makeTokens(240, 240));
+    const registration = registerScheduler(repo);
+
+    try {
+      await registration.resync();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(repo.getTokens).not.toHaveBeenCalled();
+      expect(refreshTokensMock).not.toHaveBeenCalled();
+      expect(repo.updateTokens).not.toHaveBeenCalled();
     } finally {
       registration.dispose();
       vi.useRealTimers();

@@ -13,7 +13,12 @@ import {
   scanLocalUsageAndAccountTokenUsage,
   scanLocalUsageSessions
 } from "../src/services/localUsageAnalytics";
-import type { LocalUsageScanner } from "../src/services/localUsageAnalytics";
+import type {
+  AccountTokenUsageSnapshot,
+  AccountTokenUsageWindow,
+  LocalUsageCombinedScanner,
+  LocalUsageScanner
+} from "../src/services/localUsageAnalytics";
 
 const NOW = Date.parse("2026-07-14T12:00:00.000Z");
 const TIME_ZONE = "Asia/Shanghai";
@@ -1016,6 +1021,64 @@ describe("scanLocalUsageSessions", () => {
     });
   });
 
+  it("accumulates primary account usage across quota resets", async () => {
+    const root = await createTempDirectory();
+    const sessionsPath = path.join(root, "sessions");
+    const attributionDirectory = path.join(root, "usage-attribution");
+    const firstRateLimits = {
+      primary: { resets_at: 1_800_000_000 },
+      secondary: { resets_at: 1_800_604_800 }
+    };
+    const secondRateLimits = {
+      primary: { resets_at: 1_800_018_000 },
+      secondary: { resets_at: 1_801_209_600 }
+    };
+    await writeSession(sessionsPath, "2026/07/14/reset.jsonl", [
+      { type: "session_meta", payload: { id: "thread-reset" } },
+      { type: "turn_context", payload: { model: "gpt-5.6-luna" } },
+      cumulativeTokenCountEvent(
+        "2026-07-14T01:00:00.000Z",
+        {
+          inputTokens: 80,
+          cachedInputTokens: 20,
+          outputTokens: 20,
+          reasoningOutputTokens: 2,
+          totalTokens: 100
+        },
+        undefined,
+        firstRateLimits
+      ),
+      cumulativeTokenCountEvent(
+        "2026-07-14T06:00:00.000Z",
+        {
+          inputTokens: 30,
+          cachedInputTokens: 10,
+          outputTokens: 10,
+          reasoningOutputTokens: 1,
+          totalTokens: 40
+        },
+        undefined,
+        secondRateLimits
+      )
+    ]);
+    await writeUsageAttribution(attributionDirectory, [
+      { v: 1, t: Date.parse("2026-07-14T00:59:00.000Z"), th: "thread-reset", a: "local-account" }
+    ]);
+
+    const result = await scanLocalUsageAndAccountTokenUsage({
+      sessionsPath,
+      usageAttributionDirectory: attributionDirectory,
+      periodDays: 1,
+      timeZone: TIME_ZONE,
+      now: NOW
+    });
+
+    expect(result.accountTokenUsage.lifetimeByAccount?.["local-account"]).toMatchObject({
+      totalTokens: 140,
+      windowCount: 2
+    });
+  });
+
   it("keeps the full current account quota window despite local-range trimming and reset timestamp jitter", async () => {
     const root = await createTempDirectory();
     const sessionsPath = path.join(root, "sessions");
@@ -1088,6 +1151,57 @@ describe("scanLocalUsageSessions", () => {
 });
 
 describe("LocalUsageAnalyticsService", () => {
+  it("retains lifetime account usage across refreshes without double counting a window", async () => {
+    const root = await createTempDirectory();
+    const storagePath = path.join(root, "storage");
+    let now = NOW;
+    let scanCount = 0;
+    const combinedScanner: LocalUsageCombinedScanner = vi.fn(async ({ periodDays, now: scannedAt }) => {
+      scanCount += 1;
+      const window = buildTestAccountUsageWindow(
+        scanCount === 1 ? 1_800_000_000 : 1_800_018_000,
+        scanCount === 1 ? 100 : 40,
+        scannedAt
+      );
+      return {
+        localUsage: readySnapshot(periodDays, scannedAt, window.totalTokens),
+        accountTokenUsage: {
+          status: "ready",
+          isRefreshing: false,
+          calculatedAt: scannedAt,
+          nextRefreshAt: scannedAt + LOCAL_USAGE_CACHE_TTL_MS,
+          windowsByAccount: { account: [window] },
+          lifetimeWindowsByAccount: { account: [window] }
+        }
+      };
+    });
+    const service = new LocalUsageAnalyticsService({
+      globalStoragePath: storagePath,
+      sessionsPath: path.join(root, "sessions"),
+      timeZone: TIME_ZONE,
+      now: () => now,
+      combinedScanner
+    });
+
+    const firstRefresh = waitForRefresh();
+    await service.getSnapshots(firstRefresh.resolve);
+    await firstRefresh.promise;
+    expect((await service.getSnapshots()).accountTokenUsage.lifetimeByAccount?.account?.totalTokens).toBe(100);
+
+    now += LOCAL_USAGE_CACHE_TTL_MS + 1;
+    const secondRefresh = waitForRefresh();
+    await service.getSnapshots(secondRefresh.resolve);
+    await secondRefresh.promise;
+    expect((await service.getSnapshots()).accountTokenUsage.lifetimeByAccount?.account?.totalTokens).toBe(140);
+
+    now += LOCAL_USAGE_CACHE_TTL_MS + 1;
+    const thirdRefresh = waitForRefresh();
+    await service.getSnapshots(thirdRefresh.resolve);
+    await thirdRefresh.promise;
+    expect((await service.getSnapshots()).accountTokenUsage.lifetimeByAccount?.account?.totalTokens).toBe(140);
+    expect(combinedScanner).toHaveBeenCalledTimes(3);
+  });
+
   it("uses the persisted aggregate for 15 minutes and only starts one refresh after expiry", async () => {
     const root = await createTempDirectory();
     const storagePath = path.join(root, "storage");
@@ -1412,6 +1526,29 @@ describe("LocalUsageAnalyticsService", () => {
     expect(accountWindowCache).not.toContain(secretThreadId);
   });
 });
+
+function buildTestAccountUsageWindow(
+  resetAt: number,
+  totalTokens: number,
+  lastObservedAt: number
+): AccountTokenUsageWindow {
+  const modelUsage = {
+    model: "gpt-5.6-luna",
+    inputTokens: totalTokens,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens
+  };
+  return {
+    window: "hourly",
+    resetAt,
+    eventCount: 1,
+    lastObservedAt,
+    byModel: [modelUsage],
+    ...modelUsage
+  };
+}
 
 function readySnapshot(periodDays: number, calculatedAt: number, totalTokens: number): DashboardLocalUsageViewModel {
   return {

@@ -4,13 +4,13 @@
 
 面向 VS Code 的多 Codex 账号管理扩展：导入或 OAuth 添加账号、查看配额、切换当前 `auth.json`，并提供本机用量、实验性无感切号和可选的本地集成。
 
-> 这是基于上游 `v0.1.19` 的本地 fork。本文说明的是 `0.1.19-dev` 开发构建与 `0.1.19-l2` 本地发布构建；VS Code Marketplace 上的上游扩展不承诺包含下列本地功能。
+> 这是基于上游 `v0.1.19` 的本地 fork。本文说明的是 `0.1.19-dev` 开发构建；VS Code Marketplace 上的上游扩展不承诺包含下列本地功能。
 
 本地版本已同步上游 `v0.1.17`–`v0.1.19` 的代理环境、状态栏配额控制、Business/Free 配额解析、认证请求重试、ChatGPT 桌面应用联动、订阅一致性修复，并保留本地 Dashboard、Mailbox、Gateway 和用量功能。
 
 ## 三分钟开始
 
-1. 安装本仓库提供或自行构建的 `0.1.19-dev`/`0.1.19-l2` `.vsix`。
+1. 安装本仓库提供或自行构建的 `0.1.19-dev` `.vsix`。
 2. 从命令面板运行 `Codex Accounts: Add Account via OAuth`，或 `Codex Accounts: Import Current auth.json`。
 3. 运行 `Codex Accounts: Show Quota Summary`，在 Dashboard 中刷新配额、切换账号和管理备份。
 
@@ -64,12 +64,13 @@
 - [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；Gateway 默认隐藏已保存账号中的“手动 / Gateway”虚拟账号卡片，开启后可在卡片内显示 tracker 用量/估算价格和配置动作，但不伪造 OAuth 账号或进入任何自动账号池。
 - [多来源 BugTeam 账号集成](docs/integrations/bugteam.md)：独立 VSIX 按来源卡片维护 BugTeam 官方 API 与超级炸弹车；支持服务端候补或本地库存候补，订单完成后统一导入并启用符合额度条件的无感池账号，但不会自动切换当前账号。
 - [Manager Gateway](docs/integrations/manager-gateway.md)：独立 task/session companion，承载浏览器入口、并行 Codex exec 和额度批次恢复；Workbench 数据由独立数据服务负责；需要 Manager extension 在线。
+- [Manager 账号共享](docs/ACCOUNT_SHARING.md)：基于 Manager 用户 ID、好友接受、加密 Relay、租约期限和自动归还的跨网络共享。
 
 ## 安装与更新
 
 ### 使用本地版本
 
-从本仓库获得 `codex-accounts-manager-<version>.vsix`（开发版使用 `0.1.19-dev`，本地发布版使用 `0.1.19-l2`），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
+从本仓库获得 `codex-accounts-manager-<version>.vsix`（当前开发版使用 `0.1.19-dev`），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
 
 ```bash
 code --install-extension codex-accounts-manager-<version>.vsix --force

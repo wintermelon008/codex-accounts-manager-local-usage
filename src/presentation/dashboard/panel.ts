@@ -20,6 +20,7 @@ import { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
 import { clearDashboardAccountOrder, getDashboardAccountOrder, setDashboardAccountOrder } from "./accountOrder";
+import type { AccountSharingService } from "../../sharing";
 
 const DASHBOARD_VIEW_TYPE = "codexQuotaSummary";
 export const DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS = 1_000;
@@ -36,6 +37,7 @@ type PublishDashboardSnapshotParams = {
   schedulePublishState: () => void;
   scheduleLocalUsageRefresh?: (nextRefreshAt: number) => void;
   usageAnalytics?: LocalUsageAnalyticsService;
+  accountSharing?: AccountSharingService;
   lastPublishedStateSignature?: string;
   force?: boolean;
   isCurrent?: () => boolean;
@@ -48,13 +50,15 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
   if (localUsage?.nextRefreshAt != null) {
     params.scheduleLocalUsageRefresh?.(localUsage.nextRefreshAt);
   }
+  const sharingArgument = params.accountSharing ? [params.accountSharing.getDashboardView()] as const : [];
   const state = await buildDashboardState(
     params.repo,
     params.settingsStore,
     params.logoUri,
     params.announcementsState,
     localUsage,
-    accountTokenUsage
+    accountTokenUsage,
+    ...sharingArgument
   );
   if (params.isCurrent && !params.isCurrent()) {
     return undefined;
@@ -93,7 +97,8 @@ class DashboardPanelController {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly repo: AccountsRepository
+    private readonly repo: AccountsRepository,
+    private readonly accountSharing?: AccountSharingService
   ) {
     this.announcements = new AnnouncementService(context.globalStorageUri.fsPath, context.extensionUri.fsPath);
     this.oauth = new DashboardOAuthCoordinator(repo, () => {
@@ -226,6 +231,7 @@ class DashboardPanelController {
       postMessage: (message) => this.panel!.webview.postMessage(message),
       schedulePublishState: () => this.schedulePublishState(),
       usageAnalytics: this.getUsageAnalytics(),
+      accountSharing: this.accountSharing,
       lastPublishedStateSignature: this.lastPublishedStateSignature,
       force,
       isCurrent: () => revision === this.publishRevision
@@ -250,7 +256,8 @@ class DashboardPanelController {
         refreshLocalUsage: async () => this.refreshLocalUsage(),
         oauth: this.oauth,
         announcements: this.announcements,
-        getAnnouncementOptions: () => this.getAnnouncementOptions()
+        getAnnouncementOptions: () => this.getAnnouncementOptions(),
+        accountSharing: this.accountSharing
       },
       message
     );
@@ -329,8 +336,12 @@ export function getDashboardLocalUsageRefreshDelay(nextRefreshAt: number, now = 
   return Math.max(DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS, nextRefreshAt - now);
 }
 
-export function openQuotaSummaryPanel(context: vscode.ExtensionContext, repo: AccountsRepository): void {
-  dashboardPanelController ??= new DashboardPanelController(context, repo);
+export function openQuotaSummaryPanel(
+  context: vscode.ExtensionContext,
+  repo: AccountsRepository,
+  accountSharing?: AccountSharingService
+): void {
+  dashboardPanelController ??= new DashboardPanelController(context, repo, accountSharing);
   dashboardPanelController.open();
 }
 

@@ -61,8 +61,14 @@ import {
   tryAcquireSharedFileLease
 } from "./accountsWriteCoordinator";
 import { readAuthFile, writeAuthFile } from "../codex";
-import { ensureFreshAccountTokens } from "../auth/tokenRefreshCoordinator";
-import { forgetAccountState } from "../application/accounts/accountState";
+import {
+  ensureFreshAccountTokens,
+  invalidateFreshAccountTokenRefresh
+} from "../auth/tokenRefreshCoordinator";
+import {
+  forgetAccountState,
+  resetAccountHealthEvidenceForCredentialChange
+} from "../application/accounts/accountState";
 import { createKeyedMutex } from "../utils/concurrency";
 import {
   CodexAccountRecord,
@@ -80,6 +86,7 @@ import {
   isSub2ApiAccount,
   CodexVirtualRouteDescriptor
 } from "../core/types";
+import type { CodexAccountSharingInfo } from "../core/types";
 import { fetchRemoteAccountProfile } from "../services/profile";
 import { clearQuotaCacheForAccount } from "../services/quota";
 import { prunePersistedAccountConcurrencyWindows } from "../application/accounts/accountConcurrency";
@@ -114,6 +121,9 @@ const DEBOUNCE_DELAY_MS = 100;
 /** 切换提交使用与运行时事务相同的跨宿主租约。 */
 const ACCOUNT_SWITCH_LEASE_MS = 60_000;
 const ACCOUNT_SWITCH_LEASE_WAIT_MS = 5_000;
+/** Token replacement and refresh writes must not cross each other. */
+const ACCOUNT_TOKEN_WRITE_LEASE_MS = 60_000;
+const ACCOUNT_TOKEN_WRITE_LEASE_WAIT_MS = 30_000;
 
 const INDEX_FILE = "accounts-index.json";
 const INDEX_TEMP_SUFFIX = ".tmp";
@@ -157,6 +167,12 @@ export class AccountsRepository {
   private readonly subscriptionRefreshes = new Map<string, Promise<void>>();
   private readonly tokenChangeListeners = new Set<TokenChangeListener>();
   private readonly accountChangeListeners = new Set<AccountChangeListener>();
+  /**
+   * Changes that affect the sanitized account directory exposed to optional
+   * integrations.  Sharing/pool/visibility metadata deliberately stays on
+   * onDidChangeAccounts and does not invalidate Mailbox's credential view.
+   */
+  private readonly accountDirectoryChangeListeners = new Set<AccountChangeListener>();
 
   /** 防止重复释放 */
   private disposed = false;
@@ -178,6 +194,25 @@ export class AccountsRepository {
   private invalidateIndexCache(): void {
     if (!this.state.pendingSave) {
       this.state.cache = null;
+    }
+  }
+
+  private async withAccountTokenWriteLease<T>(accountId: string, task: () => Promise<T>): Promise<T> {
+    const lease = await this.tryAcquireSchedulerLease(
+      `token-write-account-${accountId}`,
+      ACCOUNT_TOKEN_WRITE_LEASE_MS,
+      ACCOUNT_TOKEN_WRITE_LEASE_WAIT_MS
+    );
+    if (!lease) {
+      throw new StorageError("Another account credential write is in progress; try again shortly.", {
+        code: ErrorCode.STORAGE_WRITE_FAILED
+      });
+    }
+
+    try {
+      return await task();
+    } finally {
+      await lease.release();
     }
   }
 
@@ -205,6 +240,16 @@ export class AccountsRepository {
     return {
       dispose: (): void => {
         this.accountChangeListeners.delete(listener);
+      }
+    };
+  }
+
+  /** Subscribe only to additions/removals or credential/health changes visible to integrations. */
+  onDidChangeAccountDirectory(listener: AccountChangeListener): vscode.Disposable {
+    this.accountDirectoryChangeListeners.add(listener);
+    return {
+      dispose: (): void => {
+        this.accountDirectoryChangeListeners.delete(listener);
       }
     };
   }
@@ -238,6 +283,22 @@ export class AccountsRepository {
         listener(normalizedIds);
       } catch (error) {
         console.warn("[codexAccounts] account change listener failed:", error);
+      }
+    }
+  }
+
+  private notifyAccountDirectoryChanged(accountIds?: readonly string[]): void {
+    const normalizedIds =
+      accountIds === undefined ? undefined : [...new Set(accountIds.filter((accountId) => accountId?.trim()))];
+    if (normalizedIds?.length === 0) {
+      return;
+    }
+
+    for (const listener of [...this.accountDirectoryChangeListeners]) {
+      try {
+        listener(normalizedIds);
+      } catch (error) {
+        console.warn("[codexAccounts] account directory listener failed:", error);
       }
     }
   }
@@ -400,6 +461,7 @@ export class AccountsRepository {
 
     this.notifyTokensChanged();
     this.notifyAccountsChanged();
+    this.notifyAccountDirectoryChanged();
 
     return {
       source: "backup",
@@ -515,7 +577,9 @@ export class AccountsRepository {
         return storedTokens;
       }
 
-      if (!storedTokens || shouldSyncTokensFromAuthFile(storedTokens, mergedTokens)) {
+      const credentialsChanged = !storedTokens || shouldSyncTokensFromAuthFile(storedTokens, mergedTokens);
+      if (credentialsChanged) {
+        resetAccountHealthEvidenceForCredentialChange(accountId);
         await this.secretStore.setTokens(accountId, mergedTokens);
         clearQuotaCacheForAccount(accountId);
         this.notifyTokensChanged([accountId]);
@@ -526,8 +590,9 @@ export class AccountsRepository {
         cachedAt: Date.now(),
         mirrorRevision: await getAideckCodexAccountRevision(accountId)
       });
-      if (!storedTokens || shouldSyncTokensFromAuthFile(storedTokens, mergedTokens)) {
+      if (credentialsChanged) {
         this.notifyAccountsChanged([accountId]);
+        this.notifyAccountDirectoryChanged([accountId]);
       }
 
       return mergedTokens;
@@ -542,7 +607,7 @@ export class AccountsRepository {
   async updateTokens(
     accountId: string,
     tokens: CodexTokens,
-    options: { notifyTokenChange?: boolean } = {}
+    options: { notifyTokenChange?: boolean; expectedTokens?: CodexTokens } = {}
   ): Promise<CodexAccountRecord> {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
@@ -556,49 +621,71 @@ export class AccountsRepository {
       });
     }
 
-    const hadAuthQuotaError = getQuotaIssueKind(account.quotaError) === "auth";
-    const effectiveTokens = {
-      ...tokens,
-      accountId: tokens.accountId ?? account.accountId
-    };
+    return this.withAccountTokenWriteLease(accountId, async () => {
+      const currentTokens = await this.secretStore.getTokens(accountId);
+      if (
+        options.expectedTokens &&
+        (!currentTokens ||
+          toComparableTokenSnapshot({
+            ...currentTokens,
+            accountId: currentTokens.accountId ?? account.accountId
+          }) !==
+            toComparableTokenSnapshot({
+              ...options.expectedTokens,
+              accountId: options.expectedTokens.accountId ?? account.accountId
+            }))
+      ) {
+        // A newer OAuth/import write won the race while this refresh request
+        // was waiting. Never overwrite that credential pair with an older
+        // refresh response.
+        return account;
+      }
 
-    await this.secretStore.setTokens(accountId, effectiveTokens);
-    this.invalidateTokenCache(accountId);
-    await mirrorAideckCodexAccount(account, effectiveTokens);
-    if (options.notifyTokenChange !== false) {
-      this.notifyTokensChanged([accountId]);
-    }
+      const hadAuthQuotaError = getQuotaIssueKind(account.quotaError) === "auth";
+      const effectiveTokens = {
+        ...tokens,
+        accountId: tokens.accountId ?? account.accountId
+      };
 
-    let shouldWriteIndex = false;
-    if (effectiveTokens.accountId && effectiveTokens.accountId !== account.accountId) {
-      account.accountId = effectiveTokens.accountId;
-      account.updatedAt = Date.now();
-      shouldWriteIndex = true;
-    }
+      await this.secretStore.setTokens(accountId, effectiveTokens);
+      this.invalidateTokenCache(accountId);
+      await mirrorAideckCodexAccount(account, effectiveTokens);
+      if (options.notifyTokenChange !== false) {
+        this.notifyTokensChanged([accountId]);
+      }
 
-    if (getQuotaIssueKind(account.quotaError) === "auth") {
-      account.quotaError = undefined;
-      account.dismissedHealthIssueKey = undefined;
-      account.updatedAt = Date.now();
-      shouldWriteIndex = true;
-    }
+      let shouldWriteIndex = false;
+      if (effectiveTokens.accountId && effectiveTokens.accountId !== account.accountId) {
+        account.accountId = effectiveTokens.accountId;
+        account.updatedAt = Date.now();
+        shouldWriteIndex = true;
+      }
 
-    if (account.isActive) {
-      await writeAuthFile({
-        ...effectiveTokens,
-        accountId: account.accountId ?? effectiveTokens.accountId
-      });
-      await mirrorAideckCurrentAccount(accountId);
-    }
+      if (getQuotaIssueKind(account.quotaError) === "auth") {
+        account.quotaError = undefined;
+        account.dismissedHealthIssueKey = undefined;
+        account.updatedAt = Date.now();
+        shouldWriteIndex = true;
+      }
 
-    if (shouldWriteIndex) {
-      this.writeIndex(index);
-    }
-    if (options.notifyTokenChange !== false || (hadAuthQuotaError && shouldWriteIndex)) {
-      this.notifyAccountsChanged([accountId]);
-    }
+      if (account.isActive) {
+        await writeAuthFile({
+          ...effectiveTokens,
+          accountId: account.accountId ?? effectiveTokens.accountId
+        });
+        await mirrorAideckCurrentAccount(accountId);
+      }
 
-    return account;
+      if (shouldWriteIndex) {
+        this.writeIndex(index);
+      }
+      if (options.notifyTokenChange !== false || (hadAuthQuotaError && shouldWriteIndex)) {
+        this.notifyAccountsChanged([accountId]);
+        this.notifyAccountDirectoryChanged([accountId]);
+      }
+
+      return account;
+    });
   }
 
   async refreshAccountProfileMetadata(accountId: string): Promise<CodexAccountRecord> {
@@ -899,13 +986,20 @@ export class AccountsRepository {
       ...tokens,
       accountId: account.accountId ?? tokens.accountId
     };
-    await this.secretStore.setTokens(id, storedTokens);
-    this.invalidateTokenCache(id);
-    await clearAideckCodexAccountTombstone(id);
-    await mirrorAideckCodexAccount(account, storedTokens);
-    if (account.isActive) {
-      await mirrorAideckCurrentAccount(id);
-    }
+    await this.withAccountTokenWriteLease(id, async () => {
+      // OAuth/import replacement supersedes any older refresh request for
+      // this account. Drop its quota result as well so it cannot write the
+      // old token pair back after the replacement has been saved.
+      invalidateFreshAccountTokenRefresh(id);
+      clearQuotaCacheForAccount(id);
+      await this.secretStore.setTokens(id, storedTokens);
+      this.invalidateTokenCache(id);
+      await clearAideckCodexAccountTombstone(id);
+      await mirrorAideckCodexAccount(account, storedTokens);
+      if (account.isActive) {
+        await mirrorAideckCurrentAccount(id);
+      }
+    });
 
     if (options.persistImmediately) {
       await this.persistRecoveredIndex(index, options.restoreSource ?? "shared_json");
@@ -917,6 +1011,7 @@ export class AccountsRepository {
 
     this.notifyTokensChanged([id]);
     this.notifyAccountsChanged([id]);
+    this.notifyAccountDirectoryChanged([id]);
 
     return account;
   }
@@ -954,13 +1049,29 @@ export class AccountsRepository {
   }
 
   async exportSharedAccounts(accountIds: string[]): Promise<SharedCodexAccountJson[]> {
+    return this.exportSharedAccountsForLease(accountIds);
+  }
+
+  /** Export the current credentials of accounts held under one incoming lease. */
+  async exportSharedAccountsForReturn(accountIds: string[], leaseId: string): Promise<SharedCodexAccountJson[]> {
+    return this.exportSharedAccountsForLease(accountIds, leaseId);
+  }
+
+  private async exportSharedAccountsForLease(accountIds: string[], incomingLeaseId?: string): Promise<SharedCodexAccountJson[]> {
     const uniqueIds = Array.from(new Set(accountIds));
     if (uniqueIds.length === 0) {
       return [];
     }
 
     const index = await this.readIndex();
-    const accounts = index.accounts.filter((account) => uniqueIds.includes(account.id) && !isSub2ApiAccount(account));
+    const accounts = index.accounts.filter(
+      (account) =>
+        uniqueIds.includes(account.id) &&
+        !isSub2ApiAccount(account) &&
+        (incomingLeaseId === undefined
+          ? account.sharing === undefined
+          : account.sharing?.direction === "incoming" && account.sharing.leaseId === incomingLeaseId)
+    );
     const sharedAccounts: SharedCodexAccountJson[] = [];
 
     for (const account of accounts) {
@@ -1079,6 +1190,7 @@ export class AccountsRepository {
       }
       this.notifyTokensChanged([account.id]);
       this.notifyAccountsChanged([account.id]);
+      this.notifyAccountDirectoryChanged([account.id]);
       imported.push({ ...account });
     }
 
@@ -1092,7 +1204,10 @@ export class AccountsRepository {
    * @param options - Runtime bridge 回调在 coordinator 已持有租约时传入此标记
    * @returns 切换后的账号记录
    */
-  async switchAccount(accountId: string, options: { runtimeLeaseHeld?: boolean } = {}): Promise<CodexAccountRecord> {
+  async switchAccount(
+    accountId: string,
+    options: { runtimeLeaseHeld?: boolean; tokens?: CodexTokens } = {}
+  ): Promise<CodexAccountRecord> {
     // 切换会共同改写全局 auth.json、当前账号镜像和索引，不能按目标账号分片串行化。
     return this.accountMutex.runExclusive("switch", async () => {
       const lease = options.runtimeLeaseHeld
@@ -1105,14 +1220,17 @@ export class AccountsRepository {
       }
 
       try {
-        return await this.switchAccountLocked(accountId);
+        return await this.switchAccountLocked(accountId, options);
       } finally {
         await lease?.release();
       }
     });
   }
 
-  private async switchAccountLocked(accountId: string): Promise<CodexAccountRecord> {
+  private async switchAccountLocked(
+    accountId: string,
+    options: { runtimeLeaseHeld?: boolean; tokens?: CodexTokens } = {}
+  ): Promise<CodexAccountRecord> {
     // The target account still validates its own mirror revision in getTokens.
     // Keep the other cached credentials so the post-switch Dashboard does not
     // synchronously reread every account from SecretStorage.
@@ -1128,13 +1246,18 @@ export class AccountsRepository {
         code: ErrorCode.ACCOUNT_INVALID_DATA
       });
     }
+    if (account.sharing?.direction === "outgoing") {
+      throw new AccountError("Shared accounts cannot be activated on the owner Manager.", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
+    }
     if (account.isHidden && !account.isActive) {
       throw new AccountError("Hidden accounts cannot be activated. Unhide the account first.", {
         code: ErrorCode.ACCOUNT_INVALID_DATA
       });
     }
 
-    const tokens = await this.getTokens(accountId);
+    const tokens = options.tokens ?? (await this.getTokens(accountId));
     if (!tokens) {
       throw new AccountError(`Tokens missing for account ${account.email}`, {
         code: ErrorCode.AUTH_TOKEN_MISSING
@@ -1147,7 +1270,7 @@ export class AccountsRepository {
       accountId: account.accountId ?? tokens.accountId
     };
 
-    if (tokens.refreshToken) {
+    if (!options.tokens && tokens.refreshToken) {
       effectiveTokens =
         (await ensureFreshAccountTokens(this, accountId, {
           fallbackTokens: tokens,
@@ -1189,6 +1312,7 @@ export class AccountsRepository {
     this.writeIndex(index);
     this.notifyTokensChanged([accountId]);
     this.notifyAccountsChanged([accountId]);
+    this.notifyAccountDirectoryChanged([accountId]);
     forgetAccountState(accountId);
   }
 
@@ -1221,7 +1345,8 @@ export class AccountsRepository {
       );
     }
     const eligibleAccounts = selectedAccounts.filter((account) => !account.isHidden && !isSub2ApiAccount(account));
-    if (eligibleAccounts.length < 2) {
+    const shareableAccounts = eligibleAccounts.filter((account) => account.sharing?.direction !== "outgoing");
+    if (shareableAccounts.length < 2) {
       throw new AccountError("Select at least two non-hidden accounts for the seamless-switch pool.", {
         code: ErrorCode.ACCOUNT_INVALID_DATA
       });
@@ -1229,7 +1354,11 @@ export class AccountsRepository {
 
     let changed = false;
     for (const account of index.accounts) {
-      const enabled = selectedIds.has(account.id) && !account.isHidden && !isSub2ApiAccount(account);
+      const enabled =
+        selectedIds.has(account.id) &&
+        !account.isHidden &&
+        !isSub2ApiAccount(account) &&
+        account.sharing?.direction !== "outgoing";
       if (Boolean(account.balancePoolEnabled) !== enabled) {
         account.balancePoolEnabled = enabled;
         account.updatedAt = Date.now();
@@ -1241,7 +1370,8 @@ export class AccountsRepository {
     }
     return selectedAccounts.map((account) => ({
       ...account,
-      balancePoolEnabled: !account.isHidden && !isSub2ApiAccount(account)
+      balancePoolEnabled:
+        !account.isHidden && !isSub2ApiAccount(account) && account.sharing?.direction !== "outgoing"
     }));
   }
 
@@ -1250,6 +1380,11 @@ export class AccountsRepository {
     const account = index.accounts.find((item) => item.id === accountId);
     if (!account) {
       throw createError.accountNotFound(accountId);
+    }
+    if (enabled && account.sharing?.direction === "outgoing") {
+      throw new AccountError("Shared accounts cannot be added to the owner seamless-switch pool.", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
     }
     const nextEnabled = enabled && !account.isHidden && !isSub2ApiAccount(account);
     if (Boolean(account.balancePoolEnabled) !== nextEnabled) {
@@ -1282,6 +1417,23 @@ export class AccountsRepository {
       this.writeIndex(index);
     }
     return selectedAccounts.map((account) => ({ ...account, balancePoolEnabled: false }));
+  }
+
+  /** Persist non-secret lease metadata for an explicitly shared account. */
+  async setAccountSharingInfo(accountId: string, sharing: CodexAccountSharingInfo | undefined): Promise<CodexAccountRecord> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      throw createError.accountNotFound(accountId);
+    }
+    if (sharing && !sharing.leaseId.trim()) {
+      throw new AccountError("Account sharing lease ID is required", { code: ErrorCode.ACCOUNT_INVALID_DATA });
+    }
+    account.sharing = sharing ? { ...sharing } : undefined;
+    account.updatedAt = Date.now();
+    this.writeIndex(index);
+    this.notifyAccountsChanged([accountId]);
+    return { ...account, sharing: account.sharing ? { ...account.sharing } : undefined };
   }
 
   /**
@@ -1373,7 +1525,7 @@ export class AccountsRepository {
       const shouldClearAccountGroup = options.clearAccountGroup === true && account.accountGroup !== undefined;
       if (account.isHidden || account.balancePoolEnabled !== true || shouldClearAccountGroup) {
         account.isHidden = false;
-        account.balancePoolEnabled = true;
+        account.balancePoolEnabled = account.sharing?.direction === "outgoing" ? false : true;
         if (options.clearAccountGroup === true) {
           account.accountGroup = undefined;
         }
@@ -1387,7 +1539,7 @@ export class AccountsRepository {
     return selectedAccounts.map((account) => ({
       ...account,
       isHidden: false,
-      balancePoolEnabled: isSub2ApiAccount(account) ? false : true,
+      balancePoolEnabled: isSub2ApiAccount(account) || account.sharing?.direction === "outgoing" ? false : true,
       accountGroup: options.clearAccountGroup === true ? undefined : account.accountGroup
     }));
   }
@@ -1488,6 +1640,7 @@ export class AccountsRepository {
     this.writeIndex(index);
     if (previousQuotaIssueKind !== getQuotaIssueKind(account.quotaError) || (storedTokens && nextStoredTokens)) {
       this.notifyAccountsChanged([accountId]);
+      this.notifyAccountDirectoryChanged([accountId]);
     }
 
     return account;
@@ -1552,6 +1705,7 @@ export class AccountsRepository {
       this.writeIndex(index);
       if (previousError !== account.tokenRefreshLastError || previousErrorKind !== account.tokenRefreshLastErrorKind) {
         this.notifyAccountsChanged([accountId]);
+        this.notifyAccountDirectoryChanged([accountId]);
       }
     }
   }
@@ -1618,6 +1772,7 @@ export class AccountsRepository {
     }
     if (accountDirectoryChangedId) {
       this.notifyAccountsChanged([accountDirectoryChangedId]);
+      this.notifyAccountDirectoryChanged([accountDirectoryChangedId]);
     }
   }
 

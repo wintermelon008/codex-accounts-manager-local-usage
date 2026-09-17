@@ -2,7 +2,8 @@ import {
   DashboardAccountViewModel,
   DashboardLocalUsageViewModel,
   DashboardMetricViewModel,
-  DashboardState
+  DashboardState,
+  DashboardSharingViewModel
 } from "../../domain/dashboard/types";
 import { findAccountTokenUsageWindow, type AccountTokenUsageSnapshot } from "../../services/localUsageAnalytics";
 import { AccountsRepository } from "../../storage";
@@ -41,7 +42,8 @@ export async function buildDashboardState(
   logoUri: string,
   announcements: CodexAnnouncementState,
   localUsage?: DashboardLocalUsageViewModel,
-  accountTokenUsage?: AccountTokenUsageSnapshot
+  accountTokenUsage?: AccountTokenUsageSnapshot,
+  sharing?: DashboardSharingViewModel
 ): Promise<DashboardState> {
   const lang = settingsStore.resolveLanguage();
   const baseSettings = settingsStore.getDashboardSettings();
@@ -112,6 +114,7 @@ export async function buildDashboardState(
     localUsage,
     integrations,
     integrationSettings,
+    sharing,
     accounts: sortedAccounts.map((account) =>
       mapAccount(
         account,
@@ -233,6 +236,10 @@ function mapAccount(
     accountGroup: account.accountGroup,
     isCurrentWindowAccount: virtual ? Boolean(account.providerActive) : account.id === currentWindowAccountId,
     balancePoolEnabled: virtual ? false : Boolean(account.balancePoolEnabled),
+    sharingState: virtual ? undefined : account.sharing?.state,
+    sharingPeerUserId: virtual ? undefined : account.sharing?.peerUserId,
+    sharingPeerDisplayName: virtual ? undefined : account.sharing?.peerDisplayName,
+    sharingExpiresAt: virtual ? undefined : account.sharing?.expiresAt,
     showInStatusBar: Boolean(account.showInStatusBar),
     canToggleStatusBar,
     statusToggleTitle: canToggleStatusBar
@@ -258,6 +265,7 @@ function mapAccount(
     resetCreditsNextExpiresAt,
     quotaCountdownStartAvailable: virtual ? false : isQuotaCountdownStartAvailable(account),
     tokenUsage: virtual ? undefined : resolveAccountTokenUsage(account, accountTokenUsage),
+    lifetimeTokenUsage: virtual ? undefined : resolveAccountLifetimeTokenUsage(account, accountTokenUsage),
     autoSwitchLockedUntil:
       autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
     providerCard: virtual ? providerCard : undefined,
@@ -342,6 +350,13 @@ export function resolveAccountTokenUsage(
     reasoningOutputTokens: 0,
     totalTokens: 0
   };
+}
+
+export function resolveAccountLifetimeTokenUsage(
+  account: CodexAccountRecord,
+  snapshot: AccountTokenUsageSnapshot | undefined
+): DashboardAccountViewModel["lifetimeTokenUsage"] {
+  return snapshot?.lifetimeByAccount?.[account.id];
 }
 
 export function buildMetrics(

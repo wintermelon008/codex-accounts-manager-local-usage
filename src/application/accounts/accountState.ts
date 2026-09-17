@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { CodexAccountRecord, CodexTokens } from "../../core/types";
-import { decodeJwtPayload, getTokenExpiryEpochSeconds } from "../../utils/jwt";
+import { decodeJwtPayload, extractClaims, getTokenExpiryEpochSeconds } from "../../utils/jwt";
 
 import type { AvailabilityKind, RenewalKind } from "../../domain/accountHealth";
 export type { AvailabilityKind, RenewalKind } from "../../domain/accountHealth";
@@ -19,7 +19,6 @@ export type AvailabilityObservation = {
 export const AVAILABILITY_TTL_MS = 15 * 60 * 1000;
 const availability = new Map<string, AvailabilityObservation & { expiresAt?: number }>();
 const renewals = new Map<string, { fingerprint: string; kind: RenewalKind; at: number }>();
-const legacySuccessChecked = new Set<string>();
 // A successful renewal is positive authentication evidence even without a
 // resident model runtime. Later renewal failures must not erase that evidence.
 const renewalConfirmations = new Map<
@@ -44,7 +43,6 @@ type SavedEvidence = {
   availability?: ReturnType<typeof availability.get>;
   renewal?: ReturnType<typeof renewals.get>;
   confirmation?: ReturnType<typeof renewalConfirmations.get>;
-  legacySuccessChecked?: boolean;
 };
 let persistence: AccountStateStore | undefined;
 let pendingWrite = Promise.resolve();
@@ -56,26 +54,52 @@ export function initAccountStatePersistence(store: AccountStateStore): void {
   const validTime = (value: unknown): value is number =>
     typeof value === "number" && Number.isFinite(value) && value > 0 && value <= Date.now() + 5_000;
   const validHash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
-  const validExpiry = (value: unknown): boolean => value === undefined || (typeof value === "number" && Number.isFinite(value));
-  for (const key of store.keys().filter((key) => key.startsWith(STATE_PREFIX)).slice(0, 2_048)) {
+  const validExpiry = (value: unknown): boolean =>
+    value === undefined || (typeof value === "number" && Number.isFinite(value));
+  for (const key of store
+    .keys()
+    .filter((key) => key.startsWith(STATE_PREFIX))
+    .slice(0, 2_048)) {
     let id: string;
-    try { id = decodeURIComponent(key.slice(STATE_PREFIX.length)); } catch { continue; }
+    try {
+      id = decodeURIComponent(key.slice(STATE_PREFIX.length));
+    } catch {
+      continue;
+    }
     const saved = store.get<SavedEvidence>(key);
     if (!saved || saved.version !== 1) continue;
-    if (saved.legacySuccessChecked) legacySuccessChecked.add(id);
     const a = saved.availability;
-    if (a && a.localAccountId === id && typeof a.accountId === "string" && typeof a.runtimeId === "string" &&
-      validHash(a.credentialFingerprint) && validTime(a.observedAt) && validExpiry(a.expiresAt) &&
-      Number.isSafeInteger(a.sequence) && a.sequence > 0 &&
-      ["unknown", "usable", "auth_unavailable", "quota_limited"].includes(a.kind)) availability.set(id, { ...a });
+    if (
+      a &&
+      a.localAccountId === id &&
+      typeof a.accountId === "string" &&
+      typeof a.runtimeId === "string" &&
+      validHash(a.credentialFingerprint) &&
+      validTime(a.observedAt) &&
+      validExpiry(a.expiresAt) &&
+      Number.isSafeInteger(a.sequence) &&
+      a.sequence > 0 &&
+      ["unknown", "usable", "auth_unavailable", "quota_limited"].includes(a.kind)
+    )
+      availability.set(id, { ...a });
     const r = saved.renewal;
-    if (r && validHash(r.fingerprint) && validTime(r.at) &&
-      ["unknown", "refreshing", "succeeded", "unavailable", "network_failed"].includes(r.kind)) {
+    if (
+      r &&
+      validHash(r.fingerprint) &&
+      validTime(r.at) &&
+      ["unknown", "refreshing", "succeeded", "unavailable", "network_failed"].includes(r.kind)
+    ) {
       renewals.set(id, { ...r, kind: r.kind === "refreshing" ? "unknown" : r.kind });
     }
     const c = saved.confirmation;
-    if (c && typeof c.accountId === "string" && validHash(c.credentialFingerprint) &&
-      validTime(c.observedAt) && validExpiry(c.expiresAt)) renewalConfirmations.set(id, { ...c });
+    if (
+      c &&
+      typeof c.accountId === "string" &&
+      validHash(c.credentialFingerprint) &&
+      validTime(c.observedAt) &&
+      validExpiry(c.expiresAt)
+    )
+      renewalConfirmations.set(id, { ...c });
   }
   accountStateRevision();
 }
@@ -87,12 +111,14 @@ function persistAccountState(id: string): void {
     version: 1,
     availability: availability.has(id) ? { ...availability.get(id)! } : undefined,
     renewal: renewals.has(id) ? { ...renewals.get(id)! } : undefined,
-    confirmation: renewalConfirmations.has(id) ? { ...renewalConfirmations.get(id)! } : undefined,
-    legacySuccessChecked: legacySuccessChecked.has(id)
+    confirmation: renewalConfirmations.has(id) ? { ...renewalConfirmations.get(id)! } : undefined
   };
   // Per-account keys avoid overwriting other accounts updated by another window.
-  pendingWrite = pendingWrite.then(() => store.update(STATE_PREFIX + encodeURIComponent(id), snapshot))
-    .catch(() => { console.warn("[codexAccounts] could not persist local account health evidence"); });
+  pendingWrite = pendingWrite
+    .then(() => store.update(STATE_PREFIX + encodeURIComponent(id), snapshot))
+    .catch(() => {
+      console.warn("[codexAccounts] could not persist local account health evidence");
+    });
 }
 
 export async function flushAccountStates(): Promise<void> {
@@ -103,10 +129,33 @@ export function clearAccountStates(): void {
   availability.clear();
   renewals.clear();
   renewalConfirmations.clear();
-  legacySuccessChecked.clear();
   runtimeId = undefined;
   persistence = undefined;
   revision += 1;
+}
+
+/**
+ * Drop evidence that belongs to a credential pair replaced by another host.
+ * The next health read may recover a matching legacy renewal record for the
+ * new pair, but must never reuse the old pair's availability verdict.
+ */
+export function resetAccountHealthEvidenceForCredentialChange(accountId: string): void {
+  const normalized = accountId.trim();
+  if (!normalized) {
+    return;
+  }
+
+  const changed = [
+    availability.delete(normalized),
+    renewals.delete(normalized),
+    renewalConfirmations.delete(normalized)
+  ].some(Boolean);
+  if (!changed) {
+    return;
+  }
+
+  revision += 1;
+  persistAccountState(normalized);
 }
 
 /** Remove the local evidence belonging to an account that was deleted. */
@@ -115,7 +164,6 @@ export function forgetAccountState(accountId: string): void {
   availability.delete(accountId);
   renewals.delete(accountId);
   renewalConfirmations.delete(accountId);
-  legacySuccessChecked.delete(accountId);
   revision += 1;
   const store = persistence;
   if (!store) return;
@@ -138,9 +186,16 @@ function renewalFingerprint(tokens: CodexTokens): string {
     .digest("hex");
 }
 
-/** Recover local renewal history once, then bind it to the exact current pair.
+function normalizeEmailIdentity(email: string | undefined): string | undefined {
+  const normalized = email?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+/** Recover local renewal history, then bind it to the exact current pair.
  * A success timestamp alone, an unexpired JWT, or a quota response is not proof.
  * The credential must have been issued during that same successful operation.
+ * Failed or incomplete recovery stays retryable; it must never become a
+ * persisted negative marker that makes a later host keep showing unknown.
  */
 export function restoreAccountRenewalEvidence(account: CodexAccountRecord, tokens: CodexTokens | undefined): void {
   if (!tokens?.accessToken) return;
@@ -148,32 +203,69 @@ export function restoreAccountRenewalEvidence(account: CodexAccountRecord, token
   const errorAt = account.tokenRefreshLastErrorAt;
   // Repair the formerly omitted invalid_refresh_token classification without
   // applying an old error to another pair or to a different renewal operation.
-  if (previous?.kind === "unknown" && previous.fingerprint === renewalFingerprint(tokens) &&
-    typeof errorAt === "number" && errorAt >= previous.at && errorAt - previous.at <= 5_000 &&
-    classifyRenewalFailure(new Error(account.tokenRefreshLastError ?? "")) === "unavailable") {
+  if (
+    previous?.kind === "unknown" &&
+    previous.fingerprint === renewalFingerprint(tokens) &&
+    typeof errorAt === "number" &&
+    errorAt >= previous.at &&
+    errorAt - previous.at <= 5_000 &&
+    classifyRenewalFailure(new Error(account.tokenRefreshLastError ?? "")) === "unavailable"
+  ) {
     renewals.set(account.id, { ...previous, kind: "unavailable" });
     revision += 1;
     persistAccountState(account.id);
   }
-  if (legacySuccessChecked.has(account.id)) return;
-  legacySuccessChecked.add(account.id);
+  if (previous || availability.has(account.id) || renewalConfirmations.has(account.id)) return;
   try {
-    if (previous || availability.has(account.id) || renewalConfirmations.has(account.id)) return;
     const startedAt = account.tokenRefreshLastAttemptAt;
     const succeededAt = account.tokenRefreshLastSuccessAt;
-    if (!startedAt || !succeededAt || succeededAt < startedAt || succeededAt - startedAt > 60_000 ||
-      succeededAt > Date.now() || (errorAt !== undefined && errorAt >= succeededAt) ||
-      account.tokenRefreshLastError || !account.accountId || tokens.accountId !== account.accountId) return;
+    if (
+      !startedAt ||
+      !succeededAt ||
+      succeededAt < startedAt ||
+      succeededAt - startedAt > 60_000 ||
+      succeededAt > Date.now() ||
+      (errorAt !== undefined && errorAt >= succeededAt) ||
+      account.tokenRefreshLastError ||
+      !account.accountId ||
+      tokens.accountId !== account.accountId
+    )
+      return;
     const payload = decodeJwtPayload(tokens.accessToken);
-    const iat = payload["iat"], exp = payload["exp"];
-    if (typeof iat !== "number" || !Number.isFinite(iat) || typeof exp !== "number" || !Number.isFinite(exp) ||
-      iat * 1000 < startedAt - 5_000 || iat * 1000 > succeededAt + 5_000 ||
-      exp * 1000 <= Date.now() || exp <= iat) return;
+    const iat = payload["iat"],
+      exp = payload["exp"];
+    if (
+      typeof iat !== "number" ||
+      !Number.isFinite(iat) ||
+      typeof exp !== "number" ||
+      !Number.isFinite(exp) ||
+      iat * 1000 < startedAt - 5_000 ||
+      iat * 1000 > succeededAt + 5_000 ||
+      exp * 1000 <= Date.now() ||
+      exp <= iat
+    )
+      return;
     const auth = payload["https://api.openai.com/auth"] as Record<string, unknown> | undefined;
-    const providerAccountId = auth?.["chatgpt_account_id"] ?? auth?.["account_id"];
-    const providerUserId = auth?.["chatgpt_user_id"] ?? auth?.["user_id"];
-    if (providerAccountId !== undefined ? providerAccountId !== account.accountId :
-      !account.userId || providerUserId !== account.userId) return;
+    let tokenClaims: ReturnType<typeof extractClaims> | undefined;
+    if (tokens.idToken) {
+      try {
+        tokenClaims = extractClaims(tokens.idToken, tokens.accessToken);
+      } catch {
+        // Keep the access-token-only compatibility path for older hosts and
+        // opaque ID tokens. It cannot use the email fallback below.
+      }
+    }
+    const providerAccountId = tokenClaims?.accountId ?? auth?.["chatgpt_account_id"] ?? auth?.["account_id"];
+    const providerUserId = tokenClaims?.userId ?? auth?.["chatgpt_user_id"] ?? auth?.["user_id"];
+    const tokenEmail = normalizeEmailIdentity(tokenClaims?.email);
+    const accountEmail = normalizeEmailIdentity(account.email);
+    const identityMatches =
+      providerAccountId !== undefined
+        ? providerAccountId === account.accountId
+        : providerUserId !== undefined
+          ? providerUserId === account.userId || (tokenEmail !== undefined && tokenEmail === accountEmail)
+          : tokenEmail !== undefined && tokenEmail === accountEmail;
+    if (!identityMatches) return;
     renewals.set(account.id, { fingerprint: renewalFingerprint(tokens), kind: "succeeded", at: succeededAt });
     recordAuthenticationSuccess(account.id, tokens, succeededAt);
   } catch {
@@ -191,7 +283,11 @@ export function setAvailabilityRuntime(id: string | undefined): void {
   }
 }
 
-export function recordAvailability(observation: AvailabilityObservation, now = Date.now(), tokens?: CodexTokens): boolean {
+export function recordAvailability(
+  observation: AvailabilityObservation,
+  now = Date.now(),
+  tokens?: CodexTokens
+): boolean {
   if (
     !Number.isSafeInteger(observation.sequence) ||
     observation.sequence <= 0 ||
@@ -291,6 +387,16 @@ export function recordAuthorization(accountId: string, tokens: CodexTokens): voi
   persistAccountState(accountId);
 }
 
+/** A completed managed runtime switch authenticated the target access token. */
+export function recordRuntimeAuthenticationSuccess(accountId: string, tokens: CodexTokens): void {
+  if (!accountId.trim() || !tokens.accountId || !tokens.accessToken) {
+    return;
+  }
+  recordAuthenticationSuccess(accountId, tokens, Date.now());
+  revision += 1;
+  persistAccountState(accountId);
+}
+
 function recordAuthenticationSuccess(accountId: string, tokens: CodexTokens, now: number): void {
   if (tokens.accountId && tokens.accessToken) {
     const previous = availability.get(accountId);
@@ -351,7 +457,9 @@ export function classifyRenewalFailure(error: unknown): RenewalKind {
       "refresh_token_expired",
       "refresh_token_revoked"
     ].includes(code) ||
-    /no refresh token is available|\[error_code:invalid_refresh_token\]|refresh.token.(?:reused|invalidated|expired|revoked)/iu.test(message)
+    /no refresh token is available|\[error_code:invalid_refresh_token\]|refresh.token.(?:reused|invalidated|expired|revoked)/iu.test(
+      message
+    )
   )
     return "unavailable";
   if (

@@ -41,6 +41,7 @@ vi.mock("../src/services/subscription", async (importOriginal) => {
 import { AccountsRepository } from "../src/storage";
 import { mirrorAideckCodexAccount } from "../src/storage/aideckCodexStorage";
 import { buildAccountStorageId } from "../src/utils/accountIdentity";
+import * as accountState from "../src/application/accounts/accountState";
 
 function createJwt(payload: Record<string, unknown>): string {
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -593,6 +594,62 @@ describe("AccountsRepository token persistence", () => {
     });
 
     repo.dispose();
+  });
+
+  it("resets health evidence when a fresher shared credential replaces local tokens", async () => {
+    const secrets = new Map<string, string>();
+    const evidence = new Map<string, unknown>();
+    const context = {
+      globalStorageUri: { fsPath: tempDir },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const storageId = buildAccountStorageId("dev@example.com", "acct_123", undefined);
+    const localTokens = createTokens("acct_123");
+    const sharedTokens = createTokens("acct_123");
+    sharedTokens.refreshToken = "shared-refresh-token";
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [{ id: storageId, email: "dev@example.com", accountId: "acct_123", createdAt: 1, updatedAt: 1 }]
+      }),
+      "utf8"
+    );
+    await context.secrets.store(`codex.account.${storageId}`, JSON.stringify(localTokens));
+    await writeAideckAccountJson(storageId, {
+      id: storageId,
+      email: "dev@example.com",
+      account_id: "acct_123",
+      tokens: {
+        id_token: sharedTokens.idToken,
+        access_token: sharedTokens.accessToken,
+        refresh_token: sharedTokens.refreshToken,
+        account_id: sharedTokens.accountId
+      }
+    });
+
+    accountState.initAccountStatePersistence({
+      keys: () => [...evidence.keys()],
+      get: <T>(key: string) => evidence.get(key) as T | undefined,
+      update: async (key: string, value: unknown) => {
+        evidence.set(key, structuredClone(value));
+      }
+    });
+    accountState.recordRenewal(storageId, sharedTokens, "unavailable");
+
+    const repo = new AccountsRepository(context);
+    expect((await repo.getTokens(storageId))?.refreshToken).toBe("shared-refresh-token");
+    expect(accountState.readRenewal(storageId, sharedTokens)).toBeUndefined();
+
+    repo.dispose();
+    accountState.clearAccountStates();
   });
 
   it("accepts Aideck credentials whose account ID is only in mirror metadata", async () => {

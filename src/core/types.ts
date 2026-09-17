@@ -44,6 +44,20 @@ export type SeamlessSwitchThreshold = 0 | 1 | 3 | 5;
 export type TokenRefreshErrorKind = "network" | "reauthorize" | "provider_response" | "storage" | "unknown";
 /** 账号面板与无感切号使用的可见分组。 */
 export type CodexAccountGroup = "A" | "B" | "C";
+export type CodexAccountSharingDirection = "outgoing" | "incoming";
+export type CodexAccountSharingState = "shared" | "received" | "return_pending";
+
+/** Non-secret lease metadata for an explicitly shared account. */
+export interface CodexAccountSharingInfo {
+  leaseId: string;
+  transferId?: string;
+  direction: CodexAccountSharingDirection;
+  state: CodexAccountSharingState;
+  peerUserId: string;
+  peerDisplayName?: string;
+  expiresAt: number;
+  sharedAt: number;
+}
 
 /**
  * 配额摘要信息
@@ -235,6 +249,8 @@ export interface CodexAccountRecord {
   showInStatusBar?: boolean;
   /** 是否参与五小时额度分档平衡 */
   balancePoolEnabled?: boolean;
+  /** Explicit owner-approved account-sharing lease metadata; never contains credentials. */
+  sharing?: CodexAccountSharingInfo;
   /** 忽略中的健康问题键 */
   dismissedHealthIssueKey?: string;
   /** 最后刷新配额的时间戳 (毫秒) */

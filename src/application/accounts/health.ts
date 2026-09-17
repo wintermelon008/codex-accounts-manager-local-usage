@@ -29,6 +29,8 @@ export type AccountHealthSignals = {
   mailboxDeactivated?: boolean;
 };
 
+type QuotaAvailabilitySignal = "allowed";
+
 export function resolveAccountHealth(
   account: CodexAccountRecord,
   tokens: CodexTokens | undefined,
@@ -47,7 +49,24 @@ export function resolveAccountHealth(
   }
 
   restoreAccountRenewalEvidence(account, tokens);
-  let availability = readAvailability(account.id, account.accountId ?? tokens?.accountId, tokens);
+  const accountId = account.accountId ?? tokens?.accountId;
+  const renewal = readRenewal(account.id, tokens) ?? "unknown";
+  const renewalAvailability = readRenewalAvailability(account.id, accountId, tokens);
+  let availability = readAvailability(account.id, accountId, tokens);
+  const quotaSignal = resolveQuotaAvailabilitySignal(account);
+  const quotaObservedAt = account.lastQuotaAt;
+
+  // A persisted runtime quota observation remains conservative until a newer
+  // quota response explicitly says the account is allowed again.
+  if (
+    quotaSignal === "allowed" &&
+    availability.kind === "quota_limited" &&
+    quotaObservedAt !== undefined &&
+    (availability.observedAt === undefined || quotaObservedAt >= availability.observedAt)
+  ) {
+    availability = renewalAvailability;
+  }
+
   const observedAt = availability.observedAt;
   if (
     availability.kind === "quota_limited" &&
@@ -58,7 +77,6 @@ export function resolveAccountHealth(
   ) {
     availability = readRenewalAvailability(account.id, account.accountId ?? tokens?.accountId, tokens);
   }
-  const renewal = readRenewal(account.id, tokens) ?? "unknown";
   let kind: AccountHealthKind;
   if (availability.kind === "auth_unavailable") kind = "access_token_invalid";
   else if (availability.kind === "quota_limited") kind = "quota";
@@ -82,6 +100,35 @@ export function resolveAccountHealth(
     renewal,
     observedAt: availability.observedAt
   };
+}
+
+function resolveQuotaAvailabilitySignal(account: CodexAccountRecord): QuotaAvailabilitySignal | undefined {
+  const quota = account.quotaSummary;
+  if (
+    !quota ||
+    account.lastQuotaAt === undefined ||
+    !Number.isFinite(account.lastQuotaAt) ||
+    (quota.hourlyWindowPresent !== true && quota.weeklyWindowPresent !== true)
+  ) {
+    return undefined;
+  }
+
+  const raw = asRecord(quota.rawData);
+  const rateLimit = asRecord(raw?.["rate_limit"] ?? raw?.["rateLimit"]);
+  if (!rateLimit) {
+    return undefined;
+  }
+
+  const allowed = rateLimit["allowed"];
+  const limitReached = rateLimit["limit_reached"] ?? rateLimit["limitReached"];
+  if (allowed === true && limitReached === false) {
+    return "allowed";
+  }
+  return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 export function isHealthDismissed(account: CodexAccountRecord, health: AccountHealthInfo): boolean {

@@ -23,7 +23,10 @@ export type BalancePoolAccountSummary = {
   email?: string;
   planType?: string;
   hourlyPercentage?: number;
+  hourlyWindowPresent?: boolean;
   weeklyPercentage?: number;
+  weeklyWindowPresent?: boolean;
+  weeklyWindowMinutes?: number;
   creditsBalance?: string;
   poolEnabled: boolean;
   status: "ready" | "refresh_failed" | "not_eligible" | "import_failed";
@@ -128,8 +131,11 @@ function toAccountSummary(
     accountId: readResultString(account.id),
     email: readResultString(account.email),
     planType: readResultString(account.planType),
-    hourlyPercentage: finiteNumber(quota?.hourlyPercentage),
-    weeklyPercentage: finiteNumber(quota?.weeklyPercentage),
+    hourlyPercentage: quota?.hourlyWindowPresent === true ? finiteNumber(quota.hourlyPercentage) : undefined,
+    hourlyWindowPresent: quota?.hourlyWindowPresent,
+    weeklyPercentage: quota?.weeklyWindowPresent === true ? finiteNumber(quota.weeklyPercentage) : undefined,
+    weeklyWindowPresent: quota?.weeklyWindowPresent,
+    weeklyWindowMinutes: finiteNumber(quota?.weeklyWindowMinutes),
     creditsBalance: readResultString(quota?.credits?.balance),
     poolEnabled,
     status

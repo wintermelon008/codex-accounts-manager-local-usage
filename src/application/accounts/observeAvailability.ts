@@ -15,6 +15,11 @@ type Repository = TokenRefreshAccountRepository & {
 /** Only the resident runtime may supply observations; quota calls never enter here. */
 export async function observeAccountAvailability(repo: Repository, event: HotSwitchAvailabilityEvent): Promise<void> {
   const account = await repo.getAccount(event.localAccountId);
+  if (account?.sharing?.direction === "outgoing") {
+    // The owner intentionally suspends local session evidence while the
+    // credential is leased to another Manager host.
+    return;
+  }
   const tokens = await repo.getTokens(event.localAccountId, { forceReload: true });
   if (
     !account ||

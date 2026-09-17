@@ -135,6 +135,7 @@ function isValidAccountsIndex(value: unknown): value is CodexAccountsIndex {
         record.accountGroup === "B" ||
         record.accountGroup === "C") &&
       (record.balancePoolEnabled === undefined || typeof record.balancePoolEnabled === "boolean") &&
+      (record.sharing === undefined || isValidAccountSharingInfo(record.sharing)) &&
       (record.accountKind === undefined || record.accountKind === "chatgpt" || record.accountKind === "sub2api") &&
       (record.manualOnly === undefined || typeof record.manualOnly === "boolean") &&
       (record.quotaMode === undefined || record.quotaMode === "chatgpt" || record.quotaMode === "none") &&
@@ -143,6 +144,27 @@ function isValidAccountsIndex(value: unknown): value is CodexAccountsIndex {
       (record.tags === undefined || (Array.isArray(record.tags) && record.tags.every((tag) => typeof tag === "string")))
     );
   });
+}
+
+function isValidAccountSharingInfo(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const sharing = value as NonNullable<CodexAccountRecord["sharing"]>;
+  return (
+    typeof sharing.leaseId === "string" &&
+    Boolean(sharing.leaseId.trim()) &&
+    (sharing.transferId === undefined || (typeof sharing.transferId === "string" && Boolean(sharing.transferId.trim()))) &&
+    (sharing.direction === "outgoing" || sharing.direction === "incoming") &&
+    (sharing.state === "shared" || sharing.state === "received" || sharing.state === "return_pending") &&
+    typeof sharing.peerUserId === "string" &&
+    Boolean(sharing.peerUserId.trim()) &&
+    (sharing.peerDisplayName === undefined || typeof sharing.peerDisplayName === "string") &&
+    typeof sharing.expiresAt === "number" &&
+    Number.isFinite(sharing.expiresAt) &&
+    typeof sharing.sharedAt === "number" &&
+    Number.isFinite(sharing.sharedAt)
+  );
 }
 
 function normalizeProviderRoute(value: unknown): CodexProviderRoute {

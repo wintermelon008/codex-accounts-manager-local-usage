@@ -11,10 +11,11 @@ import type {
 import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCountdown";
 import {
   getAccountHealthCategory,
+  getDashboardHealthFilter,
+  getDashboardSharingFilter,
   getSensitiveDisplayValue,
   isAccountInvalid,
-  isAccountReauthorizationRequired,
-  renderTagList
+  isAccountReauthorizationRequired
 } from "./helpers";
 import {
   CopyIcon,
@@ -46,6 +47,8 @@ export function SavedAccountCard(props: {
   refreshPending: boolean;
   copyImportJsonPending: boolean;
   copyImportJsonSucceeded: boolean;
+  shareAccountsPending: boolean;
+  returnSharedAccountPending: boolean;
   accountNameCopyPending: boolean;
   accountNameCopySucceeded: boolean;
   quotaCountdownStartPending: boolean;
@@ -62,6 +65,8 @@ export function SavedAccountCard(props: {
       | "reauthorize"
       | "refresh"
       | "copyAccountImportJson"
+      | "shareAccounts"
+      | "returnSharedAccount"
       | "copyText"
       | "startQuotaCountdown"
       | "remove"
@@ -72,6 +77,7 @@ export function SavedAccountCard(props: {
     accountId?: string,
     payload?: DashboardActionPayload
   ) => void;
+  onRequestShare?: () => void;
 }) {
   const { account, copy, settings, now, onAction, privacyMode } = props;
   const virtual = account.accountKind === "sub2api" || account.manualOnly === true;
@@ -96,19 +102,23 @@ export function SavedAccountCard(props: {
           ? "加入無感切換池"
           : "Add to seamless-switch pool";
   const [flipped, setFlipped] = useState(false);
-  const hasErrorHealth = !account.dismissedHealth && isAccountInvalid(account.healthKind);
-  const hasUsableRenewalWarning = !account.dismissedHealth && account.healthKind === "refresh_unavailable";
-  const hasWarningHealth =
+  const healthFilter = getDashboardHealthFilter(account);
+  const sharingFilter = getDashboardSharingFilter(account);
+  const incomingSharedAccount = sharingFilter === "received";
+  const outgoingSharedAccount = sharingFilter === "shared";
+  const hasErrorHealth = healthFilter === "error";
+  const hasUsableRenewalWarning = healthFilter === "usable";
+  const hasWarningHealth = healthFilter === "warning";
+  const hasUnknownHealth = healthFilter === "unknown";
+  const hasRecoverableRenewalWarning =
     !account.dismissedHealth &&
     !hasUsableRenewalWarning &&
     getAccountHealthCategory(account.healthKind) === "temporary_error";
-  const hasUnknownHealth =
-    !account.dismissedHealth && getAccountHealthCategory(account.healthKind) === "availability_unknown";
   const showReauthorizeButton =
     !virtual &&
     !account.dismissedHealth &&
     (isAccountReauthorizationRequired(account.healthKind) ||
-      hasWarningHealth ||
+      hasRecoverableRenewalWarning ||
       hasUsableRenewalWarning ||
       hasUnknownHealth);
   const gatewayActive = virtual && account.providerActive;
@@ -136,7 +146,9 @@ export function SavedAccountCard(props: {
     hasErrorHealth ? "health-error" : "",
     hasWarningHealth ? "health-warning" : "",
     hasUsableRenewalWarning ? "health-usable" : "",
-    hasUnknownHealth ? "health-unknown" : ""
+    hasUnknownHealth ? "health-unknown" : "",
+    incomingSharedAccount ? "sharing-incoming" : "",
+    outgoingSharedAccount ? "sharing-outgoing" : ""
   ]
     .filter(Boolean)
     .join(" ");
@@ -206,11 +218,28 @@ export function SavedAccountCard(props: {
                     {resolveAccountGroupLabel(account.accountGroup, props.lang)}
                   </span>
                 ) : null}
-                {virtual ? <span class="pill gateway-active">{gatewayActive ? "Gateway · 手动 · 当前" : "Gateway · 手动"}</span> : null}
+                {virtual ? (
+                  <span class="pill gateway-active">{gatewayActive ? "Gateway · 手动 · 当前" : "Gateway · 手动"}</span>
+                ) : null}
                 {account.isCurrentWindowAccount && !virtual ? <span class="pill active">{copy.current}</span> : null}
                 {account.balancePoolEnabled && !virtual ? (
                   <span class="pill active">
                     {props.lang === "zh" ? "无感" : props.lang === "zh-hant" ? "無感" : "Seamless"}
+                  </span>
+                ) : null}
+                {!virtual && account.sharingState ? (
+                  <span class={`pill sharing-pill ${incomingSharedAccount ? "sharing-incoming" : "sharing-outgoing"}`}>
+                    {account.sharingState === "received"
+                      ? props.lang === "zh" || props.lang === "zh-hant"
+                        ? "借入"
+                        : "Received"
+                      : account.sharingState === "return_pending"
+                        ? props.lang === "zh" || props.lang === "zh-hant"
+                          ? "待归还"
+                          : "Return pending"
+                        : props.lang === "zh" || props.lang === "zh-hant"
+                          ? "已共享"
+                          : "Shared"}
                   </span>
                 ) : null}
                 {!virtual ? renderHealthPill(account) : null}
@@ -229,7 +258,9 @@ export function SavedAccountCard(props: {
                 ))}
               </div>
             ) : virtual ? (
-              <div class="quota-empty-placeholder">{props.lang === "zh" ? "Gateway · 仅手动切换" : "Gateway · Manual only"}</div>
+              <div class="quota-empty-placeholder">
+                {props.lang === "zh" ? "Gateway · 仅手动切换" : "Gateway · Manual only"}
+              </div>
             ) : visibleMetrics.length > 0 ? (
               visibleMetrics.map((metric) => (
                 <MetricRow
@@ -265,21 +296,23 @@ export function SavedAccountCard(props: {
           ) : null}
           <div class="saved-card-divider"></div>
           <div class="saved-actions" onClick={stopFlip}>
-            {!virtual ? <button
-              class={`saved-control saved-status-toggle saved-pool-toggle ${account.balancePoolEnabled ? "is-checked" : ""} ${props.poolTogglePending ? "is-pending" : ""} ${account.isHidden ? "disabled" : ""}`}
-              type="button"
-              aria-label={poolToggleLabel}
-              aria-pressed={account.balancePoolEnabled}
-              disabled={props.busy || account.isHidden}
-              onClick={() => onAction("toggleBalancePool", account.id)}
-            >
-              <span class="saved-status-toggle-indicator" aria-hidden="true">
-                <span></span>
-              </span>
-              <span class="saved-control-tip align-left" aria-hidden="true">
-                {poolToggleLabel}
-              </span>
-            </button> : null}
+            {!virtual ? (
+              <button
+                class={`saved-control saved-status-toggle saved-pool-toggle ${account.balancePoolEnabled ? "is-checked" : ""} ${props.poolTogglePending ? "is-pending" : ""} ${account.isHidden ? "disabled" : ""}`}
+                type="button"
+                aria-label={poolToggleLabel}
+                aria-pressed={account.balancePoolEnabled}
+                disabled={props.busy || account.isHidden}
+                onClick={() => onAction("toggleBalancePool", account.id)}
+              >
+                <span class="saved-status-toggle-indicator" aria-hidden="true">
+                  <span></span>
+                </span>
+                <span class="saved-control-tip align-left" aria-hidden="true">
+                  {poolToggleLabel}
+                </span>
+              </button>
+            ) : null}
             {!virtual && account.isActive && !account.isCurrentWindowAccount ? (
               <ActionButton
                 icon={renderReloadIcon()}
@@ -360,7 +393,7 @@ export function SavedAccountCard(props: {
                 iconOnly
                 label={props.copyImportJsonSucceeded ? copy.copySuccess : copy.copyAccountImportJsonBtn}
                 pending={props.copyImportJsonPending}
-                disabled={props.busy}
+                disabled={props.busy || Boolean(account.sharingState)}
                 onClick={() => onAction("copyAccountImportJson", account.id)}
               />
             ) : null}
@@ -414,20 +447,37 @@ export function SavedAccountCard(props: {
                   key={`${detail.label}:${detail.value}`}
                   label={detail.label}
                   value={detail.value}
-                  color={detail.emphasis === "positive" ? "var(--accent-green)" : detail.emphasis === "warning" ? "#f59e0b" : undefined}
+                  color={
+                    detail.emphasis === "positive"
+                      ? "var(--accent-green)"
+                      : detail.emphasis === "warning"
+                        ? "#f59e0b"
+                        : undefined
+                  }
                 />
               ))}
-              {!virtual ? <CardDetailRow
-                label={resolveBackLabel("subscription", props.lang)}
-                value={account.subscriptionText}
-                title={account.subscriptionTitle}
-                color={account.subscriptionColor}
-              /> : null}
+              {!virtual ? (
+                <CardDetailRow
+                  label={resolveBackLabel("subscription", props.lang)}
+                  value={account.subscriptionText}
+                  title={account.subscriptionTitle}
+                  color={account.subscriptionColor}
+                />
+              ) : null}
               <CardDetailRow label={resolveBackLabel("addMethod", props.lang)} value={account.addMethodLabel} />
               <CardDetailRow
-                label={resolveBackLabel(account.accountTimeSource === "registration" ? "registrationAt" : "importedAt", props.lang)}
+                label={resolveBackLabel(
+                  account.accountTimeSource === "registration" ? "registrationAt" : "importedAt",
+                  props.lang
+                )}
                 value={account.accountTimeLabel}
               />
+              {!virtual ? (
+                <CardDetailRow
+                  label={resolveBackLabel("lifetimeUsage", props.lang)}
+                  value={formatLifetimeTokenUsage(account.lifetimeTokenUsage, props.lang)}
+                />
+              ) : null}
               <CardDetailRow
                 label={resolveBackLabel("maxConcurrency", props.lang)}
                 value={formatMaxConcurrency(account.maxConcurrency, props.lang)}
@@ -442,12 +492,34 @@ export function SavedAccountCard(props: {
                 color={account.statusColor}
               />
             </div>
-            <div class="saved-back-tags">
-              <div class="account-tag-row">
-                {renderTagList(account.tags) ?? <span class="tag-pill muted">{resolveNoTags(props.lang)}</span>}
-              </div>
-            </div>
             <div class="saved-back-footer" onClick={stopFlip}>
+              {!virtual && incomingSharedAccount ? (
+                <ActionButton
+                  class="saved-back-share-action saved-back-return-action"
+                  icon={<span aria-hidden="true">↩</span>}
+                  iconOnly
+                  label={props.lang === "zh" || props.lang === "zh-hant" ? "归还账号" : "Return account"}
+                  pending={props.returnSharedAccountPending}
+                  disabled={props.busy}
+                  onClick={() => onAction("returnSharedAccount", account.id)}
+                />
+              ) : !virtual && !outgoingSharedAccount ? (
+                <ActionButton
+                  class="saved-back-share-action"
+                  icon={<span aria-hidden="true">⇄</span>}
+                  iconOnly
+                  label={props.lang === "zh" || props.lang === "zh-hant" ? "共享账号" : "Share account"}
+                  pending={props.shareAccountsPending}
+                  disabled={props.busy}
+                  onClick={() => {
+                    if (props.onRequestShare) {
+                      props.onRequestShare();
+                    } else {
+                      onAction("shareAccounts", account.id);
+                    }
+                  }}
+                />
+              ) : null}
               <div class="saved-back-hint">{resolveBackHint(props.lang)}</div>
               <ActionButton
                 class="saved-back-copy-action"
@@ -482,7 +554,15 @@ function renderProviderActionIcon(actionId: string): ComponentChildren {
 }
 
 function resolveBackLabel(
-  key: "subscription" | "addMethod" | "registrationAt" | "importedAt" | "maxConcurrency" | "averageTokenRate" | "status",
+  key:
+    | "subscription"
+    | "addMethod"
+    | "registrationAt"
+    | "importedAt"
+    | "lifetimeUsage"
+    | "maxConcurrency"
+    | "averageTokenRate"
+    | "status",
   lang: DashboardState["lang"]
 ): string {
   const zh = lang === "zh" || lang === "zh-hant";
@@ -491,6 +571,7 @@ function resolveBackLabel(
     addMethod: zh ? "添加方式" : "Added by",
     registrationAt: zh ? "注册时间" : "Registered at",
     importedAt: zh ? "导入时间" : "Imported at",
+    lifetimeUsage: zh ? "累积用量" : "Cumulative usage",
     maxConcurrency: zh ? "最大并发" : "Max concurrency",
     averageTokenRate: zh ? "平均速率" : "Average rate",
     status: zh ? "状态" : "Status"
@@ -515,6 +596,17 @@ function formatAverageTokenRate(value: number | undefined, lang: DashboardState[
   return `${(value / 1_000).toFixed(2)}K Token/s`;
 }
 
+function formatLifetimeTokenUsage(
+  usage: DashboardAccountViewModel["lifetimeTokenUsage"],
+  lang: DashboardState["lang"]
+): string {
+  if (!usage) {
+    return lang === "zh" ? "暂无记录" : lang === "zh-hant" ? "暫無記錄" : "No record";
+  }
+  const price = estimateStandardApiCost(usage.byModel);
+  return `${(usage.totalTokens / 1_000_000).toFixed(2)}M ($${price.amountUsd.toFixed(2)})`;
+}
+
 function resolveBackStatus(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
   if (account.accountKind === "sub2api" || account.manualOnly) {
     return account.providerActive ? "Gateway · 手动" : "Gateway · 可手动切换";
@@ -526,10 +618,6 @@ function resolveBackStatus(account: DashboardAccountViewModel, lang: DashboardSt
     return lang === "zh" ? "当前激活" : lang === "zh-hant" ? "目前啟用" : "Current active";
   }
   return account.healthLabel;
-}
-
-function resolveNoTags(lang: DashboardState["lang"]): string {
-  return lang === "zh" ? "暂无标签" : lang === "zh-hant" ? "暫無標籤" : "No tags";
 }
 
 function resolveAccountGroupLabel(group: "A" | "B" | "C", lang: DashboardState["lang"]): string {

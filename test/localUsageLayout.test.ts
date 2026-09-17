@@ -114,9 +114,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(groupFiltersIndex).toBeGreaterThan(sortControlsIndex);
     expect(fastToggleIndex).toBeLessThan(sortControlsIndex);
     expect(main.slice(sortControlsIndex, groupFiltersIndex)).not.toContain("forceFastModeToggle");
-    const compactHeaderStylesStart = stylesheet.indexOf(
-      ".saved-accounts-header-actions > .account-fast-mode-toggle"
-    );
+    const compactHeaderStylesStart = stylesheet.indexOf(".saved-accounts-header-actions > .account-fast-mode-toggle");
     const compactHeaderStylesEnd = stylesheet.indexOf(".mailbox-open-btn", compactHeaderStylesStart);
     const compactHeaderStyles = stylesheet.slice(compactHeaderStylesStart, compactHeaderStylesEnd);
     expect(compactHeaderStyles).toContain("height: 24px");
@@ -357,8 +355,12 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).toContain('sendAction("unhideAccounts"');
     expect(main).toContain("hiddenAccountsToggleButton");
     expect(main).toContain("invalidAccountsToggleButton");
-    expect(main).toContain("<InvalidAccountsIcon />");
-    expect(main).toContain("disabled={invalidAccountCount === 0 && !showInvalidAccounts}");
+    expect(main).toContain("<AccountHealthFilterIcon />");
+    expect(main).toContain("accountHealthFilterMenu");
+    expect(main).toContain("selectedHealthFilters");
+    expect(stylesheet).toContain(
+      ".saved-accounts-header-actions > .account-health-filter > .settings-btn.action-btn.icon-only"
+    );
     expect(main.indexOf('id="invalidAccountsToggleButton"')).toBeGreaterThan(
       main.indexOf('id="hiddenAccountsToggleButton"')
     );

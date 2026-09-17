@@ -411,6 +411,31 @@ type DashboardMetricKey = string;
  */
 export type DashboardAccountPlanFilter = "free" | "plus" | "pro";
 
+export type DashboardSharingFilter = "shared" | "received";
+
+export interface DashboardSharingPeerViewModel {
+  userId: string;
+  displayName: string;
+  note?: string;
+  relationship: "pending_outgoing" | "trusted";
+}
+
+export interface DashboardSharingRequestViewModel {
+  id: string;
+  fromUserId: string;
+  fromDisplayName: string;
+}
+
+export interface DashboardSharingViewModel {
+  userId: string;
+  displayName: string;
+  relayConfigured: boolean;
+  lastSyncAt?: number;
+  lastSyncError?: string;
+  peers: DashboardSharingPeerViewModel[];
+  pendingRequests: DashboardSharingRequestViewModel[];
+}
+
 export interface DashboardMetricViewModel {
   key: DashboardMetricKey;
   label: string;
@@ -450,6 +475,8 @@ export interface DashboardAccountViewModel {
   maxConcurrency?: number;
   /** Aggregate Token/s over completed sessions in the current quota window. */
   averageTokenRate?: number;
+  /** Token usage accumulated across all Manager-observed quota windows. */
+  lifetimeTokenUsage?: DashboardAccountLifetimeTokenUsageViewModel;
   statusColor?: string;
   planTypeLabel: string;
   planType?: string;
@@ -461,6 +488,10 @@ export interface DashboardAccountViewModel {
   accountGroup?: CodexAccountGroup;
   isCurrentWindowAccount: boolean;
   balancePoolEnabled: boolean;
+  sharingState?: "shared" | "received" | "return_pending";
+  sharingPeerUserId?: string;
+  sharingPeerDisplayName?: string;
+  sharingExpiresAt?: number;
   showInStatusBar: boolean;
   canToggleStatusBar: boolean;
   statusToggleTitle: string;
@@ -511,6 +542,12 @@ export interface DashboardAccountTokenUsageViewModel extends DashboardLocalUsage
   resetAt: number;
   calculatedAt?: number;
   status: "loading" | "tracking" | "waiting";
+}
+
+export interface DashboardAccountLifetimeTokenUsageViewModel extends DashboardLocalUsageTokenTotals {
+  byModel: DashboardLocalUsageModelViewModel[];
+  windowCount: number;
+  lastObservedAt?: number;
 }
 
 export interface DashboardTokenAutomationViewModel {
@@ -662,6 +699,7 @@ export interface DashboardState {
   localUsage?: DashboardLocalUsageViewModel;
   integrations?: DashboardIntegrationViewModel[];
   integrationSettings?: DashboardIntegrationSettingViewModel[];
+  sharing?: DashboardSharingViewModel;
 }
 
 export interface DashboardIntegrationSettingViewModel {
@@ -679,6 +717,9 @@ export type DashboardActionName =
   | "markAnnouncementRead"
   | "markAllAnnouncementsRead"
   | "shareTokens"
+  | "shareAccounts"
+  | "manageSharing"
+  | "returnSharedAccount"
   | "copyAccountImportJson"
   | "restoreFromBackup"
   | "restoreFromAuthJson"
@@ -749,6 +790,21 @@ export interface DashboardActionPayload {
   integrationActionId?: string;
   integrationSettingId?: string;
   enabled?: boolean;
+  sharingOperation?:
+    | "addPeer"
+    | "acceptRequest"
+    | "rejectRequest"
+    | "removePeer"
+    | "setPeerNote"
+    | "configureRelay"
+    | "sync"
+    | "resetIdentity";
+  sharingUserId?: string;
+  sharingRequestId?: string;
+  sharingNote?: string;
+  sharingRelayUrl?: string;
+  sharingPeerUserId?: string;
+  sharingDeadlineMs?: number;
 }
 
 export interface DashboardActionResultPayload {

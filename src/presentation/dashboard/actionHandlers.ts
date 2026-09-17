@@ -27,6 +27,7 @@ import { getActiveManagerIntegrationHost, type DeactivatedMailboxCleanupResult }
 import { startQuotaCountdownForAccount } from "../../application/accounts/quotaCountdown";
 import { buildCodexImportFile } from "../../codex/authFile";
 import { clearStaleCodexSessionLocks } from "../../sessions";
+import type { AccountSharingService } from "../../sharing";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -38,6 +39,7 @@ export type DashboardActionContext = {
   oauth: DashboardOAuthCoordinator;
   announcements: AnnouncementService;
   getAnnouncementOptions: () => AnnouncementOptions;
+  accountSharing?: AccountSharingService;
 };
 
 const CODEX_BATCH_REFRESH_CONCURRENCY = 1;
@@ -107,6 +109,90 @@ async function runDashboardAction(
       return undefined;
     case "shareTokens":
       return handleShareTokens(ctx.repo, payload, translate);
+    case "shareAccounts":
+      if (!ctx.accountSharing) {
+        throw new Error("账号共享服务尚未启动");
+      }
+      {
+        const accountIds = payload?.accountIds ?? (account ? [account.id] : []);
+        if (payload?.sharingPeerUserId && Number.isFinite(payload.sharingDeadlineMs)) {
+          await ctx.accountSharing.shareAccountsWithPeer(
+            accountIds,
+            payload.sharingPeerUserId,
+            Date.now() + Math.max(1, payload.sharingDeadlineMs ?? 0)
+          );
+        } else {
+          await ctx.accountSharing.shareAccountsWithPrompt(accountIds, ctx.resolveLanguage());
+        }
+      }
+      ctx.schedulePublishState();
+      return undefined;
+    case "returnSharedAccount":
+      if (!ctx.accountSharing) {
+        throw new Error("账号共享服务尚未启动");
+      }
+      if (!account) {
+        throw new Error("找不到要归还的共享账号");
+      }
+      if (!(await ctx.accountSharing.returnAccount(account.id))) {
+        throw new Error("该账号已归还或不属于当前借入租约");
+      }
+      ctx.schedulePublishState();
+      return undefined;
+    case "manageSharing":
+      if (!ctx.accountSharing) {
+        throw new Error("账号共享服务尚未启动");
+      }
+      switch (payload?.sharingOperation) {
+        case "addPeer":
+          if (!payload.sharingUserId?.trim()) {
+            throw new Error("共享用户 ID 不能为空");
+          }
+          await ctx.accountSharing.addPeerById(payload.sharingUserId);
+          break;
+        case "acceptRequest":
+          if (!payload.sharingRequestId) {
+            throw new Error("共享请求 ID 不能为空");
+          }
+          await ctx.accountSharing.acceptRequest(payload.sharingRequestId, true);
+          break;
+        case "rejectRequest":
+          if (!payload.sharingRequestId) {
+            throw new Error("共享请求 ID 不能为空");
+          }
+          await ctx.accountSharing.acceptRequest(payload.sharingRequestId, false);
+          break;
+        case "removePeer":
+          if (!payload.sharingUserId) {
+            throw new Error("共享好友 ID 不能为空");
+          }
+          await ctx.accountSharing.removePeer(payload.sharingUserId);
+          break;
+        case "setPeerNote":
+          if (!payload.sharingUserId) {
+            throw new Error("共享好友 ID 不能为空");
+          }
+          await ctx.accountSharing.setPeerNote(payload.sharingUserId, payload.sharingNote ?? "");
+          break;
+        case "configureRelay":
+          if (payload.sharingRelayUrl !== undefined) {
+            await ctx.accountSharing.setRelayUrl(payload.sharingRelayUrl);
+          } else {
+            await ctx.accountSharing.configureRelay();
+          }
+          break;
+        case "sync":
+          await ctx.accountSharing.poll();
+          break;
+        case "resetIdentity":
+          await ctx.accountSharing.resetIdentity();
+          break;
+        default:
+          await ctx.accountSharing.openManagement(ctx.resolveLanguage());
+          break;
+      }
+      ctx.schedulePublishState();
+      return undefined;
     case "copyAccountImportJson":
       return handleCopyAccountImportJson(ctx.repo, account, ctx.resolveLanguage());
     case "restoreFromBackup":
@@ -371,6 +457,9 @@ async function handleCopyAccountImportJson(
   try {
     if (!account || isSub2ApiAccount(account)) {
       throw new Error(resolveCopyAccountImportJsonUnavailableMessage(language));
+    }
+    if (account.sharing) {
+      throw new Error("共享租约中的账号不能再次导出凭据，请先完成归还");
     }
 
     const tokens = await repo.getTokens(account.id);

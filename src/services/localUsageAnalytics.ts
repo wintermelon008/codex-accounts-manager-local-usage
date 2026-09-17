@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import type {
+  DashboardAccountLifetimeTokenUsageViewModel,
   DashboardLocalUsageBucketModelViewModel,
   DashboardLocalUsageBucketViewModel,
   DashboardLocalUsageDayModelViewModel,
@@ -30,7 +31,8 @@ export const ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME = "account-token-usage-v4.json"
 export const ACCOUNT_USAGE_ATTRIBUTION_DIRECTORY_NAME = "account-usage-attribution";
 export const LOCAL_USAGE_SCAN_LEASE_FILE_NAME = `${CACHE_FILE_NAME}.scan-lease`;
 const CACHE_SCHEMA_VERSION = 9;
-const ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION = 4;
+const ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION = 5;
+const LEGACY_ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION = 4;
 const UNKNOWN_MODEL = "unknown";
 const PEER_REFRESH_WAIT_MS = 2_000;
 const PEER_REFRESH_POLL_MS = 50;
@@ -83,6 +85,9 @@ export type AccountTokenUsageSnapshot = {
   calculatedAt?: number;
   nextRefreshAt?: number;
   windowsByAccount: Record<string, AccountTokenUsageWindow[]>;
+  /** Primary-window aggregates retained beyond the normal 31-day scan range. */
+  lifetimeWindowsByAccount?: Record<string, AccountTokenUsageWindow[]>;
+  lifetimeByAccount?: Record<string, DashboardAccountLifetimeTokenUsageViewModel>;
 };
 
 export type LocalUsageSnapshots = {
@@ -165,6 +170,7 @@ type ScannedTokenUsage = {
   model: string;
   attributionAccountId?: string;
   quotaWindows: Array<Pick<AccountTokenUsageWindow, "window" | "resetAt">>;
+  primaryQuotaWindow?: Pick<AccountTokenUsageWindow, "window" | "resetAt">;
   afterSubagentBoundary: boolean;
 };
 
@@ -385,10 +391,6 @@ export class LocalUsageAnalyticsService {
       usageAttributionDirectory: this.usageAttributionDirectory
     });
     const snapshot = mergeLocalUsageSnapshots(this.snapshot, scanned.localUsage, this.timeZone, this.now());
-    const accountTokenUsage: AccountTokenUsageSnapshot = {
-      ...scanned.accountTokenUsage,
-      isRefreshing: false
-    };
 
     await this.syncSnapshotsFromCache();
     if (
@@ -397,6 +399,7 @@ export class LocalUsageAnalyticsService {
       return;
     }
 
+    const accountTokenUsage = mergeAccountTokenUsageSnapshots(this.accountTokenUsage, scanned.accountTokenUsage);
     await this.writeAccountTokenUsageCache(accountTokenUsage);
     const coverage = mergeUsageCoverage(this.cacheCoverage, scanned.localUsage, this.timeZone);
     await this.writeCache(snapshot, coverage);
@@ -526,6 +529,7 @@ async function scanLocalUsageSessionsInternal(
   const shortPeriodDays = Math.max(1, Math.floor(input.shortPeriodDays ?? LOCAL_USAGE_SHORT_PERIOD_DAYS));
   const empty = createEmptySnapshot("unavailable", input.periodDays, input.timeZone, input.now, shortPeriodDays);
   const accountUsageWindows = new Map<string, Map<string, AccountTokenUsageWindow>>();
+  const accountLifetimeUsageWindows = new Map<string, Map<string, AccountTokenUsageWindow>>();
   const tracksAccountUsage = attribution.recordCount > 0;
   const sessionRoots = getSessionRoots(input.sessionsPath);
   if (!(await hasDirectory(sessionRoots))) {
@@ -534,6 +538,7 @@ async function scanLocalUsageSessionsInternal(
       accountTokenUsage: createAccountTokenUsageSnapshot(
         attribution.recordCount > 0 ? "ready" : "unavailable",
         accountUsageWindows,
+        accountLifetimeUsageWindows,
         input.now
       )
     };
@@ -599,6 +604,16 @@ async function scanLocalUsageSessionsInternal(
           observation.usage,
           observation.timestamp
         );
+        if (observation.primaryQuotaWindow) {
+          addAccountTokenUsage(
+            accountLifetimeUsageWindows,
+            observation.attributionAccountId,
+            [observation.primaryQuotaWindow],
+            observation.model,
+            observation.usage,
+            observation.timestamp
+          );
+        }
         attributedEventCount += 1;
       }
 
@@ -732,12 +747,14 @@ async function scanLocalUsageSessionsInternal(
         const attributionRecord = includesAccountUsage
           ? findUsageAttribution(sessionThreadIds, timestamp, attribution.byThread)
           : undefined;
+        const quotaWindows = includesAccountUsage ? readTokenUsageQuotaWindows(payload) : [];
         const observation: ScannedTokenUsage = {
           usage,
           timestamp,
           model,
           attributionAccountId: attributionRecord?.a,
-          quotaWindows: includesAccountUsage ? readTokenUsageQuotaWindows(payload) : [],
+          quotaWindows,
+          primaryQuotaWindow: selectPrimaryQuotaWindow(quotaWindows),
           afterSubagentBoundary: subagentUsageBoundaryReached
         };
 
@@ -833,6 +850,7 @@ async function scanLocalUsageSessionsInternal(
     accountTokenUsage: createAccountTokenUsageSnapshot(
       attributedEventCount > 0 || attribution.recordCount > 0 ? "ready" : "unavailable",
       accountUsageWindows,
+      accountLifetimeUsageWindows,
       input.now
     )
   };
@@ -1122,28 +1140,144 @@ function createEmptyAccountTokenUsageSnapshot(
     isRefreshing: false,
     calculatedAt,
     nextRefreshAt: calculatedAt + LOCAL_USAGE_CACHE_TTL_MS,
-    windowsByAccount: {}
+    windowsByAccount: {},
+    lifetimeWindowsByAccount: {},
+    lifetimeByAccount: {}
   };
 }
 
 function createAccountTokenUsageSnapshot(
   status: AccountTokenUsageSnapshot["status"],
   windowsByAccount: Map<string, Map<string, AccountTokenUsageWindow>>,
+  lifetimeWindowsByAccount: Map<string, Map<string, AccountTokenUsageWindow>>,
   calculatedAt: number
 ): AccountTokenUsageSnapshot {
-  const serializedWindows: Record<string, AccountTokenUsageWindow[]> = {};
-  for (const [accountId, windows] of windowsByAccount) {
-    serializedWindows[accountId] = [...windows.values()]
-      .map((window) => ({
-        ...window,
-        byModel: [...window.byModel].sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model))
-      }))
-      .sort((a, b) => a.window.localeCompare(b.window) || a.resetAt - b.resetAt);
-  }
+  const serializedWindows = serializeAccountUsageWindows(windowsByAccount);
+  const serializedLifetimeWindows = serializeAccountUsageWindows(lifetimeWindowsByAccount);
   return {
     ...createEmptyAccountTokenUsageSnapshot(status, calculatedAt),
-    windowsByAccount: serializedWindows
+    windowsByAccount: serializedWindows,
+    lifetimeWindowsByAccount: serializedLifetimeWindows,
+    lifetimeByAccount: aggregateAccountLifetimeUsage(serializedLifetimeWindows)
   };
+}
+
+function serializeAccountUsageWindows(
+  windowsByAccount: Map<string, Map<string, AccountTokenUsageWindow>>
+): Record<string, AccountTokenUsageWindow[]> {
+  const serialized: Record<string, AccountTokenUsageWindow[]> = {};
+  for (const [accountId, windows] of windowsByAccount) {
+    serialized[accountId] = [...windows.values()]
+      .map(cloneAccountUsageWindow)
+      .sort((a, b) => a.window.localeCompare(b.window) || a.resetAt - b.resetAt);
+  }
+  return serialized;
+}
+
+function mergeAccountTokenUsageSnapshots(
+  previous: AccountTokenUsageSnapshot | undefined,
+  scanned: AccountTokenUsageSnapshot
+): AccountTokenUsageSnapshot {
+  const lifetimeWindowsByAccount = new Map<string, Map<string, AccountTokenUsageWindow>>();
+  for (const [accountId, windows] of Object.entries(getPersistedLifetimeWindows(previous))) {
+    for (const window of windows) {
+      mergeAccountUsageWindow(lifetimeWindowsByAccount, accountId, window);
+    }
+  }
+  for (const [accountId, windows] of Object.entries(scanned.lifetimeWindowsByAccount ?? {})) {
+    for (const window of windows) {
+      mergeAccountUsageWindow(lifetimeWindowsByAccount, accountId, window);
+    }
+  }
+
+  const serializedLifetimeWindows = serializeAccountUsageWindows(lifetimeWindowsByAccount);
+  return {
+    ...scanned,
+    isRefreshing: false,
+    lifetimeWindowsByAccount: serializedLifetimeWindows,
+    lifetimeByAccount: aggregateAccountLifetimeUsage(serializedLifetimeWindows)
+  };
+}
+
+function getPersistedLifetimeWindows(
+  snapshot: AccountTokenUsageSnapshot | undefined
+): Record<string, AccountTokenUsageWindow[]> {
+  if (snapshot?.lifetimeWindowsByAccount) {
+    return snapshot.lifetimeWindowsByAccount;
+  }
+
+  const seeded: Record<string, AccountTokenUsageWindow[]> = {};
+  for (const [accountId, windows] of Object.entries(snapshot?.windowsByAccount ?? {})) {
+    const primaryWindow = windows.find((window) => window.window === "hourly")?.window ?? windows[0]?.window;
+    if (!primaryWindow) {
+      continue;
+    }
+    seeded[accountId] = windows.filter((window) => window.window === primaryWindow).map(cloneAccountUsageWindow);
+  }
+  return seeded;
+}
+
+function mergeAccountUsageWindow(
+  windowsByAccount: Map<string, Map<string, AccountTokenUsageWindow>>,
+  accountId: string,
+  candidate: AccountTokenUsageWindow
+): void {
+  let accountWindows = windowsByAccount.get(accountId);
+  if (!accountWindows) {
+    accountWindows = new Map();
+    windowsByAccount.set(accountId, accountWindows);
+  }
+
+  const existingEntry = [...accountWindows.entries()].find(
+    ([, window]) =>
+      window.window === candidate.window &&
+      Math.abs(window.resetAt - candidate.resetAt) <= ACCOUNT_USAGE_RESET_DRIFT_TOLERANCE_SECONDS
+  );
+  if (!existingEntry) {
+    accountWindows.set(`${candidate.window}:${candidate.resetAt}`, cloneAccountUsageWindow(candidate));
+    return;
+  }
+
+  const [key, existing] = existingEntry;
+  const selected = candidate.totalTokens >= existing.totalTokens ? candidate : existing;
+  accountWindows.set(key, {
+    ...cloneAccountUsageWindow(selected),
+    lastObservedAt: Math.max(existing.lastObservedAt, candidate.lastObservedAt)
+  });
+}
+
+function cloneAccountUsageWindow(window: AccountTokenUsageWindow): AccountTokenUsageWindow {
+  return {
+    ...window,
+    byModel: window.byModel
+      .map((modelUsage) => ({ ...modelUsage }))
+      .sort((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model))
+  };
+}
+
+function aggregateAccountLifetimeUsage(
+  lifetimeWindowsByAccount: Record<string, AccountTokenUsageWindow[]>
+): Record<string, DashboardAccountLifetimeTokenUsageViewModel> {
+  const lifetimeByAccount: Record<string, DashboardAccountLifetimeTokenUsageViewModel> = {};
+  for (const [accountId, windows] of Object.entries(lifetimeWindowsByAccount)) {
+    const aggregate: DashboardAccountLifetimeTokenUsageViewModel = {
+      ...emptyTotals(),
+      byModel: [],
+      windowCount: windows.length,
+      lastObservedAt: 0
+    };
+    const modelBuckets = new Map<string, DashboardLocalUsageModelViewModel>();
+    for (const window of windows) {
+      addTotals(aggregate, window);
+      aggregate.lastObservedAt = Math.max(aggregate.lastObservedAt ?? 0, window.lastObservedAt);
+      for (const modelUsage of window.byModel) {
+        addTotals(getOrCreateModelBucket(modelBuckets, modelUsage.model), modelUsage);
+      }
+    }
+    aggregate.byModel = sortModelBuckets(modelBuckets);
+    lifetimeByAccount[accountId] = aggregate;
+  }
+  return lifetimeByAccount;
 }
 
 function emptyUsageAttributionIndex(): UsageAttributionIndex {
@@ -1286,6 +1420,12 @@ function classifyTokenUsageQuotaWindows(
     usedWindows.add(fallback);
     return { window: fallback, resetAt: candidate.resetAt };
   });
+}
+
+function selectPrimaryQuotaWindow(
+  quotaWindows: readonly Pick<AccountTokenUsageWindow, "window" | "resetAt">[]
+): Pick<AccountTokenUsageWindow, "window" | "resetAt"> | undefined {
+  return quotaWindows.find((quotaWindow) => quotaWindow.window === "hourly") ?? quotaWindows[0];
 }
 
 function classifyQuotaWindowByDuration(
@@ -2041,19 +2181,33 @@ function parseCache(raw: string): LocalUsageCache | undefined {
 function parseAccountTokenUsageCache(raw: string): AccountTokenUsageCache | undefined {
   try {
     const candidate = asRecord(JSON.parse(raw));
-    if (!candidate || candidate["schemaVersion"] !== ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION) {
+    const schemaVersion = candidate?.["schemaVersion"];
+    if (
+      !candidate ||
+      (schemaVersion !== ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION &&
+        schemaVersion !== LEGACY_ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION)
+    ) {
       return undefined;
     }
     const snapshot = candidate["snapshot"];
     return isAccountTokenUsageSnapshot(snapshot)
       ? {
           schemaVersion: ACCOUNT_TOKEN_USAGE_CACHE_SCHEMA_VERSION,
-          snapshot
+          snapshot: normalizeAccountTokenUsageSnapshot(snapshot)
         }
       : undefined;
   } catch {
     return undefined;
   }
+}
+
+function normalizeAccountTokenUsageSnapshot(snapshot: AccountTokenUsageSnapshot): AccountTokenUsageSnapshot {
+  const lifetimeWindowsByAccount = snapshot.lifetimeWindowsByAccount ?? getPersistedLifetimeWindows(snapshot);
+  return {
+    ...snapshot,
+    lifetimeWindowsByAccount,
+    lifetimeByAccount: snapshot.lifetimeByAccount ?? aggregateAccountLifetimeUsage(lifetimeWindowsByAccount)
+  };
 }
 
 function isUsageSnapshot(value: unknown): value is DashboardLocalUsageViewModel {
@@ -2111,7 +2265,52 @@ function isAccountTokenUsageSnapshot(value: unknown): value is AccountTokenUsage
         accountId.length <= MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH &&
         Array.isArray(windows) &&
         windows.every(isAccountTokenUsageWindow)
-    )
+    ) &&
+    (candidate["lifetimeWindowsByAccount"] == null ||
+      isAccountUsageWindowMap(candidate["lifetimeWindowsByAccount"])) &&
+    (candidate["lifetimeByAccount"] == null || isAccountLifetimeUsageMap(candidate["lifetimeByAccount"]))
+  );
+}
+
+function isAccountUsageWindowMap(value: unknown): value is Record<string, AccountTokenUsageWindow[]> {
+  const candidate = asRecord(value);
+  return Boolean(
+    candidate &&
+      Object.entries(candidate).every(
+        ([accountId, windows]) =>
+          accountId.length > 0 &&
+          accountId.length <= MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH &&
+          Array.isArray(windows) &&
+          windows.every(isAccountTokenUsageWindow)
+      )
+  );
+}
+
+function isAccountLifetimeUsageMap(
+  value: unknown
+): value is Record<string, DashboardAccountLifetimeTokenUsageViewModel> {
+  const candidate = asRecord(value);
+  return Boolean(
+    candidate &&
+      Object.entries(candidate).every(
+        ([accountId, lifetime]) =>
+          accountId.length > 0 &&
+          accountId.length <= MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH &&
+          isAccountLifetimeUsage(lifetime)
+      )
+  );
+}
+
+function isAccountLifetimeUsage(value: unknown): value is DashboardAccountLifetimeTokenUsageViewModel {
+  const candidate = asRecord(value);
+  return Boolean(
+    candidate &&
+      isTokenTotals(candidate) &&
+      isFiniteNumber(candidate["windowCount"]) &&
+      candidate["windowCount"] >= 0 &&
+      (candidate["lastObservedAt"] == null || isFiniteNumber(candidate["lastObservedAt"])) &&
+      Array.isArray(candidate["byModel"]) &&
+      candidate["byModel"].every(isUsageModel)
   );
 }
 

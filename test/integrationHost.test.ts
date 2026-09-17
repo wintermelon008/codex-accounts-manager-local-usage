@@ -146,9 +146,10 @@ describe("ManagerIntegrationHost", () => {
 
   it("exposes a browser-only GPT registration handoff without changing OAuth ownership", async () => {
     const gateway = createGateway();
-    const openRegistrationBrowser = vi.fn(async (options: { clipboardText?: string } = {}) => {
+    const openRegistrationBrowser = vi.fn(async (options: { clipboardText?: string; incognito?: boolean } = {}) => {
       expect(options.clipboardText).toBe("manual@example.com");
-      return { opened: true as const };
+      expect(options.incognito).toBe(true);
+      return { opened: true as const, incognito: true as const };
     });
     const startOAuthAccountImport = vi.fn(async () => ({
       accountId: "account-1",
@@ -161,10 +162,13 @@ describe("ManagerIntegrationHost", () => {
       openRegistrationBrowser
     });
 
-    await expect(host.api.openRegistrationBrowser?.({ clipboardText: "manual@example.com" })).resolves.toEqual({
-      opened: true
+    await expect(
+      host.api.openRegistrationBrowser?.({ clipboardText: "manual@example.com", incognito: true })
+    ).resolves.toEqual({
+      opened: true,
+      incognito: true
     });
-    expect(openRegistrationBrowser).toHaveBeenCalledWith({ clipboardText: "manual@example.com" });
+    expect(openRegistrationBrowser).toHaveBeenCalledWith({ clipboardText: "manual@example.com", incognito: true });
     expect(startOAuthAccountImport).not.toHaveBeenCalled();
     host.dispose();
   });

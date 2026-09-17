@@ -26,6 +26,7 @@ import {
   refreshSingleQuotaSafely
 } from "./quota";
 import { handleCodexAppRestartPreference, promptWindowReloadForAccount } from "./switchEffects";
+import type { AccountSharingService } from "../../sharing";
 const REFRESH_ALL_SILENT_CONCURRENCY = 1;
 const REFRESH_ALL_MANUAL_CONCURRENCY = 2;
 const REFRESH_ALL_SILENT_DELAY_MS = 300;
@@ -37,7 +38,8 @@ export class AccountsCommandService {
     private readonly repo: AccountsRepository,
     private readonly view: RefreshView,
     private readonly hotSwitchRuntime: CodexHotSwitchRuntime,
-    private readonly resetSeamlessSwitchRuntime?: () => void | Promise<void>
+    private readonly resetSeamlessSwitchRuntime?: () => void | Promise<void>,
+    private readonly accountSharing?: AccountSharingService
   ) {}
 
   async enableHotSwitch(): Promise<void> {
@@ -165,7 +167,10 @@ export class AccountsCommandService {
         const updated = await this.repo.upsertFromTokens(tokens, account.isActive);
         recordAuthorization(updated.id, { ...tokens, accountId: updated.accountId ?? tokens.accountId });
         if (account.isActive) {
-          await this.repo.switchAccount(updated.id);
+          // The OAuth exchange already produced the replacement credentials.
+          // Do not let switchAccount start/reuse a refresh for the superseded
+          // token pair while committing the active auth.json.
+          await this.repo.switchAccount(updated.id, { tokens });
           this.view.markObservedAuthIdentity?.(updated.id);
         }
 
@@ -443,7 +448,7 @@ export class AccountsCommandService {
   }
 
   showQuotaSummary(): void {
-    openQuotaSummaryPanel(this.context, this.repo);
+    openQuotaSummaryPanel(this.context, this.repo, this.accountSharing);
   }
 
   async restoreAccountsFromBackup(): Promise<void> {

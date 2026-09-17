@@ -732,6 +732,9 @@ function mapQuotaWindow(
   const requestsLimit = quota[`${prefix}RequestsLimit` as keyof typeof quota];
   const windowMinutes = quota[`${prefix}WindowMinutes` as keyof typeof quota];
   const present = quota[`${prefix}WindowPresent` as keyof typeof quota];
+  if (present === false) {
+    return undefined;
+  }
   return {
     percentage: asFiniteNumber(value),
     resetAt: asFiniteNumber(resetAt),

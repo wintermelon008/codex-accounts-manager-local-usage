@@ -405,7 +405,7 @@ describe("CodexHotSwitchBridge", () => {
     expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 0, max: 1 });
   }, 15_000);
 
-  it("does not count ephemeral aliases or subagent threads as separate account concurrency", async () => {
+  it("does not count ephemeral aliases but counts subagent threads as separate account concurrency", async () => {
     const root = path.resolve(__dirname, "..");
     shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
       cwd: root,
@@ -477,8 +477,8 @@ describe("CodexHotSwitchBridge", () => {
       await messages.next((message) => message.method === "turn/started" && message.params?.threadId === threadId);
     }
 
-    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 1);
-    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 1, max: 1 });
+    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 2);
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 2, max: 2 });
 
     for (const id of [
       "activity-filter-visible-complete",
@@ -490,7 +490,7 @@ describe("CodexHotSwitchBridge", () => {
       await messages.next((message) => message.id === id);
     }
     await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 0);
-    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 0, max: 1 });
+    expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 0, max: 2 });
   }, 15_000);
 
   it("does not let a classified hidden turn block all-conversations exhaustion recovery", async () => {

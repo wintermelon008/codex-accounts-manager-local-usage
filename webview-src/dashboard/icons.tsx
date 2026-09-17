@@ -26,7 +26,13 @@ export function renderQuotaCountdownStartIcon() {
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8" />
       <path d="M12 7.5v5l3 1.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <path d="M4.4 4.8 6.8 2.9M19.6 4.8l-2.4-1.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path
+        d="M4.4 4.8 6.8 2.9M19.6 4.8l-2.4-1.9"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
       <path d="m10.2 16.2 4.1 2.4-4.1 2.4Z" fill="currentColor" />
     </svg>
   );
@@ -176,13 +182,24 @@ export function EyeOffIcon() {
 export function InvalidAccountsIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 5l14 14M19 5 5 19" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+    </svg>
+  );
+}
+
+export function AccountHealthFilterIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path
-        d="M5 5l14 14M19 5 5 19"
+        d="M4 5.5h16l-6.1 7.1v5.2L10.1 19v-6.4L4 5.5Z"
         fill="none"
         stroke="currentColor"
-        stroke-width="1.9"
-        stroke-linecap="round"
+        stroke-width="1.8"
+        stroke-linejoin="round"
       />
+      <circle cx="7" cy="5.5" r="1" fill="currentColor" />
+      <circle cx="12" cy="5.5" r="1" fill="currentColor" />
+      <circle cx="17" cy="5.5" r="1" fill="currentColor" />
     </svg>
   );
 }
@@ -251,7 +268,14 @@ export function MailIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
       <rect x="3" y="5" width="18" height="14" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <path d="m4.2 7 7.8 6 7.8-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      <path
+        d="m4.2 7 7.8 6 7.8-6"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
     </svg>
   );
 }
@@ -265,7 +289,13 @@ export function BugTeamIcon() {
         stroke="currentColor"
         stroke-width="1.8"
       />
-      <path d="M5 10h3M16 10h3M5 14h3M16 14h3M10 5 9 3M14 5l1-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path
+        d="M5 10h3M16 10h3M5 14h3M16 14h3M10 5 9 3M14 5l1-2"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
       <circle cx="10.5" cy="11.5" r=".8" fill="currentColor" />
       <circle cx="13.5" cy="11.5" r=".8" fill="currentColor" />
     </svg>
@@ -363,9 +393,15 @@ export function ImportIcon() {
 export function renderResetCreditsIcon() {
   return (
     <svg viewBox="0 0 1024 1024" aria-hidden="true" width="16" height="16">
-      <path d="M504.366545 1023.767273A465.314909 465.314909 0 0 1 67.863273 396.474182l43.752727 16.290909A418.816 418.816 0 1 0 504.366545 139.636364V93.090909c256.977455 0 465.314909 208.337455 465.31491 465.314909 0 257.024-208.337455 465.361455-465.31491 465.361455z" fill="currentColor" />
+      <path
+        d="M504.366545 1023.767273A465.314909 465.314909 0 0 1 67.863273 396.474182l43.752727 16.290909A418.816 418.816 0 1 0 504.366545 139.636364V93.090909c256.977455 0 465.314909 208.337455 465.31491 465.314909 0 257.024-208.337455 465.361455-465.31491 465.361455z"
+        fill="currentColor"
+      />
       <path d="M389.259636 115.898182l116.829091 116.363636V0h-0.930909z" fill="currentColor" />
-      <path d="M504.226909 558.545455m-139.636364 0a139.636364 139.636364 0 1 0 279.272728 0 139.636364 139.636364 0 1 0-279.272728 0Z" fill="currentColor" />
+      <path
+        d="M504.226909 558.545455m-139.636364 0a139.636364 139.636364 0 1 0 279.272728 0 139.636364 139.636364 0 1 0-279.272728 0Z"
+        fill="currentColor"
+      />
     </svg>
   );
 }

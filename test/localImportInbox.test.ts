@@ -63,7 +63,14 @@ describe("LocalImportInbox", () => {
       email: "one@example.test",
       planType: "team",
       isActive: false,
-      quotaSummary: { hourlyPercentage: 80, weeklyPercentage: 95, credits: { balance: "12.50" } },
+      quotaSummary: {
+        hourlyPercentage: 80,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 95,
+        weeklyWindowPresent: true,
+        weeklyWindowMinutes: 10_080,
+        credits: { balance: "12.50" }
+      },
       createdAt: 1,
       updatedAt: 1
     };
@@ -140,7 +147,14 @@ describe("LocalImportInbox", () => {
       email: "one@example.test",
       planType: "team",
       isActive: false,
-      quotaSummary: { hourlyPercentage: 82, weeklyPercentage: 94, credits: { balance: "12.50" } },
+      quotaSummary: {
+        hourlyPercentage: 100,
+        hourlyWindowPresent: false,
+        weeklyPercentage: 94,
+        weeklyWindowPresent: true,
+        weeklyWindowMinutes: 43_200,
+        credits: { balance: "12.50" }
+      },
       createdAt: 1,
       updatedAt: 1
     };
@@ -162,8 +176,10 @@ describe("LocalImportInbox", () => {
         accountId: "account-1",
         email: "one@example.test",
         planType: "team",
-        hourlyPercentage: 82,
+        hourlyWindowPresent: false,
         weeklyPercentage: 94,
+        weeklyWindowPresent: true,
+        weeklyWindowMinutes: 43_200,
         creditsBalance: "12.50",
         poolEnabled: true,
         status: "ready"

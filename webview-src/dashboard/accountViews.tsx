@@ -72,6 +72,7 @@ export function BatchSelectionBar(props: {
   resyncPending: boolean;
   removePending: boolean;
   sharePending: boolean;
+  shareAccountsPending: boolean;
   hidePending: boolean;
   unhidePending: boolean;
   groupPending: boolean;
@@ -79,6 +80,7 @@ export function BatchSelectionBar(props: {
   onResync: () => void;
   onRemove: () => void;
   onShare: () => void;
+  onShareAccounts: () => void;
   onSetBalancePool: () => void;
   onRemoveFromBalancePool: () => void;
   onHide: () => void;
@@ -137,6 +139,9 @@ export function BatchSelectionBar(props: {
         </ActionButton>
         <ActionButton class="toolbar-btn" pending={props.sharePending} onClick={props.onShare}>
           {props.copy.batchExportBtn}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" pending={props.shareAccountsPending} onClick={props.onShareAccounts}>
+          {props.lang === "zh" || props.lang === "zh-hant" ? "共享账号" : "Share accounts"}
         </ActionButton>
         <ActionButton class="toolbar-btn" pending={props.removePending} onClick={props.onRemove}>
           {props.copy.batchRemoveBtn}

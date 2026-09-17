@@ -39,7 +39,8 @@ import { observeAccountAvailability } from "../../application/accounts/observeAv
 import {
   clearAccountStates,
   initAccountStatePersistence,
-  recordAuthorization
+  recordAuthorization,
+  recordRuntimeAuthenticationSuccess
 } from "../../application/accounts/accountState";
 import { getErrorMessage } from "../../core/errors";
 import {
@@ -56,12 +57,14 @@ import {
   ManagerIntegrationHost,
   setActiveManagerIntegrationHost,
   type CodexAccountsIntegrationApi,
+  type ManagedAccountDirectoryEntry,
   type ManagerControlRefreshSummary,
   type OAuthAccountImportOptions,
   type OAuthAccountImportResult,
   type RegistrationBrowserOptions,
   type RegistrationBrowserResult
 } from "../../integrations";
+import { launchIncognitoBrowser } from "../../integrations/registrationBrowser";
 import { extractClaims } from "../../utils/jwt";
 import { refreshQuotaSummaryPanel } from "../dashboard/panel";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
@@ -75,6 +78,7 @@ import {
   registerTokenRefreshScheduler,
   type SeamlessUsageLimitMonitor
 } from "./schedulerRegistration";
+import { AccountSharingService } from "../../sharing";
 import { SessionHub, resolveSessionRegistryPath } from "../../sessions";
 import {
   accountConcurrencyTracker,
@@ -100,6 +104,16 @@ export class AccountsWorkbench {
   private readonly managerControlServer: ManagerControlServer;
   private readonly sessionHub: SessionHub | undefined;
   private readonly integrationHost: ManagerIntegrationHost;
+  private readonly accountSharing: AccountSharingService;
+  /** Mailbox only needs to reread credentials for new or changed accounts. */
+  private readonly managedAccountTokenCache = new Map<
+    string,
+    Awaited<ReturnType<AccountsRepository["getTokens"]>>
+  >();
+  private readonly managedAccountTokenLoads = new Map<
+    string,
+    Promise<Awaited<ReturnType<AccountsRepository["getTokens"]>>>
+  >();
   private managerControlRetryTimer: NodeJS.Timeout | undefined;
   private managerControlRetryAttempt = 0;
   private readonly oauthImportCancellationSources = new Map<string, vscode.CancellationTokenSource>();
@@ -111,6 +125,30 @@ export class AccountsWorkbench {
     accountConcurrencyTracker.reset();
     this.repo = new AccountsRepository(context);
     this.statusBar = new AccountsStatusBarProvider(context, this.repo);
+    this.accountSharing = new AccountSharingService(context, this.repo, () => {
+      void refreshQuotaSummaryPanel();
+    }, {
+      switchAway: async (accountId) => {
+        const candidates = (await this.repo.listAccounts()).filter(
+          (candidate) =>
+            candidate.id !== accountId &&
+            !candidate.isHidden &&
+            !isSub2ApiAccount(candidate) &&
+            candidate.sharing?.direction !== "outgoing" &&
+            candidate.sharing?.direction !== "incoming"
+        );
+        const candidate = candidates.find((item) => item.balancePoolEnabled) ?? candidates[0];
+        if (!candidate) {
+          return false;
+        }
+        const outcome = await this.switchRuntimeAccount(
+          candidate.id,
+          { gracePeriodMs: 0, longTurnPolicy: "defer" },
+          "automatic"
+        );
+        return outcome.status === "switched";
+      }
+    });
     this.refreshCoordinator = new WorkbenchRefreshCoordinator(context, this.repo, this.statusBar);
     const refreshAccountConcurrency = (activity: AccountSessionActivity, snapshot?: AccountConcurrencySnapshot) => {
       this.handleAccountConcurrencyChanged(activity, snapshot);
@@ -161,29 +199,7 @@ export class AccountsWorkbench {
             )
           ];
         },
-        getManagedAccountDirectory: async () => {
-          const automation = getTokenAutomationSnapshot();
-          const accounts = await this.repo.listAccounts();
-          const managedAccounts = accounts.filter((account) => !isSub2ApiAccount(account));
-          const directory: Array<{
-            accountId: string;
-            email: string;
-            requiresReauthorization: boolean;
-          } | undefined> = managedAccounts.map(() => undefined);
-          await runWithConcurrencyLimit(managedAccounts, 3, async (account, index) => {
-            const tokens = await this.repo.getTokens(account.id);
-            directory[index] = {
-              accountId: account.id,
-              email: account.email,
-              requiresReauthorization: isAccountReauthorizationRequired(resolveAccountHealth(account, tokens, automation).kind)
-            };
-          });
-          return directory.filter((entry): entry is {
-            accountId: string;
-            email: string;
-            requiresReauthorization: boolean;
-          } => entry !== undefined);
-        },
+        getManagedAccountDirectory: () => this.getManagedAccountDirectory(),
         removeManagedAccount: async (accountId) => {
           const account = await this.repo.getAccount(accountId);
           if (!account) {
@@ -215,7 +231,7 @@ export class AccountsWorkbench {
       getAccountHealth: async (account) => {
         const tokens = isSub2ApiAccount(account)
           ? undefined
-          : await this.repo.getTokens(account.id, { syncExternal: false });
+          : await this.repo.getTokens(account.id);
         const deactivatedMailboxEmails = new Set(
           this.integrationHost.getDeactivatedMailboxEmails().map((email) => normalizeEmail(email)).filter(Boolean)
         );
@@ -245,6 +261,57 @@ export class AccountsWorkbench {
     });
   }
 
+  private invalidateManagedAccountTokenCache(accountIds?: readonly string[]): void {
+    if (accountIds === undefined) {
+      this.managedAccountTokenCache.clear();
+      this.managedAccountTokenLoads.clear();
+      return;
+    }
+    for (const accountId of accountIds) {
+      this.managedAccountTokenCache.delete(accountId);
+      this.managedAccountTokenLoads.delete(accountId);
+    }
+  }
+
+  private async getManagedAccountDirectory(): Promise<readonly ManagedAccountDirectoryEntry[]> {
+    const automation = getTokenAutomationSnapshot();
+    const accounts = await this.repo.listAccounts();
+    const managedAccounts = accounts.filter((account) => !isSub2ApiAccount(account));
+    const managedIds = new Set(managedAccounts.map((account) => account.id));
+    for (const accountId of this.managedAccountTokenCache.keys()) {
+      if (!managedIds.has(accountId)) {
+        this.managedAccountTokenCache.delete(accountId);
+      }
+    }
+
+    const missingAccounts = managedAccounts.filter((account) => !this.managedAccountTokenCache.has(account.id));
+    await runWithConcurrencyLimit(missingAccounts, 3, async (account) => {
+      let load = this.managedAccountTokenLoads.get(account.id);
+      if (!load) {
+        load = this.repo.getTokens(account.id);
+        this.managedAccountTokenLoads.set(account.id, load);
+      }
+      try {
+        this.managedAccountTokenCache.set(account.id, await load);
+      } finally {
+        if (this.managedAccountTokenLoads.get(account.id) === load) {
+          this.managedAccountTokenLoads.delete(account.id);
+        }
+      }
+    });
+
+    return managedAccounts.map((account) => {
+      const tokens = this.managedAccountTokenCache.get(account.id);
+      return {
+        accountId: account.id,
+        email: account.email,
+        requiresReauthorization: isAccountReauthorizationRequired(
+          resolveAccountHealth(account, tokens, automation).kind
+        )
+      };
+    });
+  }
+
   async activate(): Promise<void> {
     const activationStartedAt = Date.now();
     const activationSteps: Array<{ name: string; durationMs: number }> = [];
@@ -264,11 +331,15 @@ export class AccountsWorkbench {
     await measureStep("repo.init", async () => {
       await this.repo.init();
     });
+    await measureStep("accountSharing.init", async () => {
+      await this.accountSharing.initialize();
+      this.accountSharing.start();
+    });
     const sessionHub = this.sessionHub;
     if (sessionHub) {
       await measureStep("sessionHub.init", () => sessionHub.init());
     }
-    this.context.subscriptions.push(this.managerControlServer);
+    this.context.subscriptions.push(this.managerControlServer, this.accountSharing);
     await measureStep("managerControlServer.start", () => this.startManagerControlServer());
     await measureStep("notifyIndexHealth", async () => {
       await this.notifyIndexHealth();
@@ -293,8 +364,14 @@ export class AccountsWorkbench {
     setActiveManagerIntegrationHost(this.integrationHost);
     this.context.subscriptions.push(this.integrationHost);
     this.context.subscriptions.push(
-      this.repo.onDidChangeAccounts(() => {
-        this.integrationHost.notifyAccountDirectoryChanged();
+      this.repo.onDidChangeTokens((accountIds) => {
+        this.invalidateManagedAccountTokenCache(accountIds);
+      })
+    );
+    this.context.subscriptions.push(
+      this.repo.onDidChangeAccountDirectory((accountIds) => {
+        this.invalidateManagedAccountTokenCache(accountIds);
+        this.integrationHost.notifyAccountDirectoryChanged(accountIds);
       })
     );
     this.context.subscriptions.push(
@@ -316,7 +393,8 @@ export class AccountsWorkbench {
     };
     await measureStep("registerCommands", () => {
       registerCommands(this.context, this.repo, refreshers, this.hotSwitchRuntime, {
-        resetSeamlessSwitchRuntime: () => this.resetSeamlessSwitchRuntime()
+        resetSeamlessSwitchRuntime: () => this.resetSeamlessSwitchRuntime(),
+        accountSharing: this.accountSharing
       });
     });
     await measureStep("registerAuthFileWatcher", () => {
@@ -410,6 +488,7 @@ export class AccountsWorkbench {
     this.authRevokedAccountIds.clear();
     this.refreshCoordinator.dispose();
     this.hotSwitchRuntime.dispose();
+    this.accountSharing.dispose();
     this.localImportInbox?.dispose();
     this.managerControlServer.dispose();
     setActiveManagerIntegrationHost(undefined);
@@ -650,13 +729,20 @@ export class AccountsWorkbench {
       }
     }
 
+    if (options.incognito === true && !vscode.env.remoteName) {
+      const openedPrivately = await launchIncognitoBrowser(OPENAI_REGISTRATION_URL);
+      if (openedPrivately) {
+        return { opened: true, incognito: true };
+      }
+    }
+
     const opened = await vscode.env.openExternal(vscode.Uri.parse(OPENAI_REGISTRATION_URL));
     if (!opened) {
       throw new Error(
         "Unable to open the GPT registration page automatically. The registration page was not opened."
       );
     }
-    return { opened: true };
+    return { opened: true, incognito: false };
   }
 
   private cancelOAuthAccountImport(operationId: string): void {
@@ -847,6 +933,7 @@ export class AccountsWorkbench {
       const outcome = await this.runtimeSwitchCoordinator.runProviderSwitch(options, (transactionOptions) =>
         this.integrationHost.switchVirtualAccount(accountId, transactionOptions)
       );
+      await this.recordRuntimeSwitchAuthentication(accountId, outcome);
       return this.resetRecoveryStateAfterExplicitSwitch(outcome, source);
     }
     if (source === "manual" && this.hotSwitchRuntime.isGatewayActive()) {
@@ -864,10 +951,38 @@ export class AccountsWorkbench {
         options,
         (transactionOptions) => this.integrationHost.deactivateVirtualAccount(gatewayAccount.id, transactionOptions)
       );
+      await this.recordRuntimeSwitchAuthentication(accountId, outcome);
       return this.resetRecoveryStateAfterExplicitSwitch(outcome, source);
     }
     const outcome = await this.runtimeSwitchCoordinator.switchAccount(accountId, options, source);
+    await this.recordRuntimeSwitchAuthentication(accountId, outcome);
     return this.resetRecoveryStateAfterExplicitSwitch(outcome, source);
+  }
+
+  private async recordRuntimeSwitchAuthentication(
+    accountId: string,
+    outcome: RuntimeAccountSwitchOutcome
+  ): Promise<void> {
+    if (outcome.status !== "switched") {
+      return;
+    }
+
+    try {
+      const account = await this.repo.getAccount(accountId);
+      if (!account || isSub2ApiAccount(account)) {
+        return;
+      }
+      const tokens = await this.repo.getTokens(accountId, { forceReload: true });
+      const providerAccountId = account.accountId ?? tokens?.accountId;
+      if (!tokens?.accessToken || !providerAccountId) {
+        return;
+      }
+      recordRuntimeAuthenticationSuccess(accountId, { ...tokens, accountId: providerAccountId });
+    } catch (error) {
+      console.warn(
+        `[codexAccounts] successful runtime switch could not record authentication evidence: ${getErrorMessage(error)}`
+      );
+    }
   }
 
   private async resetRecoveryStateAfterExplicitSwitch(

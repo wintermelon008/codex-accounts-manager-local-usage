@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.19-l2",
+  "version": "0.1.19-dev",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -86,6 +86,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Selected HTTPS proxy address for Manager requests. The empty value does not override the existing process or Codex `.env` setting; choose an entry from `codexAccounts.proxyAddresses`."
+        },
+        "codexAccounts.sharingRelayUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "HTTPS URL of the shared Manager account-sharing Relay. The Relay stores only public user profiles, request state, and encrypted transfer envelopes; set CODEX_ACCOUNTS_SHARING_RELAY_BOOTSTRAP_TOKEN in the extension host for first registration."
         },
         "codexAccounts.localUsageDefaultRange": {
           "type": "string",

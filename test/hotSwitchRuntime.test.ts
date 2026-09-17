@@ -182,6 +182,77 @@ describe("Codex hot-switch runtime setup", () => {
     }
   });
 
+  it("retries usage attribution when status polling sees an unbound ChatGPT runtime", async () => {
+    const account = {
+      id: "local-a",
+      email: "a@example.invalid",
+      accountId: "workspace-a",
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1
+    } as CodexAccountRecord;
+    const bridge = {
+      getStatus: vi.fn().mockResolvedValue({
+        runtimeProtocolVersion: 15,
+        availabilityRuntimeId: "runtime-a",
+        ready: true,
+        initializeResponseReceived: true,
+        initializedNotificationReceived: true,
+        activeTurns: 0,
+        pendingSwitch: false,
+        switching: false,
+        forceFastMode: false,
+        httpTransportForced: true,
+        transportMode: "http",
+        providerKind: "chatgpt",
+        gatewayActive: false,
+        gatewayConfigured: false,
+        gatewayAutoFallbackEnabled: false,
+        usageLimitObservationEnabled: true,
+        capacityRecoveryThreads: 0,
+        capacityRecoveryWaitingThreads: 0,
+        recentUsageLimitedThreads: 0,
+        usageLimitExhaustionReady: false,
+        usageLimitExhaustionBatchId: 0,
+        observedUsageLimitFailures: 0,
+        recoveredUsageLimitedThreads: 0,
+        resumedUsageLimitedGoals: 0,
+        attributionActive: false,
+        attributionFailureReason: "not_activated",
+        shimPid: 1,
+        appServerPid: 2
+      }),
+      getIdentity: vi.fn().mockResolvedValue({
+        accountType: "chatgpt",
+        email: "a@example.invalid",
+        planType: "plus",
+        externalAuthActive: true,
+        managedAccountId: "workspace-a",
+        managedLocalAccountId: "local-a",
+        httpTransportForced: true
+      }),
+      activateUsageAttribution: vi.fn().mockResolvedValue({ active: true, localAccountId: "local-a" }),
+      dispose: vi.fn()
+    };
+    const runtime = new CodexHotSwitchRuntime(
+      {} as vscode.ExtensionContext,
+      {
+        listAccounts: vi.fn(async () => [account]),
+        getTokens: vi.fn(async () => ({ idToken: "id", accessToken: "access", accountId: "workspace-a" }))
+      } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+    (runtime as unknown as { bridge: typeof bridge }).bridge = bridge;
+
+    await runtime.getStatus();
+    await vi.waitFor(() => expect(bridge.activateUsageAttribution).toHaveBeenCalled());
+    expect(bridge.activateUsageAttribution).toHaveBeenCalledWith({
+      localAccountId: "local-a",
+      accountId: "workspace-a",
+      expectedEmail: "a@example.invalid"
+    });
+    runtime.dispose();
+  });
+
   it("uses the access-token email for app-server identity when a stable user has an email alias", () => {
     const identity = resolveRuntimeAccessTokenIdentity(
       { email: "stored@example.invalid", userId: "user-same" },

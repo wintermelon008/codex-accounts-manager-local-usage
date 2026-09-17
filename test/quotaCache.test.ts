@@ -105,6 +105,7 @@ describe("quota cache invalidation", () => {
     firstRequest.resolve(createUsageResponse(10));
     const firstResult = await inflightRefresh;
     expect(firstResult.quota?.hourlyPercentage).toBe(90);
+    expect(firstResult.stale).toBe(true);
 
     fetchWithTimeoutMock.mockResolvedValueOnce(createUsageResponse(20));
     const secondResult = await refreshQuota(account, tokens);

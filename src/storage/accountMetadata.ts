@@ -207,10 +207,12 @@ export function buildAccountRecordDraft(params: {
     quotaError: params.existing?.quotaError,
     tokenRefreshLastAttemptAt: params.existing?.tokenRefreshLastAttemptAt,
     tokenRefreshLastSuccessAt: params.existing?.tokenRefreshLastSuccessAt,
-    tokenRefreshLastError: params.existing?.tokenRefreshLastError,
-    tokenRefreshLastErrorAt: params.existing?.tokenRefreshLastErrorAt,
-    tokenRefreshLastErrorKind: params.existing?.tokenRefreshLastErrorKind,
-    tokenRefreshNextRetryAt: params.existing?.tokenRefreshNextRetryAt,
+    // A new OAuth/import credential pair supersedes diagnostics from the old
+    // refresh token. The scheduler will establish fresh status for this pair.
+    tokenRefreshLastError: undefined,
+    tokenRefreshLastErrorAt: undefined,
+    tokenRefreshLastErrorKind: undefined,
+    tokenRefreshNextRetryAt: undefined,
     createdAt: params.existing?.createdAt ?? params.now,
     updatedAt: params.now
   };

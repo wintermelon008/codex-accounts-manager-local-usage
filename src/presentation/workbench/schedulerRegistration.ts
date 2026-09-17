@@ -534,7 +534,7 @@ export function registerQuotaCountdownRefreshScheduler(params: {
 }
 
 function isQuotaCountdownRefreshable(account: CodexAccountRecord): boolean {
-  return isAutomaticAccount(account) && account.isHidden === true;
+  return isAutomaticAccount(account) && account.isHidden === true && account.sharing?.direction !== "outgoing";
 }
 
 function getExpiredResetTime(
@@ -901,7 +901,12 @@ export function registerTokenRefreshScheduler(params: {
   const synchronizeSchedules = async (accountIds?: readonly string[]): Promise<void> => {
     const accounts = await params.repo.listAccounts();
     hydrateTokenAutomationState(accounts);
-    const eligibleAccounts = accounts.filter((account) => isAutomaticAccount(account) && account.quotaMode !== "none");
+    const eligibleAccounts = accounts.filter(
+      (account) =>
+        isAutomaticAccount(account) &&
+        account.quotaMode !== "none" &&
+        account.sharing?.direction !== "outgoing"
+    );
     const eligibleById = new Map(eligibleAccounts.map((account) => [account.id, account]));
 
     if (accountIds === undefined) {
@@ -1001,6 +1006,15 @@ export function registerTokenRefreshScheduler(params: {
     let attemptAt: number | undefined;
     let tokens: CodexTokens | undefined;
     try {
+      // Sharing transfers ownership of the usable credential for the lease
+      // duration. Re-read the account before a due entry starts so a sweep
+      // already queued before the share cannot refresh or rotate it.
+      const latestAccount =
+        typeof params.repo.getAccount === "function" ? await params.repo.getAccount(account.id) : account;
+      if (!latestAccount || latestAccount.sharing?.direction === "outgoing") {
+        setTokenSchedule(account.id, {});
+        return;
+      }
       tokens = await params.repo.getTokens(account.id);
       markTokenAutomationCheck(account.id);
       counters.checked += 1;
@@ -1190,6 +1204,12 @@ export function registerTokenRefreshScheduler(params: {
   });
   if (tokenChangeDisposable) {
     params.context.subscriptions.push(tokenChangeDisposable);
+  }
+  const accountChangeDisposable = params.repo.onDidChangeAccounts?.((accountIds) => {
+    void requestResync(accountIds);
+  });
+  if (accountChangeDisposable) {
+    params.context.subscriptions.push(accountChangeDisposable);
   }
 
   applySchedule();

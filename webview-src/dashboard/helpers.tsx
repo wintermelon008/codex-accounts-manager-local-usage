@@ -5,6 +5,7 @@ import {
   DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD,
   type DashboardAccountViewModel,
   type DashboardAccountPlanFilter,
+  type DashboardSharingFilter,
   type DashboardIntegrationViewModel,
   type DashboardSettings,
   type DashboardState
@@ -37,6 +38,15 @@ export type DashboardAccountSort = {
   key: DashboardAccountSortKey;
   direction: DashboardAccountSortDirection;
 };
+
+/** Stable color buckets shared by the account cards and the health filter. */
+export const DASHBOARD_HEALTH_FILTERS = ["unknown", "usable", "warning", "error"] as const;
+export type DashboardHealthFilter = (typeof DASHBOARD_HEALTH_FILTERS)[number];
+
+export const DASHBOARD_SHARING_FILTERS = ["shared", "received"] as const;
+export type DashboardSharingFilterValue = (typeof DASHBOARD_SHARING_FILTERS)[number];
+
+export type DashboardHealthFilterCounts = Record<DashboardHealthFilter, number>;
 
 /**
  * Slices the currently displayed account set into a bounded page. The page is
@@ -74,16 +84,128 @@ export function getDashboardVisibleAccounts(
   settings: DashboardSettings,
   showHiddenAccounts: boolean,
   selectedPlanFilters: readonly DashboardAccountPlanFilter[] = [],
-  showInvalidAccounts = false
+  selectedHealthFilters: readonly DashboardHealthFilter[] | boolean = [],
+  selectedSharingFilters: readonly DashboardSharingFilter[] = []
 ): DashboardAccountViewModel[] {
   const selectedPlans = new Set<DashboardAccountPlanFilter>(selectedPlanFilters);
+  // Keep the old boolean input compatible with callers from older dashboard
+  // bundles. Its former meaning was exactly the red/error bucket.
+  const normalizedHealthFilters =
+    selectedHealthFilters === true
+      ? (["error"] as const)
+      : selectedHealthFilters === false
+        ? []
+        : selectedHealthFilters;
+  const selectedHealth = new Set<DashboardHealthFilter>(normalizedHealthFilters);
+  const selectedSharing = new Set<DashboardSharingFilter>(selectedSharingFilters);
   return accounts.filter(
     (account) =>
       isAccountInVisibleGroup(account, settings) &&
-      (showHiddenAccounts || !account.isHidden) &&
+      (showHiddenAccounts || !account.isHidden || (selectedSharing.has("shared") && getDashboardSharingFilter(account) === "shared")) &&
       isAccountInSelectedPlan(account, selectedPlans) &&
-      (!showInvalidAccounts || isDashboardAccountInvalid(account))
+      isAccountInSelectedHealthFilter(account, selectedHealth) &&
+      isAccountInSelectedSharingFilter(account, selectedSharing)
   );
+}
+
+export function getDashboardSharingFilter(
+  account: Pick<DashboardAccountViewModel, "sharingState">
+): DashboardSharingFilterValue | undefined {
+  if (account.sharingState === "shared") {
+    return "shared";
+  }
+  if (account.sharingState === "received" || account.sharingState === "return_pending") {
+    return "received";
+  }
+  return undefined;
+}
+
+export type DashboardSharingFilterCounts = Record<DashboardSharingFilterValue, number>;
+
+export function getDashboardSharingFilterCounts(
+  accounts: readonly DashboardAccountViewModel[]
+): DashboardSharingFilterCounts {
+  const counts: DashboardSharingFilterCounts = { shared: 0, received: 0 };
+  for (const account of accounts) {
+    const filter = getDashboardSharingFilter(account);
+    if (filter) {
+      counts[filter] += 1;
+    }
+  }
+  return counts;
+}
+
+/** Maps an account's detailed health diagnostic to the color shown on its card. */
+export function getDashboardHealthFilter(
+  account: Pick<DashboardAccountViewModel, "healthKind" | "dismissedHealth">
+): DashboardHealthFilter | undefined {
+  if (account.dismissedHealth) {
+    return undefined;
+  }
+
+  switch (account.healthKind) {
+    case "unverified":
+    case "refresh_unavailable_unverified":
+      return "unknown";
+    case "refresh_unavailable":
+      return "usable";
+    case "expiring":
+    case "refresh_failed":
+    case "refresh_token_invalid":
+    case "quota":
+      return "warning";
+    case "access_token_invalid":
+    case "reauthorize":
+    case "disabled":
+      return "error";
+    default:
+      return undefined;
+  }
+}
+
+/** Counts the four visible health buckets without applying group/plan filters. */
+export function getDashboardHealthFilterCounts(
+  accounts: readonly DashboardAccountViewModel[]
+): DashboardHealthFilterCounts {
+  const counts: DashboardHealthFilterCounts = {
+    unknown: 0,
+    usable: 0,
+    warning: 0,
+    error: 0
+  };
+
+  for (const account of accounts) {
+    const filter = getDashboardHealthFilter(account);
+    if (filter) {
+      counts[filter] += 1;
+    }
+  }
+
+  return counts;
+}
+
+function isAccountInSelectedHealthFilter(
+  account: DashboardAccountViewModel,
+  selectedHealth: ReadonlySet<DashboardHealthFilter>
+): boolean {
+  if (selectedHealth.size === 0) {
+    return true;
+  }
+
+  const filter = getDashboardHealthFilter(account);
+  return filter !== undefined && selectedHealth.has(filter);
+}
+
+function isAccountInSelectedSharingFilter(
+  account: DashboardAccountViewModel,
+  selectedSharing: ReadonlySet<DashboardSharingFilter>
+): boolean {
+  if (selectedSharing.size === 0) {
+    return true;
+  }
+
+  const filter = getDashboardSharingFilter(account);
+  return filter !== undefined && selectedSharing.has(filter);
 }
 
 /** Returns whether the Dashboard currently considers an account hard-invalid. */
@@ -166,7 +288,8 @@ function getRemainingQuota(account: DashboardAccountViewModel): number | undefin
 
 function getQuotaResetAt(account: DashboardAccountViewModel): number | undefined {
   const weeklyMetric = account.metrics.find(
-    (metric) => metric.key === "weekly" && metric.visible && typeof metric.resetAt === "number" && Number.isFinite(metric.resetAt)
+    (metric) =>
+      metric.key === "weekly" && metric.visible && typeof metric.resetAt === "number" && Number.isFinite(metric.resetAt)
   );
   return weeklyMetric?.resetAt;
 }
@@ -185,10 +308,7 @@ function compareOptionalNumbers(left: number | undefined, right: number | undefi
 /** Returns real accounts that need reauthorization and have a matching deactivation notice in Mailbox. */
 export function getBlockedAccountIds(accounts: readonly DashboardAccountViewModel[]): string[] {
   return accounts.flatMap((account) =>
-    account.accountKind !== "sub2api" &&
-    account.mailboxDeactivated === true
-      ? [account.id]
-      : []
+    account.accountKind !== "sub2api" && account.mailboxDeactivated === true ? [account.id] : []
   );
 }
 

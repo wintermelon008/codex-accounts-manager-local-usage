@@ -21,6 +21,10 @@ import {
 } from "../src/presentation/dashboard/panel";
 import {
   getDashboardAccountPage,
+  getDashboardHealthFilter,
+  getDashboardHealthFilterCounts,
+  getDashboardSharingFilter,
+  getDashboardSharingFilterCounts,
   getDashboardVisibleAccounts,
   getHighWeeklyQuotaHiddenAccountIds,
   getLowWeeklyQuotaAccountIds,
@@ -410,6 +414,75 @@ describe("Dashboard account selection", () => {
         (account) => account.id
       )
     ).toEqual(["reauthorize", "disabled"]);
+  });
+
+  it("finds hidden outgoing shares and distinguishes them from received accounts", () => {
+    const dashboardState = createState();
+    dashboardState.accounts = [
+      { id: "shared", sharingState: "shared", isHidden: true },
+      { id: "received", sharingState: "received", isHidden: false },
+      { id: "return-pending", sharingState: "return_pending", isHidden: false },
+      { id: "ordinary", isHidden: false }
+    ] as DashboardState["accounts"];
+
+    expect(dashboardState.accounts.map(getDashboardSharingFilter)).toEqual([
+      "shared",
+      "received",
+      "received",
+      undefined
+    ]);
+    expect(getDashboardSharingFilterCounts(dashboardState.accounts)).toEqual({ shared: 1, received: 2 });
+    expect(
+      getDashboardVisibleAccounts(dashboardState.accounts, dashboardState.settings, false, [], [], ["shared"]).map(
+        (account) => account.id
+      )
+    ).toEqual(["shared"]);
+    expect(
+      getDashboardVisibleAccounts(
+        dashboardState.accounts,
+        dashboardState.settings,
+        false,
+        [],
+        [],
+        ["received"]
+      ).map((account) => account.id)
+    ).toEqual(["received", "return-pending"]);
+  });
+
+  it("filters account cards by their yellow, cyan, orange, and red health colors", () => {
+    const dashboardState = createState();
+    dashboardState.accounts = [
+      { id: "unknown", healthKind: "unverified", dismissedHealth: false, isHidden: false },
+      { id: "usable", healthKind: "refresh_unavailable", dismissedHealth: false, isHidden: false },
+      { id: "warning", healthKind: "quota", dismissedHealth: false, isHidden: false },
+      { id: "error", healthKind: "reauthorize", dismissedHealth: false, isHidden: false },
+      { id: "healthy", healthKind: "healthy", dismissedHealth: false, isHidden: false },
+      { id: "dismissed", healthKind: "disabled", dismissedHealth: true, isHidden: false }
+    ] as DashboardState["accounts"];
+
+    expect(dashboardState.accounts.map(getDashboardHealthFilter)).toEqual([
+      "unknown",
+      "usable",
+      "warning",
+      "error",
+      undefined,
+      undefined
+    ]);
+    expect(getDashboardHealthFilterCounts(dashboardState.accounts)).toEqual({
+      unknown: 1,
+      usable: 1,
+      warning: 1,
+      error: 1
+    });
+    expect(
+      getDashboardVisibleAccounts(
+        dashboardState.accounts,
+        dashboardState.settings,
+        false,
+        [],
+        ["unknown", "error"]
+      ).map((account) => account.id)
+    ).toEqual(["unknown", "error"]);
   });
 
   it("clears only selections that leave the selected plan scope", () => {

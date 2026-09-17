@@ -2691,11 +2691,17 @@ function rememberRuntimeThreadMetadata(thread, fallback = {}) {
     isSubagentThreadSource(thread?.threadSource) ||
     (parentThreadId !== undefined && thread?.source === undefined) ||
     fallback.subagent === true;
-  const excluded = thread?.ephemeral === true || fallback.ephemeral === true || subagent;
+  const ephemeral = thread?.ephemeral === true || fallback.ephemeral === true;
+  // Subagents are hidden from quota-exhaustion switching, but they are still
+  // independent work for concurrency: a parent turn and its subagent can run
+  // in parallel. Ephemeral aliases remain excluded from both views.
+  const excluded = ephemeral || subagent;
+  const concurrencyExcluded = ephemeral;
   const previous = runtimeThreadMetadata.get(threadId);
   runtimeThreadMetadata.delete(threadId);
   runtimeThreadMetadata.set(threadId, {
-    excluded: Boolean(previous?.excluded || excluded)
+    excluded: Boolean(previous?.excluded || excluded),
+    concurrencyExcluded: Boolean(previous?.concurrencyExcluded || concurrencyExcluded)
   });
   while (runtimeThreadMetadata.size > MAX_RUNTIME_THREAD_METADATA) {
     const oldestThreadId = runtimeThreadMetadata.keys().next().value;
@@ -2716,25 +2722,31 @@ function rememberRuntimeThreadMetadata(thread, fallback = {}) {
     if (wasInExhaustionBatch) {
       suppressUsageLimitExhaustionObservation();
     }
-    for (const activity of runtimeTurnActivities.values()) {
-      if (activity.threadId !== threadId || !activity.reported) {
-        continue;
+    if (concurrencyExcluded) {
+      for (const activity of runtimeTurnActivities.values()) {
+        if (activity.threadId !== threadId || !activity.reported) {
+          continue;
+        }
+        // Classification can arrive after turn/start for an ephemeral alias.
+        // Close the provisional slot without attributing hidden work to the
+        // account's visible concurrency totals.
+        reportRuntimeAccountSessionActivity({
+          sessionId: runtimeActivitySessionId(activity.threadId),
+          accountId: activity.accountId,
+          active: false
+        });
+        activity.reported = false;
       }
-      // Classification can arrive after turn/start for server-created
-      // subagents. Close the provisional slot without attributing hidden
-      // work to the account's visible concurrency totals.
-      reportRuntimeAccountSessionActivity({
-        sessionId: runtimeActivitySessionId(activity.threadId),
-        accountId: activity.accountId,
-        active: false
-      });
-      activity.reported = false;
     }
   }
 }
 
 function isRuntimeThreadExcluded(threadId) {
   return runtimeThreadMetadata.get(threadId)?.excluded === true;
+}
+
+function isRuntimeThreadConcurrencyExcluded(threadId) {
+  return runtimeThreadMetadata.get(threadId)?.concurrencyExcluded === true;
 }
 
 function readThreadIdFromResult(value) {
@@ -2803,7 +2815,7 @@ function beginRuntimeTurnActivity(turnId, threadId) {
   ) {
     return;
   }
-  const excluded = isRuntimeThreadExcluded(threadId);
+  const excluded = isRuntimeThreadConcurrencyExcluded(threadId);
   runtimeTurnActivities.set(turnId, {
     turnId,
     threadId,

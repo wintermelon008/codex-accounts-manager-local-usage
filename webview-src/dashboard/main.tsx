@@ -7,6 +7,7 @@ import {
   DASHBOARD_ACCOUNTS_PAGE_SIZE,
   type DashboardAccountPageSize,
   type DashboardAccountPlanFilter,
+  type DashboardSharingFilter,
   type DashboardSettingKey
 } from "../../src/domain/dashboard/types";
 import { AnnouncementCenter } from "./announcementCenter";
@@ -15,8 +16,12 @@ import { postMessageToHost } from "./host";
 import {
   formatSavedAccountsSummary,
   formatTemplate,
+  DASHBOARD_SHARING_FILTERS,
+  DASHBOARD_HEALTH_FILTERS,
   getAccountHealthCategory,
   getDashboardAccountPage,
+  getDashboardHealthFilterCounts,
+  getDashboardSharingFilterCounts,
   getHighWeeklyQuotaHiddenAccountIds,
   getLowWeeklyQuotaAccountIds,
   getDashboardVisibleAccounts,
@@ -28,7 +33,9 @@ import {
   resolveOverviewAccount,
   sortDashboardAccountsForDisplay,
   type DashboardAccountSort,
-  type DashboardAccountSortKey
+  type DashboardAccountSortKey,
+  type DashboardHealthFilter,
+  type DashboardSharingFilterValue
 } from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
 import {
@@ -39,11 +46,18 @@ import {
   GitHubIcon,
   GlobeIcon,
   InfoIcon,
-  InvalidAccountsIcon,
+  AccountHealthFilterIcon,
   MailIcon,
   UnlockIcon
 } from "./icons";
-import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
+import {
+  AboutModal,
+  AddAccountModal,
+  ConfirmCancelOauthModal,
+  SettingsOverlay,
+  ShareTokenModal,
+  SharingModal
+} from "./panels";
 import { SavedAccountCard } from "./savedAccountCard";
 import { LocalUsageSection } from "./localUsageSection";
 import { IntegrationCards } from "./integrationCards";
@@ -76,8 +90,13 @@ function App() {
   const lastDashboardAccountOrderRef = useRef("");
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
+  const [sharingOpen, setSharingOpen] = useState(false);
+  const [sharingAccountIds, setSharingAccountIds] = useState<string[]>([]);
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
-  const [showInvalidAccounts, setShowInvalidAccounts] = useState(false);
+  const [selectedHealthFilters, setSelectedHealthFilters] = useState<DashboardHealthFilter[]>([]);
+  const [selectedSharingFilters, setSelectedSharingFilters] = useState<DashboardSharingFilter[]>([]);
+  const [healthFilterOpen, setHealthFilterOpen] = useState(false);
+  const healthFilterRef = useRef<HTMLDivElement>(null);
   const [selectedPlanFilters, setSelectedPlanFilters] = useState<DashboardAccountPlanFilter[]>([]);
   const [accountSort, setAccountSort] = useState<DashboardAccountSort>({
     key: "createdAt",
@@ -101,10 +120,11 @@ function App() {
       snapshot.settings,
       showHiddenAccounts,
       selectedPlanFilters,
-      showInvalidAccounts
+      selectedHealthFilters,
+      selectedSharingFilters
     );
     return sortDashboardAccountsForDisplay(visibleAccounts, accountSort);
-  }, [accountSort, selectedPlanFilters, showHiddenAccounts, showInvalidAccounts, snapshot]);
+  }, [accountSort, selectedHealthFilters, selectedPlanFilters, selectedSharingFilters, showHiddenAccounts, snapshot]);
   const modals = useDashboardModals({
     dispatch,
     sendAction,
@@ -135,12 +155,37 @@ function App() {
   }, [snapshot?.settings.dashboardTheme]);
 
   useEffect(() => {
+    if (!healthFilterOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (!healthFilterRef.current?.contains(event.target as Node)) {
+        setHealthFilterOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setHealthFilterOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [healthFilterOpen]);
+
+  useEffect(() => {
     setAccountsPage(1);
   }, [
+    selectedHealthFilters,
+    selectedSharingFilters,
     selectedPlanFilters,
     accountSort,
     showHiddenAccounts,
-    showInvalidAccounts,
     snapshot?.settings.seamlessSwitchGroupAVisible,
     snapshot?.settings.seamlessSwitchGroupBVisible,
     snapshot?.settings.seamlessSwitchGroupCVisible
@@ -283,6 +328,20 @@ function App() {
     );
   };
 
+  const handleHealthFilterToggle = (filter: DashboardHealthFilter): void => {
+    setAccountsPage(1);
+    setSelectedHealthFilters((filters) =>
+      filters.includes(filter) ? filters.filter((selectedFilter) => selectedFilter !== filter) : [...filters, filter]
+    );
+  };
+
+  const handleSharingFilterToggle = (filter: DashboardSharingFilterValue): void => {
+    setAccountsPage(1);
+    setSelectedSharingFilters((filters) =>
+      filters.includes(filter) ? filters.filter((selectedFilter) => selectedFilter !== filter) : [...filters, filter]
+    );
+  };
+
   const handleAccountSort = (key: DashboardAccountSortKey): void => {
     setAccountsPage(1);
     setAccountSort((current) =>
@@ -309,6 +368,7 @@ function App() {
   const restoreBackupPending = isActionPending("restoreFromBackup");
   const restoreAuthPending = isActionPending("restoreFromAuthJson");
   const sharePending = isActionPending("shareTokens");
+  const shareAccountsPending = isActionPending("shareAccounts");
   const downloadSharePending = isActionPending("downloadJsonFile");
   const batchRefreshPending = isActionPending("batchRefresh");
   const batchResyncPending = isActionPending("batchResyncProfile");
@@ -333,21 +393,46 @@ function App() {
     (account) => getAccountHealthCategory(account.healthKind) === "healthy"
   ).length;
   const warningAccountCount = snapshot.accounts.filter(
-    (account) =>
-      !isDashboardAccountInvalid(account) &&
-      getAccountHealthCategory(account.healthKind) !== "healthy"
+    (account) => !isDashboardAccountInvalid(account) && getAccountHealthCategory(account.healthKind) !== "healthy"
   ).length;
-  const invalidAccountsToggleLabel = resolveInvalidAccountsToggleLabel(
-    snapshot.lang,
-    showInvalidAccounts,
-    invalidAccountCount
+  const healthFilterCounts = getDashboardHealthFilterCounts(snapshot.accounts);
+  const sharingFilterCounts = getDashboardSharingFilterCounts(snapshot.accounts);
+  const selectedFilterCount = selectedHealthFilters.length + selectedSharingFilters.length;
+  const healthFilterTotalCount = DASHBOARD_HEALTH_FILTERS.reduce(
+    (total, filter) => total + healthFilterCounts[filter],
+    0
   );
+  const healthFilterToggleLabel = resolveHealthFilterToggleLabel(
+    snapshot.lang,
+    selectedHealthFilters,
+    healthFilterTotalCount,
+    selectedSharingFilters.length
+  );
+  const healthFilterOptions = DASHBOARD_HEALTH_FILTERS.map((filter) => ({
+    filter,
+    count: healthFilterCounts[filter],
+    ...resolveHealthFilterOptionCopy(snapshot.lang, filter)
+  }));
+  const sharingFilterOptions = DASHBOARD_SHARING_FILTERS.map((filter) => ({
+    filter,
+    count: sharingFilterCounts[filter],
+    ...resolveSharingFilterOptionCopy(snapshot.lang, filter)
+  }));
 
   const handleShareTokens = (): void => {
     if (!selectedCount) {
       return;
     }
     sendAction("shareTokens", undefined, { accountIds: state.selectedAccountIds });
+  };
+
+  const openSharingForAccounts = (accountIds: readonly string[]): void => {
+    const normalized = [...new Set(accountIds)].filter(Boolean);
+    if (normalized.length === 0) {
+      return;
+    }
+    setSharingAccountIds(normalized);
+    setSharingOpen(true);
   };
 
   const handleAutoSwitchLock = (): void => {
@@ -584,10 +669,7 @@ function App() {
                   type="button"
                   role="switch"
                   aria-checked={snapshot.settings.forceFastModeEnabled}
-                  aria-label={resolveForceFastModeToggleLabel(
-                    snapshot.lang,
-                    snapshot.settings.forceFastModeEnabled
-                  )}
+                  aria-label={resolveForceFastModeToggleLabel(snapshot.lang, snapshot.settings.forceFastModeEnabled)}
                   title={resolveForceFastModeToggleLabel(snapshot.lang, snapshot.settings.forceFastModeEnabled)}
                   onClick={() => handleForceFastModeToggle(!snapshot.settings.forceFastModeEnabled)}
                 >
@@ -596,11 +678,7 @@ function App() {
                     <span class="account-fast-mode-thumb" />
                   </span>
                 </button>
-                <div
-                  class="account-sort-controls"
-                  role="group"
-                  aria-label={resolveAccountControlsLabel(snapshot.lang)}
-                >
+                <div class="account-sort-controls" role="group" aria-label={resolveAccountControlsLabel(snapshot.lang)}>
                   <select
                     id="account-sort-select"
                     class="account-sort-select"
@@ -691,28 +769,130 @@ function App() {
                     {hiddenAccountsToggleLabel}
                   </span>
                 </button>
-                <button
-                  id="invalidAccountsToggleButton"
-                  class={`settings-btn action-btn icon-only ${showInvalidAccounts ? "is-active" : ""}`}
-                  type="button"
-                  title={invalidAccountsToggleLabel}
-                  aria-label={invalidAccountsToggleLabel}
-                  aria-pressed={showInvalidAccounts}
-                  disabled={invalidAccountCount === 0 && !showInvalidAccounts}
-                  onClick={() => {
-                    setAccountsPage(1);
-                    setShowInvalidAccounts((visible) => !visible);
-                  }}
-                >
-                  <span class="button-face">
-                    <span class="button-icon">
-                      <InvalidAccountsIcon />
+                <div ref={healthFilterRef} class={`account-health-filter ${healthFilterOpen ? "is-open" : ""}`}>
+                  <button
+                    id="invalidAccountsToggleButton"
+                    class={`settings-btn action-btn icon-only ${selectedFilterCount > 0 ? "is-active" : ""}`}
+                    type="button"
+                    title={healthFilterToggleLabel}
+                    aria-label={healthFilterToggleLabel}
+                    aria-pressed={selectedFilterCount > 0}
+                    aria-expanded={healthFilterOpen}
+                    aria-controls="accountHealthFilterMenu"
+                    onClick={() => setHealthFilterOpen((open) => !open)}
+                  >
+                    <span class="button-face">
+                      <span class="button-icon">
+                        <AccountHealthFilterIcon />
+                      </span>
                     </span>
-                  </span>
-                  <span class="button-tip" aria-hidden="true">
-                    {invalidAccountsToggleLabel}
-                  </span>
-                </button>
+                    <span class="button-tip" aria-hidden="true">
+                      {healthFilterToggleLabel}
+                    </span>
+                  </button>
+                  {healthFilterOpen ? (
+                    <div
+                      id="accountHealthFilterMenu"
+                      class="account-health-filter-menu"
+                      role="dialog"
+                      aria-labelledby="accountHealthFilterTitle"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <div class="account-health-filter-head">
+                        <div id="accountHealthFilterTitle" class="account-health-filter-title">
+                          {resolveHealthFilterPanelTitle(snapshot.lang)}
+                        </div>
+                        <button
+                          class="account-health-filter-close"
+                          type="button"
+                          aria-label={resolveHealthFilterCloseLabel(snapshot.lang)}
+                          onClick={() => setHealthFilterOpen(false)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <div class="account-health-filter-hint">{resolveHealthFilterPanelHint(snapshot.lang)}</div>
+                      <div
+                        class="account-health-filter-options"
+                        role="group"
+                        aria-label={resolveHealthFilterOptionsLabel(snapshot.lang)}
+                      >
+                        {healthFilterOptions.map((option) => {
+                          const selected = selectedHealthFilters.includes(option.filter);
+                          return (
+                            <label
+                              key={option.filter}
+                              class={`account-health-filter-option health-filter-${option.filter} ${
+                                selected ? "is-selected" : ""
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => handleHealthFilterToggle(option.filter)}
+                              />
+                              <span class="account-health-filter-dot" aria-hidden="true" />
+                              <span class="account-health-filter-copy">
+                                <span class="account-health-filter-label">
+                                  {option.label}
+                                  <span class="account-health-filter-count">{option.count}</span>
+                                </span>
+                                <span class="account-health-filter-description">{option.description}</span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <div class="account-health-filter-divider" />
+                      <div class="account-health-filter-subtitle">
+                        {resolveSharingFilterPanelTitle(snapshot.lang)}
+                      </div>
+                      <div
+                        class="account-health-filter-options"
+                        role="group"
+                        aria-label={resolveSharingFilterOptionsLabel(snapshot.lang)}
+                      >
+                        {sharingFilterOptions.map((option) => {
+                          const selected = selectedSharingFilters.includes(option.filter);
+                          return (
+                            <label
+                              key={option.filter}
+                              class={`account-health-filter-option sharing-filter-${option.filter} ${
+                                selected ? "is-selected" : ""
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => handleSharingFilterToggle(option.filter)}
+                              />
+                              <span class="account-health-filter-dot" aria-hidden="true" />
+                              <span class="account-health-filter-copy">
+                                <span class="account-health-filter-label">
+                                  {option.label}
+                                  <span class="account-health-filter-count">{option.count}</span>
+                                </span>
+                                <span class="account-health-filter-description">{option.description}</span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <button
+                        class="account-health-filter-clear"
+                        type="button"
+                        disabled={selectedFilterCount === 0}
+                        onClick={() => {
+                          setAccountsPage(1);
+                          setSelectedHealthFilters([]);
+                          setSelectedSharingFilters([]);
+                        }}
+                      >
+                        {resolveHealthFilterClearLabel(snapshot.lang)}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
                 <ActionButton
                   class="toolbar-btn"
                   pending={hideAccountsPending}
@@ -760,10 +940,7 @@ function App() {
                   <ActionButton
                     class="toolbar-btn danger"
                     pending={batchRemovePending}
-                    disabled={
-                      hasGlobalPendingAction ||
-                      snapshot.indexHealth.status === "corrupted_unrecoverable"
-                    }
+                    disabled={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
                     onClick={() =>
                       sendAction("batchRemove", undefined, {
                         accountIds: blockedAccountIds,
@@ -784,6 +961,7 @@ function App() {
                     resyncPending={batchResyncPending}
                     removePending={batchRemovePending}
                     sharePending={sharePending}
+                    shareAccountsPending={shareAccountsPending}
                     hidePending={hideAccountsPending}
                     unhidePending={unhideAccountsPending}
                     groupPending={setAccountGroupPending}
@@ -793,6 +971,7 @@ function App() {
                     }
                     onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
                     onShare={handleShareTokens}
+                    onShareAccounts={() => openSharingForAccounts(state.selectedAccountIds)}
                     onSetBalancePool={() =>
                       sendAction("setBalancePool", undefined, { accountIds: state.selectedAccountIds })
                     }
@@ -825,6 +1004,8 @@ function App() {
                   refreshPending={isActionPending("refresh", account.id)}
                   copyImportJsonPending={isActionPending("copyAccountImportJson", account.id)}
                   copyImportJsonSucceeded={modals.copyFeedbackKey === `account-import-json:${account.id}`}
+                  shareAccountsPending={isActionPending("shareAccounts", account.id)}
+                  returnSharedAccountPending={isActionPending("returnSharedAccount", account.id)}
                   accountNameCopyPending={isActionPending("copyText", account.id)}
                   accountNameCopySucceeded={modals.copyFeedbackKey === `account-name:${account.id}`}
                   quotaCountdownStartPending={isActionPending("startQuotaCountdown", account.id)}
@@ -837,6 +1018,7 @@ function App() {
                   selected={selectedAccountIds.has(account.id)}
                   onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
                   onAction={sendAction}
+                  onRequestShare={() => openSharingForAccounts([account.id])}
                 />
               ))}
             </div>
@@ -920,13 +1102,15 @@ function App() {
             ) : null}
             {displayedAccounts.length === 0 ? (
               <div class="saved-accounts-hidden-empty">
-                {showInvalidAccounts
-                  ? resolveInvalidAccountsEmptyLabel(snapshot.lang)
+                {selectedSharingFilters.length > 0
+                  ? resolveSharingFilterEmptyLabel(snapshot.lang, selectedSharingFilters)
+                  : selectedHealthFilters.length > 0
+                  ? resolveHealthFilterEmptyLabel(snapshot.lang, selectedHealthFilters)
                   : selectedPlanFilters.length > 0
-                  ? resolveAccountPlanFilterEmptyLabel(snapshot.lang)
-                  : hiddenAccountCount > 0 && !showHiddenAccounts
-                    ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
-                    : resolveAccountGroupEmptyLabel(snapshot.lang)}
+                    ? resolveAccountPlanFilterEmptyLabel(snapshot.lang)
+                    : hiddenAccountCount > 0 && !showHiddenAccounts
+                      ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
+                      : resolveAccountGroupEmptyLabel(snapshot.lang)}
               </div>
             ) : null}
           </section>
@@ -1040,6 +1224,19 @@ function App() {
         onCopyJson={modals.handleCopyShareJson}
         onDownloadJson={modals.handleDownloadShareJson}
       />
+
+      <SharingModal
+        open={sharingOpen}
+        lang={snapshot.lang}
+        sharing={snapshot.sharing}
+        accountIds={sharingAccountIds}
+        pending={hasGlobalPendingAction || isActionPending("manageSharing") || isActionPending("shareAccounts")}
+        onClose={() => {
+          setSharingOpen(false);
+          setSharingAccountIds([]);
+        }}
+        onAction={sendAction}
+      />
     </>
   );
 }
@@ -1084,24 +1281,234 @@ function resolveHiddenAccountsEmptyLabel(lang: string): string {
   return "All accounts are hidden. Use the eye button above to show them.";
 }
 
-function resolveInvalidAccountsToggleLabel(lang: string, visible: boolean, count: number): string {
+function resolveHealthFilterToggleLabel(
+  lang: string,
+  selectedFilters: readonly DashboardHealthFilter[],
+  totalCount: number,
+  selectedSharingCount = 0
+): string {
+  const selectedCount = selectedFilters.length + selectedSharingCount;
   if (lang === "zh") {
-    return visible ? `取消失效筛选（${count}）` : `仅显示失效账号（${count}）`;
+    return selectedCount > 0 ? `清除状态筛选（${selectedCount}）` : `按颜色筛选账号（${totalCount}）`;
   }
   if (lang === "zh-hant") {
-    return visible ? `取消失效篩選（${count}）` : `僅顯示失效帳號（${count}）`;
+    return selectedCount > 0 ? `清除狀態篩選（${selectedCount}）` : `按顏色篩選帳號（${totalCount}）`;
   }
-  return visible ? `Clear invalid-account filter (${count})` : `Show invalid accounts only (${count})`;
+  return selectedCount > 0
+    ? `Clear status filters (${selectedCount})`
+    : `Filter accounts by color (${totalCount})`;
 }
 
-function resolveInvalidAccountsEmptyLabel(lang: string): string {
+function resolveHealthFilterPanelTitle(lang: string): string {
   if (lang === "zh") {
-    return "没有符合当前分组、套餐和失效筛选的账号。";
+    return "账号状态筛选";
   }
   if (lang === "zh-hant") {
-    return "沒有符合目前分組、方案與失效篩選的帳號。";
+    return "帳號狀態篩選";
   }
-  return "No accounts match the current group, plan, and invalid-account filters.";
+  return "Account status filters";
+}
+
+function resolveHealthFilterPanelHint(lang: string): string {
+  if (lang === "zh") {
+    return "可多选颜色；未选择时显示所有账号。";
+  }
+  if (lang === "zh-hant") {
+    return "可多選顏色；未選擇時顯示所有帳號。";
+  }
+  return "Select one or more colors. With none selected, all accounts are shown.";
+}
+
+function resolveHealthFilterOptionsLabel(lang: string): string {
+  if (lang === "zh") {
+    return "账号状态颜色";
+  }
+  if (lang === "zh-hant") {
+    return "帳號狀態顏色";
+  }
+  return "Account status colors";
+}
+
+function resolveSharingFilterPanelTitle(lang: string): string {
+  if (lang === "zh") {
+    return "共享状态";
+  }
+  if (lang === "zh-hant") {
+    return "共享狀態";
+  }
+  return "Sharing state";
+}
+
+function resolveSharingFilterOptionsLabel(lang: string): string {
+  if (lang === "zh") {
+    return "共享状态筛选";
+  }
+  if (lang === "zh-hant") {
+    return "共享狀態篩選";
+  }
+  return "Sharing state filters";
+}
+
+function resolveSharingFilterOptionCopy(
+  lang: string,
+  filter: DashboardSharingFilterValue
+): { label: string; description: string } {
+  if (filter === "shared") {
+    if (lang === "zh") {
+      return { label: "靛青 · 已共享", description: "已主动共享给好友，账号暂时隐藏。" };
+    }
+    if (lang === "zh-hant") {
+      return { label: "靛青 · 已共享", description: "已主動共享給好友，帳號暫時隱藏。" };
+    }
+    return { label: "Indigo · Shared", description: "Explicitly shared with a friend and temporarily hidden." };
+  }
+  if (lang === "zh") {
+    return { label: "青绿 · 借入", description: "好友主动共享给本机的临时账号。" };
+  }
+  if (lang === "zh-hant") {
+    return { label: "青綠 · 借入", description: "好友主動共享給本機的臨時帳號。" };
+  }
+  return { label: "Teal · Received", description: "A temporary account explicitly shared by a friend." };
+}
+
+function resolveSharingFilterEmptyLabel(
+  lang: string,
+  filters: readonly DashboardSharingFilter[]
+): string {
+  const includesShared = filters.includes("shared");
+  const includesReceived = filters.includes("received");
+  if (lang === "zh") {
+    return includesShared && includesReceived
+      ? "当前没有已共享或借入的账号。"
+      : includesShared
+        ? "当前没有已共享的账号。"
+        : "当前没有借入的账号。";
+  }
+  if (lang === "zh-hant") {
+    return includesShared && includesReceived
+      ? "目前沒有已共享或借入的帳號。"
+      : includesShared
+        ? "目前沒有已共享的帳號。"
+        : "目前沒有借入的帳號。";
+  }
+  return includesShared && includesReceived
+    ? "There are no shared or received accounts."
+    : includesShared
+      ? "There are no shared accounts."
+      : "There are no received accounts.";
+}
+
+function resolveHealthFilterCloseLabel(lang: string): string {
+  if (lang === "zh") {
+    return "关闭状态筛选";
+  }
+  if (lang === "zh-hant") {
+    return "關閉狀態篩選";
+  }
+  return "Close status filters";
+}
+
+function resolveHealthFilterClearLabel(lang: string): string {
+  if (lang === "zh") {
+    return "清除颜色筛选";
+  }
+  if (lang === "zh-hant") {
+    return "清除顏色篩選";
+  }
+  return "Clear color filters";
+}
+
+function resolveHealthFilterOptionCopy(
+  lang: string,
+  filter: DashboardHealthFilter
+): {
+  label: string;
+  description: string;
+} {
+  if (lang === "zh") {
+    switch (filter) {
+      case "unknown":
+        return {
+          label: "黄色 · 会话状态未知",
+          description: "续期验证尚未建立，当前会话是否可用还未确认。"
+        };
+      case "usable":
+        return {
+          label: "青色 · 仍可使用",
+          description: "自动续期不可用，但当前访问令牌仍可能正常工作。"
+        };
+      case "warning":
+        return {
+          label: "橙色 · 需要留意",
+          description: "令牌即将过期、续期暂时失败或配额状态异常。"
+        };
+      case "error":
+        return {
+          label: "红色 · 账号失效",
+          description: "需要重新授权、访问令牌无效或工作区已停用。"
+        };
+    }
+  }
+  if (lang === "zh-hant") {
+    switch (filter) {
+      case "unknown":
+        return {
+          label: "黃色 · 會話狀態未知",
+          description: "尚未建立續期驗證，目前會話是否可用仍未確認。"
+        };
+      case "usable":
+        return {
+          label: "青色 · 仍可使用",
+          description: "自動續期不可用，但目前存取權杖仍可能正常工作。"
+        };
+      case "warning":
+        return {
+          label: "橙色 · 需要留意",
+          description: "權杖即將過期、續期暫時失敗或配額狀態異常。"
+        };
+      case "error":
+        return {
+          label: "紅色 · 帳號失效",
+          description: "需要重新授權、存取權杖無效或工作區已停用。"
+        };
+    }
+  }
+
+  switch (filter) {
+    case "unknown":
+      return {
+        label: "Yellow · Session status unknown",
+        description: "Renewal evidence is not established, so session usability is unconfirmed."
+      };
+    case "usable":
+      return {
+        label: "Cyan · Still usable",
+        description: "Automatic renewal is unavailable, but the current access token may still work."
+      };
+    case "warning":
+      return {
+        label: "Orange · Needs attention",
+        description: "The token may expire soon, renewal failed temporarily, or quota is abnormal."
+      };
+    case "error":
+      return {
+        label: "Red · Account invalid",
+        description: "Reauthorization is required, the access token is invalid, or the workspace is disabled."
+      };
+  }
+}
+
+function resolveHealthFilterEmptyLabel(lang: string, selectedFilters: readonly DashboardHealthFilter[]): string {
+  const selectedLabels = selectedFilters
+    .map((filter) => resolveHealthFilterOptionCopy(lang, filter).label)
+    .join(lang === "zh-hant" ? "、" : lang === "zh" ? "、" : ", ");
+  if (lang === "zh") {
+    return `没有符合当前分组、套餐和状态筛选（${selectedLabels}）的账号。`;
+  }
+  if (lang === "zh-hant") {
+    return `沒有符合目前分組、方案與狀態篩選（${selectedLabels}）的帳號。`;
+  }
+  return `No accounts match the current group, plan, and status filters (${selectedLabels}).`;
 }
 
 function resolveHideLowWeeklyQuotaLabel(lang: string, count: number, threshold: number): string {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMetrics,
+  resolveAccountLifetimeTokenUsage,
   resolveAccountTokenUsage,
   resolveWorkspaceDisplay,
   sortDashboardAccounts
@@ -203,6 +204,39 @@ describe("resolveAccountTokenUsage", () => {
       resetAt: weeklyResetAt,
       totalTokens: 180
     });
+  });
+
+  it("resolves lifetime account usage independently of the current quota window", () => {
+    const snapshot: AccountTokenUsageSnapshot = {
+      status: "ready",
+      isRefreshing: false,
+      windowsByAccount: {},
+      lifetimeByAccount: {
+        account: {
+          inputTokens: 100,
+          cachedInputTokens: 10,
+          outputTokens: 20,
+          reasoningOutputTokens: 2,
+          totalTokens: 120,
+          byModel: [],
+          windowCount: 2,
+          lastObservedAt: 1_800_000_000 * 1_000
+        }
+      }
+    };
+
+    expect(
+      resolveAccountLifetimeTokenUsage(
+        {
+          id: "account",
+          email: "account@example.com",
+          isActive: true,
+          createdAt: 1,
+          updatedAt: 1
+        },
+        snapshot
+      )
+    ).toMatchObject({ totalTokens: 120, windowCount: 2 });
   });
 });
 

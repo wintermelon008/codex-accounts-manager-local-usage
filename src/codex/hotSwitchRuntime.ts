@@ -276,6 +276,14 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     }
     const status = await this.bridge.getStatus();
     setAvailabilityRuntime(status.availabilityRuntimeId);
+    // Runtime startup can race the official app-server becoming ready, and a
+    // provider-only route switch can leave attribution inactive without
+    // another account switch to kick the handshake. Status polling is already
+    // the resident liveness path, so use it to converge attribution as soon
+    // as the ChatGPT runtime is ready again.
+    if (status.providerKind === "chatgpt" && !status.gatewayActive && !status.attributionActive) {
+      void this.synchronizeUsageAttribution(this.bridge);
+    }
     return {
       ...status,
       attributionFailureReason: status.attributionActive

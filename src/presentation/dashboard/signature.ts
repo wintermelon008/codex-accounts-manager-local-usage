@@ -30,6 +30,10 @@ export function buildDashboardStateSignature(state: DashboardState): string {
         account.isHidden ? "1" : "0",
         account.accountGroup ?? "",
         account.balancePoolEnabled ? "1" : "0",
+        account.sharingState ?? "",
+        account.sharingPeerUserId ?? "",
+        account.sharingPeerDisplayName ?? "",
+        account.sharingExpiresAt ?? "",
         account.showInStatusBar ? "1" : "0",
         account.lastQuotaAt ?? 0,
         account.resetCreditsAvailable ?? "",
@@ -47,6 +51,18 @@ export function buildDashboardStateSignature(state: DashboardState): string {
               account.tokenUsage.reasoningOutputTokens,
               account.tokenUsage.totalTokens,
               JSON.stringify(account.tokenUsage.byModel)
+            ].join(",")
+          : "",
+        account.lifetimeTokenUsage
+          ? [
+              account.lifetimeTokenUsage.windowCount,
+              account.lifetimeTokenUsage.lastObservedAt ?? "",
+              account.lifetimeTokenUsage.inputTokens,
+              account.lifetimeTokenUsage.cachedInputTokens,
+              account.lifetimeTokenUsage.outputTokens,
+              account.lifetimeTokenUsage.reasoningOutputTokens,
+              account.lifetimeTokenUsage.totalTokens,
+              JSON.stringify(account.lifetimeTokenUsage.byModel)
             ].join(",")
           : "",
         account.healthKind,
@@ -100,6 +116,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
       })
     : "";
   const integrationsSignature = JSON.stringify(state.integrations ?? []);
+  const sharingSignature = JSON.stringify(state.sharing ?? null);
 
   return [
     state.lang,
@@ -150,6 +167,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     accountSignature,
     localUsageSignature,
     integrationsSignature,
-    JSON.stringify(state.integrationSettings ?? [])
+    JSON.stringify(state.integrationSettings ?? []),
+    sharingSignature
   ].join("||");
 }

@@ -9,6 +9,7 @@ function createState(overrides?: {
   accountGroup?: "A" | "B" | "C";
   planType?: string;
   tokenUsage?: { totalTokens: number; resetAt: number };
+  lifetimeUsageTotal?: number;
   quotaCountdownStartAvailable?: boolean;
   metricWindowMinutes?: number;
   mailboxDeactivated?: boolean;
@@ -113,7 +114,19 @@ function createState(overrides?: {
               reasoningOutputTokens: 0,
               totalTokens: overrides.tokenUsage.totalTokens
             }
-          : undefined
+          : undefined,
+        lifetimeTokenUsage:
+          overrides?.lifetimeUsageTotal == null
+            ? undefined
+            : {
+                inputTokens: overrides.lifetimeUsageTotal,
+                cachedInputTokens: 0,
+                outputTokens: 0,
+                reasoningOutputTokens: 0,
+                totalTokens: overrides.lifetimeUsageTotal,
+                byModel: [],
+                windowCount: 2
+              }
       } as DashboardState["accounts"][number]
     ]
   };
@@ -287,6 +300,22 @@ describe("buildDashboardStateSignature", () => {
     expect(buildDashboardStateSignature(poolChanged)).not.toBe(baseSignature);
   });
 
+  it("changes when an account sharing lease changes", () => {
+    const base = createState();
+    const shared: DashboardState = {
+      ...base,
+      accounts: [
+        {
+          ...base.accounts[0]!,
+          sharingState: "shared",
+          sharingPeerUserId: "rw_peer_1234567890",
+          sharingExpiresAt: 1_800_000_000_000
+        }
+      ]
+    };
+    expect(buildDashboardStateSignature(shared)).not.toBe(buildDashboardStateSignature(base));
+  });
+
   it("changes when the unified seamless switch threshold changes", () => {
     const base = createState();
     const changed: DashboardState = {
@@ -373,6 +402,13 @@ describe("buildDashboardStateSignature", () => {
 
     expect(buildDashboardStateSignature(usedMore)).not.toBe(buildDashboardStateSignature(before));
     expect(buildDashboardStateSignature(reset)).not.toBe(buildDashboardStateSignature(usedMore));
+  });
+
+  it("changes when cumulative account usage grows", () => {
+    const before = createState({ lifetimeUsageTotal: 100 });
+    const after = createState({ lifetimeUsageTotal: 200 });
+
+    expect(buildDashboardStateSignature(after)).not.toBe(buildDashboardStateSignature(before));
   });
 
   it("changes when visible subscription or workspace fields change", () => {

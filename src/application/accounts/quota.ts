@@ -110,6 +110,11 @@ export async function refreshSingleQuota(
   if (isSub2ApiAccount(account) || account.quotaMode === "none") {
     return;
   }
+  if (account.sharing?.direction === "outgoing") {
+    // The owner has handed the credential to the peer for this lease. Do not
+    // refresh or rotate the owner's copy while the borrower is using it.
+    return;
+  }
 
   const tokens = await repo.getTokens(accountId);
   if (!tokens) {
@@ -131,6 +136,12 @@ export async function refreshSingleQuota(
       void vscode.window.showWarningMessage(copy.failedToRefresh(label, message));
     }
     throw error;
+  }
+  if (result.stale) {
+    if (shouldRefreshView) {
+      view.refresh();
+    }
+    return;
   }
   if (result.tokenRefreshFailure) {
     // Record the refresh failure before persisting the successful quota probe,
@@ -207,6 +218,9 @@ export async function refreshImportedAccountQuota(
   }
 
   const result = await refreshQuota(account, tokens, true, repo);
+  if (result.stale) {
+    return {};
+  }
   if (result.tokenRefreshFailure) {
     markTokenAutomationRefreshFailure(
       accountId,
