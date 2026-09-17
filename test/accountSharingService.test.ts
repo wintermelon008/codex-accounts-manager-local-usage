@@ -85,6 +85,102 @@ describe("AccountSharingService local identity state", () => {
       0o600
     );
   });
+
+  it("repairs owner metadata after a terminal return outlives the sent-transfer listing", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codex-sharing-owner-repair-"));
+    directories.push(directory);
+
+    const accountId = "account-owner-repair";
+    const leaseId = "lease-owner-repair";
+    const account: CodexAccountRecord = {
+      id: accountId,
+      email: "owner-repair@example.invalid",
+      isActive: false,
+      isHidden: true,
+      balancePoolEnabled: false,
+      createdAt: 1,
+      updatedAt: 1,
+      sharing: {
+        leaseId,
+        transferId: "transfer-owner-repair",
+        direction: "outgoing",
+        state: "shared",
+        peerUserId: "rw_peer_1234567890",
+        expiresAt: 10_000,
+        sharedAt: 1
+      }
+    };
+    const repo = {
+      listAccounts: vi.fn(async () => [account]),
+      onDidChangeAccounts: vi.fn(() => ({ dispose: vi.fn() })),
+      getAccount: vi.fn(async (id: string) => (id === accountId ? account : undefined)),
+      setAccountSharingInfo: vi.fn(async (_id: string, sharing: CodexAccountRecord["sharing"]) => {
+        account.sharing = sharing;
+        return account;
+      }),
+      unhideAccounts: vi.fn(async () => {
+        account.isHidden = false;
+        return [account];
+      }),
+      setBalancePoolMembership: vi.fn(async (_id: string, enabled: boolean) => {
+        account.balancePoolEnabled = enabled;
+        return account;
+      })
+    };
+    const context = {
+      globalStorageUri: { fsPath: directory },
+      globalState: { get: vi.fn(), update: vi.fn(async () => undefined) },
+      secrets: { delete: vi.fn(async () => undefined) }
+    };
+    const service = new AccountSharingService(context as never, repo as never, vi.fn(), {
+      now: () => 100,
+      relayUrl: () => "https://relay.example.invalid"
+    });
+    await service.initialize();
+
+    const internals = service as unknown as {
+      relayToken: string;
+      relayRegistrationValidatedAt: number;
+      state: { leases: SharingLease[] };
+    };
+    internals.relayToken = "relay-token";
+    internals.relayRegistrationValidatedAt = 100;
+    internals.state.leases = [
+      {
+        leaseId,
+        transferId: "transfer-owner-repair",
+        direction: "outgoing",
+        state: "returned",
+        peerUserId: "rw_peer_1234567890",
+        accountIds: [],
+        expiresAt: 10_000,
+        createdAt: 1,
+        ownerAccountStates: [{ accountId, isHidden: false, balancePoolEnabled: true }]
+      }
+    ];
+
+    fetchWithTimeoutMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      const body = url.endsWith("/transfers/inbox")
+        ? { transfers: [] }
+        : url.endsWith("/requests/inbox") || url.endsWith("/requests/mine")
+          ? { requests: [] }
+          : url.endsWith("/transfers/sent")
+            ? { transfers: [] }
+            : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    await service.poll();
+
+    expect(account.sharing).toBeUndefined();
+    expect(account.isHidden).toBe(false);
+    expect(account.balancePoolEnabled).toBe(true);
+    expect(repo.setAccountSharingInfo).toHaveBeenCalledWith(accountId, undefined);
+    expect(repo.setBalancePoolMembership).toHaveBeenCalledWith(accountId, true);
+    service.dispose();
+    fetchWithTimeoutMock.mockReset();
+  });
 });
 
 describe("AccountSharingService return confirmation", () => {

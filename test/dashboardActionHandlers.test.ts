@@ -63,6 +63,39 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
+  it("forces a fresh account index read when sharing status is refreshed", async () => {
+    const invalidateExternalStateCaches = vi.fn();
+    const poll = vi.fn().mockResolvedValue(undefined);
+    const publishState = vi.fn().mockResolvedValue(undefined);
+    const schedulePublishState = vi.fn();
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: { invalidateExternalStateCaches } as unknown as DashboardActionContext["repo"],
+        resolveLanguage: () => "en",
+        schedulePublishState,
+        publishState,
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.19", locale: "en" }),
+        accountSharing: { poll } as unknown as DashboardActionContext["accountSharing"]
+      },
+      {
+        type: "dashboard:action",
+        action: "manageSharing",
+        requestId: "req-refresh-sharing-status",
+        payload: { sharingOperation: "refreshStatus" }
+      }
+    );
+
+    expect(invalidateExternalStateCaches).toHaveBeenNthCalledWith(1, { invalidateTokens: false });
+    expect(poll).toHaveBeenCalledOnce();
+    expect(invalidateExternalStateCaches).toHaveBeenNthCalledWith(2, { invalidateTokens: false });
+    expect(publishState).toHaveBeenCalledWith(true);
+    expect(schedulePublishState).toHaveBeenCalledOnce();
+    expect(result.status).toBe("completed");
+  });
+
   it("runs a forced local usage aggregation from the Dashboard action", async () => {
     const refreshLocalUsage = vi.fn().mockResolvedValue(undefined);
     const result = await executeDashboardActionMessage(

@@ -166,11 +166,14 @@ describe("local usage dashboard placement and responsive guards", () => {
 
   it("keeps a standalone account-sharing entry point for the management modal", () => {
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+    const modal = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/sharingModal.tsx"), "utf8");
 
     expect(main).toContain('id="accountSharingButton"');
     expect(main).toContain("setSharingAccountIds([])");
     expect(main).toContain("setSharingOpen(true)");
     expect(main).toContain("<SharingModal");
+    expect(modal).toContain('sharingOperation: "refreshStatus"');
+    expect(modal).toContain("刷新状态");
   });
 
   it("exposes a batch action for removing selected accounts from the seamless-switch pool", () => {

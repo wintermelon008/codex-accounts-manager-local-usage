@@ -798,6 +798,7 @@ export interface DashboardActionPayload {
     | "setPeerNote"
     | "configureRelay"
     | "sync"
+    | "refreshStatus"
     | "resetIdentity";
   sharingUserId?: string;
   sharingRequestId?: string;

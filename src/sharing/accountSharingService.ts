@@ -123,6 +123,7 @@ export class AccountSharingService implements vscode.Disposable {
       }
     });
     const recoveredExpiredAccounts = await this.recoverExpiredAccountSharing();
+    await this.reconcileTerminalOutgoingLeases();
     await this.persistState();
     if (recoveredExpiredAccounts) {
       this.onChanged();
@@ -686,6 +687,7 @@ export class AccountSharingService implements vscode.Disposable {
     await this.pollReturnConfirmations();
     await this.pollRequests();
     await this.pollSentTransfers();
+    await this.reconcileTerminalOutgoingLeases();
     await this.pollLeaseConditions();
   }
 
@@ -1010,6 +1012,48 @@ export class AccountSharingService implements vscode.Disposable {
     return changed;
   }
 
+  /**
+   * A terminal Relay transfer can disappear from the sent-transfer listing
+   * after the owner has already recorded the lease as returned. Reconcile the
+   * owner-side account marker from the durable pre-share snapshot so a lost
+   * final poll cannot leave an account permanently hidden and unavailable.
+   */
+  private async reconcileTerminalOutgoingLeases(): Promise<boolean> {
+    let changed = false;
+    for (const lease of this.state!.leases) {
+      if (lease.direction !== "outgoing" || !["returned", "failed"].includes(lease.state)) {
+        continue;
+      }
+      const staleAccountIds: string[] = [];
+      for (const accountId of this.getOwnerLeaseAccountIds(lease)) {
+        const account = await this.repo.getAccount(accountId).catch(() => undefined);
+        if (account?.sharing?.leaseId === lease.leaseId) {
+          staleAccountIds.push(accountId);
+        }
+      }
+      if (staleAccountIds.length === 0) {
+        continue;
+      }
+      const outcome = lease.state === "failed" ? "failed" : "returned";
+      changed = (await this.finalizeOutgoingAccounts(lease, staleAccountIds, outcome)) || changed;
+    }
+    if (changed) {
+      await this.persistState();
+      this.onChanged();
+    }
+    return changed;
+  }
+
+  private getOwnerLeaseAccountIds(lease: SharingLease): string[] {
+    return [
+      ...new Set([
+        ...lease.accountIds,
+        ...(lease.ownerAccountStates?.map((entry) => entry.accountId) ?? []),
+        ...(lease.returnAckAccountIds ?? [])
+      ])
+    ];
+  }
+
   private async applyReturnedCredentials(lease: SharingLease, transfer: SharingTransfer): Promise<void> {
     const peer = this.state!.peers.find(
       (candidate) => candidate.userId === lease.peerUserId && candidate.relationship === "trusted"
@@ -1050,7 +1094,8 @@ export class AccountSharingService implements vscode.Disposable {
       }
     }
     if (appliedAccountIds.size > 0) {
-      const targetIds = [...appliedAccountIds].filter((accountId) => lease.accountIds.includes(accountId));
+      const ownerLeaseAccountIds = new Set(this.getOwnerLeaseAccountIds(lease));
+      const targetIds = [...appliedAccountIds].filter((accountId) => ownerLeaseAccountIds.has(accountId));
       if (targetIds.length > 0) {
         await this.finalizeOutgoingAccounts(lease, targetIds);
       }
@@ -1144,19 +1189,27 @@ export class AccountSharingService implements vscode.Disposable {
     lease: SharingLease,
     returnedAccountIds?: readonly string[],
     outcome: "returned" | "failed" = "returned"
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const knownAccountIds = this.getOwnerLeaseAccountIds(lease);
     const targetIds = returnedAccountIds?.length
-      ? lease.accountIds.filter((accountId) => returnedAccountIds.includes(accountId))
-      : [...lease.accountIds];
+      ? knownAccountIds.filter((accountId) => returnedAccountIds.includes(accountId))
+      : knownAccountIds;
+    const finalizedAccountIds: string[] = [];
     for (const accountId of targetIds) {
-      const account = await this.repo.getAccount(accountId);
-      if (account?.sharing?.leaseId !== lease.leaseId) {
+      const account = await this.repo.getAccount(accountId).catch(() => undefined);
+      if (!account) {
+        finalizedAccountIds.push(accountId);
+        continue;
+      }
+      if (account.sharing?.leaseId !== lease.leaseId) {
         continue;
       }
       await this.repo.setAccountSharingInfo(accountId, undefined);
       await this.restoreOwnerAccountState(lease, accountId);
+      finalizedAccountIds.push(accountId);
     }
-    lease.accountIds = lease.accountIds.filter((accountId) => !targetIds.includes(accountId));
+    lease.accountIds = lease.accountIds.filter((accountId) => !finalizedAccountIds.includes(accountId));
+    const previousState = lease.state;
     if (outcome === "failed") {
       lease.state = "failed";
       lease.returnedAt = this.now();
@@ -1166,6 +1219,7 @@ export class AccountSharingService implements vscode.Disposable {
     } else {
       lease.state = "shared";
     }
+    return finalizedAccountIds.length > 0 || previousState !== lease.state;
   }
 
   private async restoreOwnerAccountState(lease: SharingLease, accountId: string): Promise<void> {
@@ -1178,9 +1232,7 @@ export class AccountSharingService implements vscode.Disposable {
       return;
     }
     await this.repo.unhideAccounts([accountId]).catch(() => undefined);
-    if (!previous.balancePoolEnabled) {
-      await this.repo.removeFromBalancePool([accountId]).catch(() => undefined);
-    }
+    await this.repo.setBalancePoolMembership(accountId, previous.balancePoolEnabled).catch(() => undefined);
   }
 
   private async removeIncomingLeaseAccounts(lease: SharingLease, accountIds: readonly string[]): Promise<void> {

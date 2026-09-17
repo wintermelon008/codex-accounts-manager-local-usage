@@ -113,6 +113,14 @@ export function SharingModal(props: {
                 class="modal-secondary-btn"
                 type="button"
                 disabled={props.pending}
+                onClick={() => props.onAction("manageSharing", undefined, { sharingOperation: "refreshStatus" })}
+              >
+                {localized("刷新状态", "刷新狀態", "Refresh status")}
+              </button>
+              <button
+                class="modal-secondary-btn"
+                type="button"
+                disabled={props.pending}
                 onClick={() => props.onAction("manageSharing", undefined, { sharingOperation: "sync" })}
               >
                 {localized("立即同步", "立即同步", "Sync now")}

@@ -184,6 +184,15 @@ async function runDashboardAction(
         case "sync":
           await ctx.accountSharing.poll();
           break;
+        case "refreshStatus":
+          // The sharing poll can update the shared accounts index from a
+          // different extension host. Force this Dashboard to reread that
+          // index and publish the resulting account/lease state immediately.
+          ctx.repo.invalidateExternalStateCaches({ invalidateTokens: false });
+          await ctx.accountSharing.poll();
+          ctx.repo.invalidateExternalStateCaches({ invalidateTokens: false });
+          await ctx.publishState(true);
+          break;
         case "resetIdentity":
           await ctx.accountSharing.resetIdentity();
           break;
