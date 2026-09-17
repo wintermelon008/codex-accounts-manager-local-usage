@@ -22,6 +22,8 @@ import {
   CodexHotSwitchBridge,
   CodexExecProviderConfig,
   HotSwitchAccountResult,
+  HotSwitchCapacityRecoveryEvent,
+  HotSwitchCapacityRecoveryResult,
   HotSwitchAuthTokenRevokedEvent,
   HotSwitchAuthTokenRevokedResult,
   HotSwitchAvailabilityEvent,
@@ -126,7 +128,10 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       activity: AccountSessionActivity,
       snapshot?: AccountConcurrencySnapshot
     ) => void,
-    private readonly handleAvailability?: (event: HotSwitchAvailabilityEvent) => Promise<void>
+    private readonly handleAvailability?: (event: HotSwitchAvailabilityEvent) => Promise<void>,
+    private readonly handleCapacityRecovery?: (
+      event: HotSwitchCapacityRecoveryEvent
+    ) => Promise<HotSwitchCapacityRecoveryResult>
   ) {}
 
   async initialize(): Promise<HotSwitchSetupResult> {
@@ -680,7 +685,8 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
             if (status.availabilityRuntimeId !== event.runtimeId) return;
             setAvailabilityRuntime(status.availabilityRuntimeId);
             await this.handleAvailability?.(event);
-          }
+          },
+          (event) => this.handleCapacityRecovery?.(event) ?? Promise.resolve({ handled: false })
         );
         let runtimeStatusChecked = false;
         if (isOpenAiCodexExtensionActive()) {

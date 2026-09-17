@@ -77,7 +77,7 @@ export type RefreshView = {
 
 export type SeamlessQuotaSwitchOptions = {
   /** The local runtime observed a structured usageLimitExceeded failure. */
-  trigger?: "runtimeUsageLimit" | "runtimeUsageLimitExhaustion";
+  trigger?: "runtimeUsageLimit" | "runtimeUsageLimitExhaustion" | "runtimeCapacityRecovery";
   /** The account currently loaded by this window's runtime, if known. */
   activeAccountId?: string;
 };
@@ -345,14 +345,15 @@ async function runSeamlessBalanceSwitchForActiveQuota(
   const config = getCodexAccountsConfiguration();
   const quotaBandSwitchEnabled = isSeamlessSwitchQuotaBandsEnabled(config);
   const lowQuotaSwitchEnabled = isSeamlessSwitchLowQuotaEnabled(config);
+  const capacityRecoveryTrigger = options.trigger === "runtimeCapacityRecovery";
   if (
     !isSeamlessSwitchEnabled(config) ||
-    (!quotaBandSwitchEnabled && !lowQuotaSwitchEnabled) ||
+    (!capacityRecoveryTrigger && !quotaBandSwitchEnabled && !lowQuotaSwitchEnabled) ||
     !config.get<boolean>(HOT_SWITCH_ENABLED, false)
   ) {
     return false;
   }
-  if (options.trigger && !lowQuotaSwitchEnabled) {
+  if (options.trigger && !capacityRecoveryTrigger && !lowQuotaSwitchEnabled) {
     return false;
   }
   // A raw usage-limit signal remains opt-in at the percentage thresholds. At
@@ -405,7 +406,9 @@ async function runSeamlessBalanceSwitchForActiveQuota(
       config,
       now,
       view,
-      runtimeUsageLimit: options.trigger !== undefined,
+      runtimeUsageLimit:
+        options.trigger === "runtimeUsageLimit" || options.trigger === "runtimeUsageLimitExhaustion",
+      capacityRecovery: capacityRecoveryTrigger,
       quotaBandSwitchEnabled,
       lowQuotaSwitchEnabled
     });
@@ -439,6 +442,7 @@ async function executeSeamlessBalanceSwitch(params: {
   now: number;
   view: RefreshView;
   runtimeUsageLimit: boolean;
+  capacityRecovery: boolean;
   quotaBandSwitchEnabled: boolean;
   lowQuotaSwitchEnabled: boolean;
 }): Promise<boolean> {
@@ -450,13 +454,14 @@ async function executeSeamlessBalanceSwitch(params: {
     now,
     view,
     runtimeUsageLimit,
+    capacityRecovery,
     quotaBandSwitchEnabled,
     lowQuotaSwitchEnabled
   } = params;
   const quotaBandSize = normalizeSeamlessQuotaBandSize(config.get<number>(SEAMLESS_QUOTA_BAND_SIZE, 20));
   const configuredSwitchThreshold = getSeamlessSwitchThreshold(config);
-  const switchThreshold = lowQuotaSwitchEnabled ? configuredSwitchThreshold : 0;
-  const thresholdEnabled = lowQuotaSwitchEnabled && switchThreshold > 0;
+  const switchThreshold = capacityRecovery ? 0 : lowQuotaSwitchEnabled ? configuredSwitchThreshold : 0;
+  const thresholdEnabled = !capacityRecovery && lowQuotaSwitchEnabled && switchThreshold > 0;
   const afterExhaustionRecoveryEnabled = lowQuotaSwitchEnabled && switchThreshold === 0;
   const activeIsFree = isFreePlanType(active.planType);
   const activeIsFreeWindowed = isVerifiedFreeWindowedAccount(active, now);
@@ -466,7 +471,7 @@ async function executeSeamlessBalanceSwitch(params: {
   const weeklyThresholdReached =
     (runtimeUsageLimit && activeCapability === "reserve") ||
     (thresholdEnabled && active.quotaSummary!.weeklyPercentage <= switchThreshold);
-  const thresholdSwitch = hourlyThresholdReached || weeklyThresholdReached;
+  const thresholdSwitch = !capacityRecovery && (hourlyThresholdReached || weeklyThresholdReached);
   const thresholdQuota =
     weeklyThresholdReached && !hourlyThresholdReached ? "weekly" : hourlyThresholdReached ? "hourly" : undefined;
   const activeBand =
@@ -474,11 +479,12 @@ async function executeSeamlessBalanceSwitch(params: {
   // Free accounts do not participate in ordinary band balancing. With the
   // independent low-quota mode enabled, they use its threshold/runtime path.
   const bandDropped =
+    !capacityRecovery &&
     quotaBandSwitchEnabled &&
     activeCapability === "windowed" &&
     !activeIsFreeWindowed &&
     observeSeamlessQuotaBand(active.id, activeBand, quotaBandSize);
-  if (!thresholdSwitch && !bandDropped) {
+  if (!capacityRecovery && !thresholdSwitch && !bandDropped) {
     return false;
   }
 
@@ -490,15 +496,17 @@ async function executeSeamlessBalanceSwitch(params: {
     quotaBandSize,
     switchThreshold,
     thresholdQuota,
-    forceRecoveryMode: thresholdSwitch && runtimeUsageLimit,
-    requireFreshFreeCandidates: thresholdSwitch && activeIsFree,
+    forceRecoveryMode: capacityRecovery || (thresholdSwitch && runtimeUsageLimit),
+    requireFreshFreeCandidates: capacityRecovery || (thresholdSwitch && activeIsFree),
     now
   });
   if (!next) {
     return false;
   }
 
-  const switchOptions = thresholdSwitch
+  const switchOptions = capacityRecovery
+    ? { gracePeriodMs: 0, longTurnPolicy: "interruptAndContinue" as const }
+    : thresholdSwitch
     ? { gracePeriodMs: 0, recoverRecentUsageLimitedTurns: true }
     : afterExhaustionRecoveryEnabled
       ? { recoverRecentUsageLimitedTurns: true }
@@ -509,7 +517,8 @@ async function executeSeamlessBalanceSwitch(params: {
   const reason = formatSeamlessSwitchReason({
     switchThreshold,
     thresholdQuota,
-    runtimeUsageLimit
+    runtimeUsageLimit,
+    capacityRecovery
   });
   if (runtimeOutcome.status === "deferred") {
     console.info(
@@ -569,7 +578,11 @@ function formatSeamlessSwitchReason(params: {
   switchThreshold: number;
   thresholdQuota?: "hourly" | "weekly";
   runtimeUsageLimit: boolean;
+  capacityRecovery: boolean;
 }): string {
+  if (params.capacityRecovery) {
+    return "model-capacity recovery ";
+  }
   if (params.runtimeUsageLimit) {
     return params.switchThreshold === 0 ? "all-conversations exhaustion recovery " : "usage-limit recovery ";
   }

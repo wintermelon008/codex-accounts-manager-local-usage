@@ -3434,6 +3434,95 @@ describe("CodexHotSwitchBridge", () => {
     ).toBe(false);
   }, 15_000);
 
+  it("lets Manager switch before sending a model-capacity recovery Continue", async () => {
+    const root = path.resolve(__dirname, "..");
+    shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CODEX_ACCOUNTS_REAL_CLI: path.join(root, "test", "fixtures", "fake-codex-app-server.cjs"),
+        CODEX_ACCOUNTS_CAPACITY_RECOVERY_DELAY_MS: "120"
+      },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const messages = createMessageCollector(shim.stdout);
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-manager-initialize", method: "initialize", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-manager-initialize");
+
+    const capacityEvents: Array<{ threadId: string; workGeneration?: number; localAccountId?: string }> = [];
+    let switchOutcome: string | undefined;
+    bridge = new CodexHotSwitchBridge(
+      async () => ({
+        accessToken: "rollback-token-a",
+        chatgptAccountId: "account-a",
+        chatgptPlanType: "plus"
+      }),
+      undefined,
+      undefined,
+      process.pid,
+      undefined,
+      undefined,
+      undefined,
+      async (event) => {
+        capacityEvents.push(event);
+        const outcome = await bridge!.switchAccount({
+          accessToken: "access-token-b",
+          accountId: "account-b",
+          localAccountId: "local-b",
+          previousAccountId: "account-a",
+          previousLocalAccountId: "local-a",
+          previousExpectedEmail: "a@example.invalid",
+          expectedEmail: "b@example.invalid",
+          planType: "plus",
+          gracePeriodMs: 0,
+          longTurnPolicy: "interruptAndContinue"
+        });
+        switchOutcome = outcome.status;
+        return outcome.status === "switched"
+          ? { handled: true, switched: true, accountId: outcome.accountId }
+          : { handled: false, reason: outcome.reason };
+      }
+    );
+    await waitForSocket(getHotSwitchSocketPath(process.pid));
+    await expect(bridge.getStatus()).resolves.toMatchObject({ ready: true });
+
+    shim.stdin.write(
+      `${JSON.stringify({
+        id: "capacity-manager-start",
+        method: "turn/start",
+        params: { threadId: "capacity-manager-thread", input: [] }
+      })}\n`
+    );
+    await messages.next(
+      (message) => message.method === "turn/started" && message.params?.threadId === "capacity-manager-thread"
+    );
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-manager-fail", method: "test/failCapacity", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-manager-fail");
+
+    const capacityRecoveryMessage = await messages.next(
+      (message) =>
+        message.method === "test/received" &&
+        message.params?.method === "turn/start" &&
+        message.params?.threadId === "capacity-manager-thread" &&
+        message.params?.recoveryMetadata === "true"
+    );
+    await expect(Promise.resolve(capacityRecoveryMessage)).resolves.toMatchObject({
+      params: { runtimeAccountId: "account-b", inputText: "Continue." }
+    });
+    expect(capacityEvents).toHaveLength(1);
+    expect(capacityEvents[0]).toMatchObject({ threadId: "capacity-manager-thread", workGeneration: 1 });
+    await waitFor(() => switchOutcome !== undefined);
+    expect(switchOutcome).toBe("switched");
+    await expect(bridge.getStatus()).resolves.toMatchObject({
+      capacityRecoveryThreads: 0,
+      capacityRecoveryWaitingThreads: 0,
+      activeTurns: 1
+    });
+
+    shim.stdin.write(`${JSON.stringify({ id: "capacity-manager-complete", method: "test/complete", params: {} })}\n`);
+    await messages.next((message) => message.id === "capacity-manager-complete");
+  }, 15_000);
+
   it("keeps capacity retries independent and restarts the timer after a retry is rejected", async () => {
     const root = path.resolve(__dirname, "..");
     shim = childProcess.spawn(path.join(root, "runtime", "codex-app-server-shim.cjs"), ["app-server"], {

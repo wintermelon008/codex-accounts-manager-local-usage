@@ -37,9 +37,9 @@
 
 ## 模型负载过大时的自动恢复
 
-当某个 thread 收到精确错误 `Selected model is at capacity. Please try a different model.`，或结构化错误标识为 `server_overloaded`（兼容 `codex_error_info` 与 `codexErrorInfo`）时，runtime 只为这个 thread 建立独立的内存计时器，每次随机等待 `5–8` 秒后发送一次带恢复上下文的 `Continue.`。它不改变模型、不主动切号，也不把其他 thread 放入同一队列；Continue 再次容量失败时重新随机等待 `5–8` 秒。正常完成、非容量错误、手动中断或同一 thread 开始新的 `turn/start` 会清除这条等待记录；runtime 退出时队列不持久化。
+当某个 thread 收到精确错误 `Selected model is at capacity. Please try a different model.`，或结构化错误标识为 `server_overloaded`（兼容 `codex_error_info` 与 `codexErrorInfo`）时，runtime 只为这个 thread 建立独立的内存计时器，每次随机等待 `5–8` 秒。计时器到期时会先通知 Manager：若无感 runtime 已启用且存在新鲜、可用的账号池候选，Manager 会先切号并让切号事务领取这个等待条目，再在新账号上发送一次带恢复上下文的 `Continue.`；如果没有候选、Relay/控制桥不可用或切换未到达安全边界，才在当前账号上继续。它不改变模型，也不把其他 thread 放入同一队列；Continue 再次容量失败时重新随机等待 `5–8` 秒。同一工作代次最多因模型容量触发一次切号，避免多个容量账号之间无限轮换。正常完成、非容量错误、手动中断或同一 thread 开始新的 `turn/start` 会清除这条等待记录；runtime 退出时队列不持久化。
 
-这条恢复优先级低于无感切号：无感 ChatGPT 账号切换事务开始时会领取仍处于等待状态的容量条目，取消其计时器，并由切号后的现有恢复事务发送一次 Continue。切号被延后、取消或失败时，条目恢复为原来的等待状态；切号后的 Continue 若再次容量失败，则重新建立新的随机 `5–8` 秒计时器。Gateway 路由切换不会领取 ChatGPT 容量队列。额度耗尽 `usageLimitExceeded` 仍走独立的额度恢复/切号流程，且优先于容量错误判断。
+这条恢复与无感切号共用同一个事务：条目在 Manager 决策期间保持 `waiting`，确保切号能领取它；切号被延后、取消或失败时，条目恢复为原来的等待状态，之后才回退到当前账号的容量恢复。切号后的 Continue 若再次容量失败，则按上述有界规则处理。Gateway 路由切换不会领取 ChatGPT 容量队列。额度耗尽 `usageLimitExceeded` 仍走独立的额度恢复/切号流程，且优先于容量错误判断。
 
 ## 为什么 runtime 强制使用 HTTP
 

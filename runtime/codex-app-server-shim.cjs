@@ -160,6 +160,11 @@ const turnWorkGenerations = new Map();
 const latestWorkGenerations = new Map();
 const submittedTurnStartGenerations = new Map();
 const capacityRecoveryThreads = new Map();
+// A single user work generation may cross at most one account because of a
+// model-capacity recovery. If the replacement account is also at capacity,
+// keep the existing bounded Continue retry instead of rotating through the
+// whole pool indefinitely.
+const capacityRecoverySwitchGenerations = new Map();
 const recentUsageLimitedThreads = new Map();
 const recentAuthTokenRevokedThreads = new Map();
 const initializeRequests = new Set();
@@ -563,6 +568,7 @@ function handleOfficialLine(line) {
     clearRecentUsageLimitedThread(threadId);
     clearAuthTokenRevokedThread(threadId);
     clearCapacityRecoveryThread(threadId, { force: true });
+    capacityRecoverySwitchGenerations.delete(threadId);
     const workGeneration = advanceWorkGeneration(threadId);
     if (workGeneration !== undefined && Object.prototype.hasOwnProperty.call(message, "id")) {
       submittedTurnStartGenerations.set(requestIdKey(message.id), workGeneration);
@@ -3477,13 +3483,12 @@ function armCapacityRecoveryTimer(threadId, entry) {
     if (capacityRecoveryThreads.get(threadId) !== entry || entry.state !== "waiting") {
       return;
     }
-    entry.state = "running";
     void runCapacityRecoveryTurn(threadId, entry);
   }, Math.max(0, entry.retryAt - Date.now()));
 }
 
 async function runCapacityRecoveryTurn(threadId, entry) {
-  if (capacityRecoveryThreads.get(threadId) !== entry || entry.state !== "running") {
+  if (capacityRecoveryThreads.get(threadId) !== entry || entry.state !== "waiting") {
     return;
   }
   try {
@@ -3491,6 +3496,45 @@ async function runCapacityRecoveryTurn(threadId, entry) {
       clearCapacityRecoveryThread(threadId, { force: true });
       return;
     }
+
+    // Keep the entry in `waiting` until Manager has had a chance to claim it
+    // as part of the same account-switch transaction. Claiming only accepts
+    // waiting entries; marking it running before this request recreates the
+    // old race where the recovery Continue won before the account switch.
+    const previousSwitchGeneration = capacityRecoverySwitchGenerations.get(threadId);
+    if (previousSwitchGeneration !== entry.workGeneration) {
+      try {
+        const result = await sendControlRequest("runtime/capacity-recovery", {
+          threadId,
+          ...(entry.workGeneration !== undefined ? { workGeneration: entry.workGeneration } : {}),
+          ...(getActiveManagedLocalAccountId()
+            ? { localAccountId: getActiveManagedLocalAccountId() }
+            : {})
+        });
+        if (result && result.switched === true) {
+          rememberCapacityRecoverySwitchGeneration(threadId, entry.workGeneration);
+          if (capacityRecoveryThreads.get(threadId) === entry) {
+            clearCapacityRecoveryThread(threadId, { force: true });
+          }
+          return;
+        }
+        if (capacityRecoveryThreads.get(threadId) !== entry || entry.state !== "waiting") {
+          // A successful or in-flight switch claimed this entry. Its
+          // transaction owns the continuation on the replacement account.
+          return;
+        }
+      } catch (error) {
+        safeLog(`failed to notify Manager before model-capacity recovery: ${safeErrorMessage(error)}`);
+        if (capacityRecoveryThreads.get(threadId) !== entry || entry.state !== "waiting") {
+          return;
+        }
+      }
+    }
+
+    if (capacityRecoveryThreads.get(threadId) !== entry || entry.state !== "waiting") {
+      return;
+    }
+    entry.state = "running";
     await startRecoveryTurn(threadId, {
       workGeneration: entry.workGeneration,
       recoveryKind: "model-capacity"
@@ -3503,6 +3547,21 @@ async function runCapacityRecoveryTurn(threadId, entry) {
       clearCapacityRecoveryThread(threadId, { force: true });
     }
     safeLog(`failed to continue a model-capacity thread: ${safeErrorMessage(error)}`);
+  }
+}
+
+function rememberCapacityRecoverySwitchGeneration(threadId, workGeneration) {
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return;
+  }
+  capacityRecoverySwitchGenerations.delete(threadId);
+  capacityRecoverySwitchGenerations.set(threadId, workGeneration);
+  while (capacityRecoverySwitchGenerations.size > MAX_CAPACITY_RECOVERY_THREADS) {
+    const oldestThreadId = capacityRecoverySwitchGenerations.keys().next().value;
+    if (oldestThreadId === undefined) {
+      break;
+    }
+    capacityRecoverySwitchGenerations.delete(oldestThreadId);
   }
 }
 
@@ -3539,6 +3598,7 @@ function clearAllCapacityRecoveryThreads() {
     }
   }
   capacityRecoveryThreads.clear();
+  capacityRecoverySwitchGenerations.clear();
 }
 
 function rememberTerminalTurnId(turnId) {

@@ -24,6 +24,8 @@ import {
   CodexHotSwitchRuntime,
   HotSwitchAuthTokenRevokedEvent,
   HotSwitchAuthTokenRevokedResult,
+  HotSwitchCapacityRecoveryEvent,
+  HotSwitchCapacityRecoveryResult,
   RuntimeAccountSwitchOptions,
   RuntimeAccountSwitchOutcome
 } from "../../codex";
@@ -161,7 +163,8 @@ export class AccountsWorkbench {
       async (event) => {
         await observeAccountAvailability(this.repo, event);
         this.refreshCoordinator.createRefreshView().refresh();
-      }
+      },
+      (event) => this.handleCapacityRecovery(event)
     );
     this.runtimeSwitchCoordinator = new RuntimeSwitchCoordinator(this.repo, this.hotSwitchRuntime, () =>
       isSeamlessSwitchEnabled()
@@ -897,6 +900,29 @@ export class AccountsWorkbench {
           ? "no eligible account completed the automatic switch"
           : "no eligible account completed the automatic switch: " + lastFailure
     };
+  }
+
+  private async handleCapacityRecovery(
+    event: HotSwitchCapacityRecoveryEvent
+  ): Promise<HotSwitchCapacityRecoveryResult> {
+    if (!isSeamlessSwitchEnabled() || !this.hotSwitchRuntime.isEnabled()) {
+      return { handled: false, reason: "seamless switching is not enabled" };
+    }
+    if (this.hotSwitchRuntime.isGatewayActive()) {
+      return { handled: false, reason: "Gateway route is active" };
+    }
+
+    const switched = await maybeSeamlessBalanceSwitchForActiveQuota(
+      this.repo,
+      this.refreshCoordinator.createRefreshView(),
+      {
+        trigger: "runtimeCapacityRecovery",
+        activeAccountId: event.localAccountId
+      }
+    );
+    return switched
+      ? { handled: true, switched: true }
+      : { handled: false, reason: "no eligible seamless-switch account was available" };
   }
 
   private pruneAuthRevokedAccountIds(): void {

@@ -393,6 +393,32 @@ describe("seamless 5-hour quota-band switching", () => {
     expect(switchRuntimeAccount).not.toHaveBeenCalled();
   });
 
+  it("switches before model-capacity recovery even when quota-triggered switching is off", async () => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchQuotaBandsEnabled: false,
+      seamlessSwitchLowQuotaEnabled: false,
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 74);
+    const candidate = account("candidate", false, 90);
+    const repo = repository(active, candidate);
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+
+    await expect(
+      maybeSeamlessBalanceSwitchForActiveQuota(
+        repo as unknown as AccountsRepository,
+        { refresh: vi.fn(), switchRuntimeAccount },
+        { trigger: "runtimeCapacityRecovery", activeAccountId: active.id }
+      )
+    ).resolves.toBe(true);
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      longTurnPolicy: "interruptAndContinue"
+    });
+  });
+
   it("switches after the runtime confirms all active conversations are exhausted at threshold zero", async () => {
     configure({
       seamlessSwitchEnabled: true,

@@ -259,6 +259,21 @@ export type HotSwitchAuthTokenRevokedResult = {
   reason?: string;
 };
 
+/** A model-capacity recovery is about to send an automatic Continue. */
+export type HotSwitchCapacityRecoveryEvent = {
+  threadId: string;
+  workGeneration?: number;
+  localAccountId?: string;
+};
+
+/** Result returned after Manager gets a chance to switch before recovery. */
+export type HotSwitchCapacityRecoveryResult = {
+  handled: boolean;
+  switched?: boolean;
+  accountId?: string;
+  reason?: string;
+};
+
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -316,7 +331,10 @@ export class CodexHotSwitchBridge {
       activity: AccountSessionActivity,
       snapshot?: AccountConcurrencySnapshot
     ) => void = () => undefined,
-    private readonly handleAvailability: (event: HotSwitchAvailabilityEvent) => Promise<void> = () => Promise.resolve()
+    private readonly handleAvailability: (event: HotSwitchAvailabilityEvent) => Promise<void> = () => Promise.resolve(),
+    private readonly handleCapacityRecovery: (
+      event: HotSwitchCapacityRecoveryEvent
+    ) => Promise<HotSwitchCapacityRecoveryResult> = () => Promise.resolve({ handled: false })
   ) {}
 
   async getStatus(): Promise<HotSwitchStatus> {
@@ -577,6 +595,29 @@ export class CodexHotSwitchBridge {
       return;
     }
 
+    if (message.method === "runtime/capacity-recovery") {
+      const event = readCapacityRecoveryEvent(message.params);
+      if (!event) {
+        this.writeResponse(socket, message.id, {
+          error: { code: -32602, message: "Missing or invalid model-capacity recovery details" }
+        });
+        return;
+      }
+      void Promise.resolve()
+        .then(() => this.handleCapacityRecovery(event))
+        .then(
+          (result) => this.writeResponse(socket, message.id!, { result: result ?? { handled: false } }),
+          (error: unknown) =>
+            this.writeResponse(socket, message.id!, {
+              error: {
+                code: -32005,
+                message: error instanceof Error ? error.message : "Unable to handle model-capacity recovery"
+              }
+            })
+        );
+      return;
+    }
+
     if (message.method === "auth/refresh") {
       const request: HotSwitchRefreshRequest = {
         previousAccountId:
@@ -687,6 +728,24 @@ function readAuthTokenRevokedEvent(
   return {
     threadId,
     turnId: readBoundedString(params?.["turnId"], 256),
+    localAccountId: readBoundedString(params?.["localAccountId"], 256)
+  };
+}
+
+function readCapacityRecoveryEvent(
+  params: Record<string, unknown> | undefined
+): HotSwitchCapacityRecoveryEvent | undefined {
+  const threadId = readBoundedString(params?.["threadId"], 256);
+  if (!threadId) {
+    return undefined;
+  }
+  const workGeneration = params?.["workGeneration"];
+  if (workGeneration !== undefined && (!Number.isSafeInteger(workGeneration) || Number(workGeneration) < 0)) {
+    return undefined;
+  }
+  return {
+    threadId,
+    ...(workGeneration !== undefined ? { workGeneration: Number(workGeneration) } : {}),
     localAccountId: readBoundedString(params?.["localAccountId"], 256)
   };
 }
