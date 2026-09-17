@@ -40,7 +40,6 @@ import {
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
 import {
   BellIcon,
-  BugTeamIcon,
   EyeIcon,
   EyeOffIcon,
   GitHubIcon,
@@ -1241,12 +1240,9 @@ function App() {
   );
 }
 
-function renderIntegrationTopButtonIcon(icon: "mail" | "bugteam" | "default" | undefined) {
+function renderIntegrationTopButtonIcon(icon: "mail" | "default" | undefined) {
   if (icon === "mail") {
     return <MailIcon />;
-  }
-  if (icon === "bugteam") {
-    return <BugTeamIcon />;
   }
   return <GlobeIcon />;
 }

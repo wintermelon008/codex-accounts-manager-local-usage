@@ -62,7 +62,6 @@
 
 - [飞书私聊 M+/S+ 导入包](docs/integrations/feishu-private-import.md)：仅接收管理员一对一文本消息；M+ 写入 Manager 的显式本地收件箱，S+ 只写入独立私有队列。
 - [独立 Sub2API Gateway 与 S+ 导入器](docs/integrations/sub2api-gateway.md)：Gateway VSIX、管理端导入器和核心 Manager 可独立安装/停用；Gateway 默认隐藏已保存账号中的“手动 / Gateway”虚拟账号卡片，开启后可在卡片内显示 tracker 用量/估算价格和配置动作，但不伪造 OAuth 账号或进入任何自动账号池。
-- [多来源 BugTeam 账号集成](docs/integrations/bugteam.md)：独立 VSIX 按来源卡片维护 BugTeam 官方 API 与超级炸弹车；支持服务端候补或本地库存候补，订单完成后统一导入并启用符合额度条件的无感池账号，但不会自动切换当前账号。
 - [Manager Gateway](docs/integrations/manager-gateway.md)：独立 task/session companion，承载浏览器入口、并行 Codex exec 和额度批次恢复；Workbench 数据由独立数据服务负责；需要 Manager extension 在线。
 - [Manager 账号共享](docs/ACCOUNT_SHARING.md)：基于 Manager 用户 ID、好友接受、加密 Relay、租约期限和自动归还的跨网络共享。
 
@@ -95,12 +94,11 @@ npm run package
 npm --prefix integrations/feishu-private-import run package
 npm --prefix integrations/sub2api-gateway run package
 npm --prefix integrations/mailbox run package
-npm --prefix integrations/bugteam run package
 npm --prefix integrations/sub2api-importer run package
 npm --prefix integrations/manager-gateway run package
 ```
 
-可选包不包含在核心 VSIX 中。分别进入 `integrations/feishu-private-import`、`integrations/sub2api-gateway`、`integrations/mailbox`、`integrations/bugteam`、`integrations/sub2api-importer` 或 `integrations/manager-gateway` 按各自 README 构建和配置；它们不会自动复制旧服务、凭据、账号或设备路径。
+可选包不包含在核心 VSIX 中。分别进入 `integrations/feishu-private-import`、`integrations/sub2api-gateway`、`integrations/mailbox`、`integrations/sub2api-importer` 或 `integrations/manager-gateway` 按各自 README 构建和配置；它们不会自动复制旧服务、凭据、账号或设备路径。
 
 ### 使用上游 Marketplace 版本
 
@@ -112,7 +110,6 @@ npm --prefix integrations/manager-gateway run package
 - [无感切号、额度分档与阈值](docs/HOT_SWITCH.md)
 - [独立 Sub2API Gateway、S+ 导入器与迁移](docs/integrations/sub2api-gateway.md)
 - [飞书私聊 M+/S+ 导入机器人](docs/integrations/feishu-private-import.md)
-- [多来源 BugTeam 账号集成](docs/integrations/bugteam.md)
 - [核心与可选组件的独立交付、停用和迁移](docs/integrations/README.md)
 - [Vserver 会话中心基础结构](docs/SESSION_HUB.md)
 - [核心本地文本导入收件箱](docs/LOCAL_IMPORT_INBOX.md)

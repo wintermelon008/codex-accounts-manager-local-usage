@@ -634,7 +634,7 @@ export interface DashboardIntegrationTopButton {
   actionId: string;
   label: string;
   tooltip?: string;
-  icon?: "mail" | "bugteam" | "default";
+  icon?: "mail" | "default";
 }
 
 export interface DashboardIntegrationDetail {
