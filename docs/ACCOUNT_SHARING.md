@@ -79,22 +79,22 @@ curl.exe --max-time 5 http://100.114.125.9:43120/healthz
 
 ### 2. 安装最新核心 Manager
 
-向好友提供同一份已审阅的 `0.1.19-dev` VSIX，例如：
+向好友提供同一份已审阅的 `0.1.19-l3` VSIX，例如：
 
 ```text
-codex-accounts-manager-0.1.19-dev.vsix
+codex-accounts-manager-0.1.19-l3.vsix
 ```
 
 Ubuntu：
 
 ```bash
-code --install-extension codex-accounts-manager-0.1.19-dev.vsix --force
+code --install-extension codex-accounts-manager-0.1.19-l3.vsix --force
 ```
 
 Windows PowerShell：
 
 ```powershell
-code --install-extension .\codex-accounts-manager-0.1.19-dev.vsix --force
+code --install-extension .\codex-accounts-manager-0.1.19-l3.vsix --force
 ```
 
 也可以在 VS Code 中执行 **Extensions: Install from VSIX…**。安装后必须 reload；如果使用 Remote-SSH，VSIX 必须安装在真正运行 Manager、Codex `auth.json` 和扩展状态的远端扩展宿主，而不是只安装在本地窗口。

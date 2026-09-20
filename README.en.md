@@ -4,13 +4,13 @@
 
 A VS Code extension for managing multiple Codex accounts: add or import accounts, inspect quota, switch the active `auth.json`, and optionally use local usage analytics, experimental seamless switching, and local integrations.
 
-> This is a local fork based on upstream `v0.1.19`. This guide describes the `0.1.19-dev` development build and the `0.1.19-l2` local release build. The upstream Marketplace extension does not promise the local capabilities listed below.
+> This is a local fork based on upstream `v0.1.19`. This guide describes the `0.1.19-dev` development build and the `0.1.19-l3` local release build. The upstream Marketplace extension does not promise the local capabilities listed below.
 
 The local build includes upstream `v0.1.17`–`v0.1.19` proxy, quota parsing, authenticated retry, ChatGPT desktop, and subscription-consistency fixes, while preserving the local Dashboard, Mailbox, Gateway, and usage features.
 
 ## Start in three minutes
 
-1. Install a `0.1.19-dev`/`0.1.19-l2` `.vsix` supplied by, or built from, this repository.
+1. Install a `0.1.19-dev`/`0.1.19-l3` `.vsix` supplied by, or built from, this repository.
 2. Run `Codex Accounts: Add Account via OAuth`, or `Codex Accounts: Import Current auth.json`.
 3. Run `Codex Accounts: Show Quota Summary` to refresh quota, switch accounts, and manage backups from the Dashboard.
 
@@ -62,12 +62,14 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 - [Feishu private-chat M+/S+ import package](docs/integrations/feishu-private-import.md): accepts only administrator one-to-one text messages. M+ writes to Manager's explicit local inbox; S+ writes only to a separate private queue.
 - [Standalone Sub2API Gateway and S+ importer](docs/integrations/sub2api-gateway.md): the Gateway VSIX, administrative importer, and core Manager install and stop independently; the Gateway appears as a manual-only saved virtual account with card-local actions and tracker usage, but never becomes an OAuth account or normal pool member.
+- [Manager Gateway](integrations/manager-gateway/README.md): an independent task/session companion for browser entry points, parallel Codex exec, and quota-batch recovery; the Workbench data service remains separate and Manager must be online.
+- [Manager account sharing and friend setup](docs/ACCOUNT_SHARING.md): cross-device sharing through Manager user IDs, friend acceptance, encrypted Relay envelopes, lease expiry, automatic return, and troubleshooting guidance.
 
 ## Install and update
 
 ### Use the local build
 
-Obtain `codex-accounts-manager-<version>.vsix` from this repository (`0.1.19-dev` for development or `0.1.19-l2` for the current local release), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
+Obtain `codex-accounts-manager-<version>.vsix` from this repository (`0.1.19-dev` for development or `0.1.19-l3` for the current local release), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
 
 ```bash
 code --install-extension codex-accounts-manager-<version>.vsix --force
@@ -106,6 +108,7 @@ If you only need upstream core account management, search the Extensions view fo
 - [Seamless switching, quota bands, and thresholds](docs/HOT_SWITCH.md)
 - [Standalone Sub2API Gateway, S+ importer, and migration](docs/integrations/sub2api-gateway.md)
 - [Feishu private-chat M+/S+ importer](docs/integrations/feishu-private-import.md)
+- [Manager account sharing and friend setup](docs/ACCOUNT_SHARING.md)
 - [Independent delivery, disablement, and migration](docs/integrations/README.md)
 - [Vserver session hub foundation](docs/SESSION_HUB.md)
 - [Core local text import inbox](docs/LOCAL_IMPORT_INBOX.md)

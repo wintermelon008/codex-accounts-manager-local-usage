@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-09-codex-accounts-0-1-19-l2-state-runtime",
-      "type": "fix",
+      "id": "ann-2026-09-codex-accounts-0-1-19-l3-sharing-mailbox",
+      "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.19-l2",
-      "title": "Codex Accounts Manager 0.1.19-l2 — account state and runtime fixes",
-      "summary": "Separates account availability from renewal, preserves window statistics, and fixes stale runtime session activity after account switching.",
-      "content": "This local release combines the previous quota compatibility work with the account state and runtime fixes.\n1. Account state: persists credential-bound availability and renewal evidence across reloads and cleans it up when accounts are removed.\n2. Runtime switching: reports availability observations and releases stale activity when a turn is replaced or already inactive, so old accounts do not inherit active-session counts.\n3. Dashboard data: shows registration time, quota-window concurrency peaks, aggregate Token/s, and health state while preserving Mailbox and Gateway behavior.\n4. Local integrations: includes the current Mailbox registration, deactivation, import, and cleanup fixes.",
+      "releaseVersion": "0.1.19-l3",
+      "title": "Codex Accounts Manager 0.1.19-l3 — account sharing and Mailbox improvements",
+      "summary": "Adds encrypted cross-device account sharing, local Outlook/2FAuth Mailbox support, safer email rendering, and more precise account filters.",
+      "content": "This local release extends the l2 account-state and runtime work.\n1. Account sharing: use an encrypted Relay to share accounts across devices with friend approval, lease expiry, automatic return, and rollback on failed handshakes.\n2. Runtime: hardens seamless recovery, separates model-capacity recovery from quota switching, and stops quota refresh notification loops.\n3. Mailbox: adds local Outlook OAuth/IMAP and 2FAuth TOTP, safer split email detail rendering, paginated mailbox/registration lists, and the refined account-health filters.\n4. Registration and Gateway: refreshes 5SIM account data when a registration session opens, supports session attachments and visual literature chart scans, and removes the obsolete BugTeam integration.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-09-14T00:00:00Z",
+      "createdAt": "2026-09-20T00:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.19-l2 — 账号状态与 runtime 修复",
-          "summary": "分离账号可用性与续期状态，保留额度窗口统计，并修复切号后旧会话活动记录泄漏。",
-          "content": "本地版本在配额兼容修复基础上加入账号状态和 runtime 修复。\n1. 账号状态：按当前凭据绑定并持久化 availability/renewal 证据，reload 后恢复，删除账号时清理。\n2. Runtime 切号：上报账号可用性，并在 turn 被替换或已失活时释放旧活动记录，避免旧账号继承错误的并发数量。\n3. Dashboard 数据：展示注册时间、额度窗口最大并发、聚合 Token/s 和健康状态，同时保留 Mailbox/Gateway 行为。\n4. 本地集成：包含当前 Mailbox 注册、封禁、导入和清理修复。"
+          "title": "Codex Accounts Manager 0.1.19-l3 — 账号共享与 Mailbox 改进",
+          "summary": "新增加密跨设备账号共享、本地 Outlook/2FAuth 邮箱支持、安全邮件渲染和更精确的账号筛选。",
+          "content": "本地版本在 l2 的账号状态和 runtime 修复基础上继续扩展。\n1. 账号共享：通过加密 Relay 跨设备共享账号，支持好友接受、租约到期、自动归还和握手失败回滚。\n2. Runtime：加固无感恢复，区分模型容量恢复与额度切换，并停止额度刷新通知循环。\n3. Mailbox：新增本地 Outlook OAuth/IMAP、2FAuth TOTP、安全的邮件详情分栏渲染、邮箱库/注册列表分页和账号健康筛选。\n4. 注册助手与 Gateway：注册会话打开时刷新 5SIM 账号数据，支持 session 附件和文献图表扫描，并移除过时的 BugTeam 集成。"
         }
       }
     },
