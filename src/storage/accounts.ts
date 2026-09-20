@@ -1704,7 +1704,11 @@ export class AccountsRepository {
       account.updatedAt = Date.now();
       this.writeIndex(index);
       if (previousError !== account.tokenRefreshLastError || previousErrorKind !== account.tokenRefreshLastErrorKind) {
-        this.notifyAccountsChanged([accountId]);
+        // Token-refresh diagnostics are not account-configuration changes.
+        // Broadcasting them through onDidChangeAccounts makes the token
+        // scheduler resync the same expired credential that just failed,
+        // creating a tight retry loop. Keep the directory notification so
+        // optional integrations can update the visible health state.
         this.notifyAccountDirectoryChanged([accountId]);
       }
     }

@@ -231,6 +231,10 @@ describe("AccountsRepository token persistence", () => {
 
     const repo = new AccountsRepository(context);
     const attemptAt = Date.now();
+    const accountChanges: (readonly string[] | undefined)[] = [];
+    const directoryChanges: (readonly string[] | undefined)[] = [];
+    repo.onDidChangeAccounts((accountIds) => accountChanges.push(accountIds));
+    repo.onDidChangeAccountDirectory((accountIds) => directoryChanges.push(accountIds));
     try {
       await repo.updateTokenRefreshStatus("account-1", {
         tokenRefreshLastAttemptAt: attemptAt,
@@ -247,6 +251,8 @@ describe("AccountsRepository token persistence", () => {
         tokenRefreshNextRetryAt: attemptAt + 300_000
       });
       expect(context.secrets.store).not.toHaveBeenCalled();
+      expect(accountChanges).toEqual([]);
+      expect(directoryChanges).toEqual([["account-1"]]);
     } finally {
       repo.dispose();
     }

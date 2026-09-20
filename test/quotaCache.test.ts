@@ -95,6 +95,16 @@ describe("quota cache invalidation", () => {
     });
   });
 
+  it("does not report unchanged tokens as a credential update", async () => {
+    ensureFreshAccountTokensMock.mockResolvedValueOnce({ ...tokens });
+    fetchWithTimeoutMock.mockResolvedValueOnce(createUsageResponse(10));
+
+    const result = await refreshQuota(account, tokens, true, {} as never);
+
+    expect(result.quota?.hourlyPercentage).toBe(90);
+    expect(result.updatedTokens).toBeUndefined();
+  });
+
   it("does not repopulate cache from an invalidated inflight refresh", async () => {
     const firstRequest = createDeferredResponse();
     fetchWithTimeoutMock.mockImplementationOnce(() => firstRequest.promise);

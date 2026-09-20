@@ -145,13 +145,16 @@ export async function refreshQuota(
           : formatApiErrorMessage("API returned", usageResult.status, usageResult.raw);
       return {
         error: buildError(message, extractErrorDetailCode(usageResult.raw)),
-        updatedTokens: effectiveTokens
+        updatedTokens: getChangedTokens(tokens, effectiveTokens)
       };
     }
 
     const usage = usageResult.payload;
     if (!usage) {
-      return { error: buildError("Invalid quota response"), updatedTokens: effectiveTokens };
+      return {
+        error: buildError("Invalid quota response"),
+        updatedTokens: getChangedTokens(tokens, effectiveTokens)
+      };
     }
     const quotaSummary = parseUsage(usage);
 
@@ -164,7 +167,7 @@ export async function refreshQuota(
 
     return {
       quota: quotaSummary,
-      updatedTokens: effectiveTokens,
+      updatedTokens: getChangedTokens(tokens, effectiveTokens),
       updatedPlanType: usage.plan_type,
       updatedSubscriptionActiveUntil: readUsageSubscriptionActiveUntil(usage),
       tokenRefreshFailure
@@ -719,6 +722,15 @@ export function clearQuotaCacheForAccount(accountId: string): void {
 
 function getQuotaCacheGeneration(accountId: string): number {
   return quotaCacheGenerations.get(accountId) ?? 0;
+}
+
+function getChangedTokens(previous: CodexTokens, next: CodexTokens): CodexTokens | undefined {
+  return previous.idToken === next.idToken &&
+    previous.accessToken === next.accessToken &&
+    previous.refreshToken === next.refreshToken &&
+    previous.accountId === next.accountId
+    ? undefined
+    : next;
 }
 
 // ── 主动重置次数（rate-limit reset credits）──
