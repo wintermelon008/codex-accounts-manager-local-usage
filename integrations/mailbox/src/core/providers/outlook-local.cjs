@@ -3,7 +3,7 @@
 const crypto = require("node:crypto");
 const tls = require("node:tls");
 const { normalizeMailboxAccount, normalizeMailboxAddress } = require("../account.cjs");
-const { normalizeMessages } = require("../messages.cjs");
+const { htmlToText, normalizeMessages } = require("../messages.cjs");
 const { createMailboxProvider } = require("../provider.cjs");
 
 const OUTLOOK_LOCAL_PROVIDER_ID = "outlook-local";
@@ -511,7 +511,8 @@ function parseRawEmail(raw, uid) {
     subject: decodeMimeHeader(headers.subject),
     from: parseFromHeader(headers.from),
     receivedDateTime: headers.date || undefined,
-    body
+    body: body.text,
+    ...(body.html ? { bodyHtml: body.html } : {})
   };
 }
 
@@ -545,11 +546,13 @@ function parseHeaders(value) {
 
 function extractMimeBody(headers, body) {
   const contentType = String(headers["content-type"] || "text/plain");
+  const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
   const boundary = contentType.match(/boundary\s*=\s*(?:"([^"]+)"|([^;\s]+))/iu)?.[1]
     || contentType.match(/boundary\s*=\s*(?:"([^"]+)"|([^;\s]+))/iu)?.[2];
   if (boundary) {
     const parts = body.toString("latin1").split(`--${boundary}`);
-    let html = "";
+    let html;
+    let plain;
     for (const section of parts.slice(1)) {
       if (section.startsWith("--")) break;
       const cleaned = section.replace(/^\r?\n/u, "").replace(/\r?\n$/u, "");
@@ -557,16 +560,22 @@ function extractMimeBody(headers, body) {
       if (separator < 0) continue;
       const partHeaders = parseHeaders(cleaned.slice(0, separator));
       const partBody = Buffer.from(cleaned.slice(separator + 4), "latin1");
-      const partText = extractMimeBody(partHeaders, partBody);
-      if (!partText) continue;
-      if (/text\/plain/iu.test(String(partHeaders["content-type"] || ""))) return partText;
-      html ||= partText;
+      const partBodyValue = extractMimeBody(partHeaders, partBody);
+      if (!partBodyValue.text && !partBodyValue.html) continue;
+      if (/^text\/plain\b/iu.test(String(partHeaders["content-type"] || ""))) {
+        plain ||= partBodyValue.text;
+      } else {
+        html ||= partBodyValue.html || partBodyValue.text;
+      }
     }
-    return html;
+    if (plain) return { text: plain, html: "" };
+    if (html) return { text: htmlToText(html), html };
+    return { text: "", html: "" };
   }
 
   const decoded = decodeTransferEncoding(body, headers["content-transfer-encoding"]);
-  return decodeText(decoded, contentType.match(/charset\s*=\s*["']?([^;"'\s]+)/iu)?.[1]);
+  const text = decodeText(decoded, contentType.match(/charset\s*=\s*["']?([^;"'\s]+)/iu)?.[1]);
+  return mediaType === "text/html" ? { text: htmlToText(text), html: text } : { text, html: "" };
 }
 
 function decodeTransferEncoding(value, encoding) {

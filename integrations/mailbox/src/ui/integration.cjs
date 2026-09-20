@@ -233,10 +233,11 @@ class MailboxIntegration {
       if (typeof this.api.onDidChange === "function") {
         this.managerChangeSubscription = this.api.onDidChange(() => {
           // Manager publishes after its account write returns. Queue the read
-          // so the directory and token cache observe the committed state.
-          void Promise.resolve()
-            .then(() => this.publishPanelState())
-            .catch(() => undefined);
+          // so the directory and token cache observe the committed state. A
+          // quota sweep can touch several accounts in a short burst; use the
+          // existing state-publish debounce so one burst cannot replace the
+          // whole webview DOM once per account.
+          this.scheduleOperationStatePublish();
         });
       }
       // Register the new standalone entry first so older lightweight test or

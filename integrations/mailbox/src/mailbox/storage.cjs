@@ -2,7 +2,7 @@
 
 const crypto = require("node:crypto");
 const { normalizeMailboxAccount, normalizeMailboxAddress } = require("../core/account.cjs");
-const { isOpenAiAccountDeactivatedMessage, isOpenAiMessage } = require("../core/messages.cjs");
+const { isOpenAiAccountDeactivatedMessage, isOpenAiMessage, normalizeMessage } = require("../core/messages.cjs");
 
 // This is intentionally a new namespace. The redesign is a clean install and
 // must not accidentally read provider-specific data from the old extension.
@@ -778,17 +778,29 @@ function normalizeStoredMessages(messages) {
   if (!Array.isArray(messages)) {
     return [];
   }
-  return messages.slice(0, MAX_STORED_MESSAGES).filter((message) => message && typeof message === "object").map((message) => ({
-    id: stringOrUndefined(message.id ?? message.fingerprint),
-    fingerprint: stringOrUndefined(message.fingerprint ?? message.id),
-    subject: safeText(message.subject, "Untitled message"),
-    from: safeText(message.from),
-    senderName: safeText(message.senderName),
-    receivedAt: stringOrUndefined(message.receivedAt),
-    preview: safeText(message.preview),
-    body: safeText(message.body),
-    codes: normalizeCodes(message.codes)
-  }));
+  return messages.slice(0, MAX_STORED_MESSAGES).filter((message) => message && typeof message === "object").map((message) => {
+    const normalized = normalizeMessage({
+      id: message.id ?? message.fingerprint,
+      subject: message.subject,
+      from: message.from,
+      senderName: message.senderName,
+      receivedAt: message.receivedAt,
+      body: message.body,
+      bodyHtml: message.bodyHtml
+    });
+    return {
+      id: stringOrUndefined(message.id ?? normalized.id),
+      fingerprint: stringOrUndefined(message.fingerprint ?? normalized.fingerprint),
+      subject: safeText(normalized.subject, "Untitled message"),
+      from: safeText(normalized.from),
+      senderName: safeText(normalized.senderName),
+      receivedAt: stringOrUndefined(normalized.receivedAt),
+      preview: safeText(normalized.preview),
+      body: safeText(normalized.body),
+      ...(normalized.bodyHtml ? { bodyHtml: safeText(normalized.bodyHtml, "") } : {}),
+      codes: normalizeCodes(message.codes?.length ? message.codes : normalized.codes)
+    };
+  });
 }
 
 function mergeStoredMessages(currentMessages, previousMessages) {
@@ -844,7 +856,7 @@ function summarizeMessage(message) {
   if (!normalized) {
     return undefined;
   }
-  const { body: _body, ...summary } = normalized;
+  const { body: _body, bodyHtml: _bodyHtml, ...summary } = normalized;
   return summary;
 }
 

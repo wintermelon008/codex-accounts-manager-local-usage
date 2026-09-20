@@ -73,7 +73,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     #app { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
     .box { min-height: 0; height: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
     .layout > .box:first-child { display: flex; flex-direction: column; flex: 0 0 760px; height: 760px; min-height: 760px; }
-    .layout > .box.detail { flex: 0 0 auto; height: auto; min-height: 520px; }
+    .layout > .box.detail { flex: 1 1 auto; height: auto; min-height: 620px; }
     .box-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 15px; border-bottom: 1px solid var(--border); }
     .mailbox-list-header { align-items: flex-start; }
     .mailbox-list-toolbar { padding: 10px 12px; border-bottom: 1px solid var(--border); }
@@ -100,7 +100,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .mailbox-operation-progress-head strong { color: var(--accent); font-weight: 700; }
     .mailbox-operation-progress-track { height: 5px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--border) 75%, transparent); }
     .mailbox-operation-progress-fill { height: 100%; border-radius: inherit; background: var(--accent); transition: width .16s ease; }
-    .mailbox-list { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); grid-auto-rows: max-content; align-content: start; gap: 10px; min-height: 0; padding: 12px; overflow: auto; overscroll-behavior: auto; }
+    .mailbox-list { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); grid-auto-rows: max-content; align-content: start; gap: 10px; min-height: 0; padding: 12px; overflow: auto; overscroll-behavior: contain; }
+    .mailbox-pagination { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; min-height: 46px; padding: 8px 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+    .mailbox-pagination button { min-width: 68px; padding: 5px 9px; font-size: 11px; }
+    .mailbox-page-status { min-width: 128px; text-align: center; }
+    .mailbox-page-jump { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; }
+    .mailbox-page-jump label { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .mailbox-page-input { width: 58px; min-width: 58px; padding: 5px 7px; text-align: center; }
     .mailbox-row-wrap { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--text) 3%, transparent); overflow: hidden; }
     .mailbox-row-wrap.selected { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
     .mailbox-select { position: absolute; z-index: 1; top: 12px; left: 12px; display: grid; place-items: center; padding: 0; cursor: pointer; }
@@ -125,6 +131,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .tag.blocked { color: var(--warning); background: color-mix(in srgb, var(--warning) 15%, transparent); }
     .empty-list, .empty-detail { display: grid; place-items: center; min-height: 270px; padding: 28px; color: var(--muted); text-align: center; }
     .detail { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .detail-region { min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; }
     .detail-header { flex: none; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
     .detail-action-row { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; overflow-x: auto; padding: 10px 20px; border-bottom: 1px solid var(--border); }
     .detail-header-actions, .detail-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 0; border: 0; }
@@ -134,24 +141,36 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .detail-address { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; word-break: break-word; }
     .detail-name { margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
     .detail-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
-    .content { flex: 1 1 auto; min-height: 0; overflow: visible; overscroll-behavior: auto; padding: 16px 20px 22px; }
+    .content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: auto; overscroll-behavior: contain; padding: 16px 20px 22px; }
     .hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
     .hero-label { color: var(--muted); font-size: 12px; }
     .code { margin-top: 3px; color: var(--accent); font-size: clamp(17px, 3vw, 31px); font-weight: 800; letter-spacing: .08em; line-height: 1.1; }
     .hero-side { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 20px 0 10px; }
-    .messages { border: 1px solid var(--border); border-radius: 8px; overflow: visible; }
-    .message-entry { border-bottom: 1px solid var(--border); }
-    .message-entry:last-child { border-bottom: 0; }
-    .message-row { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; padding: 11px 12px; }
-    .message-entry:last-child .message-row { border-bottom: 0; }
+    .message-browser { flex: 0 0 auto; min-height: 360px; display: grid; grid-template-columns: minmax(220px, .36fr) minmax(0, 1fr); overflow: visible; border: 1px solid var(--border); border-radius: 8px; }
+    .message-list-pane, .message-reading-pane { min-width: 0; min-height: 0; }
+    .message-list-pane { overflow: visible; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--text) 2%, transparent); }
+    .message-list-title { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; font-weight: 700; }
+    .messages { overflow: visible; }
+    .message-row { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; padding: 12px; }
     .message-row.selected { background: color-mix(in srgb, var(--accent) 10%, transparent); }
     .message-subject { font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
     .message-time { margin-top: 5px; color: var(--muted); font-size: 11px; }
-    .message-detail { border-top: 1px solid var(--border); padding: 15px; background: color-mix(in srgb, var(--accent) 4%, transparent); }
-    .message-detail h3 { margin-bottom: 9px; overflow-wrap: anywhere; }
+    .message-reading-pane { overflow: visible; padding: 18px 20px 22px; background: color-mix(in srgb, var(--accent) 3%, transparent); }
+    .message-detail h3 { margin-bottom: 9px; overflow-wrap: anywhere; font-size: 17px; }
     .from { color: var(--muted); overflow-wrap: anywhere; }
-    .body { margin-top: 14px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+    .message-body { margin-top: 16px; min-width: 0; overflow-wrap: anywhere; line-height: 1.65; }
+    .message-body-text { white-space: pre-wrap; }
+    .message-body-html { min-width: 0; overflow-wrap: anywhere; }
+    .message-body-html p, .message-body-html div, .message-body-html section, .message-body-html article, .message-body-html blockquote, .message-body-html pre, .message-body-html ul, .message-body-html ol, .message-body-html table { margin: 0 0 12px; }
+    .message-body-html p:last-child, .message-body-html div:last-child, .message-body-html section:last-child, .message-body-html article:last-child, .message-body-html blockquote:last-child, .message-body-html pre:last-child, .message-body-html ul:last-child, .message-body-html ol:last-child, .message-body-html table:last-child { margin-bottom: 0; }
+    .message-body-html ul, .message-body-html ol { padding-left: 22px; }
+    .message-body-html blockquote { padding-left: 12px; border-left: 3px solid var(--border); color: var(--muted); }
+    .message-body-html pre { padding: 10px 12px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--vscode-textCodeBlock-background); white-space: pre-wrap; }
+    .message-body-html code { font-family: var(--vscode-editor-font-family); }
+    .message-body-html a { color: var(--accent); }
+    .message-body-html table { width: 100%; border-collapse: collapse; }
+    .message-body-html th, .message-body-html td { padding: 6px 8px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
     .button-spinner { display: inline-block; width: 13px; height: 13px; margin-right: 6px; vertical-align: -2px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: mailbox-spin .75s linear infinite; }
     .is-pending { opacity: .82; }
     @keyframes mailbox-spin { to { transform: rotate(360deg); } }
@@ -257,7 +276,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-fivesim-offer-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 7px; margin-top: 10px; }
     .registration-fivesim-offer-tools .field { flex: 1 1 130px; min-width: 120px; margin-top: 0; }
     .registration-fivesim-offer-tools .field label { font-size: 11px; }
-    .registration-fivesim-offers { display: grid; gap: 5px; max-height: 260px; margin-top: 9px; overflow: auto; }
+    .registration-fivesim-offers { display: grid; gap: 5px; max-height: 260px; margin-top: 9px; overflow-y: auto; overflow-x: hidden; }
     .registration-fivesim-offer { display: grid; grid-template-columns: minmax(100px, 1.2fr) minmax(70px, .8fr) repeat(3, minmax(55px, .65fr)); align-items: center; gap: 7px; width: 100%; padding: 8px; text-align: left; }
     .registration-fivesim-offer.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
     .registration-fivesim-offer span { min-width: 0; overflow-wrap: anywhere; }
@@ -266,7 +285,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-fivesim-offer-value.price { color: var(--accent); font-family: var(--vscode-editor-font-family); }
     .registration-fivesim-section { display: grid; gap: 6px; margin-top: 10px; }
     .registration-fivesim-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; font-weight: 650; }
-    .registration-fivesim-country-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; gap: 5px; max-height: 220px; overflow: auto; }
+    .registration-fivesim-country-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; gap: 5px; max-height: 220px; overflow-y: auto; overflow-x: hidden; }
     .registration-fivesim-country { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 9px; text-align: left; }
     .registration-fivesim-country.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
     .registration-fivesim-country-main, .registration-fivesim-country-price { min-width: 0; display: grid; gap: 2px; }
@@ -274,7 +293,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-fivesim-country-main small, .registration-fivesim-country-price small { color: var(--muted); font-size: 10px; }
     .registration-fivesim-country-price { flex: none; justify-items: end; }
     .registration-fivesim-country-price strong { color: var(--accent); font-family: var(--vscode-editor-font-family); }
-    .registration-fivesim-operator-list { display: grid; gap: 6px; max-height: 360px; overflow: auto; }
+    .registration-fivesim-operator-list { display: grid; gap: 6px; max-height: 360px; overflow-y: auto; overflow-x: hidden; }
     .registration-fivesim-operator-card { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; width: 100%; padding: 10px 11px; text-align: left; }
     .registration-fivesim-operator-card.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
     .registration-fivesim-operator-main, .registration-fivesim-operator-side { min-width: 0; display: grid; gap: 5px; }
@@ -295,7 +314,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-email-code-result strong { display: block; min-height: 20px; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); }
     .registration-email-code-result button { margin-top: 7px; }
     .registration-email-code .field-note { margin-top: 8px; }
-    .registration-standalone { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 0 22px; }
+    .registration-standalone { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding: 0 0 22px; }
     .registration-standalone-card { width: 100%; max-width: none; margin: 0; padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--vscode-editorWidget-background); }
     .registration-standalone-card + .registration-standalone-card { margin-top: 14px; }
     .registration-standalone-card h2 { margin-bottom: 6px; }
@@ -306,7 +325,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-mailbox-picker-tools select { width: auto; min-width: 130px; }
     .registration-mailbox-picker-tools label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; }
     .registration-mailbox-picker-tools label input { width: auto; min-width: 0; }
-    .registration-mailbox-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(235px, 1fr)); gap: 8px; max-height: 250px; margin-top: 10px; overflow: auto; }
+    .registration-mailbox-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(235px, 1fr)); grid-template-rows: repeat(3, minmax(82px, auto)); align-content: start; gap: 8px; height: 276px; margin-top: 10px; overflow: hidden; }
+    .registration-mailbox-pagination { margin-top: 8px; padding-inline: 0; border-top: 0; }
+    .registration-fivesim-offers, .registration-fivesim-country-list, .registration-fivesim-operator-list { overscroll-behavior-y: contain; scrollbar-gutter: stable; }
     .registration-mailbox-option { min-width: 0; padding: 10px; text-align: left; }
     .registration-mailbox-option.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
     .registration-mailbox-option-title { font-weight: 650; overflow-wrap: anywhere; }
@@ -321,7 +342,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       .shell { height: auto; min-height: 100vh; }
       .layout { flex: none; min-height: 0; }
       .layout > .box:first-child { flex-basis: 760px; height: 760px; min-height: 760px; }
-      .layout > .box.detail { min-height: 520px; }
+      .layout > .box.detail { min-height: 620px; }
+      .message-browser { grid-template-columns: 1fr; grid-template-rows: auto auto; }
+      .message-list-pane { border-right: 0; border-bottom: 1px solid var(--border); }
       .mailbox-row-action { padding-inline: 5px; }
       .registration-phone-config { grid-template-columns: 1fr; }
       .registration-totp-create-fields { grid-template-columns: 1fr; }
@@ -356,6 +379,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       const FIVE_SIM_CURRENCY_FEE_MULTIPLIER = ${DEFAULT_FEE_MULTIPLIER};
       const app = document.getElementById("app");
       const notice = document.getElementById("notice");
+      const MAILBOX_PAGE_SIZE = 12;
+      const REGISTRATION_MAILBOX_ROWS = 3;
+      const REGISTRATION_MAILBOX_FALLBACK_PAGE_SIZE = 9;
+      const REGISTRATION_MAILBOX_MIN_COLUMN_WIDTH = 235;
+      const REGISTRATION_MAILBOX_GRID_GAP = 8;
       let state = { mailboxes: [], providers: [] };
       let importOpen = false;
       let importProvider = "";
@@ -405,9 +433,17 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationTotpNextQueryAt = {};
       let registrationTotpFetchedAt = {};
       let pendingRenderWhileSelect = false;
+      let mailboxPage = 1;
+      let registrationMailboxPage = 1;
+      let mailboxPageJumpInput = "";
+      let registrationMailboxPageJumpInput = "";
+      let registrationMailboxPageSize = REGISTRATION_MAILBOX_FALLBACK_PAGE_SIZE;
+      let registrationMailboxResizeObserver;
+      let mounted = false;
       let registrationCountdownTimer;
       let registrationTotpCountdownTimer;
       let pendingRegistrationPhoneShortcut = null;
+      const registrationNestedScrollSelector = ".registration-mailbox-list, .registration-fivesim-offers, .registration-fivesim-country-list, .registration-fivesim-operator-list";
 
       window.addEventListener("message", (event) => {
         const message = event.data || {};
@@ -508,6 +544,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         target?.classList.remove("is-pressed");
         clearPressedButtons();
       });
+      document.addEventListener("wheel", routeRegistrationWheel, { passive: false });
       document.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           const target = closestTarget(event, "button:not(:disabled)");
@@ -560,8 +597,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           if (mailboxId) send("registrationDeleteMailbox", { mailboxId });
         }
         else if (action === "toggle-mailbox") toggleMailboxSelection(target.dataset.mailboxId || "");
-        else if (action === "toggle-mailbox-sort-direction") { mailboxSortDirection = mailboxSortDirection === "asc" ? "desc" : "asc"; refreshMailboxList(); updateSortDirectionButton("toggle-mailbox-sort-direction", mailboxSortDirection); }
-        else if (action === "toggle-registration-mailbox-sort-direction") { registrationMailboxSortDirection = registrationMailboxSortDirection === "asc" ? "desc" : "asc"; refreshRegistrationMailboxList(); updateSortDirectionButton("toggle-registration-mailbox-sort-direction", registrationMailboxSortDirection); }
+        else if (action === "mailbox-page-prev") { mailboxPage -= 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
+        else if (action === "mailbox-page-next") { mailboxPage += 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
+        else if (action === "registration-mailbox-page-prev") { registrationMailboxPage -= 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
+        else if (action === "registration-mailbox-page-next") { registrationMailboxPage += 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
+        else if (action === "toggle-mailbox-sort-direction") { mailboxSortDirection = mailboxSortDirection === "asc" ? "desc" : "asc"; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); updateSortDirectionButton("toggle-mailbox-sort-direction", mailboxSortDirection); }
+        else if (action === "toggle-registration-mailbox-sort-direction") { registrationMailboxSortDirection = registrationMailboxSortDirection === "asc" ? "desc" : "asc"; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); updateSortDirectionButton("toggle-registration-mailbox-sort-direction", registrationMailboxSortDirection); }
         else if (action === "select-visible") selectVisibleMailboxes();
         else if (action === "clear-selection") { selectedMailboxIds.clear(); render(); }
         else if (action === "batch-query") requestBatchAction("batchQuery");
@@ -829,15 +870,15 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         rememberModalFormControl(target);
         if (target.id === "providerId") { importProvider = target.value || ""; refreshImportProviderFields(); }
         if (target.id === "editProviderId") { editProvider = target.value || ""; refreshEditProviderFields(); }
-        if (target.id === "mailboxSort") { mailboxSortKey = target.value || "name"; refreshMailboxList(); }
-        if (target.id === "onlyUnlinkedCodex") { onlyUnlinkedCodex = target.checked === true; render(); }
-        if (target.id === "onlyReauthorization") { onlyReauthorization = target.checked === true; render(); }
-        if (target.id === "onlyOpenAiDeactivated") { onlyOpenAiDeactivated = target.checked === true; render(); }
-        if (target.id === "mailboxProviderFilter") { providerFilter = target.value || ""; refreshMailboxList(); }
-        if (target.id === "registrationMailboxSort") { registrationMailboxSortKey = target.value || "name"; refreshRegistrationMailboxList(); }
-        if (target.id === "registrationMailboxProviderFilter") { registrationMailboxProviderFilter = target.value || ""; refreshRegistrationMailboxList(); }
-        if (target.id === "registrationOnlyUnregisteredGpt") { registrationOnlyUnregisteredGpt = target.checked === true; render(); }
-        if (target.id === "registrationOnlyGptSevenDays") { registrationOnlyGptSevenDays = target.checked === true; render(); }
+        if (target.id === "mailboxSort") { mailboxSortKey = target.value || "name"; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
+        if (target.id === "onlyUnlinkedCodex") { onlyUnlinkedCodex = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
+        if (target.id === "onlyReauthorization") { onlyReauthorization = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
+        if (target.id === "onlyOpenAiDeactivated") { onlyOpenAiDeactivated = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
+        if (target.id === "mailboxProviderFilter") { providerFilter = target.value || ""; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
+        if (target.id === "registrationMailboxSort") { registrationMailboxSortKey = target.value || "name"; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
+        if (target.id === "registrationMailboxProviderFilter") { registrationMailboxProviderFilter = target.value || ""; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
+        if (target.id === "registrationOnlyUnregisteredGpt") { registrationOnlyUnregisteredGpt = target.checked === true; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
+        if (target.id === "registrationOnlyGptSevenDays") { registrationOnlyGptSevenDays = target.checked === true; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
         if (target.id.startsWith("registrationPhoneSource-")) {
           const sessionId = target.id.slice("registrationPhoneSource-".length);
           const sourceId = target.value || "liye";
@@ -867,10 +908,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       });
       document.addEventListener("input", (event) => {
         rememberModalFormControl(event.target);
-        if (event.target.id === "mailboxSearch") { mailboxSearch = event.target.value || ""; render(); document.getElementById("mailboxSearch")?.focus(); }
+        if (event.target.id === "mailbox-page-jump-input") { mailboxPageJumpInput = event.target.value || ""; return; }
+        if (event.target.id === "registration-mailbox-page-jump-input") { registrationMailboxPageJumpInput = event.target.value || ""; return; }
+        if (event.target.id === "mailboxSearch") { mailboxSearch = event.target.value || ""; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); document.getElementById("mailboxSearch")?.focus(); }
         if (event.target.id === "registrationMailboxSearch") {
           registrationMailboxSearch = event.target.value || "";
-          render();
+          registrationMailboxPage = 1;
+          registrationMailboxPageJumpInput = "";
+          refreshRegistrationMailboxList();
           document.getElementById("registrationMailboxSearch")?.focus();
         }
         if (event.target.id === "registrationEmailInput") {
@@ -910,6 +955,16 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         }
       });
       document.addEventListener("submit", (event) => {
+        if (event.target.id === "mailbox-page-jump-form") {
+          event.preventDefault();
+          jumpToMailboxPage(false);
+          return;
+        }
+        if (event.target.id === "registration-mailbox-page-jump-form") {
+          event.preventDefault();
+          jumpToMailboxPage(true);
+          return;
+        }
         if (event.target.id === "editForm") {
           event.preventDefault();
           const form = new FormData(event.target);
@@ -936,6 +991,22 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           return;
         }
         pendingRenderWhileSelect = false;
+        const panelRoot = document.querySelector(registrationOnly ? ".registration-standalone" : ".layout");
+        if (!mounted || !panelRoot) {
+          renderFullPanel();
+        } else if (registrationOnly) {
+          updateRegistrationPanel();
+        } else {
+          updateMailboxPanel();
+        }
+        syncModals();
+        updateRegistrationCountdowns();
+        ensureRegistrationCountdownTimer();
+        updateRegistrationTotpCountdowns();
+        ensureRegistrationTotpCountdownTimer();
+      }
+
+      function renderFullPanel() {
         const mailboxList = document.querySelector(".mailbox-list");
         const layout = document.querySelector(".layout");
         const content = document.querySelector(".content");
@@ -969,13 +1040,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const registrationStandaloneScrollTop = registrationStandalone?.scrollTop || 0;
         const registrationMailboxList = document.querySelector(".registration-mailbox-list");
         const registrationMailboxListScrollTop = registrationMailboxList?.scrollTop || 0;
-        document.querySelector(".modal-backdrop")?.remove();
         if (registrationOnly) app.innerHTML = renderStandaloneRegistration();
         else app.innerHTML = renderLayout();
-        if (importOpen) document.body.insertAdjacentHTML("beforeend", renderImportModal());
-        if (editOpenMailboxId) document.body.insertAdjacentHTML("beforeend", renderEditModal());
-        if (deleteConfirm) document.body.insertAdjacentHTML("beforeend", renderDeleteConfirmModal());
-        if (totpModalMailboxId) document.body.insertAdjacentHTML("beforeend", renderTotpModal());
+        mounted = true;
         restorePanelScrollPositions(panelScrollPositions);
         const nextMailboxList = document.querySelector(".mailbox-list");
         const nextLayout = document.querySelector(".layout");
@@ -990,16 +1057,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         if (keepSearchFocus) {
           const nextSearchInput = document.getElementById("mailboxSearch");
           nextSearchInput?.focus();
-          if (searchSelectionStart != null && searchSelectionEnd != null) {
-            nextSearchInput?.setSelectionRange(searchSelectionStart, searchSelectionEnd);
-          }
+          if (searchSelectionStart != null && searchSelectionEnd != null) nextSearchInput?.setSelectionRange(searchSelectionStart, searchSelectionEnd);
         }
         if (keepRegistrationSearchFocus) {
           const nextSearchInput = document.getElementById("registrationMailboxSearch");
           nextSearchInput?.focus();
-          if (registrationSearchSelectionStart != null && registrationSearchSelectionEnd != null) {
-            nextSearchInput?.setSelectionRange(registrationSearchSelectionStart, registrationSearchSelectionEnd);
-          }
+          if (registrationSearchSelectionStart != null && registrationSearchSelectionEnd != null) nextSearchInput?.setSelectionRange(registrationSearchSelectionStart, registrationSearchSelectionEnd);
         }
         if (focusedInput) {
           const nextFocusedInput = document.getElementById(focusedInput.id);
@@ -1011,41 +1074,210 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             restoreInputCaret(nextFocusedInput, focusedInput);
           }
         }
-        updateRegistrationCountdowns();
-        ensureRegistrationCountdownTimer();
-        updateRegistrationTotpCountdowns();
-        ensureRegistrationTotpCountdownTimer();
+      }
+
+      function updateMailboxPanel() {
+        refreshProviderFilterOptions("mailboxProviderFilter", providerFilter, "按邮箱来源筛选");
+        refreshMailboxList();
+        const detailRegion = document.querySelector(".detail-region");
+        if (!detailRegion) return;
+        const selected = state.selected;
+        const nextDetail = selected
+          ? renderSelected(selected)
+          : '<div class="empty-detail"><div><h2>选择一个邮箱</h2><p class="muted" style="margin-top:8px">其他邮箱的邮件详情不会在未选中时渲染或查询。</p></div></div>';
+        if (detailRegion.innerHTML !== nextDetail) detailRegion.innerHTML = nextDetail;
+      }
+
+      function updateRegistrationPanel() {
+        refreshProviderFilterOptions("registrationMailboxProviderFilter", registrationMailboxProviderFilter, "按邮箱来源筛选注册邮箱");
+        refreshRegistrationMailboxList();
+        const createRegion = document.querySelector(".registration-standalone-content");
+        const nextCreateForm = renderRegistrationCreateForm();
+        if (createRegion && createRegion.innerHTML !== nextCreateForm) createRegion.innerHTML = nextCreateForm;
+        const sessionsRegion = document.querySelector(".registration-sessions");
+        if (!sessionsRegion) return;
+        const sessions = [...(state.registrationSessions || [])].reverse();
+        const nextSessions = sessions.length
+          ? sessions.map(renderRegistrationSession).join("")
+          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱；进入 GPT 注册网页后会自动查询一次邮箱验证码。</p>';
+        if (sessionsRegion.innerHTML !== nextSessions) sessionsRegion.innerHTML = nextSessions;
+      }
+
+      let lastModalHtml = null;
+      function syncModals() {
+        const nextModal = importOpen
+          ? renderImportModal()
+          : editOpenMailboxId
+            ? renderEditModal()
+            : deleteConfirm
+              ? renderDeleteConfirmModal()
+              : totpModalMailboxId
+                ? renderTotpModal()
+                : "";
+        const currentModal = document.querySelector(".modal-backdrop");
+        if (!nextModal) {
+          currentModal?.remove();
+          lastModalHtml = "";
+          return;
+        }
+        if (currentModal && lastModalHtml === nextModal) return;
+        currentModal?.remove();
+        document.body.insertAdjacentHTML("beforeend", nextModal);
+        lastModalHtml = nextModal;
+      }
+
+      function refreshProviderFilterOptions(id, selectedValue, ariaLabel) {
+        const select = document.getElementById(id);
+        if (!select) return;
+        const nextOptions = '<option value="">全部来源</option>' + (state.providers || []).map((provider) => '<option value="' + esc(provider.id) + '">' + esc(provider.displayName || provider.id) + '</option>').join("");
+        if (select.innerHTML !== nextOptions) select.innerHTML = nextOptions;
+        select.value = selectedValue || "";
+        if (ariaLabel) select.setAttribute("aria-label", ariaLabel);
+      }
+
+      function paginate(items, requestedPage, pageSize) {
+        const normalizedPageSize = Math.max(1, Math.floor(pageSize));
+        const pageCount = Math.max(1, Math.ceil(items.length / normalizedPageSize));
+        const page = Math.min(pageCount, Math.max(1, Math.floor(requestedPage)));
+        const startIndex = (page - 1) * normalizedPageSize;
+        const endIndex = Math.min(items.length, startIndex + normalizedPageSize);
+        return { page, pageCount, startIndex, endIndex, items: items.slice(startIndex, endIndex) };
+      }
+
+      function paginationRange(page) {
+        return page.endIndex > page.startIndex ? (page.startIndex + 1) + "-" + page.endIndex : "0";
+      }
+
+      function renderMailboxPagination(page, previousAction, nextAction, className = "", role = "", jumpInputId = "", jumpValue = "", jumpAction = "") {
+        const jump = jumpInputId
+          ? '<form class="mailbox-page-jump" id="' + jumpAction + '-form"><label for="' + jumpInputId + '">跳转页码</label><input class="mailbox-page-input" id="' + jumpInputId + '" type="number" inputmode="numeric" min="1" max="' + page.pageCount + '" value="' + esc(jumpValue) + '" placeholder="' + page.page + '" aria-label="跳转页码"><button type="submit">跳转</button></form>'
+          : "";
+        return '<nav class="mailbox-pagination ' + className + '"' + (role ? ' data-role="' + role + '"' : '') + ' aria-label="邮箱列表分页"><button type="button" data-action="' + previousAction + '" ' + (page.page <= 1 ? "disabled" : "") + '>上一页</button><span class="mailbox-page-status" aria-live="polite">第 ' + page.page + '/' + page.pageCount + ' 页 · ' + paginationRange(page) + '</span><button type="button" data-action="' + nextAction + '" ' + (page.page >= page.pageCount ? "disabled" : "") + '>下一页</button>' + jump + '</nav>';
+      }
+
+      function jumpToMailboxPage(registration) {
+        const inputId = registration ? "registration-mailbox-page-jump-input" : "mailbox-page-jump-input";
+        const rawValue = document.getElementById(inputId)?.value ?? (registration ? registrationMailboxPageJumpInput : mailboxPageJumpInput);
+        const requestedPage = Number.parseInt(String(rawValue || "").trim(), 10);
+        if (!Number.isInteger(requestedPage) || requestedPage < 1) return;
+        if (registration) {
+          registrationMailboxPage = requestedPage;
+          registrationMailboxPageJumpInput = "";
+          refreshRegistrationMailboxList();
+          return;
+        }
+        mailboxPage = requestedPage;
+        mailboxPageJumpInput = "";
+        refreshMailboxList();
+      }
+
+      function getMailboxPageView() {
+        const allMailboxes = state.mailboxes || [];
+        const mailboxes = [...filterMailboxes()].sort(compareMailboxes);
+        const page = paginate(mailboxes, mailboxPage, MAILBOX_PAGE_SIZE);
+        mailboxPage = page.page;
+        return { allMailboxes, mailboxes, page };
       }
 
       function refreshMailboxList() {
         const mailboxList = document.querySelector(".mailbox-list");
-        if (!mailboxList) { render(); return; }
-        const allMailboxes = state.mailboxes || [];
-        const sortedMailboxes = [...filterMailboxes()].sort(compareMailboxes);
-        const rows = sortedMailboxes.length
-          ? sortedMailboxes.map((mailbox, index) => renderMailboxRow(mailbox, index)).join("")
-          : '<div class="empty-list">' + (allMailboxes.length ? '没有匹配的邮箱。' : '还没有邮箱。<br>点击“添加邮箱”并在导入时选择来源。') + '</div>';
-        const scrollTop = mailboxList.scrollTop || 0;
-        mailboxList.innerHTML = rows;
-        mailboxList.scrollTop = scrollTop;
-        const count = document.querySelector('[data-role="mailbox-count"]');
-        if (count) {
-          const filterActive = Boolean(mailboxSearch.trim() || providerFilter || onlyUnlinkedCodex || onlyReauthorization || onlyOpenAiDeactivated);
-          count.textContent = (filterActive ? sortedMailboxes.length + "/" : "") + allMailboxes.length;
+        if (!mailboxList) {
+          renderFullPanel();
+          return;
         }
-        const selectionCount = document.querySelector(".selection-tools > span");
-        if (selectionCount) selectionCount.textContent = "已选 " + selectedMailboxIds.size + " / " + sortedMailboxes.length;
+        const mailboxView = getMailboxPageView();
+        const rows = mailboxView.mailboxes.length
+          ? mailboxView.page.items.map((mailbox, index) => renderMailboxRow(mailbox, mailboxView.page.startIndex + index)).join("")
+          : '<div class="empty-list">' + (mailboxView.allMailboxes.length ? '没有匹配的邮箱。' : '还没有邮箱。<br>点击“添加邮箱”并在导入时选择来源。') + '</div>';
+        const scrollTop = mailboxList.scrollTop || 0;
+        if (mailboxList.innerHTML !== rows) mailboxList.innerHTML = rows;
+        mailboxList.scrollTop = scrollTop;
+        refreshMailboxPagination(mailboxView.page);
+        refreshMailboxToolbar(mailboxView);
       }
 
       function refreshRegistrationMailboxList() {
         const mailboxList = document.querySelector(".registration-mailbox-list");
-        if (!mailboxList) { render(); return; }
+        if (!mailboxList) {
+          renderFullPanel();
+          return;
+        }
         const scrollTop = mailboxList.scrollTop || 0;
         const mailboxView = getRegistrationMailboxView();
-        mailboxList.innerHTML = mailboxView.rows;
+        if (mailboxList.innerHTML !== mailboxView.rows) mailboxList.innerHTML = mailboxView.rows;
         mailboxList.scrollTop = scrollTop;
         const count = document.querySelector('[data-role="registration-mailbox-count"]');
         if (count) count.textContent = mailboxView.mailboxes.length + "/" + mailboxView.allMailboxes.length;
+        refreshRegistrationMailboxPagination(mailboxView.page);
+        ensureRegistrationMailboxResizeObserver();
+      }
+
+      function refreshMailboxPagination(page) {
+        const pagination = document.querySelector('[data-role="mailbox-pagination"]');
+        if (!pagination) return;
+        const next = renderMailboxPagination(page, "mailbox-page-prev", "mailbox-page-next", "", "mailbox-pagination", "mailbox-page-jump-input", mailboxPageJumpInput, "mailbox-page-jump");
+        const start = next.indexOf(">") + 1;
+        const end = next.lastIndexOf("</nav>");
+        const content = start > 0 && end > start ? next.slice(start, end) : "";
+        if (pagination.innerHTML !== content) pagination.innerHTML = content;
+      }
+
+      function refreshRegistrationMailboxPagination(page) {
+        const pagination = document.querySelector('[data-role="registration-mailbox-pagination"]');
+        if (!pagination) return;
+        const next = renderMailboxPagination(page, "registration-mailbox-page-prev", "registration-mailbox-page-next", "registration-mailbox-pagination", "registration-mailbox-pagination", "registration-mailbox-page-jump-input", registrationMailboxPageJumpInput, "registration-mailbox-page-jump");
+        const start = next.indexOf(">") + 1;
+        const end = next.lastIndexOf("</nav>");
+        const content = start > 0 && end > start ? next.slice(start, end) : "";
+        if (pagination.innerHTML !== content) pagination.innerHTML = content;
+      }
+
+      function refreshMailboxToolbar(mailboxView = getMailboxPageView()) {
+        const count = document.querySelector('[data-role="mailbox-count"]');
+        if (count) {
+          const filterActive = Boolean(mailboxSearch.trim() || providerFilter || onlyUnlinkedCodex || onlyReauthorization || onlyOpenAiDeactivated);
+          count.textContent = (filterActive ? mailboxView.mailboxes.length + "/" : "") + mailboxView.allMailboxes.length;
+        }
+        const selectionCount = document.querySelector(".selection-tools > span");
+        if (selectionCount) selectionCount.textContent = "已选 " + selectedMailboxIds.size + " / " + mailboxView.mailboxes.length;
+        const selectedHasRenewal = [...selectedMailboxIds].some((mailboxId) => {
+          const mailbox = mailboxView.allMailboxes.find((item) => item.id === mailboxId);
+          return state.providers?.find((provider) => provider.id === mailbox?.providerId)?.capabilities?.manualRenewal === true;
+        });
+        const selectedHasActiveOperation = (state.operations || []).some((operation) => selectedMailboxIds.has(operation.mailboxId));
+        const hasActiveMailboxOperation = (state.operations || []).length > 0 || (state.codexImports || []).length > 0;
+        const enabled = {
+          "batch-query": selectedMailboxIds.size > 0 && !pendingBatchAction,
+          "batch-wait": selectedMailboxIds.size > 0 && !pendingBatchAction,
+          "batch-renewal": selectedHasRenewal && !pendingBatchAction,
+          "batch-stop": selectedMailboxIds.size > 0 && selectedHasActiveOperation && !pendingBatchAction,
+          "batch-delete": selectedMailboxIds.size > 0 && !pendingBatchAction,
+          "delete-deactivated-mailboxes": getDeactivatedMailboxCandidates().length > 0 && !pendingBatchAction && !hasActiveMailboxOperation
+        };
+        for (const [action, canUse] of Object.entries(enabled)) {
+          const button = document.querySelector('[data-action="' + action + '"]');
+          if (button) button.disabled = !canUse;
+        }
+        const deactivatedDelete = document.querySelector('[data-role="deactivated-delete"]');
+        if (deactivatedDelete) {
+          const label = "删除封禁账号（" + getDeactivatedMailboxCandidates().length + "）";
+          if (deactivatedDelete.textContent !== label) deactivatedDelete.textContent = label;
+        }
+        const progress = document.querySelector('[data-role="mailbox-operation-progress"]');
+        if (progress) {
+          const progressHtml = renderMailboxOperationProgress();
+          if (progress.innerHTML !== progressHtml) progress.innerHTML = progressHtml;
+        }
+        const codexFilter = document.getElementById("onlyUnlinkedCodex");
+        if (codexFilter) codexFilter.disabled = state.codexImportAvailable !== true;
+        const reauthorizationFilter = document.getElementById("onlyReauthorization");
+        if (reauthorizationFilter) reauthorizationFilter.disabled = state.managedAccountDirectoryAvailable !== true;
+        const deactivatedSummary = document.querySelector('[data-role="deactivated-summary"]');
+        if (deactivatedSummary) {
+          const countValue = mailboxView.allMailboxes.filter((mailbox) => mailbox.openaiAccountDeactivated === true).length;
+          deactivatedSummary.textContent = countValue > 0 ? "OpenAI 封禁：" + countValue : "";
+          deactivatedSummary.className = countValue > 0 ? "tag blocked" : "";
+        }
       }
 
       function updateSortDirectionButton(action, direction) {
@@ -1130,13 +1362,47 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function getRegistrationMailboxView() {
         const allMailboxes = state.mailboxes || [];
         const mailboxes = [...filterRegistrationMailboxes()].sort(compareRegistrationMailboxes);
+        const nextPageSize = getRegistrationMailboxPageSize();
+        if (nextPageSize !== registrationMailboxPageSize) {
+          const firstVisibleIndex = Math.max(0, (registrationMailboxPage - 1) * registrationMailboxPageSize);
+          registrationMailboxPage = Math.floor(firstVisibleIndex / nextPageSize) + 1;
+          registrationMailboxPageSize = nextPageSize;
+          registrationMailboxPageJumpInput = "";
+        }
+        const page = paginate(mailboxes, registrationMailboxPage, registrationMailboxPageSize);
+        registrationMailboxPage = page.page;
         const managedCount = allMailboxes.filter((mailbox) => hasManagedCodexEmail(mailbox.address)).length;
         const mailboxRows = mailboxes.length
-          ? mailboxes.map(renderRegistrationMailboxOption).join("")
+          ? page.items.map(renderRegistrationMailboxOption).join("")
           : '<div class="empty-list" style="min-height:120px;grid-column:1/-1">' +
             (allMailboxes.length && managedCount === allMailboxes.length ? "邮箱库中的邮箱均已导入 Codex，请直接输入其他邮箱。" : allMailboxes.length && registrationOnlyGptSevenDays ? "没有注册满 7 天的邮箱。" : allMailboxes.length && registrationOnlyUnregisteredGpt ? "没有未注册 GPT 的邮箱。" : allMailboxes.length ? "没有匹配的已导入邮箱。" : "邮箱库为空，请直接输入新邮箱。") +
             '</div>';
-        return { allMailboxes, mailboxes, managedCount, rows: mailboxRows };
+        return { allMailboxes, mailboxes, managedCount, page, rows: mailboxRows };
+      }
+
+      function getRegistrationMailboxPageSize() {
+        const list = document.querySelector(".registration-mailbox-list");
+        const width = Number(list?.clientWidth);
+        if (!Number.isFinite(width) || width <= 0) return registrationMailboxPageSize;
+        const viewportWidth = Number(window.innerWidth);
+        const columns = Number.isFinite(viewportWidth) && viewportWidth <= 820
+          ? 1
+          : Math.max(1, Math.floor((width + REGISTRATION_MAILBOX_GRID_GAP) / (REGISTRATION_MAILBOX_MIN_COLUMN_WIDTH + REGISTRATION_MAILBOX_GRID_GAP)));
+        return columns * REGISTRATION_MAILBOX_ROWS;
+      }
+
+      function ensureRegistrationMailboxResizeObserver() {
+        const list = document.querySelector(".registration-mailbox-list");
+        if (!list || typeof ResizeObserver !== "function") return;
+        if (registrationMailboxResizeObserver?.target === list) return;
+        registrationMailboxResizeObserver?.observer?.disconnect();
+        const observer = new ResizeObserver(() => {
+          const nextPageSize = getRegistrationMailboxPageSize();
+          if (nextPageSize === registrationMailboxPageSize) return;
+          refreshRegistrationMailboxList();
+        });
+        observer.observe(list);
+        registrationMailboxResizeObserver = { observer, target: list };
       }
 
       function renderStandaloneRegistration() {
@@ -1160,6 +1426,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
               '<div class="registration-mailbox-picker-head"><strong>已导入邮箱库</strong><span class="tag" data-role="registration-mailbox-count">' + mailboxes.length + '/' + allMailboxes.length + '</span></div>' +
               '<div class="registration-mailbox-picker-tools"><input id="registrationMailboxSearch" type="search" value="' + esc(registrationMailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索注册邮箱"><select id="registrationMailboxProviderFilter" aria-label="按邮箱来源筛选注册邮箱"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="注册邮箱排序"><label class="mailbox-sort-label" for="registrationMailboxSort">邮箱排序</label><select id="registrationMailboxSort" class="mailbox-sort-select" aria-label="选择注册邮箱排序字段"><option value="name" ' + (registrationMailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (registrationMailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="renewal" ' + (registrationMailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option><option value="gptRegistration" ' + (registrationMailboxSortKey === "gptRegistration" ? "selected" : "") + '>GPT注册时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-registration-mailbox-sort-direction" title="' + (registrationMailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (registrationMailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (registrationMailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div><label title="只显示尚未标记为已注册 GPT 的邮箱"><input id="registrationOnlyUnregisteredGpt" type="checkbox" ' + (registrationOnlyUnregisteredGpt ? "checked" : "") + '> 仅显示未注册 GPT</label><label title="只显示从第一封 OpenAI 邮件起已注册至少 7 天的邮箱"><input id="registrationOnlyGptSevenDays" type="checkbox" ' + (registrationOnlyGptSevenDays ? "checked" : "") + '> 仅 GPT 注册 ≥ 7 天</label></div>' +
               '<div class="registration-mailbox-list">' + mailboxRows + '</div>' +
+              renderMailboxPagination(registrationMailboxView.page, "registration-mailbox-page-prev", "registration-mailbox-page-next", "registration-mailbox-pagination", "registration-mailbox-pagination", "registration-mailbox-page-jump-input", registrationMailboxPageJumpInput, "registration-mailbox-page-jump") +
             '</div>' +
             '<div class="registration-standalone-content">' + renderRegistrationCreateForm() + '</div>' +
           '</section>' +
@@ -1702,9 +1969,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       }
 
       function renderLayout() {
-        const allMailboxes = state.mailboxes || [];
-        const filteredMailboxes = filterMailboxes();
-        const sortedMailboxes = [...filteredMailboxes].sort(compareMailboxes);
+        const mailboxView = getMailboxPageView();
+        const allMailboxes = mailboxView.allMailboxes;
+        const sortedMailboxes = mailboxView.mailboxes;
         const query = mailboxSearch.trim().toLowerCase();
         const deactivatedMailboxCount = allMailboxes.filter((mailbox) => mailbox.openaiAccountDeactivated === true).length;
         const deactivatedCandidates = getDeactivatedMailboxCandidates();
@@ -1717,20 +1984,18 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         });
         const selectedHasActiveOperation = (state.operations || []).some((operation) => selectedMailboxIds.has(operation.mailboxId));
         const rows = sortedMailboxes.length
-          ? sortedMailboxes.map((mailbox, index) => renderMailboxRow(mailbox, index)).join("")
+          ? mailboxView.page.items.map((mailbox, index) => renderMailboxRow(mailbox, mailboxView.page.startIndex + index)).join("")
           : '<div class="empty-list">' + (allMailboxes.length ? '没有匹配的邮箱。' : '还没有邮箱。<br>点击“添加邮箱”并在导入时选择来源。') + '</div>';
         const selected = state.selected;
         const filterActive = Boolean(query || providerFilter || onlyUnlinkedCodex || onlyReauthorization || onlyOpenAiDeactivated);
         const providerOptions = (state.providers || []).map((provider) => '<option value="' + esc(provider.id) + '" ' + (providerFilter === provider.id ? "selected" : "") + '>' + esc(provider.displayName || provider.id) + '</option>').join("");
-        const deactivatedSummary = deactivatedMailboxCount > 0
-          ? '<span class="tag blocked">OpenAI 封禁：' + deactivatedMailboxCount + '</span>'
-          : '';
+        const deactivatedSummary = '<span data-role="deactivated-summary"' + (deactivatedMailboxCount > 0 ? ' class="tag blocked"' : '') + '>' + (deactivatedMailboxCount > 0 ? 'OpenAI 封禁：' + deactivatedMailboxCount : '') + '</span>';
         const deactivatedDeleteButton = state.managedAccountRemovalAvailable === true
-          ? '<button type="button" class="danger" data-action="delete-deactivated-mailboxes" ' + (deactivatedCandidates.length > 0 && !pendingBatchAction && !hasActiveMailboxOperation ? '' : 'disabled') + '>删除封禁账号（' + deactivatedCandidates.length + '）</button>'
+          ? '<button type="button" class="danger" data-role="deactivated-delete" data-action="delete-deactivated-mailboxes" ' + (deactivatedCandidates.length > 0 && !pendingBatchAction && !hasActiveMailboxOperation ? '' : 'disabled') + '>删除封禁账号（' + deactivatedCandidates.length + '）</button>'
           : '';
         return '<div class="layout">' +
-          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag" data-role="mailbox-count">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="邮箱排序"><label class="mailbox-sort-label" for="mailboxSort">邮箱排序</label><select id="mailboxSort" class="mailbox-sort-select" aria-label="选择邮箱排序字段"><option value="name" ' + (mailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (mailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="code" ' + (mailboxSortKey === "code" ? "selected" : "") + '>验证码状态</option><option value="renewal" ' + (mailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-mailbox-sort-direction" title="' + (mailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (mailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (mailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div><div class="mailbox-account-filters"><label title="' + (codexFilterAvailable ? '依据当前 Manager 已接入账号目录判断' : '当前 Manager 未提供账号目录') + '"><input id="onlyUnlinkedCodex" type="checkbox" ' + (onlyUnlinkedCodex ? "checked" : "") + (codexFilterAvailable ? "" : " disabled") + '>仅未接入 Codex</label><label title="' + (reauthorizationFilterAvailable ? '依据当前 Manager 账号目录同步' : '当前 Manager 未提供账号目录') + '"><input id="onlyReauthorization" type="checkbox" ' + (onlyReauthorization ? "checked" : "") + (reauthorizationFilterAvailable ? "" : " disabled") + '>仅需重新授权</label><label title="依据已保存的 OpenAI account deactivated 邮件标记判断"><input id="onlyOpenAiDeactivated" type="checkbox" ' + (onlyOpenAiDeactivated ? "checked" : "") + '>仅 OpenAI 封禁</label></div>' + deactivatedSummary + '</div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button><button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button>' + deactivatedDeleteButton + '</div>' + renderMailboxOperationProgress() + '</div><div class="mailbox-list">' + rows + '</div></section>' +
-          '<section class="box detail">' + (selected ? renderSelected(selected) : '<div class="empty-detail"><div><h2>选择一个邮箱</h2><p class="muted" style="margin-top:8px">其他邮箱的邮件详情不会在未选中时渲染或查询。</p></div></div>') + '</section>' +
+          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag" data-role="mailbox-count">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="邮箱排序"><label class="mailbox-sort-label" for="mailboxSort">邮箱排序</label><select id="mailboxSort" class="mailbox-sort-select" aria-label="选择邮箱排序字段"><option value="name" ' + (mailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (mailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="code" ' + (mailboxSortKey === "code" ? "selected" : "") + '>验证码状态</option><option value="renewal" ' + (mailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-mailbox-sort-direction" title="' + (mailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (mailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (mailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div><div class="mailbox-account-filters"><label title="' + (codexFilterAvailable ? '依据当前 Manager 已接入账号目录判断' : '当前 Manager 未提供账号目录') + '"><input id="onlyUnlinkedCodex" type="checkbox" ' + (onlyUnlinkedCodex ? "checked" : "") + (codexFilterAvailable ? "" : " disabled") + '>仅未接入 Codex</label><label title="' + (reauthorizationFilterAvailable ? '依据当前 Manager 账号目录同步' : '当前 Manager 未提供账号目录') + '"><input id="onlyReauthorization" type="checkbox" ' + (onlyReauthorization ? "checked" : "") + (reauthorizationFilterAvailable ? "" : " disabled") + '>仅需重新授权</label><label title="依据已保存的 OpenAI account deactivated 邮件标记判断"><input id="onlyOpenAiDeactivated" type="checkbox" ' + (onlyOpenAiDeactivated ? "checked" : "") + '>仅 OpenAI 封禁</label></div>' + deactivatedSummary + '</div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button><button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button>' + deactivatedDeleteButton + '</div><div data-role="mailbox-operation-progress">' + renderMailboxOperationProgress() + '</div></div><div class="mailbox-list">' + rows + '</div>' + renderMailboxPagination(mailboxView.page, "mailbox-page-prev", "mailbox-page-next", "", "mailbox-pagination", "mailbox-page-jump-input", mailboxPageJumpInput, "mailbox-page-jump") + '</section>' +
+          '<section class="box detail"><div class="detail-region">' + (selected ? renderSelected(selected) : '<div class="empty-detail"><div><h2>选择一个邮箱</h2><p class="muted" style="margin-top:8px">其他邮箱的邮件详情不会在未选中时渲染或查询。</p></div></div>') + '</div></section>' +
           '</div>';
       }
 
@@ -1805,6 +2070,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const detail = selected.detail || { messages: [], codes: [] };
         const operation = (state.operations || []).find((item) => item.mailboxId === mailbox.id);
         const messages = detail.messages || [];
+        const selectedMessage = messages.find((message) => message.id === selectedMessageId) || messages[0];
+        if (selectedMessage && selectedMessageId !== selectedMessage.id) selectedMessageId = selectedMessage.id;
         const latestCode = detail.codes?.[0] || mailbox.latestCode || "";
         const latestCodeMessage = messages.find((message) => latestCode && message.codes?.includes(latestCode));
         const latestCodeReceivedAt = latestCodeMessage?.receivedAt;
@@ -1850,22 +2117,66 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '</div></div></div>' +
           '<div class="content"><div class="hero"><div><div class="hero-label">最近一次验证码</div><div class="code">' + esc(latestCode || '—') + '</div><div class="muted">' + (detail.fetchedAt ? '查询于 ' + esc(formatDate(detail.fetchedAt)) + (latestCodeReceivedAt ? ' · 收到于 ' + esc(formatDate(latestCodeReceivedAt)) : '') : '尚未查询该邮箱') + '</div></div><div class="hero-side">' + (detail.codes?.[0] ? '<button class="primary" data-action="copy-code" data-code="' + esc(detail.codes[0]) + '">复制验证码</button>' : '') + '</div></div>' +
           '<div class="section-title"><h2>邮件</h2><span class="muted">' + esc(capability) + '</span></div>' +
-          (messages.length ? '<div class="messages">' + messages.map(renderMessageEntry).join("") + '</div>' : '<div class="empty-detail" style="min-height:180px">暂无邮件结果。手动启动一次查询或验证码接收流程。</div>') + '</div>';
+          (messages.length
+            ? '<div class="message-browser"><aside class="message-list-pane" aria-label="邮件条目列表"><div class="message-list-title">邮件条目（' + messages.length + '）</div><div class="messages">' + messages.map(renderMessageRow).join("") + '</div></aside><article class="message-reading-pane" aria-live="polite">' + renderMessageDetail(selectedMessage) + '</article></div>'
+            : '<div class="empty-detail" style="min-height:180px">暂无邮件结果。手动启动一次查询或验证码接收流程。</div>') + '</div>';
       }
 
       function renderMessageRow(message) {
         const selected = message.id === selectedMessageId;
-        return '<button class="message-row ' + (selected ? 'selected' : '') + '" data-action="select-message" data-message-id="' + esc(message.id) + '" aria-expanded="' + selected + '"><div class="message-subject">' + esc(message.subject) + '</div><div class="message-time">' + esc(formatDate(message.receivedAt)) + (message.codes?.length ? ' · 验证码 ' + esc(message.codes.join('/')) : '') + '</div></button>';
-      }
-
-      function renderMessageEntry(message) {
-        return '<div class="message-entry">' + renderMessageRow(message) + (message.id === selectedMessageId ? '<article class="message-detail">' + renderMessageDetail(message) + '</article>' : '') + '</div>';
+        return '<button class="message-row ' + (selected ? 'selected' : '') + '" data-action="select-message" data-message-id="' + esc(message.id) + '" aria-pressed="' + selected + '"><div class="message-subject">' + esc(message.subject) + '</div><div class="message-time">' + esc(formatDate(message.receivedAt)) + (message.codes?.length ? ' · 验证码 ' + esc(message.codes.join('/')) : '') + '</div></button>';
       }
 
       function renderMessageDetail(message) {
         if (!message) return '<p class="muted">选择一封邮件查看详情。</p>';
         const sender = [message.senderName, message.from].filter(Boolean).join(' <') + (message.from && message.senderName ? '>' : '');
-        return '<h3>' + esc(message.subject) + '</h3><div class="from">发件人：' + esc(sender || '未知') + '</div><div class="from">时间：' + esc(formatDate(message.receivedAt)) + '</div>' + (message.codes?.length ? '<div class="detail-meta">' + message.codes.map((code) => '<span class="tag success">验证码 ' + esc(code) + '</span>').join('') + '</div>' : '') + '<div class="body">' + esc(message.body || message.preview || '无正文') + '</div>';
+        return '<div class="message-detail"><h3>' + esc(message.subject) + '</h3><div class="from">发件人：' + esc(sender || '未知') + '</div><div class="from">时间：' + esc(formatDate(message.receivedAt)) + '</div>' + (message.codes?.length ? '<div class="detail-meta">' + message.codes.map((code) => '<span class="tag success">验证码 ' + esc(code) + '</span>').join('') + '</div>' : '') + '<div class="message-body">' + renderMessageBody(message) + '</div></div>';
+      }
+
+      function renderMessageBody(message) {
+        const rawHtml = typeof message?.bodyHtml === "string" ? message.bodyHtml.trim() : "";
+        if (rawHtml) {
+          const safeHtml = sanitizeEmailHtml(rawHtml);
+          if (safeHtml) return '<div class="message-body-html">' + safeHtml + '</div>';
+        }
+        return '<div class="message-body-text">' + esc(message?.body || message?.preview || '无正文') + '</div>';
+      }
+
+      function sanitizeEmailHtml(value) {
+        if (typeof DOMParser === "undefined") return "";
+        const documentFragment = new DOMParser().parseFromString(String(value || ""), "text/html");
+        const body = documentFragment.body;
+        if (!body) return "";
+        for (const element of body.querySelectorAll("script, style, link, meta, base, iframe, frame, object, embed, form, input, button, textarea, select, video, audio, canvas, svg, math")) {
+          element.remove();
+        }
+        const allowedTags = new Set([
+          "A", "ARTICLE", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "H5", "H6", "HR", "I", "LI", "OL", "P", "PRE", "SECTION", "SMALL", "SPAN", "STRONG", "S", "TABLE", "TBODY", "TD", "TH", "THEAD", "TFOOT", "TR", "U", "UL"
+        ]);
+        for (const element of Array.from(body.querySelectorAll("*"))) {
+          if (!element.parentNode) continue;
+          if (!allowedTags.has(element.tagName)) {
+            const parent = element.parentNode;
+            while (element.firstChild) parent.insertBefore(element.firstChild, element);
+            parent.removeChild(element);
+            continue;
+          }
+          for (const attribute of Array.from(element.attributes)) {
+            const name = attribute.name.toLowerCase();
+            if (name !== "href" && name !== "alt" && name !== "colspan" && name !== "dir" && name !== "height" && name !== "lang" && name !== "rowspan" && name !== "target" && name !== "title" && name !== "width") {
+              element.removeAttribute(attribute.name);
+              continue;
+            }
+            if (name === "href" && !/^(?:https?:|mailto:)/iu.test(attribute.value.trim())) {
+              element.removeAttribute(attribute.name);
+            }
+          }
+          if (element.tagName === "A" && element.hasAttribute("href")) {
+            element.setAttribute("target", "_blank");
+            element.setAttribute("rel", "noreferrer noopener");
+          }
+        }
+        return body.innerHTML.trim();
       }
 
       function normalizeEmail(value) {
@@ -2591,6 +2902,39 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function closestTarget(event, selector) {
         const target = event?.target;
         return target && typeof target.closest === "function" ? target.closest(selector) : null;
+      }
+      function routeRegistrationWheel(event) {
+        if (!registrationOnly || event?.defaultPrevented) return;
+        const nested = closestTarget(event, registrationNestedScrollSelector);
+        if (!nested) return;
+        const rawDelta = Number(event.deltaY);
+        if (!Number.isFinite(rawDelta) || rawDelta === 0) return;
+        const delta = event.deltaMode === 1
+          ? rawDelta * 16
+          : event.deltaMode === 2
+            ? rawDelta * (Number(window.innerHeight) || 600)
+            : rawDelta;
+        const scrollTop = Number(nested.scrollTop);
+        const clientHeight = Number(nested.clientHeight);
+        const scrollHeight = Number(nested.scrollHeight);
+        if (![scrollTop, clientHeight, scrollHeight].every(Number.isFinite)) return;
+        const canScrollNested = scrollHeight > clientHeight + 1;
+        const atTop = scrollTop <= 0 && delta < 0;
+        const atBottom = scrollTop + clientHeight >= scrollHeight - 1 && delta > 0;
+        if (canScrollNested && !atTop && !atBottom) return;
+
+        const outer = typeof nested.closest === "function"
+          ? nested.closest(".registration-standalone")
+          : document.querySelector(".registration-standalone");
+        if (!outer || outer === nested) return;
+        const outerTop = Number(outer.scrollTop);
+        const outerClientHeight = Number(outer.clientHeight);
+        const outerScrollHeight = Number(outer.scrollHeight);
+        if (![outerTop, outerClientHeight, outerScrollHeight].every(Number.isFinite)) return;
+        const nextTop = Math.max(0, Math.min(outerScrollHeight - outerClientHeight, outerTop + delta));
+        if (nextTop === outerTop) return;
+        event.preventDefault?.();
+        outer.scrollTop = nextTop;
       }
       function rememberModalFormControl(target) {
         if (!target) return;
