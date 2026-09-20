@@ -7,6 +7,7 @@ import { createGatewayServer, listen } from "./server.mjs";
 import { WorktreeManager } from "./worktree-manager.mjs";
 import { GatewayUsageLedger } from "./usage.mjs";
 import { createSharingRelay } from "./sharing-relay.mjs";
+import { GatewayAttachmentStore } from "./attachments.mjs";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   printHelp();
@@ -25,6 +26,12 @@ async function start() {
     : undefined;
   const usage = new GatewayUsageLedger({ stateDir: config.server.stateDir });
   await usage.init();
+  const attachments = new GatewayAttachmentStore({
+    stateDir: config.server.stateDir,
+    ttlMs: config.attachments.ttlMs,
+    maxBytes: config.attachments.maxBytes
+  });
+  await attachments.init();
   const sharingRelay = config.sharing.bootstrapToken
     ? createSharingRelay({
         stateDir: config.sharing.stateDir,
@@ -40,9 +47,10 @@ async function start() {
       projectRoot: config.codex.projectRoot,
       stateDir: config.server.stateDir
     }),
+    attachments,
     maxSessions: config.maxSessions
   });
-  const server = createGatewayServer({ sessions, config, usage, sharingRelay });
+  const server = createGatewayServer({ sessions, config, usage, sharingRelay, attachments });
   const address = await listen(server, config.server.host, config.server.port);
   console.log(`[manager-gateway] listening on ${address.host}:${address.port}`);
 
@@ -78,6 +86,9 @@ function printHelp() {
   MANAGER_GATEWAY_RESEARCH_BASE_URL research 模式 OpenAI-compatible 地址
   MANAGER_GATEWAY_RESEARCH_API_KEY  research provider key
   MANAGER_GATEWAY_MAX_SESSIONS      并行 session 上限，默认 4
+  MANAGER_GATEWAY_PUBLIC_URL        附件文本中使用的可访问 Gateway 根地址（可选）
+  MANAGER_GATEWAY_ATTACHMENT_TTL_MS 附件保留时间，默认 86400000
+  MANAGER_GATEWAY_MAX_ATTACHMENT_BYTES 附件大小上限，默认 20 MB
   MANAGER_GATEWAY_SHARING_BOOTSTRAP_TOKEN  账号共享 Relay 注册令牌（可选）
   MANAGER_GATEWAY_SHARING_STATE_DIR        账号共享 Relay 状态目录（可选）
 `);

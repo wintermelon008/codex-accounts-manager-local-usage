@@ -11,6 +11,8 @@ const DEFAULT_GATEWAY_STATE_DIR = path.join(
   "codex-accounts-manager",
   "gateway"
 );
+const DEFAULT_ATTACHMENT_TTL_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
 
 export function loadConfig(env = process.env) {
   const host = optional(env.MANAGER_GATEWAY_HOST) ?? DEFAULT_GATEWAY_HOST;
@@ -30,7 +32,10 @@ export function loadConfig(env = process.env) {
       port: parsePort(env.MANAGER_GATEWAY_PORT, DEFAULT_GATEWAY_PORT),
       token: gatewayToken,
       corsOrigin: optional(env.MANAGER_GATEWAY_CORS_ORIGIN) ?? (isLoopbackHost(host) ? "*" : undefined),
-      stateDir
+      stateDir,
+      ...(optional(env.MANAGER_GATEWAY_PUBLIC_URL)
+        ? { publicBaseUrl: normalizeBaseUrl(env.MANAGER_GATEWAY_PUBLIC_URL, "MANAGER_GATEWAY_PUBLIC_URL") }
+        : {})
     },
     manager: {
       baseUrl: normalizeBaseUrl(env.MANAGER_CONTROL_URL ?? DEFAULT_MANAGER_CONTROL_URL, "MANAGER_CONTROL_URL"),
@@ -52,6 +57,20 @@ export function loadConfig(env = process.env) {
     sharing: {
       bootstrapToken: optional(env.MANAGER_GATEWAY_SHARING_BOOTSTRAP_TOKEN),
       stateDir: optional(env.MANAGER_GATEWAY_SHARING_STATE_DIR) ?? path.join(stateDir, "sharing")
+    },
+    attachments: {
+      ttlMs: parseBoundedInteger(
+        env.MANAGER_GATEWAY_ATTACHMENT_TTL_MS,
+        DEFAULT_ATTACHMENT_TTL_MS,
+        60_000,
+        7 * 24 * 60 * 60 * 1_000
+      ),
+      maxBytes: parseBoundedInteger(
+        env.MANAGER_GATEWAY_MAX_ATTACHMENT_BYTES,
+        DEFAULT_ATTACHMENT_MAX_BYTES,
+        1,
+        100 * 1024 * 1024
+      )
     },
     research: {
       baseUrl: optional(env.MANAGER_GATEWAY_RESEARCH_BASE_URL)

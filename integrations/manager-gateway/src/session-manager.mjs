@@ -15,11 +15,12 @@ export class GatewaySessionManager {
   #automaticSwitchInFlight;
   #eventSequence = 0;
 
-  constructor({ provider, manager, workspaces, usage, maxSessions = 4, now = () => Date.now(), idFactory = randomUUID }) {
+  constructor({ provider, manager, workspaces, usage, attachments, maxSessions = 4, now = () => Date.now(), idFactory = randomUUID }) {
     this.provider = provider;
     this.manager = manager;
     this.workspaces = workspaces;
     this.usage = usage;
+    this.attachments = attachments;
     this.maxSessions = maxSessions;
     this.now = now;
     this.idFactory = idFactory;
@@ -27,13 +28,13 @@ export class GatewaySessionManager {
 
   create(input) {
     const mode = input?.mode;
-    const message = normalizeMessage(input?.message);
+    const message = normalizeMessage(input?.message, input?.attachments);
     if (mode !== "research" && mode !== "develop") {
       throw new Error("mode must be research or develop");
     }
     const id = this.idFactory();
     const now = this.now();
-    const turn = createTurn(this.idFactory, message, now);
+    const turn = createTurn(this.idFactory, message, now, this.#normalizeAttachments(input?.attachments));
     const session = {
       id,
       mode,
@@ -84,9 +85,9 @@ export class GatewaySessionManager {
       throw sessionError("session is still running", 409);
     }
 
-    const message = normalizeMessage(input?.message);
+    const message = normalizeMessage(input?.message, input?.attachments);
     const now = this.now();
-    const turn = createTurn(this.idFactory, message, now);
+    const turn = createTurn(this.idFactory, message, now, this.#normalizeAttachments(input?.attachments));
     session.turns.push(turn);
     session.activeTurnId = turn.id;
     session.message = message;
@@ -127,10 +128,10 @@ export class GatewaySessionManager {
       throw sessionError("an interjection is already pending", 409);
     }
 
-    const message = normalizeMessage(input?.message);
+    const message = normalizeMessage(input?.message, input?.attachments);
     const now = this.now();
     const interruptedTurn = currentTurn(session);
-    const turn = createTurn(this.idFactory, message, now);
+    const turn = createTurn(this.idFactory, message, now, this.#normalizeAttachments(input?.attachments));
     session.turns.push(turn);
     session.activeTurnId = turn.id;
     session.message = message;
@@ -181,6 +182,9 @@ export class GatewaySessionManager {
     if (session.workspace?.status === "open") {
       throw sessionError("session has an open develop worktree; apply or discard it before deletion", 409);
     }
+    void this.attachments?.removeMany(
+      session.turns.flatMap((turn) => turn.attachments?.map((attachment) => attachment.id) ?? [])
+    );
     this.#subscribers.delete(id);
     const batch = this.#exhaustionBatch;
     if (batch) {
@@ -443,6 +447,7 @@ export class GatewaySessionManager {
       this.#reportAccountActivity(session, true, { accountId: session.runAccountId });
       const result = await this.provider.run({
         session: providerSnapshot(session),
+        attachments: this.#resolveCurrentAttachments(session),
         signal: session.controller.signal,
         emit: (event) => this.#emit(session, event)
       });
@@ -848,6 +853,24 @@ export class GatewaySessionManager {
     }
     session.interruptedTurnId = undefined;
   }
+
+  #normalizeAttachments(value) {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value)) throw new Error("attachments must be an array");
+    if (value.length > 12) throw new Error("too many attachments");
+    return value.map((candidate) => {
+      const id = typeof candidate === "string" ? candidate : candidate?.id;
+      const attachment = this.attachments?.get(id);
+      if (!attachment) throw new Error(`attachment not found: ${id || "unknown"}`);
+      return attachment;
+    });
+  }
+
+  #resolveCurrentAttachments(session) {
+    return (currentTurn(session)?.attachments ?? [])
+      .map((attachment) => this.attachments?.resolve(attachment.id))
+      .filter(Boolean);
+  }
 }
 
 function snapshot(session) {
@@ -865,6 +888,9 @@ function snapshot(session) {
     updatedAt: session.updatedAt,
     turns: session.turns.map(snapshotTurn),
     activeTurnId: session.activeTurnId,
+    ...(currentTurn(session)?.attachments?.length
+      ? { attachments: currentTurn(session).attachments.map(publicAttachment) }
+      : {}),
     result: session.result,
     error: session.error,
     recoveryCount: session.recoveryCount,
@@ -892,7 +918,8 @@ function snapshotTurn(turn) {
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
     result: turn.result,
-    error: turn.error
+    error: turn.error,
+    ...(turn.attachments?.length ? { attachments: turn.attachments.map(publicAttachment) } : {})
   };
 }
 
@@ -900,21 +927,23 @@ function currentTurn(session) {
   return session.turns.find((turn) => turn.id === session.activeTurnId);
 }
 
-function createTurn(idFactory, message, now) {
+function createTurn(idFactory, message, now, attachments = []) {
   return {
     id: idFactory(),
     message,
     status: "queued",
     createdAt: now,
     updatedAt: now,
+    attachments,
     result: undefined,
     error: undefined
   };
 }
 
-function normalizeMessage(value) {
+function normalizeMessage(value, attachments) {
   const message = typeof value === "string" ? value.trim() : "";
   if (!message) {
+    if (Array.isArray(attachments) && attachments.length > 0) return "请分析我发送的附件。";
     throw new Error("message is required");
   }
   if (message.length > 100_000) {
@@ -946,4 +975,16 @@ function quotaScore(account) {
 
 function optionalText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function publicAttachment(attachment) {
+  return {
+    id: attachment.id,
+    filename: attachment.filename,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    createdAt: attachment.createdAt,
+    expiresAt: attachment.expiresAt,
+    url: attachment.url
+  };
 }

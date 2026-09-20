@@ -6,9 +6,9 @@ const MAX_BODY_BYTES = 1_000_000;
 const MAX_SESSION_BODY_BYTES = 8_000_000;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "quota_exhausted"]);
 
-export function createGatewayServer({ sessions, config, usage, sharingRelay }) {
+export function createGatewayServer({ sessions, config, usage, sharingRelay, attachments }) {
   return http.createServer((request, response) => {
-    void handleRequest(request, response, { sessions, config, usage, sharingRelay }).catch((error) => {
+    void handleRequest(request, response, { sessions, config, usage, sharingRelay, attachments }).catch((error) => {
       if (!response.headersSent) {
         sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }, config);
       } else if (!response.destroyed) {
@@ -39,7 +39,7 @@ export function listen(server, host, port) {
   });
 }
 
-async function handleRequest(request, response, { sessions, config, usage, sharingRelay }) {
+async function handleRequest(request, response, { sessions, config, usage, sharingRelay, attachments }) {
   const url = new URL(request.url ?? "/", `http://${config.server.host}`);
   applyCors(response, config);
   if (request.method === "OPTIONS") {
@@ -53,6 +53,10 @@ async function handleRequest(request, response, { sessions, config, usage, shari
   }
   if (url.pathname === "/v1/sharing" || url.pathname.startsWith("/v1/sharing/")) {
     await handleSharingRequest(request, response, url, sharingRelay, config);
+    return;
+  }
+  if (url.pathname === "/v1/attachments" || /^\/v1\/attachments\/[^/]+$/u.test(url.pathname)) {
+    await handleAttachmentRequest(request, response, url, attachments, config);
     return;
   }
   if (!isAuthorized(request, config.server.token)) {
@@ -430,6 +434,80 @@ async function handleSharingRequest(request, response, url, sharingRelay, config
   }
 }
 
+async function handleAttachmentRequest(request, response, url, attachments, config) {
+  if (!attachments) {
+    sendJson(response, 503, { error: "Gateway attachment storage is unavailable" }, config);
+    return;
+  }
+
+  const idMatch = /^\/v1\/attachments\/([^/]+)$/u.exec(url.pathname);
+  const id = idMatch ? decodeURIComponent(idMatch[1]) : undefined;
+  const stored = id ? attachments.get(id) : undefined;
+
+  if (request.method === "POST" && url.pathname === "/v1/attachments") {
+    if (!isAuthorized(request, config.server.token)) {
+      sendJson(response, 401, { error: "unauthorized" }, config);
+      return;
+    }
+    try {
+      const bytes = await readBinaryBody(request, attachments.maxBytes);
+      const attachment = await attachments.create({
+        filename: decodeFilename(request.headers["x-manager-filename"]),
+        mimeType: request.headers["content-type"],
+        bytes,
+        publicBaseUrl: attachmentPublicBaseUrl(request, config)
+      });
+      sendJson(response, 201, { attachment }, config);
+    } catch (error) {
+      const status = typeof error?.statusCode === "number" ? error.statusCode : 400;
+      sendJson(response, status, { error: error instanceof Error ? error.message : String(error) }, config);
+    }
+    return;
+  }
+
+  if (!id || !stored) {
+    sendJson(response, 404, { error: "attachment not found" }, config);
+    return;
+  }
+
+  const accessToken = url.searchParams.get("access_token");
+  if (!isAuthorized(request, config.server.token) && !attachments.isAccessTokenValid(id, accessToken)) {
+    sendJson(response, 401, { error: "unauthorized" }, config);
+    return;
+  }
+
+  if (request.method === "GET") {
+    try {
+      const result = await attachments.read(id);
+      if (!result) {
+        sendJson(response, 404, { error: "attachment not found" }, config);
+        return;
+      }
+      const filename = safeAttachmentFilename(result.metadata.filename);
+      response.writeHead(200, {
+        ...corsHeaders(config),
+        "content-type": result.metadata.mimeType,
+        "content-length": result.bytes.length,
+        "content-disposition": `inline; filename="${filename}"`,
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff"
+      });
+      response.end(result.bytes);
+    } catch (error) {
+      sendJson(response, 404, { error: error instanceof Error ? error.message : String(error) }, config);
+    }
+    return;
+  }
+
+  if (request.method === "DELETE") {
+    await attachments.remove(id);
+    sendJson(response, 200, { deleted: true, attachmentId: id }, config);
+    return;
+  }
+
+  sendJson(response, 405, { error: "method not allowed" }, config);
+}
+
 function writeSharingAudit(config, message) {
   const stateDir = config?.sharing?.stateDir;
   if (typeof stateDir !== "string" || !stateDir) {
@@ -570,6 +648,22 @@ async function readJsonBody(request, maxBytes = MAX_BODY_BYTES) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+async function readBinaryBody(request, maxBytes) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maxBytes) {
+      const error = new Error("attachment body too large");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -580,6 +674,35 @@ function isAuthorized(request, token) {
   }
   const value = request.headers.authorization;
   return typeof value === "string" && value === `Bearer ${token}`;
+}
+
+function attachmentPublicBaseUrl(request, config) {
+  if (typeof config.server.publicBaseUrl === "string" && config.server.publicBaseUrl) {
+    return config.server.publicBaseUrl;
+  }
+  const forwardedProto = typeof request.headers["x-forwarded-proto"] === "string"
+    ? request.headers["x-forwarded-proto"].split(",")[0].trim()
+    : "";
+  const protocol = forwardedProto === "https" ? "https" : "http";
+  const host = typeof request.headers.host === "string" && request.headers.host
+    ? request.headers.host
+    : `${config.server.host}:${config.server.port}`;
+  return `${protocol}://${host}`;
+}
+
+function decodeFilename(value) {
+  if (typeof value !== "string" || !value.trim()) return "attachment";
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function safeAttachmentFilename(value) {
+  return String(value || "attachment")
+    .replace(/["\\\r\n]+/gu, "_")
+    .slice(0, 180) || "attachment";
 }
 
 function sendJson(response, status, body, config) {
@@ -604,7 +727,7 @@ function corsHeaders(config) {
   return config.server.corsOrigin
     ? {
         "access-control-allow-origin": config.server.corsOrigin,
-        "access-control-allow-headers": "authorization, content-type",
+        "access-control-allow-headers": "authorization, content-type, x-manager-filename",
         "access-control-allow-methods": "GET, POST, DELETE, OPTIONS"
       }
     : {};

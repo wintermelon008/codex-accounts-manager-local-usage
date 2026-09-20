@@ -17,6 +17,7 @@ Manager 侧的独立 task/session Gateway。Research Workbench 只需配置 Gate
 - `GET /v1/usage/today`：读取 Gateway 自己记录的今日 token 用量和按模型统计。
 - `GET /v1/manager/accounts`、`GET /v1/manager/status`：向受控客户端提供脱敏的 Manager 账号/状态摘要。
 - `GET /v1/manager/proxy`：向同机 Feishu Helper 提供当前 Manager 有效的 HTTPS 代理和 `NO_PROXY`；该接口仍受 Gateway/Manager 本机令牌保护。
+- `POST /v1/attachments`、`GET/DELETE /v1/attachments/:id`：保存、读取和清理 session 附件；上传使用原始二进制请求体，不把文件内容放入 session JSON。
 - `/v1/sharing/*`：可选的跨网络账号共享 Relay；只保存公开用户资料、请求状态和端到端加密的共享包，不读取 OAuth token 明文。
 - 多 session 并行，使用 `MANAGER_GATEWAY_MAX_SESSIONS` 限制并发数。
 - 同一活动账号的 session 在额度耗尽时先等待该批次相关任务终态；只对明确因额度耗尽结束的 session 切换一次并恢复，其他已结束 session 不会被重复执行，并优先使用原 Codex thread 恢复。
@@ -78,6 +79,22 @@ FEISHU_GATEWAY_URL=http://127.0.0.1:43118
 Feishu Helper 配置 `FEISHU_GATEWAY_URL=http://127.0.0.1:43118` 后，普通管理员私聊会通过本 Gateway 创建或继续 AI session，并与 Workbench session 共用 token ledger。Gateway 启动 Codex exec 时会注入 `WORKBENCH_DATA_URL` 和可选的 `WORKBENCH_DATA_TOKEN`，并把 Workbench HTTP API 约定加入 Codex 指令；因此飞书自然语言任务与 Workbench 网页端 AI 使用同一数据服务边界。Feishu 侧没有 Manager control 接口时，`账号`、`状态`、`健康`、`用量` 仍可按可用接口降级，其中 token 用量优先来自 Gateway；刷新额度、导入状态等 Manager 专属操作会明确提示未接入。
 
 `MANAGER_GATEWAY_STATE_DIR` 用于 Gateway 的运行状态、token ledger 和 develop worktree（默认 `worktrees/`）；Workbench SQLite 不属于 Gateway 的运行目录，也不由 Gateway 创建或管理。请按 Workbench 的 [`macos/docs/gateway-setup.md`](https://github.com/Layman-art/Research-Workbench/blob/main/macos/docs/gateway-setup.md) 单独启动数据服务，并通过 `WORKBENCH_DATA_URL` 让 Codex 访问数据接口。
+
+## 附件与多模态输入
+
+Workbench 和 Feishu 先把图片或文件上传到 Gateway，再把附件 ID 随当前 turn 发送。Gateway 将文件保存到 `MANAGER_GATEWAY_STATE_DIR/attachments/`，返回一个带短期访问令牌的 URL；附件不会写入 Workbench SQLite。默认保留 24 小时、单个附件上限 20 MB，可通过下面的变量调整：
+
+```dotenv
+# 当模型或外部 provider 需要从 Gateway URL 读取附件时填写可访问根地址。
+# 例如经反向代理暴露时填写 https://gateway.example.test；SSH/本机使用时可省略。
+MANAGER_GATEWAY_PUBLIC_URL=https://gateway.example.test
+MANAGER_GATEWAY_ATTACHMENT_TTL_MS=86400000
+MANAGER_GATEWAY_MAX_ATTACHMENT_BYTES=20971520
+```
+
+Codex provider 对图片会额外使用 Codex CLI 的 `--image` 原生输入，同时在 prompt 中保留附件地址；PDF、Markdown、CSV 等非图片附件会以保存地址和 Gateway 本机路径告知 Codex。Gateway research provider 以及 Workbench 直接连接的标准 provider 都使用同一套“附件已保存，按地址访问”的文字说明，不把二进制强行编码进对话 JSON。标准 provider 只有在数据服务或 Gateway URL 对 provider 所在网络可访问时才能读取地址；`127.0.0.1`、SSH 本地端口和带内网权限的地址不能被公网 provider 直接访问。
+
+Feishu Helper 对图片和文件消息使用飞书消息资源接口下载后再上传 Gateway；因此机器人只需访问 Gateway，不需要直接把飞书资源地址交给 Codex。附件只绑定到对应 session turn，删除已结束 session 时会异步清理，未绑定或过期附件会在 Gateway 启动/上传时回收。
 
 ## 运行
 

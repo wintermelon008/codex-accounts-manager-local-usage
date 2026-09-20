@@ -64,6 +64,40 @@ describe("manager gateway Codex provider", () => {
     assert.doesNotMatch(prompt, /WORKBENCH_DATA_URL/u);
   });
 
+  it("passes saved image attachments to Codex and describes every attachment by address", async () => {
+    const harness = await createHarness("success");
+    const imagePath = join(harness.root, "uploaded-image.png");
+    await writeFile(imagePath, Buffer.from([137, 80, 78, 71]));
+    const provider = createProvider(harness.config);
+
+    await provider.run({
+      session: sessionFor(harness.root, {
+        message: "请看这个图片",
+        attachments: [{
+          id: "attachment-1",
+          filename: "uploaded-image.png",
+          mimeType: "image/png",
+          size: 4,
+          url: "http://gateway.test/v1/attachments/attachment-1?access_token=opaque"
+        }]
+      }),
+      attachments: [{
+        id: "attachment-1",
+        filename: "uploaded-image.png",
+        mimeType: "image/png",
+        size: 4,
+        url: "http://gateway.test/v1/attachments/attachment-1?access_token=opaque",
+        path: imagePath
+      }],
+      emit() {}
+    });
+    const [{ argv }] = await readInvocations(harness.logPath);
+    assert.ok(argv.includes("--image"));
+    assert.equal(argv[argv.indexOf("--image") + 1], imagePath);
+    assert.match(argv.at(-1), /附件已经保存/u);
+    assert.match(argv.at(-1), /gateway\.test\/v1\/attachments/u);
+  });
+
   it("applies the current Manager HTTPS proxy to each Codex child process", async () => {
     const harness = await createHarness("success");
     const provider = createProvider(harness.config, {

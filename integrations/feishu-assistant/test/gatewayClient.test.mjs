@@ -61,6 +61,45 @@ describe("Feishu Gateway client", () => {
     assert.deepEqual(JSON.parse(posts[1].init.body), { message: "follow-up message" });
     assert.ok(calls.every(({ init }) => init.headers.get("authorization") === "Bearer gateway-token"));
   });
+
+  it("uploads binary attachments and includes their ids in a session request", async () => {
+    const calls = [];
+    const client = createGatewayClient({
+      baseUrl: "http://gateway.test",
+      token: "gateway-token",
+      pollIntervalMs: 0,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        if (url === "http://gateway.test/v1/attachments") {
+          assert.equal(init.headers.get("content-type"), "image/png");
+          assert.equal(init.headers.get("x-manager-filename"), "image.png");
+          assert.deepEqual(Buffer.from(init.body), Buffer.from([1, 2, 3]));
+          return jsonResponse({ attachment: { id: "attachment-1", url: "http://gateway.test/v1/attachments/attachment-1" } }, 201);
+        }
+        if (url === "http://gateway.test/v1/sessions" && init.method === "POST") {
+          assert.deepEqual(JSON.parse(init.body), {
+            mode: "develop",
+            message: "分析这个",
+            attachments: [{ id: "attachment-1" }]
+          });
+          return jsonResponse({ sessionId: "session-attachment" });
+        }
+        if (url === "http://gateway.test/v1/sessions/session-attachment") {
+          return jsonResponse({ status: "completed", result: { text: "完成" } });
+        }
+        throw new Error(`unexpected request ${url}`);
+      }
+    });
+
+    const attachment = await client.uploadAttachment({
+      filename: "image.png",
+      mimeType: "image/png",
+      bytes: Buffer.from([1, 2, 3])
+    });
+    assert.equal(attachment.id, "attachment-1");
+    assert.equal(await client.sendMessage("chat-attachment", "分析这个", [attachment]), "完成");
+    assert.ok(calls.every(({ init }) => init.headers.get("authorization") === "Bearer gateway-token"));
+  });
 });
 
 function jsonResponse(body, status = 200) {

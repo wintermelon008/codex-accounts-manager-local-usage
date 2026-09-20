@@ -8,7 +8,8 @@ export const WEB_WORKFLOW_NOT_CONFIGURED_MESSAGE = "网页分析流程尚未配�
 export async function handleAssistantEvent(event, options) {
   const message = event?.message;
   const text = extractTextContent(message?.content);
-  if (!text) {
+  const resources = extractMessageResources(message);
+  if (!text && resources.length === 0) {
     return { handled: false };
   }
   if (message?.chat_type !== "p2p") {
@@ -20,11 +21,18 @@ export async function handleAssistantEvent(event, options) {
   }
 
   const command = parseAssistantCommand(text);
-  if (command?.action === "unknown" && typeof options.gateway?.sendMessage === "function") {
+  if ((command?.action === "unknown" || resources.length > 0) && typeof options.gateway?.sendMessage === "function") {
     try {
+      const attachments = resources.length > 0
+        ? await options.loadAttachments?.(resources) ?? []
+        : [];
       return {
         handled: true,
-        reply: await options.gateway.sendMessage(message?.chat_id, text)
+        reply: await options.gateway.sendMessage(
+          message?.chat_id,
+          text || "请分析我发送的附件。",
+          attachments
+        )
       };
     } catch (error) {
       return { handled: true, reply: `操纵助手\n${safeErrorMessage(error)}` };
@@ -180,6 +188,34 @@ export function extractTextContent(content) {
   } catch {
     return "";
   }
+}
+
+export function extractMessageResources(message) {
+  if (!message || typeof message !== "object") return [];
+  let parsed;
+  try {
+    parsed = typeof message.content === "string" ? JSON.parse(message.content) : undefined;
+  } catch {
+    return [];
+  }
+  const messageType = message.message_type ?? message.msg_type;
+  if (messageType === "image" && typeof parsed?.image_key === "string" && parsed.image_key) {
+    return [{ type: "image", fileKey: parsed.image_key, filename: `image-${parsed.image_key}.bin` }];
+  }
+  if (messageType === "file" && typeof parsed?.file_key === "string" && parsed.file_key) {
+    return [{
+      type: "file",
+      fileKey: parsed.file_key,
+      filename: typeof parsed.file_name === "string" && parsed.file_name ? parsed.file_name : `file-${parsed.file_key}`
+    }];
+  }
+  if (typeof parsed?.image_key === "string" && parsed.image_key) {
+    return [{ type: "image", fileKey: parsed.image_key, filename: `image-${parsed.image_key}.bin` }];
+  }
+  if (typeof parsed?.file_key === "string" && parsed.file_key) {
+    return [{ type: "file", fileKey: parsed.file_key, filename: parsed.file_name || `file-${parsed.file_key}` }];
+  }
+  return [];
 }
 
 export function senderOpenIdFrom(sender) {

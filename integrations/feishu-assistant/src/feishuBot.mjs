@@ -7,6 +7,7 @@ const POLL_INTERVAL_MS = 1_000;
 const POLL_TIMEOUT_MS = 60 * 1_000;
 const MAX_QR_BYTES = 4 * 1024 * 1024;
 const QR_FETCH_TIMEOUT_MS = 10_000;
+const MAX_GATEWAY_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 export function createFeishuAssistant(options) {
   const client = options.client ?? new Lark.Client({ appId: options.appId, appSecret: options.appSecret });
@@ -93,7 +94,13 @@ export function createFeishuAssistant(options) {
       manager: options.manager,
       gateway: options.gateway,
       paymentWorkflow: options.paymentWorkflow,
-      webWorkflow: options.webWorkflow
+      webWorkflow: options.webWorkflow,
+      loadAttachments: async (resources) => downloadMessageAttachments(
+        client,
+        messageId,
+        resources,
+        options.gateway
+      )
     });
     if (!result.handled || !result.reply) {
       return result;
@@ -182,6 +189,45 @@ async function sendText(client, chatId, text) {
       content: JSON.stringify({ text })
     }
   });
+}
+
+async function downloadMessageAttachments(client, messageId, resources, gateway) {
+  if (!messageId) throw new Error("飞书消息缺少 message_id，无法下载附件。 ");
+  if (typeof gateway?.uploadAttachment !== "function") {
+    throw new Error("当前 Gateway 不支持附件上传。 ");
+  }
+  const result = [];
+  for (const resource of resources) {
+    const response = await client.im.v1.messageResource.get({
+      path: { message_id: messageId, file_key: resource.fileKey },
+      params: { type: resource.type }
+    });
+    const bytes = await readResourceStream(response.getReadableStream());
+    const contentType = response.headers?.["content-type"] ?? response.headers?.["Content-Type"] ??
+      (resource.type === "image" ? "image/png" : "application/octet-stream");
+    const attachment = await gateway.uploadAttachment({
+      filename: resource.filename,
+      mimeType: contentType.split(";", 1)[0].trim(),
+      bytes
+    });
+    result.push(attachment);
+  }
+  return result;
+}
+
+async function readResourceStream(stream) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > MAX_GATEWAY_ATTACHMENT_BYTES) {
+      throw new Error("飞书附件超过 Gateway 大小限制。 ");
+    }
+    chunks.push(buffer);
+  }
+  if (size === 0) throw new Error("飞书附件内容为空。 ");
+  return Buffer.concat(chunks);
 }
 
 async function closeWebSocket(wsClient) {

@@ -33,7 +33,7 @@ export function createGatewayClient(options) {
     try {
       const headers = new Headers(init.headers);
       headers.set("accept", "application/json");
-      if (init.body !== undefined) {
+      if (init.body !== undefined && !headers.has("content-type")) {
         headers.set("content-type", "application/json; charset=utf-8");
       }
       if (options.token) {
@@ -82,14 +82,33 @@ export function createGatewayClient(options) {
         gatewayCapabilities: capabilities
       };
     },
-    async sendMessage(chatId, message) {
+    async uploadAttachment({ filename, mimeType, bytes }) {
+      const body = await request("/v1/attachments", {
+        method: "POST",
+        headers: {
+          "content-type": mimeType || "application/octet-stream",
+          "x-manager-filename": encodeURIComponent(filename || "attachment")
+        },
+        body: bytes
+      });
+      const attachment = body?.attachment;
+      if (!attachment || typeof attachment.id !== "string" || typeof attachment.url !== "string") {
+        throw new GatewayClientError("Gateway 没有返回有效的附件信息。 ");
+      }
+      return attachment;
+    },
+    async sendMessage(chatId, message, attachments = []) {
       const key = typeof chatId === "string" && chatId.trim() ? chatId.trim() : "default";
+      const requestBody = {
+        message,
+        ...(attachments.length > 0 ? { attachments: attachments.map((attachment) => ({ id: attachment.id })) } : {})
+      };
       let sessionId = sessionByChat.get(key);
       if (sessionId) {
         try {
           await request(`${sessionPath(sessionId)}/messages`, {
             method: "POST",
-            body: JSON.stringify({ message })
+            body: JSON.stringify(requestBody)
           });
         } catch (error) {
           if (error?.statusCode !== 404) {
@@ -101,11 +120,11 @@ export function createGatewayClient(options) {
       }
 
       if (!sessionId) {
-        const payload = await request("/v1/sessions", {
+        const created = await request("/v1/sessions", {
           method: "POST",
-          body: JSON.stringify({ mode: "develop", message })
+          body: JSON.stringify({ mode: "develop", ...requestBody })
         });
-        sessionId = readSessionId(payload);
+        sessionId = readSessionId(created);
         if (!sessionId) {
           throw new GatewayClientError("Gateway 没有返回有效的会话编号。 ");
         }

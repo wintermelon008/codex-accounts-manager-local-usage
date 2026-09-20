@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Readable } from "node:stream";
 import { describe, it } from "node:test";
 import { createFeishuAssistant } from "../src/feishuBot.mjs";
 
@@ -113,6 +114,70 @@ describe("Feishu long-connection adapter", () => {
     assert.deepEqual(received, { chatId: "chat-gateway", message: "请通过 Gateway 处理" });
     assert.equal(result.sent, true);
     assert.equal(JSON.parse(sent[0].data.content).text, "来自 Gateway 的回复");
+  });
+
+  it("downloads a private image message and uploads it to the Gateway", async () => {
+    const sent = [];
+    let uploaded;
+    let received;
+    const bot = createFeishuAssistant({
+      appId: "app-placeholder",
+      appSecret: "secret-placeholder",
+      adminOpenIds: new Set(["admin-open-id"]),
+      manager: undefined,
+      gateway: {
+        async uploadAttachment(input) {
+          uploaded = input;
+          return {
+            id: "gateway-attachment-1",
+            filename: input.filename,
+            mimeType: input.mimeType,
+            size: input.bytes.length,
+            url: "http://gateway.test/v1/attachments/gateway-attachment-1"
+          };
+        },
+        async sendMessage(chatId, message, attachments) {
+          received = { chatId, message, attachments };
+          return "已收到图片";
+        }
+      },
+      client: {
+        im: {
+          v1: {
+            message: { create: async (request) => sent.push(request) },
+            messageResource: {
+              get: async ({ path, params }) => {
+                assert.deepEqual(path, { message_id: "image-message", file_key: "image-key" });
+                assert.deepEqual(params, { type: "image" });
+                return {
+                  headers: { "content-type": "image/png" },
+                  getReadableStream: () => Readable.from([Buffer.from([1, 2, 3])])
+                };
+              }
+            }
+          }
+        }
+      },
+      wsClient: { start: async () => undefined, close: () => undefined }
+    });
+
+    const result = await bot.processMessage({
+      message: {
+        message_id: "image-message",
+        message_type: "image",
+        chat_type: "p2p",
+        chat_id: "chat-image",
+        content: JSON.stringify({ image_key: "image-key" })
+      },
+      sender: { sender_id: { open_id: "admin-open-id" } }
+    });
+
+    assert.equal(result.sent, true);
+    assert.equal(uploaded.filename, "image-image-key.bin");
+    assert.deepEqual(uploaded.bytes, Buffer.from([1, 2, 3]));
+    assert.equal(received.message, "请分析我发送的附件。");
+    assert.equal(received.attachments[0].id, "gateway-attachment-1");
+    assert.equal(JSON.parse(sent[0].data.content).text, "已收到图片");
   });
 
   it("uploads and sends the payment QR after the order text", async () => {
