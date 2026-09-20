@@ -568,8 +568,8 @@ function extractMimeBody(headers, body) {
         html ||= partBodyValue.html || partBodyValue.text;
       }
     }
+    if (html) return { text: plain || htmlToText(html), html };
     if (plain) return { text: plain, html: "" };
-    if (html) return { text: htmlToText(html), html };
     return { text: "", html: "" };
   }
 

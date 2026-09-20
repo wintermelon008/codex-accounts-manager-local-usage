@@ -42,7 +42,9 @@ function normalizeMessage(message) {
     receivedAt,
     preview: body.text.slice(0, MAX_PREVIEW_LENGTH),
     body: body.text.slice(0, MAX_BODY_LENGTH),
-    ...(body.html ? { bodyHtml: body.html.slice(0, MAX_BODY_HTML_LENGTH) } : {}),
+    ...(body.html
+      ? { bodyHtml: compactEmailHtml(body.html).slice(0, MAX_BODY_HTML_LENGTH) }
+      : {}),
     codes
   };
 }
@@ -73,8 +75,7 @@ function readBodyCandidate(candidate) {
   if (typeof value !== "string" || !value.trim()) {
     return { text: "", html: "" };
   }
-  const contentType = isObject ? String(candidate.contentType ?? candidate.type ?? "") : "";
-  if (/text\/html/iu.test(contentType) || looksLikeHtml(value)) {
+  if (looksLikeHtml(value)) {
     const html = value.trim();
     return { text: htmlToText(html), html };
   }
@@ -119,6 +120,19 @@ function htmlToText(value) {
     .trim();
 }
 
+function compactEmailHtml(value) {
+  return String(value ?? "")
+    .replace(/<!doctype[^>]*>/giu, " ")
+    .replace(/<!--[\s\S]*?-->/gu, " ")
+    .replace(/<head\b[^>]*>[\s\S]*?<\s*\/\s*head\s*>/giu, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\s*\/\s*style\s*>/giu, " ")
+    .replace(/<script\b[^>]*>[\s\S]*?<\s*\/\s*script\s*>/giu, " ")
+    .replace(/<title\b[^>]*>[\s\S]*?<\s*\/\s*title\s*>/giu, " ")
+    .replace(/<meta\b[^>]*>/giu, " ")
+    .replace(/<link\b[^>]*>/giu, " ")
+    .trim();
+}
+
 function decodeCodePoint(value) {
   const codePoint = Number(value);
   return Number.isSafeInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
@@ -131,16 +145,22 @@ function looksLikeHtml(value) {
 }
 
 function stripEmbeddedEmailCss(value) {
-  let text = String(value ?? "").replace(/\/\*[\s\S]*?\*\//gu, " ");
-  const cssStart = /(?:@(?:media|supports|font-face|keyframes)\b|(?:body|table|td|a|img|h[1-6]|p)(?:\s*,\s*(?:body|table|td|a|img|h[1-6]|p))*\s*\{)/giu;
+  let text = String(value ?? "")
+    .replace(/\\(?=[/*])/gu, "")
+    .replace(/\/\*[\s\S]*?\*\//gu, " ");
+  const cssStart = /(?:@(?:media|supports|font-face|keyframes)\b|:root|(?<![A-Za-z0-9_-])(?:[.#][\w-]+|(?:html|body|table|td|a|img|h[1-6]|p|div|span|section)(?:\[[^\]]+\])?)[^{}]*\{)/giu;
   let result = "";
   let cursor = 0;
   let match;
   while ((match = cssStart.exec(text))) {
     const openBrace = text.indexOf("{", match.index);
     const closeBrace = findMatchingBrace(text, openBrace);
-    if (openBrace < 0 || closeBrace < 0) {
+    if (openBrace < 0) {
       continue;
+    }
+    if (closeBrace < 0) {
+      const preserved = text.slice(cursor, match.index);
+      return result + preserved + (preserved && !/\n\s*$/u.test(preserved) ? "\n" : "");
     }
     const preserved = text.slice(cursor, match.index);
     result += preserved + (preserved && !/\n\s*$/u.test(preserved) ? "\n" : "");

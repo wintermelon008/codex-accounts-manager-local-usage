@@ -2266,7 +2266,8 @@ function normalizeManagedAccountDirectory(entries) {
     .map((entry) => ({
       accountId: typeof entry.accountId === "string" ? entry.accountId.trim() : "",
       email: typeof entry.email === "string" ? entry.email.trim() : "",
-      requiresReauthorization: entry.requiresReauthorization === true
+      requiresReauthorization: entry.requiresReauthorization === true,
+      ...(typeof entry.healthKind === "string" ? { healthKind: entry.healthKind } : {})
     }))
     .filter((entry) => Boolean(entry.accountId && entry.email));
 }

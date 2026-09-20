@@ -72,8 +72,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .layout { flex: 1 1 auto; display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow: auto; padding-right: 2px; }
     #app { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
     .box { min-height: 0; height: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
-    .layout > .box:first-child { display: flex; flex-direction: column; flex: 0 0 760px; height: 760px; min-height: 760px; }
-    .layout > .box.detail { flex: 1 1 auto; height: auto; min-height: 620px; }
+    .layout > .box:first-child { display: flex; flex-direction: column; flex: 0 0 auto; height: auto; min-height: 0; }
+    .layout > .box.detail { flex: 0 0 auto; height: auto; min-height: 620px; }
     .box-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 15px; border-bottom: 1px solid var(--border); }
     .mailbox-list-header { align-items: flex-start; }
     .mailbox-list-toolbar { padding: 10px 12px; border-bottom: 1px solid var(--border); }
@@ -100,29 +100,30 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .mailbox-operation-progress-head strong { color: var(--accent); font-weight: 700; }
     .mailbox-operation-progress-track { height: 5px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--border) 75%, transparent); }
     .mailbox-operation-progress-fill { height: 100%; border-radius: inherit; background: var(--accent); transition: width .16s ease; }
-    .mailbox-list { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); grid-auto-rows: max-content; align-content: start; gap: 10px; min-height: 0; padding: 12px; overflow: auto; overscroll-behavior: contain; }
+    .mailbox-list { flex: 0 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); grid-auto-rows: 156px; align-content: start; gap: 10px; min-height: 0; padding: 12px; overflow: visible; }
     .mailbox-pagination { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; min-height: 46px; padding: 8px 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
     .mailbox-pagination button { min-width: 68px; padding: 5px 9px; font-size: 11px; }
     .mailbox-page-status { min-width: 128px; text-align: center; }
     .mailbox-page-jump { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; }
     .mailbox-page-jump label { color: var(--muted); font-size: 11px; white-space: nowrap; }
     .mailbox-page-input { width: 58px; min-width: 58px; padding: 5px 7px; text-align: center; }
-    .mailbox-row-wrap { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--text) 3%, transparent); overflow: hidden; }
+    .mailbox-row-wrap { position: relative; display: flex; flex-direction: column; min-width: 0; height: 156px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--text) 3%, transparent); overflow: hidden; }
     .mailbox-row-wrap.selected { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
     .mailbox-select { position: absolute; z-index: 1; top: 12px; left: 12px; display: grid; place-items: center; padding: 0; cursor: pointer; }
     .mailbox-select input { width: auto; margin: 0; }
-    .mailbox-row { display: block; width: 100%; min-width: 0; flex: 0 0 auto; text-align: left; border: 0; border-radius: 0; background: transparent; padding: 14px 12px 10px 40px; }
+    .mailbox-row { display: flex; flex-direction: column; justify-content: flex-start; width: 100%; min-width: 0; min-height: 0; flex: 1 1 auto; text-align: left; border: 0; border-radius: 0; background: transparent; padding: 10px 10px 5px 40px; }
     .mailbox-row.selected { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
     .mailbox-row:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-    .mailbox-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 0 12px 8px; background: transparent; }
+    .mailbox-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-height: 34px; padding: 0 10px 6px; background: transparent; }
     .mailbox-row-action { padding: 4px 6px; font-size: 11px; white-space: nowrap; }
     .row-number { color: var(--muted); margin-right: 6px; }
     .address { overflow-wrap: anywhere; word-break: break-word; }
-    .row-title { font-weight: 650; line-height: 1.4; }
-    .row-meta { display: flex; flex-wrap: wrap; gap: 6px 9px; margin-top: 7px; color: var(--muted); font-size: 12px; }
-    .mailbox-card-time { margin-top: 9px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .row-title { font-weight: 650; line-height: 1.25; }
+    .row-meta { display: flex; flex-wrap: wrap; gap: 3px 5px; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .mailbox-card-time { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.25; }
     .mailbox-card-time.warning { color: var(--warning); font-weight: 650; }
     .tag { display: inline-flex; align-items: center; width: fit-content; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); font-size: 11px; }
+    .mailbox-row .tag { padding: 1px 5px; font-size: 10px; line-height: 1.25; }
     .tag.source { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
     .tag.neutral { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
     .tag.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
@@ -131,7 +132,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .tag.blocked { color: var(--warning); background: color-mix(in srgb, var(--warning) 15%, transparent); }
     .empty-list, .empty-detail { display: grid; place-items: center; min-height: 270px; padding: 28px; color: var(--muted); text-align: center; }
     .detail { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-    .detail-region { min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; }
+    .detail-region { min-width: 0; min-height: 0; height: auto; display: flex; flex-direction: column; }
     .detail-header { flex: none; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
     .detail-action-row { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; overflow-x: auto; padding: 10px 20px; border-bottom: 1px solid var(--border); }
     .detail-header-actions, .detail-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 0; border: 0; }
@@ -141,7 +142,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .detail-address { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; word-break: break-word; }
     .detail-name { margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
     .detail-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
-    .content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: auto; overscroll-behavior: contain; padding: 16px 20px 22px; }
+    .content { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; overflow: visible; padding: 16px 20px 22px; }
     .hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
     .hero-label { color: var(--muted); font-size: 12px; }
     .code { margin-top: 3px; color: var(--accent); font-size: clamp(17px, 3vw, 31px); font-weight: 800; letter-spacing: .08em; line-height: 1.1; }
@@ -325,13 +326,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-mailbox-picker-tools select { width: auto; min-width: 130px; }
     .registration-mailbox-picker-tools label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; }
     .registration-mailbox-picker-tools label input { width: auto; min-width: 0; }
-    .registration-mailbox-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(235px, 1fr)); grid-template-rows: repeat(3, minmax(82px, auto)); align-content: start; gap: 8px; height: 276px; margin-top: 10px; overflow: hidden; }
+    .registration-mailbox-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(235px, 1fr)); grid-template-rows: repeat(3, 100px); align-content: start; gap: 8px; height: 316px; margin-top: 10px; overflow: hidden; }
     .registration-mailbox-pagination { margin-top: 8px; padding-inline: 0; border-top: 0; }
     .registration-fivesim-offers, .registration-fivesim-country-list, .registration-fivesim-operator-list { overscroll-behavior-y: contain; scrollbar-gutter: stable; }
-    .registration-mailbox-option { min-width: 0; padding: 10px; text-align: left; }
+    .registration-mailbox-option { min-width: 0; height: 100px; display: flex; flex-direction: column; padding: 8px; text-align: left; }
     .registration-mailbox-option.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 var(--accent); }
-    .registration-mailbox-option-title { font-weight: 650; overflow-wrap: anywhere; }
-    .registration-mailbox-option-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; color: var(--muted); font-size: 11px; }
+    .registration-mailbox-option-title { font-weight: 650; line-height: 1.25; overflow-wrap: anywhere; }
+    .registration-mailbox-option-meta { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 3px; margin-top: auto; color: var(--muted); font-size: 10px; }
+    .registration-mailbox-option .tag { padding: 1px 5px; font-size: 10px; line-height: 1.25; }
     .registration-standalone-content { margin-top: 14px; }
     .registration-standalone-content .registration-form { padding-top: 0; }
     @media (max-width: 820px) {
@@ -341,7 +343,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       body { overflow: auto; }
       .shell { height: auto; min-height: 100vh; }
       .layout { flex: none; min-height: 0; }
-      .layout > .box:first-child { flex-basis: 760px; height: 760px; min-height: 760px; }
+      .layout > .box:first-child { flex-basis: auto; height: auto; min-height: 0; }
+      .layout { overflow: visible; }
       .layout > .box.detail { min-height: 620px; }
       .message-browser { grid-template-columns: 1fr; grid-template-rows: auto auto; }
       .message-list-pane { border-right: 0; border-bottom: 1px solid var(--border); }
@@ -379,7 +382,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       const FIVE_SIM_CURRENCY_FEE_MULTIPLIER = ${DEFAULT_FEE_MULTIPLIER};
       const app = document.getElementById("app");
       const notice = document.getElementById("notice");
-      const MAILBOX_PAGE_SIZE = 12;
+      const MAILBOX_ROWS = 4;
+      const MAILBOX_GRID_MIN_COLUMN_WIDTH = 280;
+      const MAILBOX_GRID_GAP = 10;
       const REGISTRATION_MAILBOX_ROWS = 3;
       const REGISTRATION_MAILBOX_FALLBACK_PAGE_SIZE = 9;
       const REGISTRATION_MAILBOX_MIN_COLUMN_WIDTH = 235;
@@ -392,6 +397,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let mailboxSortKey = "name";
       let mailboxSortDirection = "asc";
       let onlyUnlinkedCodex = false;
+      let onlyQueryFailed = false;
       let onlyReauthorization = false;
       let onlyOpenAiDeactivated = false;
       let providerFilter = "";
@@ -434,6 +440,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationTotpFetchedAt = {};
       let pendingRenderWhileSelect = false;
       let mailboxPage = 1;
+      let mailboxPageSize = MAILBOX_ROWS * 3;
+      let mailboxResizeObserver;
       let registrationMailboxPage = 1;
       let mailboxPageJumpInput = "";
       let registrationMailboxPageJumpInput = "";
@@ -872,6 +880,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         if (target.id === "editProviderId") { editProvider = target.value || ""; refreshEditProviderFields(); }
         if (target.id === "mailboxSort") { mailboxSortKey = target.value || "name"; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "onlyUnlinkedCodex") { onlyUnlinkedCodex = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
+        if (target.id === "onlyQueryFailed") { onlyQueryFailed = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "onlyReauthorization") { onlyReauthorization = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "onlyOpenAiDeactivated") { onlyOpenAiDeactivated = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "mailboxProviderFilter") { providerFilter = target.value || ""; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
@@ -1074,6 +1083,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             restoreInputCaret(nextFocusedInput, focusedInput);
           }
         }
+        if (!registrationOnly) ensureMailboxResizeObserver();
       }
 
       function updateMailboxPanel() {
@@ -1174,9 +1184,41 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function getMailboxPageView() {
         const allMailboxes = state.mailboxes || [];
         const mailboxes = [...filterMailboxes()].sort(compareMailboxes);
-        const page = paginate(mailboxes, mailboxPage, MAILBOX_PAGE_SIZE);
+        const nextPageSize = getMailboxPageSize();
+        if (nextPageSize !== mailboxPageSize) {
+          const firstVisibleIndex = Math.max(0, (mailboxPage - 1) * mailboxPageSize);
+          mailboxPage = Math.floor(firstVisibleIndex / nextPageSize) + 1;
+          mailboxPageSize = nextPageSize;
+          mailboxPageJumpInput = "";
+        }
+        const page = paginate(mailboxes, mailboxPage, mailboxPageSize);
         mailboxPage = page.page;
         return { allMailboxes, mailboxes, page };
+      }
+
+      function getMailboxPageSize() {
+        const list = document.querySelector(".mailbox-list");
+        const width = Number(list?.clientWidth);
+        if (!Number.isFinite(width) || width <= 0) return mailboxPageSize;
+        const viewportWidth = Number(window.innerWidth);
+        const columns = Number.isFinite(viewportWidth) && viewportWidth <= 820
+          ? 1
+          : Math.max(1, Math.floor((width + MAILBOX_GRID_GAP) / (MAILBOX_GRID_MIN_COLUMN_WIDTH + MAILBOX_GRID_GAP)));
+        return columns * MAILBOX_ROWS;
+      }
+
+      function ensureMailboxResizeObserver() {
+        const list = document.querySelector(".mailbox-list");
+        if (!list || typeof ResizeObserver !== "function") return;
+        if (mailboxResizeObserver?.target === list) return;
+        mailboxResizeObserver?.observer?.disconnect();
+        const observer = new ResizeObserver(() => {
+          const nextPageSize = getMailboxPageSize();
+          if (nextPageSize === mailboxPageSize) return;
+          refreshMailboxList();
+        });
+        observer.observe(list);
+        mailboxResizeObserver = { observer, target: list };
       }
 
       function refreshMailboxList() {
@@ -1235,7 +1277,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function refreshMailboxToolbar(mailboxView = getMailboxPageView()) {
         const count = document.querySelector('[data-role="mailbox-count"]');
         if (count) {
-          const filterActive = Boolean(mailboxSearch.trim() || providerFilter || onlyUnlinkedCodex || onlyReauthorization || onlyOpenAiDeactivated);
+          const filterActive = Boolean(mailboxSearch.trim() || providerFilter || onlyUnlinkedCodex || onlyQueryFailed || onlyReauthorization || onlyOpenAiDeactivated);
           count.textContent = (filterActive ? mailboxView.mailboxes.length + "/" : "") + mailboxView.allMailboxes.length;
         }
         const selectionCount = document.querySelector(".selection-tools > span");
@@ -1438,7 +1480,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const selected = mailbox.id === selectedRegistrationMailboxId;
         const provider = (state.providers || []).find((item) => item.id === mailbox.providerId);
         const totpTag = renderTotpLinkedTag(mailbox);
-        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="address">' + esc(mailbox.address) + '</div><div class="registration-mailbox-option-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + renderGptRegisteredTag(mailbox) + totpTag + '</div></button>';
+        const displayName = mailbox.displayName || mailbox.address;
+        const addressLine = normalizeEmail(displayName) === normalizeEmail(mailbox.address)
+          ? ""
+          : '<div class="address">' + esc(mailbox.address) + '</div>';
+        return '<button type="button" class="registration-mailbox-option' + (selected ? ' selected' : '') + '" data-action="registration-select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '"><div class="registration-mailbox-option-title">' + esc(displayName) + '</div>' + addressLine + '<div class="registration-mailbox-option-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId || "未知来源") + '</span><span class="tag neutral">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + renderGptRegisteredTag(mailbox) + totpTag + '</div></button>';
       }
 
       function filterRegistrationMailboxes() {
@@ -1987,14 +2033,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           ? mailboxView.page.items.map((mailbox, index) => renderMailboxRow(mailbox, mailboxView.page.startIndex + index)).join("")
           : '<div class="empty-list">' + (allMailboxes.length ? '没有匹配的邮箱。' : '还没有邮箱。<br>点击“添加邮箱”并在导入时选择来源。') + '</div>';
         const selected = state.selected;
-        const filterActive = Boolean(query || providerFilter || onlyUnlinkedCodex || onlyReauthorization || onlyOpenAiDeactivated);
+        const filterActive = Boolean(query || providerFilter || onlyUnlinkedCodex || onlyQueryFailed || onlyReauthorization || onlyOpenAiDeactivated);
         const providerOptions = (state.providers || []).map((provider) => '<option value="' + esc(provider.id) + '" ' + (providerFilter === provider.id ? "selected" : "") + '>' + esc(provider.displayName || provider.id) + '</option>').join("");
-        const deactivatedSummary = '<span data-role="deactivated-summary"' + (deactivatedMailboxCount > 0 ? ' class="tag blocked"' : '') + '>' + (deactivatedMailboxCount > 0 ? 'OpenAI 封禁：' + deactivatedMailboxCount : '') + '</span>';
+        const deactivatedSummary = '<label title="依据最近一轮邮箱查询结果判断"><input id="onlyQueryFailed" type="checkbox" ' + (onlyQueryFailed ? "checked" : "") + '>仅查询失败</label><span data-role="deactivated-summary"' + (deactivatedMailboxCount > 0 ? ' class="tag blocked"' : '') + '>' + (deactivatedMailboxCount > 0 ? 'OpenAI 封禁：' + deactivatedMailboxCount : '') + '</span>';
         const deactivatedDeleteButton = state.managedAccountRemovalAvailable === true
           ? '<button type="button" class="danger" data-role="deactivated-delete" data-action="delete-deactivated-mailboxes" ' + (deactivatedCandidates.length > 0 && !pendingBatchAction && !hasActiveMailboxOperation ? '' : 'disabled') + '>删除封禁账号（' + deactivatedCandidates.length + '）</button>'
           : '';
         return '<div class="layout">' +
-          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag" data-role="mailbox-count">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="邮箱排序"><label class="mailbox-sort-label" for="mailboxSort">邮箱排序</label><select id="mailboxSort" class="mailbox-sort-select" aria-label="选择邮箱排序字段"><option value="name" ' + (mailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (mailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="code" ' + (mailboxSortKey === "code" ? "selected" : "") + '>验证码状态</option><option value="renewal" ' + (mailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-mailbox-sort-direction" title="' + (mailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (mailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (mailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div><div class="mailbox-account-filters"><label title="' + (codexFilterAvailable ? '依据当前 Manager 已接入账号目录判断' : '当前 Manager 未提供账号目录') + '"><input id="onlyUnlinkedCodex" type="checkbox" ' + (onlyUnlinkedCodex ? "checked" : "") + (codexFilterAvailable ? "" : " disabled") + '>仅未接入 Codex</label><label title="' + (reauthorizationFilterAvailable ? '依据当前 Manager 账号目录同步' : '当前 Manager 未提供账号目录') + '"><input id="onlyReauthorization" type="checkbox" ' + (onlyReauthorization ? "checked" : "") + (reauthorizationFilterAvailable ? "" : " disabled") + '>仅需重新授权</label><label title="依据已保存的 OpenAI account deactivated 邮件标记判断"><input id="onlyOpenAiDeactivated" type="checkbox" ' + (onlyOpenAiDeactivated ? "checked" : "") + '>仅 OpenAI 封禁</label></div>' + deactivatedSummary + '</div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button><button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button>' + deactivatedDeleteButton + '</div><div data-role="mailbox-operation-progress">' + renderMailboxOperationProgress() + '</div></div><div class="mailbox-list">' + rows + '</div>' + renderMailboxPagination(mailboxView.page, "mailbox-page-prev", "mailbox-page-next", "", "mailbox-pagination", "mailbox-page-jump-input", mailboxPageJumpInput, "mailbox-page-jump") + '</section>' +
+          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag" data-role="mailbox-count">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="邮箱排序"><label class="mailbox-sort-label" for="mailboxSort">邮箱排序</label><select id="mailboxSort" class="mailbox-sort-select" aria-label="选择邮箱排序字段"><option value="name" ' + (mailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (mailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="code" ' + (mailboxSortKey === "code" ? "selected" : "") + '>验证码状态</option><option value="renewal" ' + (mailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-mailbox-sort-direction" title="' + (mailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (mailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (mailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div><div class="mailbox-account-filters"><label title="' + (codexFilterAvailable ? '依据当前 Manager 已接入账号目录判断' : '当前 Manager 未提供账号目录') + '"><input id="onlyUnlinkedCodex" type="checkbox" ' + (onlyUnlinkedCodex ? "checked" : "") + (codexFilterAvailable ? "" : " disabled") + '>仅未接入 Codex</label><label title="' + (reauthorizationFilterAvailable ? '依据当前 Manager 账号目录同步' : '当前 Manager 未提供账号目录') + '"><input id="onlyReauthorization" type="checkbox" ' + (onlyReauthorization ? "checked" : "") + (reauthorizationFilterAvailable ? "" : " disabled") + '>仅状态异常</label><label title="依据已保存的 OpenAI account deactivated 邮件标记判断"><input id="onlyOpenAiDeactivated" type="checkbox" ' + (onlyOpenAiDeactivated ? "checked" : "") + '>仅 OpenAI 封禁</label></div>' + deactivatedSummary + '</div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button><button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button>' + deactivatedDeleteButton + '</div><div data-role="mailbox-operation-progress">' + renderMailboxOperationProgress() + '</div></div><div class="mailbox-list">' + rows + '</div>' + renderMailboxPagination(mailboxView.page, "mailbox-page-prev", "mailbox-page-next", "", "mailbox-pagination", "mailbox-page-jump-input", mailboxPageJumpInput, "mailbox-page-jump") + '</section>' +
           '<section class="box detail"><div class="detail-region">' + (selected ? renderSelected(selected) : '<div class="empty-detail"><div><h2>选择一个邮箱</h2><p class="muted" style="margin-top:8px">其他邮箱的邮件详情不会在未选中时渲染或查询。</p></div></div>') + '</div></section>' +
           '</div>';
       }
@@ -2042,7 +2088,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           if (query && !matchesMailboxSearch(mailbox, query)) return false;
           if (providerFilter && mailbox.providerId !== providerFilter) return false;
           if (onlyUnlinkedCodex && (!state.codexImportAvailable || isCodexLinked(mailbox))) return false;
-          if (onlyReauthorization && (!state.managedAccountDirectoryAvailable || !requiresReauthorization(mailbox))) return false;
+          if (onlyQueryFailed && !mailbox.lastQueryError) return false;
+          if (onlyReauthorization && (!state.managedAccountDirectoryAvailable || !isCodexStatusAbnormal(mailbox))) return false;
           if (onlyOpenAiDeactivated && mailbox.openaiAccountDeactivated !== true) return false;
           return true;
         });
@@ -2058,10 +2105,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const accountStatusTag = renderAccountStatusTag(mailbox);
         const totpTag = renderTotpLinkedTag(mailbox);
         const blockedTag = mailbox.openaiAccountDeactivated === true ? '<span class="tag blocked">OpenAI 封禁</span>' : '';
+        const addressTag = normalizeEmail(mailbox.displayName) === normalizeEmail(mailbox.address)
+          ? ''
+          : '<span class="address">' + esc(mailbox.address) + '</span>';
         const activityClass = mailboxRenewalNeedsAttention(mailbox) ? ' warning' : '';
         return '<div class="mailbox-row-wrap ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '"><label class="mailbox-select"><input class="mailbox-checkbox" type="checkbox" value="' + esc(mailbox.id) + '" ' + (selectedMailboxIds.has(mailbox.id) ? "checked" : "") + ' aria-label="选择 ' + esc(mailbox.address) + '"></label><button class="mailbox-row ' + (state.selectedMailboxId === mailbox.id ? "selected" : "") + '" data-action="select-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">' +
           '<div class="row-title"><span class="row-number">' + (index + 1) + '</span><span class="address">' + esc(mailbox.displayName || mailbox.address) + '</span></div>' +
-          '<div class="row-meta"><span class="address">' + esc(mailbox.address) + '</span><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span>' + statusTag + accountStatusTag +
+          '<div class="row-meta">' + addressTag + '<span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span>' + statusTag + accountStatusTag +
           totpTag + blockedTag + (mailbox.lastError ? '<span class="tag error" title="' + esc(mailbox.lastError.message || "查询失败") + '">' + esc(mailbox.lastError.code || "错误") + '</span>' : '') + '</div><div class="mailbox-card-time' + activityClass + '">' + esc(mailboxActivityLabel(mailbox)) + '</div></button><div class="mailbox-row-actions"><button class="mailbox-row-action" data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制邮箱">复制邮箱</button><button class="mailbox-row-action" data-action="open-totp" data-mailbox-id="' + esc(mailbox.id) + '" title="打开 2FA 设置与查询">2FA</button><button class="mailbox-row-action ' + (pending === "edit" ? 'is-pending' : '') + '" data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="编辑邮箱" ' + (pending ? 'disabled' : '') + '>' + (pending === "edit" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '编辑</button><button class="mailbox-row-action danger ' + (pending === "delete" ? 'is-pending' : '') + '" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '" title="删除邮箱" ' + (pending === "delete" ? 'disabled' : '') + '>' + (pending === "delete" ? '<span class="button-spinner" aria-hidden="true"></span>' : '') + '删除</button></div></div>';
       }
 
@@ -2135,11 +2185,51 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
 
       function renderMessageBody(message) {
         const rawHtml = typeof message?.bodyHtml === "string" ? message.bodyHtml.trim() : "";
-        if (rawHtml) {
+        if (rawHtml && looksLikeEmailHtml(rawHtml)) {
           const safeHtml = sanitizeEmailHtml(rawHtml);
           if (safeHtml) return '<div class="message-body-html">' + safeHtml + '</div>';
         }
-        return '<div class="message-body-text">' + esc(message?.body || message?.preview || '无正文') + '</div>';
+        const rawText = String(message?.body || message?.preview || "");
+        if (looksLikeEmailHtml(rawText)) {
+          const safeHtml = sanitizeEmailHtml(rawText);
+          if (safeHtml) return '<div class="message-body-html">' + safeHtml + '</div>';
+        }
+        return '<div class="message-body-text">' + esc(stripEmbeddedEmailCss(rawText) || '无正文') + '</div>';
+      }
+
+      function looksLikeEmailHtml(value) {
+        return /<\\/?(?:html|body|table|div|p|br|style|font|a)\\b[^>]*>/iu.test(String(value || ""));
+      }
+
+      function stripEmbeddedEmailCss(value) {
+        let text = String(value || "")
+          .replace(/\\\\(?=[/*])/gu, "")
+          .replace(/\\\/\\*[\\s\\S]*?\\*\\//gu, " ");
+        const cssStart = /(?:@(?:media|supports|font-face|keyframes)\\b|:root|(?<![A-Za-z0-9_-])(?:[.#][\\w-]+|(?:html|body|table|td|a|img|h[1-6]|p|div|span|section)(?:\\[[^\\]]+\\])?)[^{}]*\\{)/giu;
+        let result = "";
+        let cursor = 0;
+        let match;
+        while ((match = cssStart.exec(text))) {
+          const openBrace = text.indexOf("{", match.index);
+          const closeBrace = findMatchingBrace(text, openBrace);
+          if (openBrace < 0) continue;
+          const preserved = text.slice(cursor, match.index);
+          if (closeBrace < 0) return result + preserved + (preserved && !/\\n\\s*$/u.test(preserved) ? "\\n" : "");
+          result += preserved + (preserved && !/\\n\\s*$/u.test(preserved) ? "\\n" : "");
+          cursor = closeBrace + 1;
+          cssStart.lastIndex = cursor;
+        }
+        return result + text.slice(cursor);
+      }
+
+      function findMatchingBrace(value, openBrace) {
+        if (openBrace < 0) return -1;
+        let depth = 0;
+        for (let index = openBrace; index < value.length; index += 1) {
+          if (value[index] === "{") depth += 1;
+          else if (value[index] === "}" && --depth === 0) return index;
+        }
+        return -1;
       }
 
       function sanitizeEmailHtml(value) {
@@ -2228,6 +2318,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
 
       function requiresReauthorization(mailbox) {
         return getManagedAccountForMailbox(mailbox)?.requiresReauthorization === true;
+      }
+
+      function isCodexStatusAbnormal(mailbox) {
+        const managedAccount = getManagedAccountForMailbox(mailbox);
+        if (!managedAccount) return false;
+        return managedAccount.healthKind
+          ? managedAccount.healthKind !== "healthy"
+          : managedAccount.requiresReauthorization === true;
       }
 
       function getDeactivatedMailboxCandidates() {
@@ -2465,8 +2563,6 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
 
       const SCROLLABLE_PANEL_SELECTORS = [
         ".layout",
-        ".mailbox-list",
-        ".content",
         ".registration-standalone",
         ".registration-mailbox-list",
         ".registration-fivesim-offers",

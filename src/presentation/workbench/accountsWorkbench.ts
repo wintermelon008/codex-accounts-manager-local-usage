@@ -305,12 +305,12 @@ export class AccountsWorkbench {
 
     return managedAccounts.map((account) => {
       const tokens = this.managedAccountTokenCache.get(account.id);
+      const healthKind = resolveAccountHealth(account, tokens, automation).kind;
       return {
         accountId: account.id,
         email: account.email,
-        requiresReauthorization: isAccountReauthorizationRequired(
-          resolveAccountHealth(account, tokens, automation).kind
-        )
+        requiresReauthorization: isAccountReauthorizationRequired(healthKind),
+        healthKind
       };
     });
   }

@@ -15,6 +15,7 @@ import type {
   DashboardProviderAccountCardViewModel
 } from "../domain/dashboard/types";
 import type { CodexVirtualRouteDescriptor, SharedCodexAccountJson } from "../core/types";
+import type { AccountHealthKind } from "../domain/accountHealth";
 
 const INTEGRATION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 export const MANAGER_INTEGRATION_API_VERSION = 1 as const;
@@ -159,6 +160,7 @@ export type ManagedAccountDirectoryEntry = {
   accountId: string;
   email: string;
   requiresReauthorization: boolean;
+  healthKind?: AccountHealthKind;
 };
 
 export type AccountImportOperations = {

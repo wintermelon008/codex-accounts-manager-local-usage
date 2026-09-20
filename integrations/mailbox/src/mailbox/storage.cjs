@@ -13,6 +13,7 @@ const TRASH_INDEX_KEY = "codexAccounts.mailbox.trash.v1";
 const TRASH_SECRET_KEY_PREFIX = "codexAccounts.mailbox.trash.credential.";
 const POOL_SCHEMA_VERSION = 2;
 const MAX_STORED_MESSAGES = 20;
+const MAX_STORED_BODY_HTML_LENGTH = 24_000;
 const TRASH_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 class MailboxPool {
@@ -166,6 +167,7 @@ class MailboxPool {
             lastRenewalAt: previous?.lastRenewalAt,
             lastStatus: previous?.lastStatus,
             lastError: previous?.lastError,
+            lastQueryError: previous?.lastQueryError,
             latestCode: previous?.latestCode,
             latestMessage: previous?.latestMessage,
             messageCount: previous?.messageCount ?? 0,
@@ -199,6 +201,7 @@ class MailboxPool {
       metadata.updatedAt = timestamp;
       metadata.lastStatus = result?.ok ? (result.codes?.length ? "code_found" : "ready") : "error";
       metadata.lastError = result?.ok ? undefined : sanitizeError(result?.error);
+      metadata.lastQueryError = result?.ok ? undefined : sanitizeError(result?.error);
       if (result?.ok) {
         const fetchedMessages = normalizeStoredMessages(result.messages);
         const previousDetail = await this.metadataStore.get(detailKey(id));
@@ -262,6 +265,7 @@ class MailboxPool {
         metadata.updatedAt = timestamp;
         metadata.lastStatus = result.ok ? (result.codes?.length ? "code_found" : "ready") : "error";
         metadata.lastError = result.ok ? undefined : sanitizeError(result.error);
+        metadata.lastQueryError = result.ok ? undefined : sanitizeError(result.error);
         if (result.ok) {
           const fetchedMessages = normalizeStoredMessages(result.messages);
           const previousDetail = previousDetails.get(detailKey(entry.id));
@@ -750,6 +754,7 @@ function sanitizeMetadata(entry) {
     lastRenewalAt: numberOrUndefined(entry.lastRenewalAt),
     lastStatus: typeof entry.lastStatus === "string" ? entry.lastStatus : undefined,
     lastError: sanitizeError(entry.lastError),
+    lastQueryError: sanitizeError(entry.lastQueryError),
     latestCode: typeof entry.latestCode === "string" ? entry.latestCode : undefined,
     latestMessage: entry.latestMessage ? summarizeMessage(entry.latestMessage) : undefined,
     messageCount: Number.isFinite(entry.messageCount) ? Math.max(0, Math.floor(entry.messageCount)) : 0,
@@ -797,7 +802,9 @@ function normalizeStoredMessages(messages) {
       receivedAt: stringOrUndefined(normalized.receivedAt),
       preview: safeText(normalized.preview),
       body: safeText(normalized.body),
-      ...(normalized.bodyHtml ? { bodyHtml: safeText(normalized.bodyHtml, "") } : {}),
+      ...(normalized.bodyHtml
+        ? { bodyHtml: safeText(normalized.bodyHtml, "").slice(0, MAX_STORED_BODY_HTML_LENGTH) }
+        : {}),
       codes: normalizeCodes(message.codes?.length ? message.codes : normalized.codes)
     };
   });
