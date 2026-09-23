@@ -36,6 +36,8 @@ export type DashboardIntegrationRegistration = {
   id: string;
   getViewModel: () => DashboardIntegrationViewModel;
   runAction: (actionId: string) => void | Promise<void>;
+  /** Optional refresh hook invoked by the core Dashboard refresh action. */
+  refresh?: () => void | Promise<void>;
   /** Optional sanitized mailbox addresses that have a persisted OpenAI deactivation notice. */
   getDeactivatedMailboxEmails?: () => readonly string[];
   /** Removes only the provider-owned mailbox records for already-removed blocked accounts. */
@@ -70,6 +72,8 @@ export type VirtualAccountRegistration = {
   displayName: string;
   descriptor: CodexVirtualRouteDescriptor;
   activate: (options?: RuntimeAccountSwitchOptions) => Promise<HotSwitchSetupResult>;
+  /** Optional refresh hook invoked by the core Dashboard refresh action. */
+  refresh?: () => void | Promise<void>;
   /** Provider-owned, sanitized card data rendered inside the saved account card. */
   getCardView?: () => DashboardProviderAccountCardViewModel;
   /** Executes a declared provider-owned card action without exposing secrets to Manager. */
@@ -163,6 +167,12 @@ export type ManagedAccountDirectoryEntry = {
   healthKind?: AccountHealthKind;
 };
 
+/** Request capability for optional integrations that need Manager's proxy route. */
+export type ManagerProxyFetch = (
+  input: string | URL | globalThis.Request,
+  init?: RequestInit
+) => Promise<Response>;
+
 export type AccountImportOperations = {
   getManagedAccountEmails: () => Promise<readonly string[]>;
   getManagedAccountDirectory?: () => Promise<readonly ManagedAccountDirectoryEntry[]>;
@@ -177,6 +187,8 @@ export type AccountImportOperations = {
   importSharedAccountsToBalancePool?: (
     input: SharedCodexAccountJson | SharedCodexAccountJson[]
   ) => Promise<BalancePoolImportResult>;
+  /** Sends an integration request through Manager's configured proxy dispatcher. */
+  fetchWithManagerProxy?: ManagerProxyFetch;
 };
 
 export type CodexAccountsIntegrationApi = {
@@ -204,6 +216,8 @@ export type CodexAccountsIntegrationApi = {
   importSharedAccountsToBalancePool?: (
     input: SharedCodexAccountJson | SharedCodexAccountJson[]
   ) => Promise<BalancePoolImportResult>;
+  /** Optional network capability that preserves Manager's configured proxy route. */
+  fetchWithManagerProxy?: ManagerProxyFetch;
 };
 
 type GatewayRuntimeOperations = {
@@ -288,6 +302,12 @@ export class ManagerIntegrationHost implements vscode.Disposable {
                   importSharedAccountsToBalancePool: (input: SharedCodexAccountJson | SharedCodexAccountJson[]) =>
                     this.importSharedAccountsToBalancePool(input)
                 }
+              : {}),
+            ...(this.accountImportOperations.fetchWithManagerProxy
+              ? {
+                  fetchWithManagerProxy: (input: string | URL | globalThis.Request, init?: RequestInit) =>
+                    this.fetchWithManagerProxy(input, init)
+                }
               : {})
           }
         : {})
@@ -356,6 +376,50 @@ export class ManagerIntegrationHost implements vscode.Disposable {
     const result = await importer(input);
     this.fireDidChange();
     return result;
+  }
+
+  fetchWithManagerProxy(
+    input: string | URL | globalThis.Request,
+    init?: RequestInit
+  ): Promise<Response> {
+    this.throwIfDisposed();
+    const fetcher = this.accountImportOperations?.fetchWithManagerProxy;
+    if (!fetcher) {
+      throw new Error("Manager proxy requests are unavailable in this Manager build");
+    }
+    return fetcher(input, init);
+  }
+
+  /**
+   * Refresh provider-owned Dashboard state when the optional integration is
+   * installed. Missing integrations simply contribute no refresh task, and a
+   * failed provider refresh never blocks the core Dashboard refresh.
+   */
+  async refreshRegisteredIntegrations(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+
+    const registrations = [
+      ...this.dashboardIntegrations.values(),
+      ...this.virtualAccounts.values()
+    ].filter((registration) => typeof registration.refresh === "function");
+    if (registrations.length === 0) {
+      return;
+    }
+    await Promise.all(
+      registrations.map(async (registration) => {
+        try {
+          await registration.refresh!();
+        } catch (error) {
+          console.warn(
+            `[codexAccounts] optional integration '${registration.id}' refresh failed:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      })
+    );
+    this.fireDidChange();
   }
 
   onDidChange(listener: () => void): vscode.Disposable {

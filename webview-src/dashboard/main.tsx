@@ -42,7 +42,6 @@ import {
   BellIcon,
   EyeIcon,
   EyeOffIcon,
-  GitHubIcon,
   GlobeIcon,
   InfoIcon,
   AccountHealthFilterIcon,
@@ -54,6 +53,7 @@ import {
   AboutModal,
   AddAccountModal,
   ConfirmCancelOauthModal,
+  RestartServicesModal,
   SettingsOverlay,
   ShareTokenModal,
   SharingModal
@@ -64,7 +64,6 @@ import { IntegrationCards } from "./integrationCards";
 import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
 
-const GITHUB_PROJECT_URL = "https://github.com/wannanbigpig/codex-tools";
 const ACCOUNT_GROUPS: readonly CodexAccountGroup[] = ["A", "B", "C"];
 const ACCOUNT_PLAN_FILTERS: readonly DashboardAccountPlanFilter[] = ["free", "plus", "pro"];
 const ACCOUNT_SORT_KEYS: readonly DashboardAccountSortKey[] = ["name", "createdAt", "quota", "quotaUpdatedAt"];
@@ -90,6 +89,7 @@ function App() {
   const lastDashboardAccountOrderRef = useRef("");
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
+  const [restartServicesOpen, setRestartServicesOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
   const [sharingAccountIds, setSharingAccountIds] = useState<string[]>([]);
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
@@ -358,7 +358,6 @@ function App() {
   const selectedCount = state.selectedAccountIds.length;
   const isAccountBusy = (accountId: string): boolean =>
     hasGlobalPendingAction || state.pendingActions.some((request) => request.accountId === accountId);
-  const privacyToggleLabel = state.privacyMode ? snapshot.copy.showSensitive : snapshot.copy.hideSensitive;
   const announcementUnreadCount = snapshot.announcements.unreadIds.length;
   const prepareOAuthPending = isActionPending("prepareOAuthSession");
   const startOAuthAutoPending = isActionPending("startOAuthAutoFlow");
@@ -494,39 +493,6 @@ function App() {
                 </span>
               </button>
               <button
-                id="githubProjectButton"
-                class="settings-btn action-btn github-project-btn"
-                type="button"
-                title={snapshot.copy.githubProject}
-                aria-label={snapshot.copy.githubProject}
-                onClick={() => sendAction("openExternalUrl", undefined, { url: GITHUB_PROJECT_URL })}
-              >
-                <span class="button-face">
-                  <span class="button-icon">
-                    <GitHubIcon />
-                  </span>
-                </span>
-                <span class="button-tip" aria-hidden="true">
-                  {snapshot.copy.githubProjectTip}
-                </span>
-              </button>
-              <button
-                id="privacyToggleButton"
-                class={`settings-btn action-btn icon-only ${state.privacyMode ? "is-active" : ""}`}
-                type="button"
-                title={privacyToggleLabel}
-                aria-label={privacyToggleLabel}
-                aria-pressed={state.privacyMode}
-                onClick={() => dispatch({ type: "toggle-privacy" })}
-              >
-                <span class="button-face">
-                  <span class="button-icon">{state.privacyMode ? <EyeOffIcon /> : <EyeIcon />}</span>
-                </span>
-                <span class="button-tip" aria-hidden="true">
-                  {privacyToggleLabel}
-                </span>
-              </button>
-              <button
                 id="refreshViewButton"
                 class="settings-btn refresh-view-btn action-btn icon-only"
                 type="button"
@@ -542,6 +508,27 @@ function App() {
                 </span>
                 <span class="button-tip" aria-hidden="true">
                   {snapshot.copy.refreshPage}
+                </span>
+              </button>
+              <button
+                id="restartServicesButton"
+                class="settings-btn action-btn icon-only"
+                type="button"
+                title={resolveRestartServicesLabel(snapshot.lang)}
+                aria-label={resolveRestartServicesLabel(snapshot.lang)}
+                disabled={isActionPending("restartServices")}
+                aria-busy={isActionPending("restartServices")}
+                onClick={() => setRestartServicesOpen(true)}
+              >
+                <span class="button-face">
+                  {isActionPending("restartServices") ? (
+                    <span class="button-spinner" aria-hidden="true"></span>
+                  ) : (
+                    <span class="button-icon">⟳</span>
+                  )}
+                </span>
+                <span class="button-tip" aria-hidden="true">
+                  {resolveRestartServicesLabel(snapshot.lang)}
                 </span>
               </button>
               <button
@@ -1232,6 +1219,16 @@ function App() {
         onConfirm={modals.confirmCancelOauth}
       />
 
+      <RestartServicesModal
+        open={restartServicesOpen}
+        lang={snapshot.lang}
+        onClose={() => setRestartServicesOpen(false)}
+        onConfirm={() => {
+          setRestartServicesOpen(false);
+          sendAction("restartServices");
+        }}
+      />
+
       <ShareTokenModal
         open={modals.shareModalOpen}
         copy={snapshot.copy}
@@ -1660,6 +1657,16 @@ function resolveUnlockCodexSessionLocksLabel(lang: string): string {
     return "強制解除 Codex 會話鎖（終止其他視窗執行時）";
   }
   return "Force-unlock Codex sessions (terminate other-window runtimes)";
+}
+
+function resolveRestartServicesLabel(lang: string): string {
+  if (lang === "zh") {
+    return "重启 Manager、Mailbox 与 Codex 服务";
+  }
+  if (lang === "zh-hant") {
+    return "重啟 Manager、Mailbox 與 Codex 服務";
+  }
+  return "Restart Manager, Mailbox, and Codex services";
 }
 
 function resolveForceFastModeToggleLabel(lang: string, enabled: boolean): string {

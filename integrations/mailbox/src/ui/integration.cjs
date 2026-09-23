@@ -30,6 +30,8 @@ const {
 } = require("../operations/fivesim-token-store.cjs");
 const { RegistrationExchangeRateStore } = require("../operations/registration-exchange-rate.cjs");
 const { TwoFactorManager, resolveTotpConfigFilePath } = require("../totp/manager.cjs");
+const { resolvePrivateStateRoot } = require("../private-state.cjs");
+const { MANAGER_EXTENSION_ID } = require("../managerApi.cjs");
 const {
   getRegistrationPhoneSource,
   listRegistrationPhoneSources
@@ -65,8 +67,13 @@ class MailboxIntegration {
       new TototoIcloudProvider().asProvider()
     ];
     this.providers = new MailboxProviderRegistry(this.providerInstances);
-    this.sharedMailboxStores = createServerMailboxStores({
+    const managerExtensionRoot = vscode.extensions?.getExtension?.(MANAGER_EXTENSION_ID)?.extensionPath;
+    this.privateStateRoot = resolvePrivateStateRoot({
       storageUri: context.globalStorageUri,
+      managerExtensionRoot
+    });
+    this.sharedMailboxStores = createServerMailboxStores({
+      storageUri: { fsPath: this.privateStateRoot },
       legacyMetadataStore: context.globalState,
       legacySecretStore: context.secrets,
       sourceId: typeof vscode.env?.machineId === "string" ? vscode.env.machineId : undefined
@@ -78,11 +85,11 @@ class MailboxIntegration {
     this.twoFactor = new TwoFactorManager({
       metadataStore: this.sharedMailboxStores.metadataStore,
       secretStore: this.sharedMailboxStores.secretStore,
-      configFilePath: resolveTotpConfigFilePath()
+      configFilePath: resolveTotpConfigFilePath({ privateRoot: this.privateStateRoot })
     });
     this.totpLoadError = undefined;
     this.registrationSessionStore = createServerRegistrationSessionStore({
-      storageUri: context.globalStorageUri,
+      storageUri: { fsPath: this.privateStateRoot },
       legacyStore: context.globalState
     });
     this.coordinator = new MailboxOperationCoordinator({
@@ -112,8 +119,13 @@ class MailboxIntegration {
       openRegistrationBrowser: typeof this.api?.openRegistrationBrowser === "function"
         ? (options) => this.api.openRegistrationBrowser(options)
         : undefined,
+      fiveSimFetch: typeof this.api?.fetchWithManagerProxy === "function"
+        ? (input, init) => this.api.fetchWithManagerProxy(input, init)
+        : undefined,
     });
-    this.registrationDiagnostics = createRegistrationDiagnostics(vscode, context);
+    this.registrationDiagnostics = createRegistrationDiagnostics(vscode, context, {
+      storageRoot: this.privateStateRoot
+    });
     this.registrationEmailWatchers = new Map();
     this.operationStatePublishTimer = undefined;
     this.registrationGptStatusSync = Promise.resolve();
@@ -121,17 +133,17 @@ class MailboxIntegration {
     this.registrationSessionsOperation = Promise.resolve();
     this.registrationClipboardCopied = new Map();
     this.registrationClipboardQueues = new Map();
-    const serverRegistrationKeyStore = createLocalRegistrationKeyStore(context.globalStorageUri);
+    const serverRegistrationKeyStore = createLocalRegistrationKeyStore({ fsPath: this.privateStateRoot });
     this.registrationKeyPool = new RegistrationKeyPool({
       secretStore: serverRegistrationKeyStore || context.secrets,
       backupStore: serverRegistrationKeyStore ? context.secrets : undefined
     });
-    const serverFiveSimTokenStore = createLocalFiveSimTokenStore(context.globalStorageUri);
+    const serverFiveSimTokenStore = createLocalFiveSimTokenStore({ fsPath: this.privateStateRoot });
     this.fiveSimTokenStore = new FiveSimTokenStore({
       secretStore: serverFiveSimTokenStore || context.secrets,
       backupStore: serverFiveSimTokenStore ? context.secrets : undefined
     });
-    this.registrationExchangeRateStore = exchangeRateStore || (context.globalStorageUri?.fsPath
+    this.registrationExchangeRateStore = exchangeRateStore || (this.privateStateRoot
       ? new RegistrationExchangeRateStore({
         metadataStore: this.sharedMailboxStores.metadataStore,
         fetchImpl: exchangeRateFetch
@@ -252,6 +264,7 @@ class MailboxIntegration {
       this.registration = this.api.registerDashboardIntegration({
         id: INTEGRATION_ID,
         getViewModel: () => this.getViewModel(),
+        refresh: () => this.refresh(),
         getDeactivatedMailboxEmails: () => this.getDeactivatedMailboxEmails(),
         removeDeactivatedMailboxes: (emails) => this.removeDeactivatedMailboxes(emails),
         runAction: (actionId) => this.runAction(actionId),
@@ -296,6 +309,19 @@ class MailboxIntegration {
         { id: "open", label: "Mailbox", enabled: !this.loadError, tone: "primary", tooltip: "在当前主编辑器组打开 Mailbox" }
       ]
     };
+  }
+
+  async refresh() {
+    if (this.disposed) {
+      return;
+    }
+    if (this.pool.isLoaded()) {
+      await this.pool.reload();
+    }
+    await this.syncCompletedRegistrationMailboxStates();
+    await this.ensureRegistrationExchangeRate();
+    await this.publishPanelState();
+    this.publish();
   }
 
   getDeactivatedMailboxEmails() {
@@ -434,8 +460,10 @@ class MailboxIntegration {
     try {
       switch (message.action) {
         case "ready":
-        case "refresh":
           await this.publishPanelState();
+          return;
+        case "refresh":
+          await this.refresh();
           return;
         case "copyText":
           await this.copyText(message.text, message.successMessage);

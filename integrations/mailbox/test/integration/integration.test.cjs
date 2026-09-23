@@ -1,8 +1,23 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
+
+// Never let integration tests write credentials or other state into the
+// checkout's real private/ directory. The production environment may point
+// CODEX_ACCOUNTS_PRIVATE_DIR at that directory, so tests must override it
+// before constructing MailboxIntegration.
+const testPrivateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-accounts-mailbox-integration-"));
+process.env.CODEX_ACCOUNTS_PRIVATE_DIR = testPrivateRoot;
+
 const { MailboxIntegration, INTEGRATION_ID, REGISTRATION_INTEGRATION_ID } = require("../../src/ui/integration.cjs");
+
+test.after(() => {
+  fs.rmSync(testPrivateRoot, { recursive: true, force: true });
+});
 
 test("activation loads local state, registers a generic Manager card, and does not query a provider", async () => {
   const vscode = createVscode();
@@ -1466,6 +1481,41 @@ test("5SIM registration uses its own API Token and never claims the LIYE Key poo
   integration.dispose();
 });
 
+test("5SIM registration routes API requests through the Manager proxy capability", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const requests = [];
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    fetchWithManagerProxy: async (url, options) => {
+      requests.push({ url, options });
+      const path = new URL(url).pathname;
+      if (path === "/v1/user/profile") {
+        return fakeResponse({ balance: 12.5, frozen_balance: 0, rating: 96 });
+      }
+      if (path === "/v1/guest/prices") {
+        return fakeResponse({ openai: { england: { any: { cost: 0.29, count: 12, rate: 98.5 } } } });
+      }
+      if (path === "/v1/guest/countries") {
+        return fakeResponse({ england: { text_en: "England", iso: { gb: 1 }, prefix: { "+44": 1 } } });
+      }
+      throw new Error(`unexpected 5SIM request ${url}`);
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  const sessionId = integration.registrationManager.createSession({ email: "proxy@example.com", password: "password" });
+
+  await integration.saveFiveSimToken("five-sim-secret-token");
+  await integration.refreshRegistrationFiveSim(sessionId, { country: "england", operator: "any", product: "openai" });
+
+  assert.equal(requests.length, 3);
+  assert.equal(requests.every(({ url }) => url.startsWith("https://5sim.net/v1/")), true);
+  assert.equal(requests.every(({ options }) => options?.signal instanceof AbortSignal), true);
+  assert.equal(integration.registrationManager.getSessionState(sessionId).phoneOrder.card.authenticated, true);
+  integration.dispose();
+});
+
 test("registration panel publishes the cached daily exchange rate after opening", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -1554,6 +1604,14 @@ function createContext() {
       async store(key, value) { secrets.set(key, value); },
       async delete(key) { secrets.delete(key); }
     }
+  };
+}
+
+function fakeResponse(body, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() { return typeof body === "string" ? body : JSON.stringify(body); }
   };
 }
 

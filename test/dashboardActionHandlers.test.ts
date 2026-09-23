@@ -63,6 +63,60 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
+  it("uses the extended Dashboard refresh hook when one is provided", async () => {
+    const refreshDashboard = vi.fn().mockResolvedValue(undefined);
+    const publishState = vi.fn().mockResolvedValue(undefined);
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: {} as DashboardActionContext["repo"],
+        resolveLanguage: () => "en",
+        schedulePublishState: vi.fn(),
+        publishState,
+        refreshDashboard,
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.19", locale: "en" })
+      },
+      {
+        type: "dashboard:action",
+        action: "refreshView",
+        requestId: "req-extended-refresh"
+      }
+    );
+
+    expect(refreshDashboard).toHaveBeenCalledOnce();
+    expect(publishState).not.toHaveBeenCalled();
+    expect(result.status).toBe("completed");
+  });
+
+  it("reloads the VS Code window without consulting the hot-switch runtime", async () => {
+    const executeCommand = vi.mocked(vscode.commands.executeCommand);
+    executeCommand.mockClear();
+    executeCommand.mockResolvedValueOnce(undefined);
+
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: {} as DashboardActionContext["repo"],
+        resolveLanguage: () => "en",
+        schedulePublishState: vi.fn(),
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.19", locale: "en" })
+      },
+      {
+        type: "dashboard:action",
+        action: "restartServices",
+        requestId: "req-restart-services"
+      }
+    );
+
+    expect(executeCommand).toHaveBeenCalledWith("workbench.action.reloadWindow");
+    expect(result.status).toBe("completed");
+  });
+
   it("forces a fresh account index read when sharing status is refreshed", async () => {
     const invalidateExternalStateCaches = vi.fn();
     const poll = vi.fn().mockResolvedValue(undefined);

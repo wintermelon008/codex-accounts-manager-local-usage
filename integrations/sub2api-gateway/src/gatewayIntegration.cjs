@@ -356,6 +356,7 @@ class Sub2ApiGatewayIntegration {
       id: INTEGRATION_ID,
       displayName: this.config.displayName || "Sub2API Gateway",
       descriptor,
+      refresh: () => this.refresh(),
       getCardView: () => this.getCardViewModel(),
       runCardAction: (actionId) => this.runAction(actionId),
       onDidChange: this.events.event,

@@ -21,15 +21,7 @@ export async function fetchWithTimeout(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const dispatcher = getCodexProxyDispatcher();
-    if (dispatcher) {
-      return (await undiciFetch(input as Parameters<typeof undiciFetch>[0], {
-        ...init,
-        signal: controller.signal,
-        dispatcher
-      } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
-    }
-    return await fetch(input, {
+    return await fetchWithConfiguredProxy(input, {
       ...init,
       signal: controller.signal
     });
@@ -45,6 +37,25 @@ export async function fetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Sends a request through the same request-local proxy dispatcher used by
+ * Manager. Integrations use this instead of relying on Node's global fetch to
+ * discover process proxy variables on its own.
+ */
+export async function fetchWithConfiguredProxy(
+  input: string | URL | globalThis.Request,
+  init: RequestInit = {}
+): Promise<Response> {
+  const dispatcher = getCodexProxyDispatcher();
+  if (dispatcher) {
+    return (await undiciFetch(input as Parameters<typeof undiciFetch>[0], {
+      ...init,
+      dispatcher
+    } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+  }
+  return fetch(input, init);
 }
 
 function isAbortError(error: unknown): boolean {

@@ -158,6 +158,7 @@ class FiveSimPhoneOrderSession {
     cardMasked = "",
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     orderTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS,
+    fetchImpl,
     clientFactory,
     onStateChange = () => {},
     onLog = () => {}
@@ -169,9 +170,11 @@ class FiveSimPhoneOrderSession {
     this.cardMasked = text(cardMasked);
     this.pollIntervalMs = clampNumber(pollIntervalMs, DEFAULT_POLL_INTERVAL_MS, 250, 30000);
     this.orderTimeoutMs = clampNumber(orderTimeoutMs, DEFAULT_ORDER_TIMEOUT_MS, 10000, 15 * 60 * 1000);
+    this.fetchImpl = typeof fetchImpl === "function" ? fetchImpl : undefined;
     this.clientFactory = clientFactory || ((token) => new FiveSimClient({
       baseUrl: this.baseUrl,
       token,
+      fetchImpl: this.fetchImpl,
       onLog: (level, message) => this.onLog(level, message)
     }));
     this.onStateChange = typeof onStateChange === "function" ? onStateChange : () => {};

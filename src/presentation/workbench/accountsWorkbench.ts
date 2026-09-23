@@ -17,9 +17,9 @@ import {
   isSeamlessSwitchEnabled
 } from "../../infrastructure/config/extensionSettings";
 import { getConfiguredProxySettings } from "../../infrastructure/config/proxyEnvironment";
-import { AccountsRepository } from "../../storage";
+import { AccountsRepository, getPrivateStatePaths } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
-import { registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
+import { fetchWithConfiguredProxy, registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
 import {
   CodexHotSwitchRuntime,
   HotSwitchAuthTokenRevokedEvent,
@@ -122,9 +122,11 @@ export class AccountsWorkbench {
   private readonly authRevokedAccountIds = new Map<string, number>();
   private seamlessUsageLimitMonitor: SeamlessUsageLimitMonitor | undefined;
   private accountConcurrencyPersistenceQueue: Promise<void> = Promise.resolve();
+  private readonly privateStatePaths: ReturnType<typeof getPrivateStatePaths>;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     accountConcurrencyTracker.reset();
+    this.privateStatePaths = getPrivateStatePaths(context);
     this.repo = new AccountsRepository(context);
     this.statusBar = new AccountsStatusBarProvider(context, this.repo);
     this.accountSharing = new AccountSharingService(context, this.repo, () => {
@@ -218,16 +220,17 @@ export class AccountsWorkbench {
         startOAuthAccountImport: (options) => this.startOAuthAccountImport(options),
         cancelOAuthAccountImport: (operationId) => this.cancelOAuthAccountImport(operationId),
         openRegistrationBrowser: (options) => this.openRegistrationBrowser(options),
-        importSharedAccountsToBalancePool: (input) => this.importSharedAccountsToBalancePool(input)
+        importSharedAccountsToBalancePool: (input) => this.importSharedAccountsToBalancePool(input),
+        fetchWithManagerProxy: (input, init) => fetchWithConfiguredProxy(input, init)
       }
     );
     this.localImportInbox = isLocalImportInboxEnabled() || isExternalControlEnabled()
       ? new LocalImportInbox(this.repo, () => {
           void this.statusBar.refresh();
-        })
+        }, { queuePath: this.privateStatePaths.importInbox })
       : undefined;
     this.sessionHub = isExternalControlEnabled()
-      ? new SessionHub(resolveSessionRegistryPath())
+      ? new SessionHub(resolveSessionRegistryPath(this.privateStatePaths.root))
       : undefined;
     this.managerControlServer = new ManagerControlServer({
       repo: this.repo,
@@ -243,13 +246,13 @@ export class AccountsWorkbench {
         });
       },
       usage: new LocalUsageAnalyticsService({
-        globalStoragePath: context.globalStorageUri.fsPath,
+        globalStoragePath: this.privateStatePaths.root,
         backgroundRefreshEnabled: true
       }),
       sessionHub: this.sessionHub,
       refreshQuotas: (accountIds) => this.refreshQuotasForControl(accountIds),
-      enqueueImport: (accounts) => enqueueLocalImportJob(accounts),
-      getImportStatus: (jobId) => readLocalImportStatus(jobId),
+      enqueueImport: (accounts) => enqueueLocalImportJob(accounts, this.privateStatePaths.importInbox),
+      getImportStatus: (jobId) => readLocalImportStatus(jobId, this.privateStatePaths.importInbox),
       getCodexExecProviderConfig: () => this.hotSwitchRuntime.getCodexExecProviderConfig(),
       getDeactivatedMailboxEmails: () => this.integrationHost.getDeactivatedMailboxEmails(),
       onAccountConcurrencyChanged: refreshAccountConcurrency,

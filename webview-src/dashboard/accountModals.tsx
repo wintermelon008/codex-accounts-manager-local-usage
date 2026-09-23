@@ -245,6 +245,70 @@ export function ConfirmCancelOauthModal(props: {
   );
 }
 
+export function RestartServicesModal(props: {
+  open: boolean;
+  lang: DashboardState["lang"];
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const text = getRestartServicesText(props.lang);
+  return (
+    <ModalShell
+      open={props.open}
+      title={text.title}
+      closeLabel={text.close}
+      className="dashboard-modal-compact dashboard-confirm-modal"
+      onClose={props.onClose}
+    >
+      <div class="modal-stack">
+        <div class="modal-note">{text.body}</div>
+        <div class="modal-actions">
+          <button class="modal-secondary-btn" type="button" onClick={props.onClose}>
+            {text.cancel}
+          </button>
+          <button class="modal-primary-btn" type="button" onClick={props.onConfirm}>
+            {text.confirm}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+function getRestartServicesText(lang: DashboardState["lang"]): {
+  title: string;
+  body: string;
+  cancel: string;
+  confirm: string;
+  close: string;
+} {
+  if (lang === "zh-hant") {
+    return {
+      title: "重啟服務",
+      body: "將重新載入 VS Code 視窗，重啟 Manager、Mailbox 與 Codex 擴充功能。正在執行的本機操作可能會中斷。",
+      cancel: "取消",
+      confirm: "確認重啟",
+      close: "關閉"
+    };
+  }
+  if (lang === "zh") {
+    return {
+      title: "重启服务",
+      body: "将重新加载 VS Code 窗口，重启 Manager、Mailbox 和 Codex 扩展。正在执行的本地操作可能会中断。",
+      cancel: "取消",
+      confirm: "确认重启",
+      close: "关闭"
+    };
+  }
+  return {
+    title: "Restart services",
+    body: "This reloads the VS Code window and restarts Manager, Mailbox, and the Codex extension. Running local operations may be interrupted.",
+    cancel: "Cancel",
+    confirm: "Restart",
+    close: "Close"
+  };
+}
+
 export function ShareTokenModal(props: {
   open: boolean;
   copy: DashboardCopy;

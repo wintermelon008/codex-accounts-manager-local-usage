@@ -9,7 +9,7 @@ import type {
   DashboardSettingValue
 } from "../../domain/dashboard/types";
 import { ExtensionSettingsStore } from "../../infrastructure/config/extensionSettings";
-import { AccountsRepository } from "../../storage";
+import { AccountsRepository, getPrivateStatePaths } from "../../storage";
 import { AnnouncementService, type AnnouncementOptions } from "../../services/announcements";
 import { LocalUsageAnalyticsService } from "../../services/localUsageAnalytics";
 import { renderDashboardShell } from "./shell";
@@ -21,6 +21,7 @@ import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
 import { clearDashboardAccountOrder, getDashboardAccountOrder, setDashboardAccountOrder } from "./accountOrder";
 import type { AccountSharingService } from "../../sharing";
+import { getActiveManagerIntegrationHost } from "../../integrations";
 
 const DASHBOARD_VIEW_TYPE = "codexQuotaSummary";
 export const DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS = 1_000;
@@ -253,6 +254,7 @@ class DashboardPanelController {
         resolveLanguage: () => this.settingsStore.resolveLanguage(),
         schedulePublishState: () => this.schedulePublishState(),
         publishState: async (force = false) => this.publishState(force),
+        refreshDashboard: async () => this.refreshDashboardData(),
         refreshLocalUsage: async () => this.refreshLocalUsage(),
         oauth: this.oauth,
         announcements: this.announcements,
@@ -302,6 +304,35 @@ class DashboardPanelController {
     }
   }
 
+  private async refreshDashboardData(): Promise<void> {
+    // The refresh button is also the explicit cross-window convergence point
+    // for the account index. Keep token caches intact; quota and credential
+    // refresh remain separate actions.
+    this.repo.invalidateExternalStateCaches({ invalidateTokens: false });
+
+    const integrationHost = getActiveManagerIntegrationHost();
+    const refreshTasks: Promise<unknown>[] = [
+      this.announcements.forceRefresh(this.getAnnouncementOptions())
+    ];
+    if (this.accountSharing) {
+      refreshTasks.push(this.accountSharing.poll());
+    }
+    if (integrationHost) {
+      refreshTasks.push(integrationHost.refreshRegisteredIntegrations());
+    }
+
+    const results = await Promise.allSettled(refreshTasks);
+    results.forEach((result) => {
+      if (result.status === "rejected") {
+        console.warn(
+          "[codexAccounts] Dashboard refresh source failed:",
+          result.reason instanceof Error ? result.reason.message : String(result.reason)
+        );
+      }
+    });
+    await this.publishState(true);
+  }
+
   private async refreshLocalUsage(): Promise<void> {
     const usageAnalytics = this.getUsageAnalytics();
     await usageAnalytics.refresh(() => this.schedulePublishState());
@@ -322,7 +353,7 @@ class DashboardPanelController {
 
   private getUsageAnalytics(): LocalUsageAnalyticsService {
     this.usageAnalytics ??= new LocalUsageAnalyticsService({
-      globalStoragePath: this.context.globalStorageUri.fsPath,
+      globalStoragePath: getPrivateStatePaths(this.context).root,
       // Keep the Dashboard read-only at startup. The local session scan can
       // cover hundreds of megabytes and is intentionally user-triggered.
       backgroundRefreshEnabled: false

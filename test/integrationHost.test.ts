@@ -15,6 +15,8 @@ describe("ManagerIntegrationHost", () => {
       quotaRefreshed: true
     }));
     const cancelOAuthAccountImport = vi.fn();
+    const proxyResponse = {} as Response;
+    const fetchWithManagerProxy = vi.fn(async (_input: string, _init?: RequestInit) => proxyResponse);
     const importSharedAccountsToBalancePool = vi.fn(async () => ({
       status: "completed" as const,
       total: 1,
@@ -41,7 +43,8 @@ describe("ManagerIntegrationHost", () => {
       removeManagedAccount,
       startOAuthAccountImport,
       cancelOAuthAccountImport,
-      importSharedAccountsToBalancePool
+      importSharedAccountsToBalancePool,
+      fetchWithManagerProxy
     });
 
     await expect(host.api.getManagedAccountEmails?.()).resolves.toEqual(["linked@example.com"]);
@@ -69,6 +72,8 @@ describe("ManagerIntegrationHost", () => {
       account_id: "account-1",
       tokens: { id_token: "id-token", access_token: "access-token" }
     });
+    await expect(host.api.fetchWithManagerProxy?.("https://5sim.net/v1/guest/countries")).resolves.toBe(proxyResponse);
+    expect(fetchWithManagerProxy).toHaveBeenCalledWith("https://5sim.net/v1/guest/countries", undefined);
     host.dispose();
   });
 
@@ -207,6 +212,36 @@ describe("ManagerIntegrationHost", () => {
     host.dispose();
   });
 
+  it("refreshes registered optional integrations without requiring any integration", async () => {
+    const gateway = createGateway();
+    const host = new ManagerIntegrationHost(gateway.operations);
+    const refresh = vi.fn(async () => undefined);
+    const failedRefresh = vi.fn(async () => {
+      throw new Error("optional provider unavailable");
+    });
+    host.api.registerDashboardIntegration({
+      id: "example.refreshable",
+      getViewModel: () => ({ id: "example.refreshable", title: "Refreshable", status: "ready", actions: [] }),
+      runAction: vi.fn(),
+      refresh
+    });
+    host.api.registerDashboardIntegration({
+      id: "example.unavailable",
+      getViewModel: () => ({ id: "example.unavailable", title: "Unavailable", status: "error", actions: [] }),
+      runAction: vi.fn(),
+      refresh: failedRefresh
+    });
+
+    await expect(host.refreshRegisteredIntegrations()).resolves.toBeUndefined();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(failedRefresh).toHaveBeenCalledOnce();
+
+    const emptyHost = new ManagerIntegrationHost(createGateway().operations);
+    await expect(emptyHost.refreshRegisteredIntegrations()).resolves.toBeUndefined();
+    emptyHost.dispose();
+    host.dispose();
+  });
+
   it("contains an invalid integration view instead of exposing it to the Dashboard", () => {
     const gateway = createGateway();
     const host = new ManagerIntegrationHost(gateway.operations);
@@ -288,6 +323,7 @@ describe("ManagerIntegrationHost", () => {
     const host = new ManagerIntegrationHost(gateway.operations, virtual);
     const activate = vi.fn(async () => ({ enabled: true, configured: true, requiresReload: false }));
     const runCardAction = vi.fn(async () => undefined);
+    const providerRefresh = vi.fn(async () => undefined);
     const setEnabled = vi.fn(async () => undefined);
     let visible = true;
     await host.api.registerVirtualAccount({
@@ -300,6 +336,7 @@ describe("ManagerIntegrationHost", () => {
         credentialRef: "primary"
       },
       activate,
+      refresh: providerRefresh,
       getCardView: () => ({
         integrationId: "sub2api-gateway",
         details: [{ label: "下游", value: "https://gateway.invalid/v1" }],
@@ -327,8 +364,10 @@ describe("ManagerIntegrationHost", () => {
       expect.objectContaining({ id: "sub2api-gateway-card-visible", enabled: true })
     ]);
     await host.runVirtualAccountAction("virtual:sub2api-gateway", "refresh");
+    await host.refreshRegisteredIntegrations();
     await host.updateIntegrationSetting("sub2api-gateway-card-visible", false);
     expect(runCardAction).toHaveBeenCalledWith("refresh");
+    expect(providerRefresh).toHaveBeenCalledOnce();
     expect(setEnabled).toHaveBeenCalledWith(false);
     expect(host.getVirtualAccountCards()).toEqual([]);
     expect(host.getVisibleVirtualAccountIds()).not.toContain("virtual:sub2api-gateway");

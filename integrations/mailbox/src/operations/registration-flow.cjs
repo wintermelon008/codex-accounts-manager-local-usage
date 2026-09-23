@@ -166,6 +166,7 @@ class RegistrationSession {
     this.startOAuthImport = typeof options.startOAuthImport === "function" ? options.startOAuthImport : null;
     this.cancelOAuthImport = typeof options.cancelOAuthImport === "function" ? options.cancelOAuthImport : null;
     this.openRegistrationBrowser = typeof options.openRegistrationBrowser === "function" ? options.openRegistrationBrowser : null;
+    this.fiveSimFetch = typeof options.fiveSimFetch === "function" ? options.fiveSimFetch : undefined;
 
     this.state = STATES.IDLE;
     this.mode = this.importCodex
@@ -687,6 +688,7 @@ class RegistrationSession {
         await this.phoneOrder?.dispose?.();
         this.phoneOrder = new FiveSimPhoneOrderSession({
           sourceId,
+          fetchImpl: this.fiveSimFetch,
           onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
           onLog: (level, msg) => this.log(level, msg)
         });
@@ -721,6 +723,7 @@ class RegistrationSession {
       await this.phoneOrder?.dispose?.();
       this.phoneOrder = new FiveSimPhoneOrderSession({
         sourceId,
+        fetchImpl: this.fiveSimFetch,
         onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
         onLog: (level, msg) => this.log(level, msg)
       });

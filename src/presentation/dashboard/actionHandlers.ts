@@ -35,6 +35,7 @@ export type DashboardActionContext = {
   resolveLanguage: () => DashboardLanguage;
   schedulePublishState: () => void;
   publishState: (force?: boolean) => Promise<void>;
+  refreshDashboard?: () => Promise<void>;
   refreshLocalUsage?: () => Promise<void>;
   oauth: DashboardOAuthCoordinator;
   announcements: AnnouncementService;
@@ -228,7 +229,24 @@ async function runDashboardAction(
     case "completeOAuthSession":
       return ctx.oauth.completeSession(payload?.oauthSessionId, payload?.callbackUrl, translate);
     case "refreshView":
-      await ctx.publishState(true);
+      if (ctx.refreshDashboard) {
+        await ctx.refreshDashboard();
+      } else {
+        await ctx.publishState(true);
+      }
+      return undefined;
+    case "restartServices":
+      // This action must not depend on the hot-switch socket: reloading the
+      // VS Code window is the recovery path when that socket is missing or
+      // the Codex extension host is wedged. Do not await the reload command;
+      // the extension host is expected to be torn down immediately after the
+      // command is accepted.
+      void Promise.resolve(vscode.commands.executeCommand("workbench.action.reloadWindow")).catch((error: unknown) => {
+        console.error(
+          `[codexAccounts] service restart command failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+        void vscode.window.showErrorMessage("无法自动重启服务，请手动执行 Developer: Reload Window。");
+      });
       return undefined;
     case "refreshLocalUsage":
       await ctx.refreshLocalUsage?.();

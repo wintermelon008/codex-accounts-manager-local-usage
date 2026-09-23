@@ -744,6 +744,7 @@ export type DashboardActionName =
   | "batchResyncProfile"
   | "batchRemove"
   | "refreshView"
+  | "restartServices"
   | "refreshLocalUsage"
   | "unlockCodexSessionLocks"
   | "resetSeamlessSwitchRuntime"

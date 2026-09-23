@@ -31,6 +31,7 @@ export const BLOCKING_GLOBAL_ACTIONS = new Set<DashboardActionName>([
   "downloadJsonFile",
   "integrationAction",
   "integrationSetting",
+  "restartServices",
   "resetSeamlessSwitchRuntime"
 ]);
 
@@ -39,7 +40,9 @@ let actionRequestSequence = 0;
 export function getActionTimeoutMs(action: DashboardActionName): number {
   switch (action) {
     case "refreshView":
-      return 8_000;
+      return 30_000;
+    case "restartServices":
+      return 30_000;
     case "refreshLocalUsage":
       return 120_000;
     case "unlockCodexSessionLocks":
