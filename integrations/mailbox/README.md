@@ -2,7 +2,7 @@
 
 这是一个可选的 VS Code 扩展，为 Codex Accounts Manager 提供通用 Mailbox 查询、验证码人工监听和人工凭据续期入口。当前内置远端 `tototo-outlook`、本地 `Outlook（本地 OAuth）`、`boya`、`cdns` 与 `tototo-icloud` 五个 provider；界面使用显示名称，内部 provider ID 保持兼容。
 
-它是独立组件：邮箱池元数据、详情和凭据只由本扩展管理，并以扩展宿主服务器的 `globalStorageUri` 为共享权威，分别写入 `0600` 的邮箱状态文件和秘密文件；旧版 VS Code `globalState/SecretStorage` 数据会按设备标识一次性合并迁移。Manager 核心账号库、Sub2API 配置和其他 provider 不会被读取。Manager 只通过已有的 Dashboard integration API 显示一个轻量入口卡片，邮箱列表和当前选中邮箱详情由本扩展自己的 Webview 面板渲染；从 Dashboard 打开时使用当前主编辑器组，不再强制分裂到 `Beside` 侧栏。
+它是独立组件：邮箱池元数据、详情和凭据只由本扩展管理，并以 `CODEX_ACCOUNTS_PRIVATE_DIR` 指向的 Manager `private/` 目录为共享权威，分别写入 `0600` 的邮箱状态文件和秘密文件；旧版 VS Code `globalState/SecretStorage` 数据会按设备标识一次性合并迁移。未设置该变量时回退到扩展宿主存储目录。Manager 核心账号库、Sub2API 配置和其他 provider 不会被读取。Manager 只通过已有的 Dashboard integration API 显示一个轻量入口卡片，邮箱列表和当前选中邮箱详情由本扩展自己的 Webview 面板渲染；从 Dashboard 打开时使用当前主编辑器组，不再强制分裂到 `Beside` 侧栏。
 
 这里的“共享”指多个设备连接到同一个远程 VS Code 扩展宿主服务器。连接到不同服务器时不会自动同步；活动浏览器注册流程也不会跨服务器迁移。
 
@@ -39,7 +39,7 @@
 
 `outlook-local` 不通过 `email.nloop.cc` 查询，而是在扩展宿主本机完成 token exchange 和 Outlook IMAP 查询：
 
-1. 用 `client id + refresh token` 向微软 token endpoint 换取短期 access token，并在扩展宿主内存中缓存到过期前 5 分钟；access token 不写入磁盘；
+1. 用 `client id + refresh token` 向微软 token endpoint 换取短期 access token，并在扩展宿主内存中缓存到过期前 5 分钟；若 Outlook IMAP 拒绝该 token，会丢弃对应缓存，下一次手动查询重新换取；access token 不写入磁盘；
 2. 通过 Outlook IMAP 的 XOAUTH2 只读打开 `INBOX`；
 3. 在本地解析最近邮件的 MIME 正文并提取验证码；
 4. 微软返回轮换后的 refresh token 时自动写回 Mailbox 私有凭据；“人工续期”按钮也会单独执行一次续期。默认只搜索最近 30 天、读取最近最多 3 封邮件，并使用一次多 UID FETCH，减少单邮箱查询的往返次数。

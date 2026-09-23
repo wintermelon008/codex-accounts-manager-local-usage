@@ -121,6 +121,25 @@ describe("accountsWriteCoordinator helpers", () => {
     }
   });
 
+  it("reclaims a lease whose owner process has already exited", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "codex-accounts-dead-lease-test-"));
+    const lockPath = path.join(directory, "shared.lease");
+    try {
+      await fs.mkdir(lockPath);
+      await fs.writeFile(
+        path.join(lockPath, "owner.json"),
+        JSON.stringify({ host: os.hostname(), pid: 99_999_999, expiresAt: Date.now() + 60_000 }),
+        "utf8"
+      );
+
+      const recovered = await tryAcquireSharedFileLease(lockPath, 1_000, 100);
+      expect(recovered).toBeDefined();
+      await recovered?.release();
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("defers a final dispose write when an in-process async writer still owns the shared lock", async () => {
     const state = createAccountsRepositoryState();
     state.isDirty = true;

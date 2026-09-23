@@ -15,10 +15,9 @@ const LEGACY_MIGRATION_KEY = "codexAccounts.mailbox.serverStorageMigration.v1";
  * Mailbox data belongs to the extension host, not to a VS Code client.
  *
  * VS Code globalState/SecretStorage can be scoped differently by local and
- * remote extension hosts. The shared files below live under globalStorageUri,
- * which is the server-side extension directory for a workspace extension.
- * Credentials and mail details are kept in owner-only files; they are never
- * put into the public metadata object.
+ * remote extension hosts. The shared files below live under the configured
+ * Manager private state directory. Credentials and mail details are kept in
+ * owner-only files; they are never put into the public metadata object.
  */
 function createServerMailboxStores({ storageUri, legacyMetadataStore, legacySecretStore, sourceId } = {}) {
   const root = typeof storageUri?.fsPath === "string" ? storageUri.fsPath : "";

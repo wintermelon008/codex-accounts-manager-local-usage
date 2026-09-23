@@ -2,12 +2,12 @@
 
 Manager 默认开启 SessionHub，把普通会话、Supergoal、Loop-goal、Feishu 引用和 Codex `thread_id` 关联到同一份 Vserver registry。
 
-Manager 激活时优先使用进程环境中的 `CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN`；若 Extension Host 没有继承该环境变量，会读取用户级配置文件 `~/.config/codex-accounts-manager/manager-control.env`。该文件只应由当前用户读写。
+Manager 激活时优先使用进程环境中的 `CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN`；若 Extension Host 没有继承该环境变量，会优先读取 `CODEX_ACCOUNTS_PRIVATE_DIR/manager-control.env`，再兼容读取旧的 `~/.config/codex-accounts-manager/manager-control.env`。该文件只应由当前用户读写。
 
 registry 路径为：
 
 ```text
-~/.local/state/codex-accounts-manager/session-registry.json
+<CODEX_ACCOUNTS_PRIVATE_DIR>/session-registry.json
 ```
 
 查询：

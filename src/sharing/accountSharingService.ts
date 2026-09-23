@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { DashboardLanguage } from "../localization/languages";
 import type { DashboardSharingViewModel } from "../domain/dashboard/types";
 import {
@@ -12,6 +11,7 @@ import {
 } from "../utils/network";
 import { importSharedAccountsIntoBalancePool } from "../application/accounts/importIntoBalancePool";
 import type { AccountsRepository } from "../storage";
+import { getPrivateStatePaths } from "../storage";
 import { restoreSharedTokens } from "../storage/sharedAccounts";
 import type { CodexAccountRecord, SharedCodexAccountJson } from "../core/types";
 import {
@@ -39,14 +39,12 @@ import {
 const SHARING_STATE_KEY = "codexAccounts.accountSharing.v1";
 const SHARING_KEYS_SECRET = "codexAccounts.accountSharing.keys.v1";
 const SHARING_RELAY_TOKEN_SECRET = "codexAccounts.accountSharing.relayToken.v1";
-const SHARING_LOCAL_STATE_FILE = "sharing-local-state-v1.json";
 const SHARING_LOCAL_STATE_VERSION = 1;
 const SHARING_POLL_INTERVAL_MS = 10_000;
 const SHARING_HANDSHAKE_TIMEOUT_MS = 60_000;
 const MAX_PROCESSED_TRANSFERS = 512;
 const MAX_SHARED_ACCOUNTS = 50;
 const DEFAULT_DISPLAY_NAME = "Manager User";
-const SHARING_HEALTH_FILE = "sharing-health.json";
 // A private-overlay or reverse-proxy path can take several seconds to open
 // while it re-establishes. Keep the deadline independent of the deployment
 // type so Docker, bare metal, Windows and macOS expose the same behavior.
@@ -1392,8 +1390,9 @@ export class AccountSharingService implements vscode.Disposable {
   }
 
   private async loadLocalState(legacyDisplayName?: string): Promise<SharingLocalStateFile> {
-    const storageDirectory = this.context.globalStorageUri.fsPath;
-    this.localStatePath = path.join(storageDirectory, SHARING_LOCAL_STATE_FILE);
+    const privateState = getPrivateStatePaths(this.context);
+    const storageDirectory = privateState.root;
+    this.localStatePath = privateState.sharingState;
     await mkdir(storageDirectory, { recursive: true, mode: 0o700 });
 
     try {
@@ -1470,7 +1469,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   private async persistSyncHealth(): Promise<void> {
     await writeFile(
-      `${this.context.globalStorageUri.fsPath}/${SHARING_HEALTH_FILE}`,
+      getPrivateStatePaths(this.context).sharingHealth,
       JSON.stringify(
         {
           lastSyncAt: this.lastSyncAt,

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "fs/promises";
 import * as fsSync from "fs";
+import * as os from "node:os";
 import * as path from "path";
 import { isDeepStrictEqual } from "node:util";
 import { cloneIndex, createEmptyIndex, parseAccountsIndex } from "./accountsIndex";
@@ -21,6 +22,7 @@ import type { AccountsRepositoryState } from "./accountsRepositoryState";
 const WRITE_LOCK_LEASE_MS = 15_000;
 const WRITE_LOCK_WAIT_MS = 5_000;
 const LOCK_RETRY_MS = 25;
+const LOCAL_HOSTNAME = os.hostname();
 
 export type SharedFileLease = {
   /**
@@ -31,6 +33,22 @@ export type SharedFileLease = {
   renew(leaseMs?: number): Promise<boolean>;
   release(): Promise<void>;
 };
+
+type SharedFileLeaseOwner = {
+  token?: unknown;
+  pid?: unknown;
+  host?: unknown;
+  expiresAt?: unknown;
+};
+
+function createSharedFileLeaseOwner(token: string, leaseMs: number): SharedFileLeaseOwner {
+  return {
+    token,
+    pid: process.pid,
+    host: LOCAL_HOSTNAME,
+    expiresAt: Date.now() + leaseMs
+  };
+}
 
 export function disposeWriteCoordinator(
   state: AccountsRepositoryState,
@@ -379,7 +397,7 @@ export async function tryAcquireSharedFileLease(
       try {
         await fs.writeFile(
           path.join(lockPath, "owner.json"),
-          JSON.stringify({ token, pid: process.pid, expiresAt: Date.now() + effectiveLeaseMs }),
+          JSON.stringify(createSharedFileLeaseOwner(token, effectiveLeaseMs)),
           "utf8"
         );
       } catch (error) {
@@ -417,7 +435,7 @@ async function renewSharedFileLease(lockPath: string, token: string, leaseMs: nu
     // owner's lease through the reused path.
     handle = await fs.open(ownerPath, "r+");
     const raw = await handle.readFile("utf8");
-    const owner = JSON.parse(raw) as { token?: unknown; expiresAt?: unknown };
+    const owner = JSON.parse(raw) as SharedFileLeaseOwner;
     if (
       owner.token !== token ||
       typeof owner.expiresAt !== "number" ||
@@ -427,7 +445,7 @@ async function renewSharedFileLease(lockPath: string, token: string, leaseMs: nu
       return false;
     }
 
-    const next = JSON.stringify({ token, pid: process.pid, expiresAt: Date.now() + leaseMs });
+    const next = JSON.stringify(createSharedFileLeaseOwner(token, leaseMs));
     await handle.truncate(0);
     await handle.write(next, 0, "utf8");
     return true;
@@ -551,10 +569,8 @@ function readLatestIndexSync(indexPath: string): CodexAccountsIndex {
 async function reapExpiredSharedFileLease(lockPath: string, fallbackLeaseMs: number): Promise<boolean> {
   let expired = false;
   try {
-    const owner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8")) as {
-      expiresAt?: unknown;
-    };
-    expired = typeof owner.expiresAt === "number" && owner.expiresAt <= Date.now();
+    const owner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8")) as SharedFileLeaseOwner;
+    expired = isExpiredOrDeadLeaseOwner(owner);
   } catch {
     try {
       const stats = await fs.stat(lockPath);
@@ -613,7 +629,7 @@ function tryAcquireSharedFileLeaseSync(lockPath: string, leaseMs: number): (() =
   try {
     fsSync.writeFileSync(
       path.join(lockPath, "owner.json"),
-      JSON.stringify({ token, pid: process.pid, expiresAt: Date.now() + leaseMs }),
+      JSON.stringify(createSharedFileLeaseOwner(token, leaseMs)),
       "utf8"
     );
   } catch (error) {
@@ -637,10 +653,8 @@ function tryAcquireSharedFileLeaseSync(lockPath: string, leaseMs: number): (() =
 function reapExpiredSharedFileLeaseSync(lockPath: string, fallbackLeaseMs: number): boolean {
   let expired = false;
   try {
-    const owner = JSON.parse(fsSync.readFileSync(path.join(lockPath, "owner.json"), "utf8")) as {
-      expiresAt?: unknown;
-    };
-    expired = typeof owner.expiresAt === "number" && owner.expiresAt <= Date.now();
+    const owner = JSON.parse(fsSync.readFileSync(path.join(lockPath, "owner.json"), "utf8")) as SharedFileLeaseOwner;
+    expired = isExpiredOrDeadLeaseOwner(owner);
   } catch {
     try {
       expired = fsSync.statSync(lockPath).mtimeMs + fallbackLeaseMs <= Date.now();
@@ -658,6 +672,23 @@ function reapExpiredSharedFileLeaseSync(lockPath: string, fallbackLeaseMs: numbe
     return true;
   } catch (error) {
     return isFileNotFoundError(error);
+  }
+}
+
+function isExpiredOrDeadLeaseOwner(owner: SharedFileLeaseOwner): boolean {
+  if (typeof owner.expiresAt === "number" && Number.isFinite(owner.expiresAt) && owner.expiresAt <= Date.now()) {
+    return true;
+  }
+
+  if (owner.host !== LOCAL_HOSTNAME || typeof owner.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (error) {
+    return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ESRCH";
   }
 }
 

@@ -20,7 +20,7 @@
                    SecretStorage 导入 → 额度刷新/401 测活 → 合格账号进入无感池
 ```
 
-默认收件箱由目标设备的标准状态目录解析；机器人和 Manager 都遵循同一可移植规则。需要使用非默认目录时，为机器人和 VS Code 扩展宿主设置相同的绝对 `MANAGER_IMPORT_QUEUE_DIR`。旧的 `CODEX_IMPORT_QUEUE_DIR` 仅保留为兼容别名；若两者同时存在，以 `MANAGER_IMPORT_QUEUE_DIR` 为准。独立机器人安装、私聊限制和队列配置见 [飞书私聊 M+/S+ 导入机器人](integrations/feishu-private-import.md)。
+设置 `CODEX_ACCOUNTS_PRIVATE_DIR` 后，默认收件箱位于该目录下的 `import-inbox/`；机器人和 Manager 都遵循同一可移植规则。需要使用非默认目录时，为机器人和 VS Code 扩展宿主设置相同的绝对 `MANAGER_IMPORT_QUEUE_DIR`。旧的 `CODEX_IMPORT_QUEUE_DIR` 仅保留为兼容别名；若两者同时存在，以 `MANAGER_IMPORT_QUEUE_DIR` 为准。独立机器人安装、私聊限制和队列配置见 [飞书私聊 M+/S+ 导入机器人](integrations/feishu-private-import.md)。
 
 命令机器人以原子 rename 写入 `codex-account-import/v1` 任务，目录权限为 `0700`、任务文件权限为 `0600`。扩展完成或拒绝任务后，会删除含凭据的任务文件，并在同级 `results/` 写入仅含计数的脱敏结果。结果不包含邮箱、账号 ID、token 或原始 JSON。
 

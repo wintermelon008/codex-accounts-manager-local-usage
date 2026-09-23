@@ -16,7 +16,7 @@
 - **src/operations/registration-exchange-rate.cjs**: 每天首次打开注册助手时查询并保存一条 USD/CNY 汇率；下一天覆盖旧记录，并提供 1.029 手续费倍率
 - **src/operations/registration-email-code.cjs**: 按邮箱匹配已导入来源，支持注册启动后的持续查询，以及 GPT 外部浏览器打开后的单次邮箱验证码查询
 - **src/operations/registration-key-pool.cjs**: 使用扩展宿主服务器上的 `0600` 文件保存接码 Key 池，旧版 VS Code SecretStorage 仅作为一次性迁移/恢复来源，只向面板展示脱敏值
-- **src/mailbox/server-storage.cjs**: 以扩展宿主服务器的 `globalStorageUri` 保存共享邮箱池、邮箱凭据和注册助手非敏感记录，并一次性迁移旧客户端状态
+- **src/mailbox/server-storage.cjs**: 以 `CODEX_ACCOUNTS_PRIVATE_DIR` 指向的 `private/` 保存共享邮箱池、邮箱凭据和注册助手非敏感记录，并一次性迁移旧客户端状态
 - **src/operations/registration-phone-sources.cjs**: 接码来源注册表（LIYE 与 5SIM）
 
 ### 前端集成

@@ -3,3 +3,4 @@ test/**
 scripts/**
 *.vsix
 *.log
+private/**

@@ -116,14 +116,14 @@ code --install-extension .\codex-accounts-manager-0.1.19-l3.vsix --force
 Ubuntu/Remote-SSH 推荐写入好友自己的用户级环境文件：
 
 ```bash
-mkdir -p ~/.config/codex-accounts-manager
-chmod 700 ~/.config/codex-accounts-manager
-cat > ~/.config/codex-accounts-manager/manager-control.env <<'EOF'
+mkdir -p /absolute/path/to/manager/private
+chmod 700 /absolute/path/to/manager/private
+cat > /absolute/path/to/manager/private/manager-control.env <<'EOF'
 CODEX_ACCOUNTS_SHARING_RELAY_BOOTSTRAP_TOKEN=<owner-提供的首次注册令牌>
 # 只有好友机器存在 HTTP(S) 代理时才必须填写；无代理可省略
 NO_PROXY=100.114.125.9,localhost,127.0.0.1
 EOF
-chmod 600 ~/.config/codex-accounts-manager/manager-control.env
+chmod 600 /absolute/path/to/manager/private/manager-control.env
 ```
 
 Windows 可以在启动 VS Code 前用 PowerShell 临时注入：

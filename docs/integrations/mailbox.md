@@ -4,7 +4,7 @@
 
 ## 边界
 
-该组件拥有自己的邮箱池、元数据、详情缓存和秘密命名空间。现在以扩展宿主服务器的 `globalStorageUri` 为共享权威，邮箱状态、详情和凭据分别写入扩展目录下受限的 `0600` 文件；旧版客户端 `globalState/SecretStorage` 数据会按设备标识一次性合并迁移。注册助手只持久化不含密码、手机号、验证码和 OAuth token 的会话摘要。这里的共享范围是“同一远程 VS Code 扩展宿主服务器”，不同服务器之间仍需额外的中心服务或手动迁移。
+该组件拥有自己的邮箱池、元数据、详情缓存和秘密命名空间。现在以 `CODEX_ACCOUNTS_PRIVATE_DIR` 指向的 Manager `private/` 目录为共享权威，邮箱状态、详情和凭据分别写入受限的 `0600` 文件；旧版客户端 `globalState/SecretStorage` 数据仍按设备标识一次性合并迁移。未设置该变量时保留扩展宿主目录作为兼容回退。注册助手只持久化不含密码、手机号、验证码和 OAuth token 的会话摘要。
 
 Manager 仅通过现有 `registerDashboardIntegration` API 渲染一个轻量入口卡片，并可选提供脱敏的账号邮箱目录、账号健康状态、账号删除、无界面 OAuth 导入能力和已标记为收到 OpenAI `account deactivated` 邮件的邮箱地址；Mailbox 不读取 Manager 账号 token、不读取 Sub2API SecretStorage，也不把邮件正文或邮箱凭据带入核心公共 API。邮箱列表和当前选中邮箱详情由扩展自有 Webview Panel 提供；从 Dashboard 打开时面板进入当前主编辑器组，与 Dashboard 使用同一标签栏。
 
@@ -24,13 +24,13 @@ email@example.com----client-id----refresh-token
 
 ## 2FAuth 集成
 
-Mailbox 可选连接自托管的 2FAuth 服务，用于为邮箱关联 TOTP 条目并快速查询动态验证码。连接信息不再放在面板里，统一由扩展宿主服务器上的配置文件提供，避免误触和把 PAT 留在界面状态中。默认路径为：
+Mailbox 可选连接自托管的 2FAuth 服务，用于为邮箱关联 TOTP 条目并快速查询动态验证码。连接信息不再放在面板里，统一由 private 状态目录中的配置文件提供，避免误触和把 PAT 留在界面状态中。设置 `CODEX_ACCOUNTS_PRIVATE_DIR` 后默认路径为：
 
 ```text
 ~/.config/codex-accounts-manager/mailbox-2fauth.json
 ```
 
-也可以通过 `CODEX_ACCOUNTS_MAILBOX_TOTP_CONFIG_FILE` 指定绝对路径。文件格式如下，扩展会按 `0600` 创建文件和按 `0700` 创建父目录：
+也可以通过 `CODEX_ACCOUNTS_MAILBOX_TOTP_CONFIG_FILE` 指定绝对路径覆盖默认值。文件格式如下，扩展会按 `0600` 创建文件和按 `0700` 创建父目录：
 
 ```json
 {
@@ -40,7 +40,7 @@ Mailbox 可选连接自托管的 2FAuth 服务，用于为邮箱关联 TOTP 条�
 }
 ```
 
-文件必须位于扩展宿主服务器上；Remote-SSH 场景下 `127.0.0.1` 指的是 VServer 本机。修改文件后重新加载 Mailbox 扩展即可。旧版本面板保存的连接信息会在首次加载时迁移到该文件，并删除旧的 SecretStorage 配置。
+文件必须位于扩展宿主服务器的 private 状态目录中；Remote-SSH 场景下 `127.0.0.1` 指的是对应 Extension Host 本机。修改文件后重新加载 Mailbox 扩展即可。旧版本面板保存的连接信息会在首次加载时迁移到该文件，并删除旧的 SecretStorage 配置。
 
 邮箱详情卡片提供“2FA 绑定与查询”入口；注册助手则把 2FA 作为邮箱验证码和电话接码之间的独立操作块。注册块只负责新建条目、绑定当前邮箱、自动收码和显示剩余有效期；已有条目的选择绑定仍在邮箱详情入口完成。功能包括：
 

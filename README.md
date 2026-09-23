@@ -113,6 +113,7 @@ npm --prefix integrations/manager-gateway run package
 - [核心与可选组件的独立交付、停用和迁移](docs/integrations/README.md)
 - [Vserver 会话中心基础结构](docs/SESSION_HUB.md)
 - [核心本地文本导入收件箱](docs/LOCAL_IMPORT_INBOX.md)
+- [运行时 private 状态目录与迁移](docs/PRIVATE_STATE.md)
 - [变更日志](docs/CHANGELOG.md)
 
 常用命令：`Add Account via OAuth`、`Import Current auth.json`、`Show Quota Summary`、`Refresh All Quotas`、`Install/Remove Experimental Seamless Runtime`。其余操作可从 Dashboard 或命令面板进入。

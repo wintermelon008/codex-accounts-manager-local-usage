@@ -9,6 +9,7 @@ import { getDashboardProxyAddress } from "./infrastructure/config/extensionSetti
 import { loadManagerControlEnvironment } from "./infrastructure/config/managerControlEnvironment";
 import { AccountsWorkbench } from "./presentation/workbench/accountsWorkbench";
 import { flushAccountStates } from "./application/accounts/accountState";
+import { getPrivateStatePaths } from "./storage";
 
 let workbench: AccountsWorkbench | undefined;
 
@@ -18,7 +19,7 @@ let workbench: AccountsWorkbench | undefined;
  * @param context - 扩展上下文
  */
 export async function activate(context: vscode.ExtensionContext): Promise<CodexAccountsIntegrationApi> {
-  await loadManagerControlEnvironment();
+  await loadManagerControlEnvironment({ privateRoot: getPrivateStatePaths(context).root });
   await initializeConfiguredProxyEnvironment();
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {

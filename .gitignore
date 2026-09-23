@@ -15,3 +15,6 @@ auth.local.json
 media/webview/dashboard
 .aitasks
 .codegraph
+private/*
+!private/.gitignore
+!private/README.md

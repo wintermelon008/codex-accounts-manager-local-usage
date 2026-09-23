@@ -9,12 +9,13 @@
  * - 添加类型安全的缓存接口
  */
 
+import { randomUUID } from "node:crypto";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { SecretStore } from "./secrets";
-import { createEmptyIndex, cloneIndex, markActive, syncActiveAccountState } from "./accountsIndex";
+import { createEmptyIndex, cloneIndex, markActive, parseAccountsIndex, syncActiveAccountState } from "./accountsIndex";
 import {
   addAccountTags as addAccountTagsToIndex,
   dismissAccountHealthIssue,
@@ -102,6 +103,7 @@ import { extractClaims, isTokenExpired } from "../utils/jwt";
 import { getQuotaIssueKind } from "../utils/quotaIssue";
 import { isFreePlanType, normalizePlanType } from "../utils/quotaLabels";
 import { AccountError, StorageError, createError, ErrorCode } from "../core/errors";
+import { ensurePrivateStateScaffold, getPrivateStatePaths, type PrivateStatePaths } from "./privateState";
 import {
   AideckMirrorTokenSnapshot,
   clearAideckCodexAccountTombstone,
@@ -157,6 +159,7 @@ export type TokenRefreshStatusUpdate = {
 
 export class AccountsRepository {
   private readonly secretStore: SecretStore;
+  private readonly privateStatePaths: PrivateStatePaths;
   private readonly indexPath: string;
   private readonly state = createAccountsRepositoryState();
   /** 串行化本宿主内的切换提交，避免不同目标同时改写全局 auth.json */
@@ -217,8 +220,9 @@ export class AccountsRepository {
   }
 
   constructor(private readonly context: vscode.ExtensionContext) {
-    this.secretStore = new SecretStore(context.secrets);
-    this.indexPath = path.join(context.globalStorageUri.fsPath, INDEX_FILE);
+    this.privateStatePaths = getPrivateStatePaths(context);
+    this.secretStore = new SecretStore(context.secrets, this.privateStatePaths.accountsSecrets);
+    this.indexPath = this.privateStatePaths.accountsIndex;
   }
 
   /**
@@ -310,9 +314,12 @@ export class AccountsRepository {
    */
   async init(): Promise<void> {
     try {
-      await fs.mkdir(this.context.globalStorageUri.fsPath, { recursive: true });
+      await fs.mkdir(this.privateStatePaths.root, { recursive: true, mode: 0o700 });
+      await fs.chmod(this.privateStatePaths.root, 0o700).catch(() => undefined);
+      await ensurePrivateStateScaffold(this.privateStatePaths);
+      await migrateLegacyIndex(this.context.globalStorageUri.fsPath, this.indexPath);
     } catch (cause) {
-      throw createError.storageWriteFailed(this.context.globalStorageUri.fsPath, cause);
+      throw createError.storageWriteFailed(this.privateStatePaths.root, cause);
     }
 
     try {
@@ -447,7 +454,7 @@ export class AccountsRepository {
   ): Promise<SharedFileLease | undefined> {
     const safeName = name.trim().replace(/[^a-zA-Z0-9._-]/g, "_") || "scheduler";
     return tryAcquireSharedFileLease(
-      path.join(this.context.globalStorageUri.fsPath, `.codex-accounts-${safeName}.lease`),
+      path.join(this.privateStatePaths.root, `.codex-accounts-${safeName}.lease`),
       leaseMs,
       waitTimeoutMs
     );
@@ -2268,6 +2275,45 @@ function hasRequiredIdentityMismatch(expected: string | undefined, candidate: st
 
 function hasPresentIdentityMismatch(expected: string | undefined, candidate: string | undefined): boolean {
   return Boolean(expected && candidate && expected !== candidate);
+}
+
+async function migrateLegacyIndex(legacyRoot: string, privateIndexPath: string): Promise<void> {
+  const legacyIndexPath = path.join(legacyRoot, INDEX_FILE);
+  if (path.resolve(legacyIndexPath) === path.resolve(privateIndexPath)) {
+    return;
+  }
+
+  try {
+    await fs.access(privateIndexPath);
+    return;
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      throw error;
+    }
+  }
+
+  let serialized: string;
+  try {
+    serialized = await fs.readFile(legacyIndexPath, "utf8");
+    parseAccountsIndex(serialized, legacyIndexPath);
+  } catch (error) {
+    if (isFileNotFoundError(error)) {
+      return;
+    }
+    throw error;
+  }
+
+  const temporaryPath = `${privateIndexPath}.migration.${process.pid}.${randomUUID()}.tmp`;
+  await fs.mkdir(path.dirname(privateIndexPath), { recursive: true, mode: 0o700 });
+  try {
+    await fs.writeFile(temporaryPath, serialized, { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(temporaryPath, 0o600).catch(() => undefined);
+    await fs.rename(temporaryPath, privateIndexPath);
+    await fs.chmod(privateIndexPath, 0o600).catch(() => undefined);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 /**

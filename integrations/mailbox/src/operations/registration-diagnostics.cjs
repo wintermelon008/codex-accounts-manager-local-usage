@@ -53,7 +53,8 @@ function formatDiagnosticEntry(entry) {
   return `${entry.timestamp} [${entry.level}]${session} ${entry.message || "(empty)"}${url}`;
 }
 
-function storagePath(context) {
+function storagePath(context, storageRoot) {
+  if (typeof storageRoot === "string" && storageRoot) return storageRoot;
   const uri = context?.globalStorageUri;
   if (typeof uri?.fsPath === "string" && uri.fsPath) return uri.fsPath;
   if (typeof context?.globalStoragePath === "string" && context.globalStoragePath) {
@@ -62,7 +63,7 @@ function storagePath(context) {
   return "";
 }
 
-function createRegistrationDiagnostics(vscode, context) {
+function createRegistrationDiagnostics(vscode, context, { storageRoot } = {}) {
   let output;
   try {
     output = typeof vscode?.window?.createOutputChannel === "function"
@@ -72,7 +73,7 @@ function createRegistrationDiagnostics(vscode, context) {
     output = undefined;
   }
 
-  const basePath = storagePath(context);
+  const basePath = storagePath(context, storageRoot);
   const logFilePath = basePath ? path.join(basePath, "registration-diagnostics.log") : "";
   let writeQueue = Promise.resolve();
 

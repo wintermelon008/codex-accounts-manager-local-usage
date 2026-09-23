@@ -190,7 +190,13 @@ export class SessionHub {
   }
 }
 
-export function resolveSessionRegistryPath(): string {
+export function resolveSessionRegistryPath(privateRoot?: string): string {
+  if (privateRoot?.trim()) {
+    if (!path.isAbsolute(privateRoot)) {
+      throw new Error("private state root must be absolute");
+    }
+    return path.join(path.resolve(privateRoot), "session-registry.json");
+  }
   return path.join(os.homedir(), ".local", "state", "codex-accounts-manager", "session-registry.json");
 }
 

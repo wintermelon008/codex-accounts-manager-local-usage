@@ -390,9 +390,14 @@ function normalizeConfigFilePath(value) {
   return path.resolve(explicit);
 }
 
-function resolveTotpConfigFilePath({ env = process.env, homeDir = os.homedir() } = {}) {
+function resolveTotpConfigFilePath({ env = process.env, homeDir = os.homedir(), privateRoot } = {}) {
   const configured = typeof env?.[TOTP_CONFIG_FILE_ENV] === "string" ? env[TOTP_CONFIG_FILE_ENV].trim() : "";
-  return path.resolve(configured || path.join(homeDir, ".config", "codex-accounts-manager", TOTP_CONFIG_FILE_NAME));
+  return path.resolve(
+    configured ||
+      (privateRoot && path.isAbsolute(privateRoot)
+        ? path.join(privateRoot, TOTP_CONFIG_FILE_NAME)
+        : path.join(homeDir, ".config", "codex-accounts-manager", TOTP_CONFIG_FILE_NAME))
+  );
 }
 
 async function readConfigFile(filePath) {

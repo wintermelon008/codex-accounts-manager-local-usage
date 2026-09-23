@@ -220,7 +220,7 @@ export class LocalImportInbox {
   }
 }
 
-export function getLocalImportInboxPath(): string {
+export function getLocalImportInboxPath(privateRoot?: string): string {
   const managerQueuePath = process.env["MANAGER_IMPORT_QUEUE_DIR"]?.trim();
   const configured =
     managerQueuePath && managerQueuePath.length > 0 ? managerQueuePath : process.env["CODEX_IMPORT_QUEUE_DIR"]?.trim();
@@ -229,6 +229,12 @@ export function getLocalImportInboxPath(): string {
       throw new Error("local import queue path must be absolute");
     }
     return path.normalize(configured);
+  }
+  if (privateRoot?.trim()) {
+    if (!path.isAbsolute(privateRoot)) {
+      throw new Error("private state root must be absolute");
+    }
+    return path.join(path.resolve(privateRoot), "import-inbox");
   }
   const configuredStateHome = process.env["XDG_STATE_HOME"]?.trim();
   const stateHome =
