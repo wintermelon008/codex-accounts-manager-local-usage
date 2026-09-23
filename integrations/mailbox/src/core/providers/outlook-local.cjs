@@ -78,8 +78,9 @@ class OutlookLocalProvider {
       return invalidResult(account.error);
     }
 
+    let token;
     try {
-      const token = await this.getAccessToken(account.value, { signal });
+      token = await this.getAccessToken(account.value, { signal });
       if (token.credentialRefreshPending && typeof onCredentialRefresh === "function") {
         await onCredentialRefresh({
           address: account.value.address,
@@ -107,6 +108,13 @@ class OutlookLocalProvider {
         fetchedAt: new Date().toISOString()
       };
     } catch (error) {
+      if (error?.providerCode === "imap_auth_failed" && token?.accessToken) {
+        const cacheKey = accessTokenCacheKey(account.value);
+        const cached = this.accessTokenCache.get(cacheKey);
+        if (cached?.accessToken === token.accessToken) {
+          this.accessTokenCache.delete(cacheKey);
+        }
+      }
       return failedResult(account.value, toProviderError(error));
     }
   }
@@ -324,16 +332,29 @@ class ImapClient {
   async authenticateXoauth2(username, accessToken) {
     const tag = this.nextTag();
     const response = Buffer.from(`user=${username}\x01auth=Bearer ${accessToken}\x01\x01`).toString("base64");
+    let responseSent = false;
+    let diagnostic;
     this.write(`${tag} AUTHENTICATE XOAUTH2`);
     while (true) {
       const line = await this.readLine();
       if (line.startsWith("+")) {
-        this.writeRaw(`${response}\r\n`);
+        diagnostic = parseXoauth2Diagnostic(line) || diagnostic;
+        if (responseSent) {
+          // XOAUTH2 servers send an error continuation after rejecting the
+          // bearer token. A blank response completes SASL and lets the server
+          // return its tagged NO response; never resend the bearer token.
+          this.writeRaw("\r\n");
+        } else {
+          this.writeRaw(`${response}\r\n`);
+          responseSent = true;
+        }
         continue;
       }
       if (!line.startsWith(`${tag} `)) continue;
       if (!/\sOK(?:\s|$)/iu.test(line)) {
-        throw imapError("Outlook IMAP OAuth authentication failed", "imap_auth_failed");
+        const error = imapError("Outlook IMAP OAuth authentication failed", "imap_auth_failed");
+        error.imapDiagnostic = diagnostic;
+        throw error;
       }
       return;
     }
@@ -685,6 +706,32 @@ function abortError() {
   return error;
 }
 
+function parseXoauth2Diagnostic(line) {
+  const encoded = String(line ?? "").replace(/^\+\s*/u, "").trim();
+  if (!encoded || encoded.length > 1024 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)) {
+    return undefined;
+  }
+
+  let value;
+  try {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    if (decoded.length > 512) return undefined;
+    value = JSON.parse(decoded);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+
+  const fields = [];
+  const status = String(value.status ?? "");
+  if (/^\d{3}$/u.test(status)) fields.push(`status=${status}`);
+  const schemes = typeof value.schemes === "string" ? value.schemes.trim() : "";
+  if (schemes && /^[A-Za-z0-9 ,._-]{1,48}$/u.test(schemes)) fields.push(`schemes=${schemes}`);
+  const code = typeof value.error === "string" ? value.error.trim() : "";
+  if (code && /^[A-Za-z0-9_.:-]{1,64}$/u.test(code)) fields.push(`error=${code}`);
+  return fields.length > 0 ? fields.join(", ") : undefined;
+}
+
 function toProviderError(error, fallbackStage = "network") {
   if (error?.name === "AbortError") {
     return { stage: "cancelled", code: "request_aborted", message: "Request cancelled", retryable: false };
@@ -693,7 +740,10 @@ function toProviderError(error, fallbackStage = "network") {
     return { stage: "token", code: "invalid_refresh_token", message: "Outlook refresh token 无效、过期或已撤销", retryable: false };
   }
   if (error?.providerCode === "imap_auth_failed") {
-    return { stage: "auth", code: "imap_auth_failed", message: "Outlook IMAP OAuth 认证失败", retryable: false };
+    const detail = typeof error.imapDiagnostic === "string" && error.imapDiagnostic
+      ? `（${error.imapDiagnostic}）`
+      : "";
+    return { stage: "auth", code: "imap_auth_failed", message: `Outlook IMAP OAuth 认证失败${detail}`, retryable: false };
   }
   if (error?.code === "ETIMEDOUT") {
     return { stage: "network", code: "timeout", message: "Outlook 邮箱连接超时", retryable: true };

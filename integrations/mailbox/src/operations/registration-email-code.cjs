@@ -156,7 +156,7 @@ class RegistrationEmailCodeWatcher {
           this.setState({
             phase: "error",
             error: message,
-            message: result.error?.retryable === false ? "邮箱来源凭据不可用，请检查 Mailbox 导入信息" : "邮箱查询失败，将继续重试…"
+            message: emailQueryFailureMessage(result.error, "邮箱查询失败，将继续重试…")
           });
           if (result.error?.retryable === false) {
             return this.snapshot();
@@ -229,9 +229,7 @@ class RegistrationEmailCodeWatcher {
         return this.finishState({
           phase: "error",
           error: message,
-          message: result.error?.retryable === false
-            ? "邮箱来源凭据不可用，请检查 Mailbox 导入信息"
-            : "本次邮箱查询失败，请点击“查询邮件”重试"
+          message: emailQueryFailureMessage(result.error, "本次邮箱查询失败，请点击“查询邮件”重试")
         });
       }
 
@@ -415,6 +413,13 @@ function abortError() {
 function safeError(error, fallback) {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   return (message || fallback).replace(/[\r\n\t]+/gu, " ").slice(0, 160);
+}
+
+function emailQueryFailureMessage(error, retryMessage) {
+  if (error?.code === "imap_auth_failed") {
+    return "Outlook IMAP OAuth 认证失败；请点击“查询邮件”重试，若仍失败请检查 IMAP 权限或重新授权。";
+  }
+  return error?.retryable === false ? "邮箱来源凭据不可用，请检查 Mailbox 导入信息" : retryMessage;
 }
 
 module.exports = {

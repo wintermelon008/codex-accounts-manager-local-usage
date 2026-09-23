@@ -112,6 +112,21 @@ test("registration email watcher can perform exactly one query for GPT browser e
   assert.equal(watcher.isRunning(), false);
 });
 
+test("registration email watcher explains Outlook IMAP authorization failures", async () => {
+  const results = await Promise.all([
+    createOutlookAuthFailureWatcher().start("person@example.com"),
+    createOutlookAuthFailureWatcher().queryOnce("person@example.com")
+  ]);
+
+  for (const result of results) {
+    assert.equal(result.phase, "error");
+    assert.equal(
+      result.message,
+      "Outlook IMAP OAuth 认证失败；请点击“查询邮件”重试，若仍失败请检查 IMAP 权限或重新授权。"
+    );
+  }
+});
+
 test("registration email watcher reports an unimported address without polling", async () => {
   let queryCount = 0;
   const watcher = new RegistrationEmailCodeWatcher({
@@ -227,4 +242,39 @@ function abortError() {
   const error = new Error("cancelled");
   error.name = "AbortError";
   return error;
+}
+
+function createOutlookAuthFailureWatcher() {
+  const account = {
+    id: "mailbox-1",
+    providerId: "outlook-local",
+    address: "person@example.com",
+    credentials: { clientId: "client-id", refreshToken: "refresh-token" }
+  };
+  const provider = {
+    apiVersion: 1,
+    id: account.providerId,
+    capabilities: { history: "recent", maxMessages: 3 },
+    parseImport: () => ({ entries: [], failed: [] }),
+    async query() {
+      return {
+        ok: false,
+        providerId: account.providerId,
+        error: {
+          stage: "auth",
+          code: "imap_auth_failed",
+          message: "Outlook IMAP OAuth authentication failed",
+          retryable: false
+        }
+      };
+    }
+  };
+  return new RegistrationEmailCodeWatcher({
+    pool: {
+      listMetadata: () => [{ id: account.id, providerId: account.providerId, address: account.address, enabled: true }],
+      getAccount: async () => account,
+      recordQueryResult: async () => undefined
+    },
+    providers: { get: (id) => id === provider.id ? provider : undefined }
+  });
 }

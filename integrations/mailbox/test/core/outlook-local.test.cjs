@@ -102,6 +102,45 @@ test("local Outlook provider caches access tokens until the refresh window", asy
   assert.equal(refreshed.length, 1);
 });
 
+test("local Outlook provider discards an IMAP-rejected access token before the next query", async () => {
+  let tokenRequests = 0;
+  let imapConnections = 0;
+  const rawMessage = [
+    "From: no-reply@example.com",
+    "Subject: Code 123456",
+    "Date: Tue, 15 Sep 2026 10:00:00 +0000",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "Use 123456."
+  ].join("\r\n");
+  const provider = new OutlookLocalProvider({
+    fetchImpl: async () => {
+      tokenRequests += 1;
+      return response({
+        access_token: `access-token-${tokenRequests}`,
+        refresh_token: "refresh-token",
+        expires_in: 3600
+      });
+    },
+    tlsConnect: () => new FakeImapSocket({
+      rawMessage: Buffer.from(rawMessage),
+      authFailure: imapConnections++ === 0
+    })
+  }).asProvider();
+  const account = {
+    address: "person@example.com",
+    credentials: { clientId: "client-id", refreshToken: "refresh-token" }
+  };
+
+  const rejected = await provider.query(account, { maxMessages: 1 });
+  const retried = await provider.query(account, { maxMessages: 1 });
+
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.error.code, "imap_auth_failed");
+  assert.equal(retried.ok, true);
+  assert.equal(tokenRequests, 2);
+});
+
 test("local Outlook provider coalesces concurrent first token exchanges", async () => {
   let tokenRequests = 0;
   const rawMessage = [
@@ -174,9 +213,10 @@ function response(data) {
 }
 
 class FakeImapSocket extends EventEmitter {
-  constructor({ rawMessage }) {
+  constructor({ rawMessage, authFailure = false }) {
     super();
     this.rawMessage = rawMessage;
+    this.authFailure = authFailure;
     this.commands = [];
     this.destroyed = false;
     setImmediate(() => {
@@ -192,7 +232,8 @@ class FakeImapSocket extends EventEmitter {
     this.commands.push(command);
     const match = command.match(/^(A\d+)\s+(.+?)\r?\n$/u);
     if (!match) {
-      setImmediate(() => this.emit("data", Buffer.from(`${matchTag(this.commands)} OK\r\n`)));
+      const status = this.authFailure ? "NO AUTHENTICATE failed" : "OK AUTHENTICATE completed";
+      setImmediate(() => this.emit("data", Buffer.from(`${matchTag(this.commands)} ${status}\r\n`)));
       return true;
     }
 
