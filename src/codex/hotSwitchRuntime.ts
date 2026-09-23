@@ -14,6 +14,7 @@ import {
   isForceFastModeEnabled
 } from "../infrastructure/config/extensionSettings";
 import type { AccountsRepository } from "../storage";
+import { getPrivateStatePaths } from "../storage";
 import {
   getCurrentWindowRuntimeAccountId,
   setCurrentWindowRuntimeAccountId
@@ -616,7 +617,8 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         throw new Error("Experimental Codex account hot switch is not yet supported on Windows");
       }
       const cliPath = await resolveOpenAiCodexCliPath();
-      const runtimeDirectory = path.join(this.context.globalStorageUri.fsPath, RUNTIME_DIRECTORY);
+      const runtimeDirectory = path.join(getPrivateStatePaths(this.context).root, RUNTIME_DIRECTORY);
+      const legacyRuntimeDirectory = path.join(this.context.globalStorageUri.fsPath, RUNTIME_DIRECTORY);
       const shimSource = this.context.asAbsolutePath(path.join("runtime", SHIM_FILE));
       const shimDestination = path.join(runtimeDirectory, SHIM_FILE);
       const launcherDestination = path.join(runtimeDirectory, SHIM_LAUNCHER_FILE);
@@ -635,7 +637,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       // host. Overlay that path on both local and remote hosts so a shared
       // application-level chatgpt.cliExecutable setting cannot redirect a
       // remote extension host to a local filesystem path.
-      const cliOverlay = await installRemoteCliOverlay(cliPath, launcherDestination);
+      const cliOverlay = await installRemoteCliOverlay(cliPath, launcherDestination, [
+        path.join(legacyRuntimeDirectory, SHIM_LAUNCHER_FILE)
+      ]);
       if (cliOverlay.installed) {
         installedCliOverlay = cliOverlay;
       }

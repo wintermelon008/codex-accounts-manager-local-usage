@@ -55,6 +55,25 @@ describe("remote Codex CLI overlay", () => {
     );
   });
 
+  it("migrates a previous Manager overlay to a new launcher path", async () => {
+    const directory = await createTemporaryDirectory();
+    const cliPath = path.join(directory, "codex");
+    const legacyLauncherPath = path.join(directory, "legacy", "launcher");
+    const currentLauncherPath = path.join(directory, "current", "launcher");
+    await fs.mkdir(path.dirname(legacyLauncherPath), { recursive: true });
+    await fs.mkdir(path.dirname(currentLauncherPath), { recursive: true });
+    await fs.writeFile(cliPath, "official-codex-binary", "utf8");
+    await fs.writeFile(legacyLauncherPath, "legacy-manager-launcher", "utf8");
+    await fs.writeFile(currentLauncherPath, "current-manager-launcher", "utf8");
+
+    await installRemoteCliOverlay(cliPath, legacyLauncherPath);
+    const migrated = await installRemoteCliOverlay(cliPath, currentLauncherPath, [legacyLauncherPath]);
+
+    expect(migrated.installed).toBe(true);
+    expect(await fs.readlink(cliPath)).toBe(path.resolve(currentLauncherPath));
+    await expect(fs.readFile(migrated.realCliPath, "utf8")).resolves.toBe("official-codex-binary");
+  });
+
   async function createTemporaryDirectory(): Promise<string> {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "codex-accounts-overlay-"));
     temporaryDirectories.push(directory);

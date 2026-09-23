@@ -15,20 +15,38 @@ export type RemoteCliOverlay = {
  * manager launcher. The original binary remains alongside it and is used by
  * the launcher as the real app-server executable.
  */
-export async function installRemoteCliOverlay(cliPath: string, launcherPath: string): Promise<RemoteCliOverlay> {
+export async function installRemoteCliOverlay(
+  cliPath: string,
+  launcherPath: string,
+  legacyLauncherPaths: readonly string[] = []
+): Promise<RemoteCliOverlay> {
   const backupPath = `${cliPath}${BACKUP_SUFFIX}`;
   const normalizedLauncherPath = path.resolve(launcherPath);
+  const normalizedLegacyLauncherPaths = legacyLauncherPaths.map((value) => path.resolve(value));
   const entry = await fs.lstat(cliPath);
 
   if (entry.isSymbolicLink()) {
     const target = await fs.readlink(cliPath);
-    if (path.resolve(path.dirname(cliPath), target) !== normalizedLauncherPath) {
+    const resolvedTarget = path.resolve(path.dirname(cliPath), target);
+    if (resolvedTarget === normalizedLauncherPath) {
+      await fs.access(backupPath);
+      return { cliPath, realCliPath: backupPath, launcherPath: normalizedLauncherPath, installed: false };
+    }
+    if (!normalizedLegacyLauncherPaths.includes(resolvedTarget)) {
       throw new Error(
         "Refusing to replace the remote Codex CLI because it is already a symbolic link managed by something else"
       );
     }
     await fs.access(backupPath);
-    return { cliPath, realCliPath: backupPath, launcherPath: normalizedLauncherPath, installed: false };
+    await fs.access(resolvedTarget);
+    await fs.unlink(cliPath);
+    try {
+      await fs.symlink(normalizedLauncherPath, cliPath);
+    } catch (error) {
+      await fs.symlink(resolvedTarget, cliPath).catch(() => undefined);
+      throw error;
+    }
+    return { cliPath, realCliPath: backupPath, launcherPath: normalizedLauncherPath, installed: true };
   }
 
   if (!entry.isFile()) {
