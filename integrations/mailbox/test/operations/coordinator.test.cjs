@@ -132,6 +132,41 @@ test("uses the same progress contract for renewal and listening batches", async 
   assert.ok(snapshots.some((snapshot) => snapshot.kind === "wait" && snapshot.total === 2));
 });
 
+test("automatic renewal honors its low concurrency limit and persistence context", async () => {
+  const accounts = [
+    { id: "one", providerId: "8t92", email: "one@example.com" },
+    { id: "two", providerId: "8t92", email: "two@example.com" }
+  ];
+  const pool = fakePool(accounts);
+  let active = 0;
+  let maximumActive = 0;
+  const coordinator = new MailboxOperationCoordinator({
+    pool,
+    provider: {
+      apiVersion: 1,
+      id: "8t92",
+      async query() {
+        throw new Error("unused");
+      },
+      async renew() {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setImmediate(resolve));
+        active -= 1;
+        return { ok: true, providerId: "8t92", operation: "renewal", status: "unchanged" };
+      }
+    }
+  });
+
+  await coordinator.renew(accounts.map((account) => account.id), { automatic: true, maxConcurrent: 1 });
+
+  assert.equal(maximumActive, 1);
+  assert.deepEqual(pool.renewalOptions, [
+    { id: "one", automatic: true },
+    { id: "two", automatic: true }
+  ]);
+});
+
 test("limits concurrent provider operations for a large batch", async () => {
   const accounts = Array.from({ length: 7 }, (_, index) => ({
     id: `mailbox-${index + 1}`,
@@ -329,6 +364,7 @@ function fakePool(accounts) {
   return {
     queryUpdates: [],
     renewalUpdates: [],
+    renewalOptions: [],
     refreshUpdates: [],
     async listAccounts() {
       return accounts;
@@ -336,8 +372,9 @@ function fakePool(accounts) {
     async recordQueryResult(id) {
       this.queryUpdates.push(id);
     },
-    async recordRenewalResult(id) {
+    async recordRenewalResult(id, _result, options) {
       this.renewalUpdates.push(id);
+      this.renewalOptions.push({ id, ...(options || {}) });
     },
     async recordCredentialRefresh(id, account) {
       this.refreshUpdates.push({ id, refreshToken: account.credentials.refreshToken });

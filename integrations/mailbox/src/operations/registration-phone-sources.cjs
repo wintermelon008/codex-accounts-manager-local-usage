@@ -2,22 +2,29 @@
 
 const REGISTRATION_PHONE_SOURCES = Object.freeze([
   Object.freeze({
-    id: "liye",
-    displayName: "LIYE",
-    websiteUrl: "https://liye.5x20.cn",
-    service: "chatai",
-    credentialType: "key"
-  }),
-  Object.freeze({
     id: "fivesim",
     displayName: "5SIM",
     websiteUrl: "https://5sim.net",
     service: "openai",
     credentialType: "api-token"
+  }),
+  Object.freeze({
+    id: "sms688",
+    displayName: "SMS688",
+    websiteUrl: "https://cdk.sms688.cc",
+    service: "manual-sms",
+    credentialType: "api-key"
+  }),
+  Object.freeze({
+    id: "liye",
+    displayName: "LIYE",
+    websiteUrl: "https://liye.5x20.cn",
+    service: "chatai",
+    credentialType: "key"
   })
 ]);
 
-function getRegistrationPhoneSource(sourceId = "liye") {
+function getRegistrationPhoneSource(sourceId = "fivesim") {
   const id = String(sourceId ?? "").trim().toLowerCase();
   return REGISTRATION_PHONE_SOURCES.find((source) => source.id === id) || null;
 }

@@ -15,9 +15,12 @@ const POOL_SCHEMA_VERSION = 2;
 const MAX_STORED_MESSAGES = 20;
 const MAX_STORED_BODY_HTML_LENGTH = 24_000;
 const TRASH_RETENTION_MS = 24 * 60 * 60 * 1000;
+const AUTO_RENEWAL_MIN_INTERVAL_DAYS = 14;
+const AUTO_RENEWAL_MAX_INTERVAL_DAYS = 21;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 class MailboxPool {
-  constructor({ metadataStore, secretStore, now = () => Date.now() }) {
+  constructor({ metadataStore, secretStore, now = () => Date.now(), random = Math.random }) {
     if (!metadataStore || typeof metadataStore.get !== "function" || typeof metadataStore.update !== "function") {
       throw new TypeError("Mailbox metadata store must provide get and update");
     }
@@ -32,6 +35,7 @@ class MailboxPool {
     this.metadataStore = metadataStore;
     this.secretStore = secretStore;
     this.now = now;
+    this.random = typeof random === "function" ? random : Math.random;
     this.metadata = emptyMetadata();
     this.loaded = false;
     this.deactivationBackfillDone = false;
@@ -165,6 +169,12 @@ class MailboxPool {
             updatedAt: timestamp,
             lastQueryAt: previous?.lastQueryAt,
             lastRenewalAt: previous?.lastRenewalAt,
+            autoRenewalNextAt: provider.capabilities?.manualRenewal === true
+              ? (Number.isFinite(previous?.autoRenewalNextAt)
+                ? previous.autoRenewalNextAt
+                : timestamp + randomAutomaticRenewalDelayMs(this.random))
+              : undefined,
+            autoRenewalBlocked: false,
             lastStatus: previous?.lastStatus,
             lastError: previous?.lastError,
             lastQueryError: previous?.lastQueryError,
@@ -202,6 +212,10 @@ class MailboxPool {
       metadata.lastStatus = result?.ok ? (result.codes?.length ? "code_found" : "ready") : "error";
       metadata.lastError = result?.ok ? undefined : sanitizeError(result?.error);
       metadata.lastQueryError = result?.ok ? undefined : sanitizeError(result?.error);
+      if (result?.error?.code === "invalid_refresh_token") {
+        metadata.autoRenewalBlocked = true;
+        metadata.autoRenewalNextAt = undefined;
+      }
       if (result?.ok) {
         const fetchedMessages = normalizeStoredMessages(result.messages);
         const previousDetail = await this.metadataStore.get(detailKey(id));
@@ -249,6 +263,8 @@ class MailboxPool {
         const timestamp = this.now();
         metadata.updatedAt = timestamp;
         metadata.lastRenewalAt = timestamp;
+        metadata.autoRenewalNextAt = timestamp + randomAutomaticRenewalDelayMs(this.random);
+        metadata.autoRenewalBlocked = false;
         metadata.lastStatus = "renewed";
         metadata.lastError = undefined;
       }
@@ -266,6 +282,10 @@ class MailboxPool {
         metadata.lastStatus = result.ok ? (result.codes?.length ? "code_found" : "ready") : "error";
         metadata.lastError = result.ok ? undefined : sanitizeError(result.error);
         metadata.lastQueryError = result.ok ? undefined : sanitizeError(result.error);
+        if (result.error?.code === "invalid_refresh_token") {
+          metadata.autoRenewalBlocked = true;
+          metadata.autoRenewalNextAt = undefined;
+        }
         if (result.ok) {
           const fetchedMessages = normalizeStoredMessages(result.messages);
           const previousDetail = previousDetails.get(detailKey(entry.id));
@@ -297,7 +317,11 @@ class MailboxPool {
     });
   }
 
-  async recordRenewalResult(id, result) {
+  async recordRenewalResult(id, result, options = {}) {
+    return this.recordRenewalResultWithOptions(id, result, options);
+  }
+
+  async recordRenewalResultWithOptions(id, result, { automatic = false } = {}) {
     return this.enqueueMetadataOperation(async () => {
       await this.loadFromStore();
       this.assertLoaded();
@@ -319,12 +343,24 @@ class MailboxPool {
           JSON.stringify({ providerId: metadata.providerId, address: metadata.address, credentials: updated.credentials })
         );
         metadata.lastRenewalAt = timestamp;
+        metadata.autoRenewalNextAt = timestamp + randomAutomaticRenewalDelayMs(this.random);
+        metadata.autoRenewalBlocked = false;
         metadata.lastStatus = "renewed";
         metadata.lastError = undefined;
       } else if (result?.ok && result.status === "unchanged") {
+        metadata.autoRenewalNextAt = timestamp + randomAutomaticRenewalDelayMs(this.random);
+        metadata.autoRenewalBlocked = false;
         metadata.lastStatus = "unchanged";
         metadata.lastError = undefined;
       } else {
+        if (result?.error?.code === "invalid_refresh_token") {
+          metadata.autoRenewalBlocked = true;
+          metadata.autoRenewalNextAt = undefined;
+        } else if (automatic) {
+          metadata.autoRenewalNextAt = result?.error?.retryable === true
+            ? timestamp + DAY_MS
+            : undefined;
+        }
         metadata.lastStatus = "error";
         metadata.lastError = sanitizeError(result?.error);
       }
@@ -360,12 +396,44 @@ class MailboxPool {
         ]);
         metadata.updatedAt = timestamp;
         metadata.lastRenewalAt = timestamp;
+        metadata.autoRenewalNextAt = timestamp + randomAutomaticRenewalDelayMs(this.random);
+        metadata.autoRenewalBlocked = false;
         metadata.lastStatus = "renewed";
         metadata.lastError = undefined;
         updated.push(sanitizeMetadata(metadata));
       }
       await updateStoreValues(this.secretStore, secretUpdates);
       await this.persistMetadata();
+      return updated;
+    });
+  }
+
+  async initializeAutomaticRenewalSchedules(ids, at = this.now()) {
+    const selectedIds = new Set(
+      (Array.isArray(ids) ? ids : [])
+        .filter((id) => typeof id === "string" && id)
+    );
+    if (selectedIds.size === 0) return [];
+    return this.enqueueMetadataOperation(async () => {
+      await this.loadFromStore();
+      this.assertLoaded();
+      const timestamp = Number.isFinite(at) ? at : this.now();
+      const updated = [];
+      for (const metadata of this.metadata.accounts) {
+        if (
+          !selectedIds.has(metadata.id) ||
+          metadata.autoRenewalBlocked === true ||
+          Number.isFinite(metadata.autoRenewalNextAt)
+        ) continue;
+        const base = Number.isFinite(metadata.lastRenewalAt) ? metadata.lastRenewalAt : timestamp;
+        const candidate = base + randomAutomaticRenewalDelayMs(this.random);
+        metadata.autoRenewalNextAt = Math.max(timestamp, candidate);
+        metadata.updatedAt = timestamp;
+        updated.push(sanitizeMetadata(metadata));
+      }
+      if (updated.length > 0) {
+        await this.persistMetadata();
+      }
       return updated;
     });
   }
@@ -444,12 +512,20 @@ class MailboxPool {
           metadata.lastError = undefined;
           metadata.lastQueryAt = undefined;
           metadata.lastRenewalAt = undefined;
+          metadata.autoRenewalNextAt = provider.capabilities?.manualRenewal === true
+            ? this.now() + randomAutomaticRenewalDelayMs(this.random)
+            : undefined;
+          metadata.autoRenewalBlocked = false;
         }
         metadata.providerId = nextProviderId;
         metadata.historyMode = provider.capabilities?.history === "latest" ? "latest" : "recent";
       }
 
       metadata.displayName = normalizeDisplayName(displayName, metadata.address);
+      if (replacement && provider.capabilities?.manualRenewal === true) {
+        metadata.autoRenewalNextAt = this.now() + randomAutomaticRenewalDelayMs(this.random);
+        metadata.autoRenewalBlocked = false;
+      }
       metadata.updatedAt = this.now();
       await this.persistMetadata();
       return sanitizeMetadata(metadata);
@@ -752,6 +828,8 @@ function sanitizeMetadata(entry) {
     updatedAt: numberOrUndefined(entry.updatedAt),
     lastQueryAt: numberOrUndefined(entry.lastQueryAt),
     lastRenewalAt: numberOrUndefined(entry.lastRenewalAt),
+    autoRenewalNextAt: numberOrUndefined(entry.autoRenewalNextAt),
+    autoRenewalBlocked: entry.autoRenewalBlocked === true,
     lastStatus: typeof entry.lastStatus === "string" ? entry.lastStatus : undefined,
     lastError: sanitizeError(entry.lastError),
     lastQueryError: sanitizeError(entry.lastQueryError),
@@ -935,6 +1013,15 @@ function replaceMetadataAccount(accounts, next) {
   }
 }
 
+function randomAutomaticRenewalDelayMs(random = Math.random) {
+  const sample = Number(random());
+  const normalized = Number.isFinite(sample) ? Math.min(0.999999, Math.max(0, sample)) : 0;
+  const days = AUTO_RENEWAL_MIN_INTERVAL_DAYS + Math.floor(
+    normalized * (AUTO_RENEWAL_MAX_INTERVAL_DAYS - AUTO_RENEWAL_MIN_INTERVAL_DAYS + 1)
+  );
+  return days * DAY_MS;
+}
+
 function makeMailboxId(providerId, address) {
   const digest = crypto.createHash("sha256").update(`${providerId}\u0000${address.trim().toLowerCase()}`).digest("hex").slice(0, 24);
   return `mailbox:${digest}`;
@@ -975,9 +1062,13 @@ module.exports = {
   TRASH_INDEX_KEY,
   TRASH_RETENTION_MS,
   TRASH_SECRET_KEY_PREFIX,
+  AUTO_RENEWAL_MAX_INTERVAL_DAYS,
+  AUTO_RENEWAL_MIN_INTERVAL_DAYS,
+  DAY_MS,
   MailboxPool,
   detailKey,
   makeMailboxId,
+  randomAutomaticRenewalDelayMs,
   sanitizeMetadata,
   secretKey,
   trashSecretKey

@@ -174,6 +174,40 @@ test("local Outlook provider coalesces concurrent first token exchanges", async 
   assert.equal(tokenRequests, 1);
 });
 
+test("manual renewal shares an in-flight token exchange with a query", async () => {
+  let tokenRequests = 0;
+  const rawMessage = [
+    "From: no-reply@example.com",
+    "Subject: Code 123456",
+    "Date: Tue, 15 Sep 2026 10:00:00 +0000",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "Use 123456."
+  ].join("\r\n");
+  const provider = new OutlookLocalProvider({
+    fetchImpl: async () => {
+      tokenRequests += 1;
+      await new Promise((resolve) => setImmediate(resolve));
+      return response({ access_token: "shared-access-token", refresh_token: "rotated-refresh-token", expires_in: 3600 });
+    },
+    tlsConnect: () => new FakeImapSocket({ rawMessage: Buffer.from(rawMessage) })
+  }).asProvider();
+  const account = {
+    address: "person@example.com",
+    credentials: { clientId: "client-id", refreshToken: "refresh-token" }
+  };
+
+  const [query, renewal] = await Promise.all([
+    provider.query(account, { maxMessages: 1 }),
+    provider.renew(account)
+  ]);
+
+  assert.equal(query.ok, true);
+  assert.equal(renewal.ok, true);
+  assert.equal(renewal.status, "updated");
+  assert.equal(tokenRequests, 1);
+});
+
 test("manual renewal returns a rotated refresh token without exposing an access token", async () => {
   const provider = new OutlookLocalProvider({
     fetchImpl: async () => response({ access_token: "access-token", refresh_token: "new-refresh-token" }),

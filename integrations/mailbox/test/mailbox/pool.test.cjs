@@ -316,10 +316,17 @@ test("loading the pool preserves a historical marker even when stored details ha
 test("renewal writes a new secret only after the provider reports changed credentials", async () => {
   let clock = 100;
   const stores = memoryStores();
-  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore, now: () => ++clock });
-  const provider = new Eight92Provider({ fetchImpl: async () => response({}) }).asProvider();
+  const pool = new MailboxPool({
+    metadataStore: stores.metadata,
+    secretStore: stores.secretStore,
+    now: () => ++clock,
+    random: () => 0
+  });
+  const provider = new OutlookLocalProvider({ fetchImpl: async () => response({}) }).asProvider();
   await pool.load();
   const [{ id }] = (await pool.importProvider({ provider, input: "one@example.com----password-one----client-one----refresh-one" })).imported;
+  const initialNextRenewal = pool.listMetadata()[0].autoRenewalNextAt;
+  assert.ok(initialNextRenewal > clock);
 
   await pool.recordRenewalResult(id, {
     ok: true,
@@ -328,6 +335,7 @@ test("renewal writes a new secret only after the provider reports changed creden
   });
   assert.match(stores.secretStore.values.get(secretKey(id)), /refresh-one/u);
   assert.equal(pool.listMetadata()[0].lastRenewalAt, undefined);
+  assert.ok(pool.listMetadata()[0].autoRenewalNextAt > initialNextRenewal);
 
   const renewed = await pool.recordRenewalResult(id, {
     ok: true,
@@ -340,6 +348,7 @@ test("renewal writes a new secret only after the provider reports changed creden
   assert.match(stores.secretStore.values.get(secretKey(id)), /refresh-two/u);
   assert.equal((await pool.getAccount(id)).credentials.refreshToken, "refresh-two");
   assert.equal(renewed.lastRenewalAt, 103);
+  assert.ok(renewed.autoRenewalNextAt > renewed.lastRenewalAt);
 
   await pool.recordRenewalResult(id, {
     ok: false,
@@ -347,6 +356,87 @@ test("renewal writes a new secret only after the provider reports changed creden
     error: { stage: "refresh", code: "temporary_failure", message: "temporary failure" }
   });
   assert.equal(pool.listMetadata()[0].lastRenewalAt, 103);
+});
+
+test("automatic renewal failure retries later without changing the real renewal time", async () => {
+  let clock = 1_000;
+  const stores = memoryStores();
+  const pool = new MailboxPool({
+    metadataStore: stores.metadata,
+    secretStore: stores.secretStore,
+    now: () => ++clock,
+    random: () => 0
+  });
+  const provider = new OutlookLocalProvider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "automatic@example.com----client-one----refresh-one"
+  })).imported;
+
+  await pool.recordRenewalResult(id, {
+    ok: false,
+    status: "error",
+    error: { stage: "network", code: "timeout", message: "timeout", retryable: true }
+  }, { automatic: true });
+
+  const metadata = pool.listMetadata()[0];
+  assert.equal(metadata.lastRenewalAt, undefined);
+  assert.equal(metadata.autoRenewalNextAt, 1_000 + 2 + 24 * 60 * 60 * 1000);
+});
+
+test("invalid refresh tokens block automatic renewal until credentials are replaced", async () => {
+  const stores = memoryStores();
+  const pool = new MailboxPool({ metadataStore: stores.metadata, secretStore: stores.secretStore });
+  const provider = new OutlookLocalProvider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "blocked@example.com----client-one----refresh-one"
+  })).imported;
+
+  await pool.recordRenewalResult(id, {
+    ok: false,
+    status: "error",
+    error: { stage: "token", code: "invalid_refresh_token", message: "invalid", retryable: false }
+  }, { automatic: true });
+
+  let metadata = pool.listMetadata()[0];
+  assert.equal(metadata.autoRenewalBlocked, true);
+  assert.equal(metadata.autoRenewalNextAt, undefined);
+
+  await pool.updateAccount(id, {
+    provider,
+    providerId: provider.id,
+    input: "blocked@example.com----client-one----refresh-replaced"
+  });
+  metadata = pool.listMetadata()[0];
+  assert.equal(metadata.autoRenewalBlocked, false);
+  assert.ok(Number.isFinite(metadata.autoRenewalNextAt));
+});
+
+test("legacy renewal schedules become due immediately when their interval already elapsed", async () => {
+  let clock = 1_000;
+  const stores = memoryStores();
+  const pool = new MailboxPool({
+    metadataStore: stores.metadata,
+    secretStore: stores.secretStore,
+    now: () => clock,
+    random: () => 0
+  });
+  const provider = new OutlookLocalProvider({ fetchImpl: async () => response({}) }).asProvider();
+  await pool.load();
+  const [{ id }] = (await pool.importProvider({
+    provider,
+    input: "legacy@example.com----client-one----refresh-one"
+  })).imported;
+  pool.metadata.accounts[0].lastRenewalAt = clock - 15 * 24 * 60 * 60 * 1000;
+  pool.metadata.accounts[0].autoRenewalNextAt = undefined;
+  await pool.persistMetadata();
+
+  await pool.initializeAutomaticRenewalSchedules([id], clock);
+
+  assert.equal(pool.listMetadata()[0].autoRenewalNextAt, clock);
 });
 
 test("silent provider credential refresh replaces only the private credential record", async () => {

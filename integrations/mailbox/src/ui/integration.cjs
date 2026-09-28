@@ -28,6 +28,10 @@ const {
   createLocalFiveSimTokenStore,
   FiveSimTokenStore
 } = require("../operations/fivesim-token-store.cjs");
+const {
+  createLocalSms688TokenStore,
+  Sms688TokenStore
+} = require("../operations/sms688-token-store.cjs");
 const { RegistrationExchangeRateStore } = require("../operations/registration-exchange-rate.cjs");
 const { TwoFactorManager, resolveTotpConfigFilePath } = require("../totp/manager.cjs");
 const { resolvePrivateStateRoot } = require("../private-state.cjs");
@@ -47,6 +51,9 @@ const OPERATION_LABELS = {
 };
 const CLIPBOARD_RETRY_DELAYS_MS = [0, 250, 750];
 const OPERATION_STATE_PUBLISH_DEBOUNCE_MS = 250;
+const AUTOMATIC_RENEWAL_SCAN_HOUR = 12;
+const AUTOMATIC_RENEWAL_SCAN_MINUTE = 5;
+const AUTOMATIC_RENEWAL_MAX_CONCURRENT = 1;
 const REGISTRATION_CLIPBOARD_MESSAGES = {
   emailCode: "邮箱验证码已自动复制",
   phone: "手机号已自动复制",
@@ -104,6 +111,8 @@ class MailboxIntegration {
     this.registrationPanel = undefined;
     this.registrationTotpQueries = new Map();
     this.selectedMailboxId = undefined;
+    this.automaticRenewalScanTimer = undefined;
+    this.automaticRenewalScanPromise = undefined;
     // mailbox id -> opaque Manager OAuth operation id. Keeping this separate
     // from provider operations lets mailbox query/renewal continue in parallel
     // while still allowing the shared Stop action to cancel OAuth import.
@@ -120,6 +129,9 @@ class MailboxIntegration {
         ? (options) => this.api.openRegistrationBrowser(options)
         : undefined,
       fiveSimFetch: typeof this.api?.fetchWithManagerProxy === "function"
+        ? (input, init) => this.api.fetchWithManagerProxy(input, init)
+        : undefined,
+      sms688Fetch: typeof this.api?.fetchWithManagerProxy === "function"
         ? (input, init) => this.api.fetchWithManagerProxy(input, init)
         : undefined,
     });
@@ -142,6 +154,11 @@ class MailboxIntegration {
     this.fiveSimTokenStore = new FiveSimTokenStore({
       secretStore: serverFiveSimTokenStore || context.secrets,
       backupStore: serverFiveSimTokenStore ? context.secrets : undefined
+    });
+    const serverSms688TokenStore = createLocalSms688TokenStore({ fsPath: this.privateStateRoot });
+    this.sms688TokenStore = new Sms688TokenStore({
+      secretStore: serverSms688TokenStore || context.secrets,
+      backupStore: serverSms688TokenStore ? context.secrets : undefined
     });
     this.registrationExchangeRateStore = exchangeRateStore || (this.privateStateRoot
       ? new RegistrationExchangeRateStore({
@@ -271,6 +288,9 @@ class MailboxIntegration {
         onDidChange: this.events.event
       });
     }
+    if (this.pool.isLoaded()) {
+      this.scheduleAutomaticRenewalScan();
+    }
     this.publish();
   }
 
@@ -322,6 +342,65 @@ class MailboxIntegration {
     await this.ensureRegistrationExchangeRate();
     await this.publishPanelState();
     this.publish();
+  }
+
+  scheduleAutomaticRenewalScan() {
+    if (this.disposed || !this.pool.isLoaded() || this.automaticRenewalScanTimer) {
+      return;
+    }
+    const now = Date.now();
+    const nextAt = nextAutomaticRenewalScanAt(now);
+    const delay = Math.max(1, nextAt - now);
+    this.automaticRenewalScanTimer = setTimeout(() => {
+      this.automaticRenewalScanTimer = undefined;
+      void this.runAutomaticRenewalScan()
+        .catch(() => undefined)
+        .finally(() => this.scheduleAutomaticRenewalScan());
+    }, delay);
+    this.automaticRenewalScanTimer.unref?.();
+  }
+
+  async runAutomaticRenewalScan(now = Date.now()) {
+    if (this.disposed || !this.pool.isLoaded()) {
+      return { operation: "automatic-renewal", results: [], stopped: false };
+    }
+    if (this.automaticRenewalScanPromise) {
+      return this.automaticRenewalScanPromise;
+    }
+
+    const scan = (async () => {
+      await this.pool.reload();
+      const eligible = this.pool
+        .listMetadata({ includeDisabled: false })
+        .filter((mailbox) => typeof this.providers.get(mailbox.providerId)?.renew === "function");
+      const eligibleIds = eligible.map((mailbox) => mailbox.id);
+      const eligibleIdSet = new Set(eligibleIds);
+      await this.pool.initializeAutomaticRenewalSchedules(eligibleIds, now);
+
+      const dueIds = this.pool
+        .listMetadata({ includeDisabled: false })
+        .filter((mailbox) => {
+          if (!eligibleIdSet.has(mailbox.id)) return false;
+          if (mailbox.autoRenewalBlocked === true) return false;
+          if (!Number.isFinite(mailbox.autoRenewalNextAt) || mailbox.autoRenewalNextAt > now) return false;
+          return !this.coordinator.isActive(mailbox.id);
+        })
+        .map((mailbox) => mailbox.id);
+      if (dueIds.length === 0) {
+        return { operation: "automatic-renewal", results: [], stopped: false };
+      }
+      return this.coordinator.renew(dueIds, {
+        automatic: true,
+        maxConcurrent: AUTOMATIC_RENEWAL_MAX_CONCURRENT
+      });
+    })();
+    const promise = scan.finally(() => {
+      if (this.automaticRenewalScanPromise === promise) {
+        this.automaticRenewalScanPromise = undefined;
+      }
+    });
+    this.automaticRenewalScanPromise = promise;
+    return promise;
   }
 
   getDeactivatedMailboxEmails() {
@@ -615,6 +694,15 @@ class MailboxIntegration {
             operator: message.operator,
             product: message.product
           });
+          return;
+        case "registrationSaveSms688Token":
+          await this.saveSms688Token(message.token);
+          return;
+        case "registrationClearSms688Token":
+          await this.clearSms688Token();
+          return;
+        case "registrationRefreshSms688":
+          await this.refreshRegistrationSms688(message.sessionId);
           return;
         case "registrationConfirmPhone":
           await this.confirmRegistrationPhone(message.sessionId);
@@ -1396,7 +1484,7 @@ class MailboxIntegration {
   async acquireRegistrationPhone(sessionId, selection = {}) {
     const id = this.requireRegistrationSessionId(sessionId);
     const legacyCardCode = typeof selection === "string" ? selection.trim() : typeof selection?.cardCode === "string" ? selection.cardCode.trim() : "";
-    const sourceId = typeof selection === "string" ? "liye" : String(selection?.sourceId || "liye").trim().toLowerCase();
+    const sourceId = typeof selection === "string" ? "liye" : String(selection?.sourceId || "fivesim").trim().toLowerCase();
     const source = getRegistrationPhoneSource(sourceId);
     if (!source) {
       throw new Error("请选择有效的接码平台来源");
@@ -1411,6 +1499,16 @@ class MailboxIntegration {
         product: typeof selection?.product === "string" ? selection.product.trim() : source.service
       });
       if (result?.phase === "error") throw new Error(result.error || "5SIM 取号失败");
+      await this.publishPanelState();
+      return;
+    }
+    if (source.id === "sms688") {
+      const token = await this.sms688TokenStore.get();
+      if (!token) throw new Error("请先保存 SMS688 API Key");
+      const result = await this.registrationManager.acquirePhoneNumber(id, token, {
+        sourceId: source.id
+      });
+      if (result?.phase === "error") throw new Error(result.error || "SMS688 取号失败");
       await this.publishPanelState();
       return;
     }
@@ -1463,6 +1561,28 @@ class MailboxIntegration {
     await this.publishPanelState();
   }
 
+  async saveSms688Token(value) {
+    const result = await this.sms688TokenStore.set(value);
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationSaveSms688Token",
+      message: `SMS688 API Key 已保存（${result.masked}）`
+    });
+    await this.publishPanelState();
+  }
+
+  async clearSms688Token() {
+    await this.sms688TokenStore.clear();
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationClearSms688Token",
+      message: "SMS688 API Key 已清除"
+    });
+    await this.publishPanelState();
+  }
+
   async refreshRegistrationFiveSim(sessionId, selection = {}) {
     const id = this.requireRegistrationSessionId(sessionId);
     const token = await this.fiveSimTokenStore.get();
@@ -1474,6 +1594,17 @@ class MailboxIntegration {
       product: typeof selection?.product === "string" ? selection.product.trim() : "openai"
     });
     if (result?.phase === "error") throw new Error(result.error || "5SIM 信息刷新失败");
+    await this.publishPanelState();
+  }
+
+  async refreshRegistrationSms688(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    const token = await this.sms688TokenStore.get();
+    if (!token) throw new Error("请先保存 SMS688 API Key");
+    const result = await this.registrationManager.refreshPhoneInfo(id, token, {
+      sourceId: "sms688"
+    });
+    if (result?.phase === "error") throw new Error(result.error || "SMS688 信息刷新失败");
     await this.publishPanelState();
   }
 
@@ -1964,6 +2095,7 @@ class MailboxIntegration {
     const codexImportState = await this.getCodexImportState();
     const registrationKeyPool = await this.getRegistrationKeyPoolState();
     const registrationFiveSimToken = await this.getRegistrationFiveSimTokenState();
+    const registrationSms688Token = await this.getRegistrationSms688TokenState();
     const registrationFiveSimExchangeRate = await this.getRegistrationExchangeRateState();
     let totpSummary = { configured: false, baseUrl: "", links: {}, error: this.totpLoadError || "" };
     try {
@@ -1989,6 +2121,7 @@ class MailboxIntegration {
       phoneSources: listRegistrationPhoneSources(),
       registrationKeyPool,
       registrationFiveSimToken,
+      registrationSms688Token,
       registrationFiveSimExchangeRate,
       totp: {
         configured: totpSummary.configured,
@@ -2064,6 +2197,14 @@ class MailboxIntegration {
       return await this.fiveSimTokenStore.snapshot();
     } catch {
       return { configured: false, masked: "", error: "5SIM API Token 存储不可用" };
+    }
+  }
+
+  async getRegistrationSms688TokenState() {
+    try {
+      return await this.sms688TokenStore.snapshot();
+    } catch {
+      return { configured: false, masked: "", error: "SMS688 API Key 存储不可用" };
     }
   }
 
@@ -2214,6 +2355,10 @@ class MailboxIntegration {
       clearTimeout(this.operationStatePublishTimer);
       this.operationStatePublishTimer = undefined;
     }
+    if (this.automaticRenewalScanTimer) {
+      clearTimeout(this.automaticRenewalScanTimer);
+      this.automaticRenewalScanTimer = undefined;
+    }
     this.stopRegistrationTotpQueries();
     this.coordinator.stop();
     if (typeof this.api?.cancelOAuthAccountImport === "function") {
@@ -2327,4 +2472,20 @@ function safeError(error, fallback) {
   return (message || fallback).replace(/[\r\n\t]+/gu, " ").slice(0, 160);
 }
 
-module.exports = { INTEGRATION_ID, REGISTRATION_INTEGRATION_ID, MailboxIntegration, safeError };
+function nextAutomaticRenewalScanAt(value = Date.now()) {
+  const now = new Date(Number.isFinite(value) ? value : Date.now());
+  const next = new Date(now);
+  next.setHours(AUTOMATIC_RENEWAL_SCAN_HOUR, AUTOMATIC_RENEWAL_SCAN_MINUTE, 0, 0);
+  if (next.getTime() <= now.getTime()) {
+    next.setDate(next.getDate() + 1);
+  }
+  return next.getTime();
+}
+
+module.exports = {
+  INTEGRATION_ID,
+  REGISTRATION_INTEGRATION_ID,
+  MailboxIntegration,
+  nextAutomaticRenewalScanAt,
+  safeError
+};

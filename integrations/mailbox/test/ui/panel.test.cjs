@@ -1532,9 +1532,11 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
       providers: [],
       phoneSources: [
         { id: "liye", displayName: "LIYE", credentialType: "key" },
-        { id: "fivesim", displayName: "5SIM", credentialType: "api-token", websiteUrl: "https://5sim.net" }
+        { id: "fivesim", displayName: "5SIM", credentialType: "api-token", websiteUrl: "https://5sim.net" },
+        { id: "sms688", displayName: "SMS688", credentialType: "api-key", websiteUrl: "https://cdk.sms688.cc" }
       ],
       registrationFiveSimToken: { configured: true, masked: "five…oken" },
+      registrationSms688Token: { configured: true, masked: "sms6…-key" },
       registrationFiveSimExchangeRate: { rate: 6.8, date: "2026-09-06", stale: false },
       registrationKeyPool: { count: 0, available: 0, inUse: 0, keys: [] },
       registrationSessions: [{
@@ -1593,6 +1595,8 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   assert.ok(renderedHtml.indexOf("England") < renderedHtml.indexOf("USA"));
   assert.match(renderedHtml, /data-registration-phone-source-panel="liye" hidden/u);
   assert.match(renderedHtml, /data-registration-phone-source-panel="fivesim"/u);
+  assert.match(renderedHtml, /registrationSms688TokenInput-session:fivesim/u);
+  assert.match(renderedHtml, /Manual SMS（manual-sms）/u);
   const autoRefreshMessages = messages.filter((message) => message.action === "registrationRefreshFiveSim");
   assert.equal(autoRefreshMessages.length, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(autoRefreshMessages[0])), {

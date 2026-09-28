@@ -44,7 +44,7 @@ class OutlookLocalProvider {
     this.timeoutMs = normalizeTimeout(timeoutMs);
     this.now = typeof now === "function" ? now : () => Date.now();
     this.accessTokenCache = new Map();
-    this.accessTokenInflight = new Map();
+    this.tokenExchangeInflight = new Map();
   }
 
   asProvider() {
@@ -128,7 +128,7 @@ class OutlookLocalProvider {
     try {
       // Manual renewal deliberately performs a fresh exchange even when the
       // query cache still contains a usable access token.
-      const token = await this.exchangeRefreshToken(account.value, { signal });
+      const token = await this.exchangeRefreshTokenSingleFlight(account.value, { signal });
       this.cacheAccessToken(account.value, token, { credentialRefreshPending: false });
       const rotated = token.refreshToken && token.refreshToken !== account.value.credentials.refreshToken;
       return {
@@ -168,20 +168,10 @@ class OutlookLocalProvider {
       return cached;
     }
 
-    const inflight = this.accessTokenInflight.get(cacheKey);
-    if (inflight) return inflight;
-
-    const pending = this.exchangeRefreshToken(account, { signal })
-      .then((token) => this.cacheAccessToken(account, token, {
-        credentialRefreshPending: token.refreshToken !== account.credentials.refreshToken
-      }))
-      .finally(() => {
-        if (this.accessTokenInflight.get(cacheKey) === pending) {
-          this.accessTokenInflight.delete(cacheKey);
-        }
-      });
-    this.accessTokenInflight.set(cacheKey, pending);
-    return pending;
+    const token = await this.exchangeRefreshTokenSingleFlight(account, { signal });
+    return this.cacheAccessToken(account, token, {
+      credentialRefreshPending: token.refreshToken !== account.credentials.refreshToken
+    });
   }
 
   cacheAccessToken(account, token, { credentialRefreshPending = false } = {}) {
@@ -234,6 +224,20 @@ class OutlookLocalProvider {
     } finally {
       linked.dispose();
     }
+  }
+
+  async exchangeRefreshTokenSingleFlight(account, { signal } = {}) {
+    const exchangeKey = `${accessTokenCacheKey(account)}\u0000${account.credentials.refreshToken}`;
+    const inflight = this.tokenExchangeInflight.get(exchangeKey);
+    if (inflight) return inflight;
+
+    const pending = this.exchangeRefreshToken(account, { signal }).finally(() => {
+      if (this.tokenExchangeInflight.get(exchangeKey) === pending) {
+        this.tokenExchangeInflight.delete(exchangeKey);
+      }
+    });
+    this.tokenExchangeInflight.set(exchangeKey, pending);
+    return pending;
   }
 
   async queryImap(username, accessToken, {

@@ -15,6 +15,7 @@ class RegistrationManager extends EventEmitter {
     this.cancelOAuthImport = typeof options.cancelOAuthImport === "function" ? options.cancelOAuthImport : null;
     this.openRegistrationBrowser = typeof options.openRegistrationBrowser === "function" ? options.openRegistrationBrowser : null;
     this.fiveSimFetch = typeof options.fiveSimFetch === "function" ? options.fiveSimFetch : undefined;
+    this.sms688Fetch = typeof options.sms688Fetch === "function" ? options.sms688Fetch : this.fiveSimFetch;
   }
 
   createSession(params) {
@@ -33,6 +34,7 @@ class RegistrationManager extends EventEmitter {
       cancelOAuthImport: importCodex ? this.cancelOAuthImport : null,
       openRegistrationBrowser: importCodex ? null : this.openRegistrationBrowser,
       fiveSimFetch: this.fiveSimFetch,
+      sms688Fetch: this.sms688Fetch,
       onStateChange: (event) => {
         this.emit("stateChange", { sessionId: session.id, ...event });
       },
@@ -209,7 +211,8 @@ class RegistrationManager extends EventEmitter {
         startOAuthImport: importCodex && record.mode === "oauth" ? this.startOAuthImport : null,
         cancelOAuthImport: importCodex && record.mode === "oauth" ? this.cancelOAuthImport : null,
         openRegistrationBrowser: !importCodex ? this.openRegistrationBrowser : null,
-        fiveSimFetch: this.fiveSimFetch
+        fiveSimFetch: this.fiveSimFetch,
+        sms688Fetch: this.sms688Fetch
       });
       session.id = record.id;
       session.oauthOperationId = `registration-oauth:${session.id}`;

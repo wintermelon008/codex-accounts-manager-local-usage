@@ -13,7 +13,12 @@ const test = require("node:test");
 const testPrivateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-accounts-mailbox-integration-"));
 process.env.CODEX_ACCOUNTS_PRIVATE_DIR = testPrivateRoot;
 
-const { MailboxIntegration, INTEGRATION_ID, REGISTRATION_INTEGRATION_ID } = require("../../src/ui/integration.cjs");
+const {
+  MailboxIntegration,
+  INTEGRATION_ID,
+  REGISTRATION_INTEGRATION_ID,
+  nextAutomaticRenewalScanAt
+} = require("../../src/ui/integration.cjs");
 
 test.after(() => {
   fs.rmSync(testPrivateRoot, { recursive: true, force: true });
@@ -47,6 +52,77 @@ test("activation loads local state, registers a generic Manager card, and does n
   assert.equal(registration.getViewModel().title, "Mailbox");
   assert.equal(registration.getViewModel().actions.some((action) => action.id === "open"), true);
   integration.dispose();
+});
+
+test("automatic renewal scan is scheduled for the next local 12:05", () => {
+  const before = new Date(2026, 8, 28, 12, 4, 59, 999).getTime();
+  const after = new Date(2026, 8, 28, 12, 5, 0, 0).getTime();
+  assert.equal(
+    nextAutomaticRenewalScanAt(before),
+    new Date(2026, 8, 28, 12, 5, 0, 0).getTime()
+  );
+  assert.equal(
+    nextAutomaticRenewalScanAt(after),
+    new Date(2026, 8, 29, 12, 5, 0, 0).getTime()
+  );
+});
+
+test("automatic renewal rotates due credentials and schedules the next attempt", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  let renewalCalls = 0;
+  const provider = {
+    apiVersion: 1,
+    id: "outlook-local",
+    displayName: "Outlook local",
+    capabilities: { history: "recent", maxMessages: 1, manualRenewal: true },
+    importSchema: { label: "Mock row", placeholder: "email|client|refresh" },
+    parseImport(input) {
+      const [address, clientId, refreshToken] = String(input).split("|");
+      return { entries: [{ address, credentials: { email: address, clientId, refreshToken } }], failed: [] };
+    },
+    async query() {
+      return { ok: true, providerId: "outlook-local", messages: [], codes: [] };
+    },
+    async renew(account) {
+      renewalCalls += 1;
+      return {
+        ok: true,
+        providerId: "outlook-local",
+        operation: "renewal",
+        status: "updated",
+        address: account.address,
+        messages: [],
+        codes: [],
+        account: {
+          address: account.address,
+          credentials: { email: account.address, clientId: "client-id", refreshToken: "rotated-refresh" }
+        }
+      };
+    }
+  };
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
+  await integration.initialize();
+  const [{ id }] = (await integration.pool.importProvider({
+    provider,
+    input: "automatic@example.com|client-id|refresh-one"
+  })).imported;
+  try {
+    integration.pool.metadata.accounts[0].autoRenewalNextAt = 0;
+    await integration.pool.persistMetadata();
+
+    await integration.runAutomaticRenewalScan(Date.now());
+
+    const metadata = integration.pool.listMetadata()[0];
+    assert.equal(renewalCalls, 1);
+    assert.equal((await integration.pool.getAccount(id)).credentials.refreshToken, "rotated-refresh");
+    assert.ok(Number.isFinite(metadata.lastRenewalAt));
+    assert.ok(metadata.autoRenewalNextAt > metadata.lastRenewalAt);
+  } finally {
+    await integration.pool.deleteAccount(id).catch(() => undefined);
+    integration.dispose();
+  }
 });
 
 test("importing a mailbox asks 2FAuth to auto-bind the newest matching entry", async () => {
@@ -1428,7 +1504,7 @@ test("registration phone keys are claimed for取号, consumed on SMS, and releas
 
   await integration.addRegistrationPhoneKeys("POOL-KEY-1\nPOOL-KEY-2");
   const before = await integration.getPanelState();
-  assert.equal(before.phoneSources[0].id, "liye");
+  assert.deepEqual(before.phoneSources.map((source) => source.id), ["fivesim", "sms688", "liye"]);
   const keyId = before.registrationKeyPool.keys[0].id;
   await integration.acquireRegistrationPhone(sessionId, { sourceId: "liye", keyId });
   assert.equal(acquired.code, "POOL-KEY-1");
@@ -1478,6 +1554,29 @@ test("5SIM registration uses its own API Token and never claims the LIYE Key poo
   assert.deepEqual(acquired.options, { sourceId: "fivesim", country: "england", operator: "any", product: "openai" });
   assert.equal(integration.registrationPhoneKeyClaims.has(sessionId), false);
   assert.deepEqual((await integration.getPanelState()).registrationFiveSimToken, { configured: true, masked: "five…oken" });
+  integration.dispose();
+});
+
+test("SMS688 registration uses its own API Key and never claims the LIYE Key pool", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  const sessionId = integration.registrationManager.createSession({ email: "sms688@example.com", password: "password" });
+  let acquired;
+  integration.registrationManager.acquirePhoneNumber = async (_id, credential, options) => {
+    acquired = { credential, options };
+    return { phase: "polling", running: true };
+  };
+
+  await integration.saveSms688Token("sms688-account-api-key");
+  await integration.acquireRegistrationPhone(sessionId, { sourceId: "sms688" });
+
+  assert.equal(acquired.credential, "sms688-account-api-key");
+  assert.deepEqual(acquired.options, { sourceId: "sms688" });
+  assert.equal(integration.registrationPhoneKeyClaims.has(sessionId), false);
+  assert.deepEqual((await integration.getPanelState()).registrationSms688Token, { configured: true, masked: "sms6…-key" });
   integration.dispose();
 });
 

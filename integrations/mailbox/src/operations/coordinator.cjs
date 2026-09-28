@@ -117,6 +117,7 @@ class MailboxOperationCoordinator {
   }
 
   async renew(ids, options = {}) {
+    const { maxConcurrent, automatic = false, ...providerOptions } = options;
     return this.run("renewal", ids, async (account, provider, signal) => {
       if (typeof provider.renew !== "function") {
         const result = {
@@ -133,13 +134,16 @@ class MailboxOperationCoordinator {
             retryable: false
           }
         };
-        await this.pool.recordRenewalResult(account.id, result);
+        await this.pool.recordRenewalResult(account.id, result, { automatic });
         return withMailboxId(account, result);
       }
-      const result = await provider.renew(account, { ...options, signal });
+      const result = await provider.renew(account, { ...providerOptions, signal });
       throwIfAborted(signal);
-      await this.pool.recordRenewalResult(account.id, result);
+      await this.pool.recordRenewalResult(account.id, result, { automatic });
       return withMailboxId(account, sanitizePublicRenewalResult(result));
+    }, {
+      maxConcurrent,
+      persistOptions: { automatic }
     });
   }
 
@@ -165,7 +169,7 @@ class MailboxOperationCoordinator {
     return stopped;
   }
 
-  async run(operation, ids, worker, { persistBatch } = {}) {
+  async run(operation, ids, worker, { maxConcurrent = this.maxConcurrent, persistBatch, persistOptions } = {}) {
     const accounts = await this.pool.listAccounts({ includeDisabled: false });
     const selected = selectAccounts(accounts, ids);
     if (selected.length === 0) {
@@ -201,7 +205,7 @@ class MailboxOperationCoordinator {
     this.notifyOperationChange();
 
     try {
-      const results = await runWithConcurrency(selected, this.maxConcurrent, async (account) => {
+      const results = await runWithConcurrency(selected, normalizePositive(maxConcurrent, this.maxConcurrent), async (account) => {
         const active = entries.get(account.id);
         if (!active || active.stopped) {
           if (active) {
@@ -211,7 +215,8 @@ class MailboxOperationCoordinator {
         }
         active.started = true;
         return this.runOne(operation, account, worker, active, {
-          persistResult: typeof persistBatch !== "function"
+          persistResult: typeof persistBatch !== "function",
+          persistOptions
         });
       });
       if (typeof persistBatch === "function") {
@@ -237,7 +242,7 @@ class MailboxOperationCoordinator {
     }
   }
 
-  async runOne(operation, account, worker, active, { persistResult = true } = {}) {
+  async runOne(operation, account, worker, active, { persistResult = true, persistOptions } = {}) {
     const provider = this.providers.get(account.providerId);
     try {
       if (!provider) {
@@ -260,7 +265,7 @@ class MailboxOperationCoordinator {
       try {
         if (persistResult) {
           if (operation === "renewal") {
-            await this.pool.recordRenewalResult(account.id, failure);
+            await this.pool.recordRenewalResult(account.id, failure, persistOptions);
           } else {
             await this.pool.recordQueryResult(account.id, failure);
           }

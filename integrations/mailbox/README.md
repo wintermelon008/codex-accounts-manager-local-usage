@@ -42,7 +42,7 @@
 1. 用 `client id + refresh token` 向微软 token endpoint 换取短期 access token，并在扩展宿主内存中缓存到过期前 5 分钟；若 Outlook IMAP 拒绝该 token，会丢弃对应缓存，下一次手动查询重新换取；access token 不写入磁盘；
 2. 通过 Outlook IMAP 的 XOAUTH2 只读打开 `INBOX`；
 3. 在本地解析最近邮件的 MIME 正文并提取验证码；
-4. 微软返回轮换后的 refresh token 时自动写回 Mailbox 私有凭据；“人工续期”按钮也会单独执行一次续期。默认只搜索最近 30 天、读取最近最多 3 封邮件，并使用一次多 UID FETCH，减少单邮箱查询的往返次数。
+4. 微软返回轮换后的 refresh token 时自动写回 Mailbox 私有凭据；“人工续期”按钮也会单独执行一次续期。Mailbox 扩展每天按本机时间 12:05 扫描支持续期的邮箱，每个邮箱在 14–21 天的随机间隔后自动尝试一次；自动任务最多同时续期 1 个邮箱，失败会按后续扫描重试，明确的 refresh token 失效会停止自动重试。只有新 refresh token 成功写入后才更新上次续期时间。默认只搜索最近 30 天、读取最近最多 3 封邮件，并使用一次多 UID FETCH，减少单邮箱查询的往返次数。
 
 导入格式为：
 
@@ -52,7 +52,7 @@
 
 也兼容 `邮箱----旧字段----client-id----refresh-token` 四段格式，但第二段不会被本地来源使用或保存。编辑已有 `tototo-outlook` 邮箱时，将来源切换为本地 Outlook 并留空凭据栏，会自动从已保存凭据迁移 client id 和 refresh token；其他来源切换仍需填写新格式。该来源不请求发送邮件权限，access token 不写入持久存储；refresh token 只保存在扩展宿主的受限私有凭据存储中。
 
-注册助手的手机号来源目前包括 `LIYE` 和 `5SIM`。LIYE 继续使用独立的接码卡密池；5SIM 使用单独保存的 API Token，不进入 LIYE Key 池。5SIM 面板通过账户资料显示余额/冻结余额/评分，并从公开价格接口加载 OpenAI 可选号区、运营商、库存、成功率和价格；地区列表默认按可用内部条目的最低价格递增，默认最高价格为 `0.1`，还可设置最低成功率筛选。面板将 API 的即时 `rate` 与 `rate1`、`rate3`、`rate24`、`rate72`、`rate168`、`rate720` 等窗口计算出的平均成功率分开显示；筛选使用平均成功率，低于 1% 或没有任何可用成功率数据的条目会自动剔除。5SIM 和 LIYE 均允许在当前订单可换号期间持续重新取号，不再限制换号次数；取号界面打开且有可换号订单时，按 `N` 可重新取号并在新号码返回后自动复制。价格同时显示美元原价和人民币估算；人民币按每天首次打开注册助手时保存的 USD/CNY 汇率并额外乘以 `1.029`（2.9% 手续费）计算。缓存只保留一个当天记录，下一天成功查询后覆盖。Token 只保存在扩展宿主的私有存储中，面板和日志只显示脱敏值。
+注册助手的手机号来源默认顺序为 `5SIM`、`SMS688`、`LIYE`。LIYE 继续使用独立的接码卡密池；5SIM 使用单独保存的 API Token，SMS688 使用账户专属 API Key，两者都不进入 LIYE Key 池。5SIM 面板通过账户资料显示余额/冻结余额/评分，并从公开价格接口加载 OpenAI 可选号区、运营商、库存、成功率和价格；地区列表默认按可用内部条目的最低价格递增，默认最高价格为 `0.1`，还可设置最低成功率筛选。面板将 API 的即时 `rate` 与 `rate1`、`rate3`、`rate24`、`rate72`、`rate168`、`rate720` 等窗口计算出的平均成功率分开显示；筛选使用平均成功率，低于 1% 或没有任何可用成功率数据的条目会自动剔除。SMS688 对接账户 API 的手动接码接口：`POST /api/v1/manual-sms/leases` 获取异步租约，轮询 `GET /api/v1/manual-sms/leases/{job_id}` 读取号码和短信，并通过 `/change`、`/release` 执行用户明确的换号和停止。5SIM、SMS688 和 LIYE 均允许在当前订单可换号期间重新取号；取号界面打开且有可换号订单时，按 `N` 可重新取号并在新号码返回后自动复制。价格同时显示美元原价和人民币估算；人民币按每天首次打开注册助手时保存的 USD/CNY 汇率并额外乘以 `1.029`（2.9% 手续费）计算。缓存只保留一个当天记录，下一天成功查询后覆盖。各平台凭据只保存在扩展宿主的私有存储中，面板和日志只显示脱敏值。
 
 ## 内置 boya 来源
 
@@ -99,6 +99,8 @@ provider 要求 HTTPS、固定接口路径、非空 `key`，并校验 URL 路径
 卸载本扩展不会删除 Manager 账号。当前版本使用全新的 `Mailbox` 扩展身份和存储命名空间，不从旧的 provider 专用扩展迁移数据；若需要清理旧扩展凭据，应在卸载前通过 VS Code 的扩展存储清理能力处理。本扩展没有自动续期或后台网络任务；注册助手每天首次打开时才会查询一次汇率。
 
 5SIM 使用[当前 REST v1 接口](https://5sim.net/docs)：`/v1/user/profile` 查询余额，`/v1/guest/prices?product=openai` 查询可选号区，`/v1/user/buy/activation/{country}/{operator}/openai` 购买，`/v1/user/check/{id}` 轮询短信，`/v1/user/finish/{id}` 完成订单，`/v1/user/cancel/{id}` 取消订单。目录解析同时保留即时 `rate` 和由 `rate1`/`rate3`/`rate24`/`rate72`/`rate168`/`rate720` 窗口计算的平均值，并按平均值的 1% 门槛过滤。5SIM 没有独立换号接口，注册助手的“重新取号”会先取消旧订单再购买新订单，当前订单可持续执行；短信到达与取消并发时会优先保留已收到的验证码。
+
+SMS688 使用[账户 API 接入指南](https://cdk.sms688.cc/api-guide)中的 Manual SMS API：凭据为账户中心生成的 API Key，使用 `Authorization: Bearer <ACCOUNT_API_KEY>`；`GET /api/v1/manual-sms/me` 查询可用次数和活动租约，`POST /api/v1/manual-sms/leases` 获取号码，`GET /api/v1/manual-sms/leases/{job_id}` 轮询租约，`POST .../{job_id}/change` 换号，`POST .../{job_id}/release` 释放号码。创建、换号和释放请求各使用新的 `Idempotency-Key`，刷新或断线时只查询已有 `job_id`，不会重复创建租约。
 
 ## 安装
 
