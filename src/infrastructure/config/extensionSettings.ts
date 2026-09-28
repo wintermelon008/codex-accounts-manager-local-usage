@@ -40,7 +40,9 @@ export class ExtensionSettingsStore {
       codexAppRestartEnabled: config.get<boolean>("codexAppRestartEnabled", false),
       codexAppRestartMode: config.get<"auto" | "manual">("codexAppRestartMode") ?? "manual",
       backgroundTokenRefreshEnabled: config.get<boolean>("backgroundTokenRefreshEnabled", true),
-      forceFastModeEnabled: config.get<boolean>("forceFastModeEnabled", false),
+      // Fast mode is intentionally disabled in this build; keep the setting
+      // field for backwards-compatible dashboard snapshots.
+      forceFastModeEnabled: false,
       autoRefreshMinutes: normalizeAutoRefreshMinutes(config.get<number>("autoRefreshMinutes", 0)),
       autoSwitchEnabled: config.get<boolean>("autoSwitchEnabled", false),
       hotSwitchEnabled: config.get<boolean>("hotSwitchEnabled", false),
@@ -303,10 +305,8 @@ export function isBackgroundTokenRefreshEnabled(): boolean {
   return getCodexAccountsConfiguration().get<boolean>("backgroundTokenRefreshEnabled", true);
 }
 
-export function isForceFastModeEnabled(
-  config: ReadableCodexAccountsConfiguration = getCodexAccountsConfiguration()
-): boolean {
-  return config.get<boolean>("forceFastModeEnabled", false);
+export function isForceFastModeEnabled(): boolean {
+  return false;
 }
 
 export function isHourlyQuotaControlEnabled(): boolean {

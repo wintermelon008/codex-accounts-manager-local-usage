@@ -349,11 +349,6 @@ function App() {
     );
   };
 
-  const handleForceFastModeToggle = (enabled: boolean): void => {
-    patchSettings({ forceFastModeEnabled: enabled });
-    sendSetting("forceFastModeEnabled", enabled);
-  };
-
   const selectedAccountIds = new Set(state.selectedAccountIds);
   const selectedCount = state.selectedAccountIds.length;
   const isAccountBusy = (accountId: string): boolean =>
@@ -490,24 +485,6 @@ function App() {
                 ) : null}
                 <span class="button-tip" aria-hidden="true">
                   {snapshot.copy.announcementsTooltip}
-                </span>
-              </button>
-              <button
-                id="refreshViewButton"
-                class="settings-btn refresh-view-btn action-btn icon-only"
-                type="button"
-                title={snapshot.copy.refreshPage}
-                aria-label={snapshot.copy.refreshPage}
-                disabled={hasGlobalPendingAction || isActionPending("refreshView")}
-                aria-busy={isActionPending("refreshView")}
-                onClick={() => sendAction("refreshView")}
-              >
-                <span class="button-face">
-                  {isActionPending("refreshView") ? <span class="button-spinner" aria-hidden="true"></span> : null}
-                  <span class="button-label">↻</span>
-                </span>
-                <span class="button-tip" aria-hidden="true">
-                  {snapshot.copy.refreshPage}
                 </span>
               </button>
               <button
@@ -671,21 +648,6 @@ function App() {
                 <div class="header-sub">{snapshot.copy.savedAccountsSub}</div>
               </div>
               <div class="saved-accounts-header-actions">
-                <button
-                  id="forceFastModeToggle"
-                  class={`account-fast-mode-toggle ${snapshot.settings.forceFastModeEnabled ? "is-active" : ""}`}
-                  type="button"
-                  role="switch"
-                  aria-checked={snapshot.settings.forceFastModeEnabled}
-                  aria-label={resolveForceFastModeToggleLabel(snapshot.lang, snapshot.settings.forceFastModeEnabled)}
-                  title={resolveForceFastModeToggleLabel(snapshot.lang, snapshot.settings.forceFastModeEnabled)}
-                  onClick={() => handleForceFastModeToggle(!snapshot.settings.forceFastModeEnabled)}
-                >
-                  <span class="account-fast-mode-label">Fast</span>
-                  <span class="account-fast-mode-track" aria-hidden="true">
-                    <span class="account-fast-mode-thumb" />
-                  </span>
-                </button>
                 <div class="account-sort-controls" role="group" aria-label={resolveAccountControlsLabel(snapshot.lang)}>
                   <select
                     id="account-sort-select"
@@ -1667,16 +1629,6 @@ function resolveRestartServicesLabel(lang: string): string {
     return "重啟 Manager、Mailbox 與 Codex 服務";
   }
   return "Restart Manager, Mailbox, and Codex services";
-}
-
-function resolveForceFastModeToggleLabel(lang: string, enabled: boolean): string {
-  if (lang === "zh") {
-    return enabled ? "关闭 Fast 模式（下一回合生效）" : "开启 Fast 模式（下一回合生效）";
-  }
-  if (lang === "zh-hant") {
-    return enabled ? "關閉 Fast 模式（下一回合生效）" : "開啟 Fast 模式（下一回合生效）";
-  }
-  return enabled ? "Turn off Fast mode (applies next turn)" : "Turn on Fast mode (applies next turn)";
 }
 
 function resolveAccountSortSelectLabel(lang: string): string {

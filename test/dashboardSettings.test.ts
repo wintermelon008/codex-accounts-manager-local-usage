@@ -4,7 +4,11 @@ import {
   DEFAULT_WEEKLY_QUOTA_HIDE_THRESHOLD,
   DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD
 } from "../src/domain/dashboard/types";
-import { ExtensionSettingsStore, normalizeProxyAddresses } from "../src/infrastructure/config/extensionSettings";
+import {
+  ExtensionSettingsStore,
+  isForceFastModeEnabled,
+  normalizeProxyAddresses
+} from "../src/infrastructure/config/extensionSettings";
 import { handleDashboardSettingUpdate } from "../src/presentation/dashboard/settings";
 
 describe("handleDashboardSettingUpdate", () => {
@@ -39,7 +43,7 @@ describe("handleDashboardSettingUpdate", () => {
     expect(fallbackSettings.unhideWeeklyQuotaThreshold).toBe(DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD);
   });
 
-  it("reads and persists the Fast mode switch", async () => {
+  it("keeps Fast mode disabled even when the legacy setting is enabled", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     const get = vi.fn((key: string, fallback: unknown) => (key === "forceFastModeEnabled" ? true : fallback));
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
@@ -48,7 +52,8 @@ describe("handleDashboardSettingUpdate", () => {
       inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}` }))
     } as never);
 
-    expect(new ExtensionSettingsStore().getDashboardSettings().forceFastModeEnabled).toBe(true);
+    expect(new ExtensionSettingsStore().getDashboardSettings().forceFastModeEnabled).toBe(false);
+    expect(isForceFastModeEnabled()).toBe(false);
     await expect(handleDashboardSettingUpdate("forceFastModeEnabled", false)).resolves.toBe(true);
     expect(update).toHaveBeenCalledWith("forceFastModeEnabled", false, vscode.ConfigurationTarget.Global);
   });

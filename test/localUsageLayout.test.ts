@@ -104,24 +104,13 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(narrowUsageStyles).toContain(".local-usage-layout");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
     expect(main).toContain('sendAction("refreshLocalUsage")');
-    expect(main).toContain('id="forceFastModeToggle"');
-    expect(main).toContain('sendSetting("forceFastModeEnabled", enabled)');
-    const fastToggleIndex = main.indexOf('id="forceFastModeToggle"');
     const sortControlsIndex = main.indexOf('class="account-sort-controls"');
     const groupFiltersIndex = main.indexOf('class="account-group-filters"', sortControlsIndex);
-    expect(fastToggleIndex).toBeGreaterThan(-1);
+    expect(main).not.toContain('id="forceFastModeToggle"');
+    expect(main).not.toContain('sendSetting("forceFastModeEnabled", enabled)');
     expect(sortControlsIndex).toBeGreaterThan(-1);
     expect(groupFiltersIndex).toBeGreaterThan(sortControlsIndex);
-    expect(fastToggleIndex).toBeLessThan(sortControlsIndex);
-    expect(main.slice(sortControlsIndex, groupFiltersIndex)).not.toContain("forceFastModeToggle");
-    const compactHeaderStylesStart = stylesheet.indexOf(".saved-accounts-header-actions > .account-fast-mode-toggle");
-    const compactHeaderStylesEnd = stylesheet.indexOf(".mailbox-open-btn", compactHeaderStylesStart);
-    const compactHeaderStyles = stylesheet.slice(compactHeaderStylesStart, compactHeaderStylesEnd);
-    expect(compactHeaderStyles).toContain("height: 24px");
-    expect(compactHeaderStyles).toContain("min-height: 24px");
-    expect(compactHeaderStyles).toContain("min-height: 18px");
-    expect(compactHeaderStyles).toContain("height: 18px");
-    expect(compactHeaderStyles).toContain("min-height: 24px;");
+    expect(stylesheet).not.toContain("account-fast-mode-toggle");
     expect(main).not.toContain("账号排序");
   });
 
