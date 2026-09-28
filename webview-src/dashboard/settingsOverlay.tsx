@@ -489,10 +489,10 @@ export function SettingsOverlay(props: {
             </div>
             <div class="settings-note">
               {props.lang === "zh"
-                ? "清除额度基线、低额度观测和待重试状态；不会中断正在运行的对话。"
+                ? "清除额度基线、低额度观测和待重试状态；会同步实际 provider 路由，并只回收没有真实 app-server 子进程的孤儿 runtime。"
                 : props.lang === "zh-hant"
-                  ? "清除額度基線、低額度觀測和待重試狀態；不會中斷正在執行的對話。"
-                  : "Clear quota baselines, low-quota observations, and pending retries without interrupting active conversations."}
+                  ? "清除額度基線、低額度觀測和待重試狀態；會同步實際 provider 路由，並只回收沒有真實 app-server 子程序的孤兒 runtime。"
+                  : "Clear quota baselines, low-quota observations, and pending retries; reconcile the live provider route and reap only orphan runtimes without a real app-server child."}
             </div>
             <div class="saved-actions settings-inline-actions">
               <button type="button" onClick={props.onResetSeamlessSwitchRuntime}>

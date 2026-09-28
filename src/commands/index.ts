@@ -3,7 +3,12 @@ import { AccountsCommandService } from "../application/accounts/commandService";
 export { refreshImportedAccountQuota } from "../application/accounts/quota";
 import { CodexAccountRecord } from "../core/types";
 import { AccountsRepository } from "../storage";
-import { CodexHotSwitchRuntime, RuntimeAccountSwitchOptions, RuntimeAccountSwitchOutcome } from "../codex";
+import {
+  CodexHotSwitchRuntime,
+  HotSwitchRuntimeRepairResult,
+  RuntimeAccountSwitchOptions,
+  RuntimeAccountSwitchOutcome
+} from "../codex";
 import type { RuntimeSwitchSource } from "../application/accounts/runtimeSwitchCoordinator";
 import type { AccountSharingService } from "../sharing";
 
@@ -25,6 +30,7 @@ export function registerCommands(
   hotSwitchRuntime: CodexHotSwitchRuntime,
   options: {
     resetSeamlessSwitchRuntime?: () => void | Promise<void>;
+    repairSeamlessSwitchRuntime?: () => Promise<HotSwitchRuntimeRepairResult>;
     accountSharing?: AccountSharingService;
   } = {}
 ): void {
@@ -77,7 +83,7 @@ export function registerCommands(
     vscode.commands.registerCommand("codexAccounts.openCodexHome", () => service.openCodexHome()),
     vscode.commands.registerCommand("codexAccounts.showQuotaSummary", () => service.showQuotaSummary()),
     vscode.commands.registerCommand("codexAccounts.resetSeamlessSwitchRuntime", () =>
-      options.resetSeamlessSwitchRuntime?.()
+      options.repairSeamlessSwitchRuntime?.() ?? options.resetSeamlessSwitchRuntime?.()
     )
   );
 }

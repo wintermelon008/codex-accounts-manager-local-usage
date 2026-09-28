@@ -253,6 +253,83 @@ describe("Codex hot-switch runtime setup", () => {
     runtime.dispose();
   });
 
+  it("reconciles a stale persisted provider route when the live runtime is ChatGPT", async () => {
+    const switchProviderRoute = vi.fn().mockResolvedValue(undefined);
+    const bridge = {
+      getStatus: vi.fn().mockResolvedValue({
+        ready: true,
+        appServerPid: 2,
+        providerKind: "chatgpt",
+        gatewayActive: false,
+        attributionActive: true
+      }),
+      dispose: vi.fn()
+    };
+    const runtime = new CodexHotSwitchRuntime(
+      {} as vscode.ExtensionContext,
+      { switchProviderRoute } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+    (runtime as unknown as { bridge: typeof bridge }).bridge = bridge;
+
+    await expect(runtime.repairRuntimeState()).resolves.toEqual({
+      providerRoute: "chatgpt",
+      providerRouteReconciled: true,
+      requiresReload: false
+    });
+    expect(switchProviderRoute).toHaveBeenCalledOnce();
+    runtime.dispose();
+  });
+
+  it("does not rewrite the provider route while the live Gateway is active", async () => {
+    const switchProviderRoute = vi.fn().mockResolvedValue(undefined);
+    const bridge = {
+      getStatus: vi.fn().mockResolvedValue({
+        ready: true,
+        appServerPid: 2,
+        providerKind: "gateway",
+        gatewayActive: true,
+        attributionActive: false
+      }),
+      dispose: vi.fn()
+    };
+    const runtime = new CodexHotSwitchRuntime(
+      {} as vscode.ExtensionContext,
+      { switchProviderRoute } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+    (runtime as unknown as { bridge: typeof bridge }).bridge = bridge;
+
+    await expect(runtime.repairRuntimeState()).resolves.toEqual({
+      providerRoute: "gateway",
+      providerRouteReconciled: false,
+      requiresReload: false
+    });
+    expect(switchProviderRoute).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
+
+  it("probes the resident runtime when the Manager bridge is not attached", async () => {
+    const switchProviderRoute = vi.fn().mockResolvedValue(undefined);
+    const getStatus = vi.spyOn(CodexHotSwitchBridge.prototype, "getStatus").mockResolvedValue({
+      ready: true,
+      appServerPid: 2,
+      providerKind: "chatgpt",
+      gatewayActive: false,
+      attributionActive: true
+    } as never);
+    const runtime = new CodexHotSwitchRuntime(
+      {} as vscode.ExtensionContext,
+      { switchProviderRoute } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+
+    try {
+      await expect(runtime.reconcileProviderRoute()).resolves.toBe("chatgpt");
+      expect(switchProviderRoute).toHaveBeenCalledOnce();
+    } finally {
+      getStatus.mockRestore();
+      runtime.dispose();
+    }
+  });
+
   it("uses the access-token email for app-server identity when a stable user has an email alias", () => {
     const identity = resolveRuntimeAccessTokenIdentity(
       { email: "stored@example.invalid", userId: "user-same" },

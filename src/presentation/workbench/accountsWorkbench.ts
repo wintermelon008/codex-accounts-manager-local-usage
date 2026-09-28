@@ -26,6 +26,7 @@ import {
   HotSwitchAuthTokenRevokedResult,
   HotSwitchCapacityRecoveryEvent,
   HotSwitchCapacityRecoveryResult,
+  HotSwitchRuntimeRepairResult,
   RuntimeAccountSwitchOptions,
   RuntimeAccountSwitchOutcome
 } from "../../codex";
@@ -354,6 +355,13 @@ export class AccountsWorkbench {
       await this.refreshCoordinator.initializeObservedAuthIdentity();
     });
     const hotSwitchSetup = await measureStep("hotSwitchRuntime.initialize", () => this.hotSwitchRuntime.initialize());
+    await measureStep("reconcileRuntimeProviderRoute", async () => {
+      try {
+        await this.hotSwitchRuntime.reconcileProviderRoute();
+      } catch (error) {
+        console.warn(`[codexAccounts] provider route reconciliation skipped: ${getErrorMessage(error)}`);
+      }
+    });
     this.context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (!event.affectsConfiguration("codexAccounts.forceFastModeEnabled")) {
@@ -400,6 +408,7 @@ export class AccountsWorkbench {
     await measureStep("registerCommands", () => {
       registerCommands(this.context, this.repo, refreshers, this.hotSwitchRuntime, {
         resetSeamlessSwitchRuntime: () => this.resetSeamlessSwitchRuntime(),
+        repairSeamlessSwitchRuntime: () => this.repairSeamlessSwitchRuntime(),
         accountSharing: this.accountSharing
       });
     });
@@ -944,6 +953,13 @@ export class AccountsWorkbench {
       return;
     }
     await this.hotSwitchRuntime.resetUsageLimitObservation();
+  }
+
+  private async repairSeamlessSwitchRuntime(): Promise<HotSwitchRuntimeRepairResult> {
+    await this.resetSeamlessSwitchRuntime();
+    const result = await this.hotSwitchRuntime.repairRuntimeState();
+    void this.statusBar.refresh();
+    return result;
   }
 
   private async switchRuntimeAccount(

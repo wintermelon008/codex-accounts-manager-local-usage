@@ -262,8 +262,22 @@ async function runDashboardAction(
       return undefined;
     }
     case "resetSeamlessSwitchRuntime":
-      await vscode.commands.executeCommand("codexAccounts.resetSeamlessSwitchRuntime");
-      await ctx.publishState(true);
+      {
+        const result = await vscode.commands.executeCommand<{ requiresReload?: boolean }>(
+          "codexAccounts.resetSeamlessSwitchRuntime"
+        );
+        await ctx.publishState(true);
+        if (result?.requiresReload) {
+          void Promise.resolve(vscode.commands.executeCommand("workbench.action.reloadWindow")).catch(
+            (error: unknown) => {
+              console.error(
+                `[codexAccounts] runtime repair reload failed: ${error instanceof Error ? error.message : String(error)}`
+              );
+              void vscode.window.showErrorMessage("运行时已回收，但无法自动重载窗口，请手动执行 Developer: Reload Window。");
+            }
+          );
+        }
+      }
       return undefined;
     case "integrationAction":
       {

@@ -74,6 +74,13 @@ type GatewayRuntimeState = {
   active: boolean;
 };
 
+export type HotSwitchRuntimeRepairResult = {
+  providerRoute: "chatgpt" | "gateway" | "unknown";
+  providerRouteReconciled: boolean;
+  recoveredOwnerPid?: number;
+  requiresReload: boolean;
+};
+
 export type HotSwitchSetupResult = {
   enabled: boolean;
   configured: boolean;
@@ -298,6 +305,49 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     };
   }
 
+  /**
+   * Repair only state that is provably stale. A live Gateway remains selected;
+   * a live non-Gateway runtime makes the persisted provider route converge to
+   * ChatGPT. If the runtime cannot answer, reap only an orphaned Manager shim
+   * with no real app-server child so the next reload can acquire the lease.
+   */
+  async repairRuntimeState(): Promise<HotSwitchRuntimeRepairResult> {
+    try {
+      const providerRoute = await this.reconcileProviderRoute();
+      if (providerRoute !== "unknown") {
+        return {
+          providerRoute,
+          providerRouteReconciled: providerRoute === "chatgpt",
+          requiresReload: false
+        };
+      }
+    } catch {
+      // Fall through to the orphan-owner recovery path below.
+    }
+
+    const recoveredOwnerPid = await this.recoverOrphanedRuntimeOwner();
+    return {
+      providerRoute: "unknown",
+      providerRouteReconciled: false,
+      ...(recoveredOwnerPid === undefined ? {} : { recoveredOwnerPid }),
+      requiresReload: recoveredOwnerPid !== undefined
+    };
+  }
+
+  /** Reconcile the persisted provider marker without reclaiming any process. */
+  async reconcileProviderRoute(): Promise<HotSwitchRuntimeRepairResult["providerRoute"]> {
+    const status = await this.readStatusForRepair();
+    if (!status.ready || status.appServerPid === null) {
+      return "unknown";
+    }
+
+    const gatewayActive = status.gatewayActive === true || status.providerKind === "gateway";
+    if (!gatewayActive) {
+      await this.repo.switchProviderRoute();
+    }
+    return gatewayActive ? "gateway" : "chatgpt";
+  }
+
   async getOperationStatus(operationId: string): Promise<HotSwitchOperationStatus> {
     if (!this.bridge) {
       throw new Error("Codex hot switch is not configured");
@@ -317,6 +367,75 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("Codex hot switch is not configured");
     }
     await this.bridge.configureUsageLimitObservation(enabled);
+  }
+
+  private async readStatusForRepair(): Promise<HotSwitchStatus> {
+    if (this.bridge) {
+      return this.getStatus();
+    }
+
+    // A stale Gateway configuration can intentionally leave the normal bridge
+    // unset while the current shim/app-server is already healthy. Probe the
+    // same read-only socket without installing a second bridge or sending any
+    // mutation request.
+    const probe = new CodexHotSwitchBridge(() =>
+      Promise.reject(new Error("Credential refresh is unavailable during a status probe"))
+    );
+    try {
+      return await probe.getStatus();
+    } finally {
+      probe.dispose();
+    }
+  }
+
+  private async recoverOrphanedRuntimeOwner(): Promise<number | undefined> {
+    if (process.platform !== "linux") {
+      return undefined;
+    }
+
+    const ownerPath = path.join(getCodexHome(), RUNTIME_OWNER_FILE);
+    const owner = await readRuntimeOwner(ownerPath);
+    if (!owner) {
+      return undefined;
+    }
+
+    const processInfo = await readLinuxProcessInfo(owner.pid);
+    if (!processInfo) {
+      return (await removeRuntimeOwnerIfMatches(ownerPath, owner)) ? owner.pid : undefined;
+    }
+    if (!isExpectedManagerShim(processInfo.commandLine, this.context)) {
+      return undefined;
+    }
+
+    const leaseExpired = owner.expiresAt <= Date.now();
+    if (processInfo.ppid !== 1 && !leaseExpired) {
+      return undefined;
+    }
+    if ((await readLiveLinuxChildPids(owner.pid)).length > 0) {
+      return undefined;
+    }
+
+    try {
+      process.kill(owner.pid, "SIGTERM");
+    } catch (error) {
+      if (getErrorCode(error) !== "ESRCH") {
+        return undefined;
+      }
+    }
+    if (!(await waitForProcessExit(owner.pid, 1_000))) {
+      try {
+        process.kill(owner.pid, "SIGKILL");
+      } catch (error) {
+        if (getErrorCode(error) !== "ESRCH") {
+          return undefined;
+        }
+      }
+      if (!(await waitForProcessExit(owner.pid, 1_000))) {
+        return undefined;
+      }
+    }
+
+    return (await removeRuntimeOwnerIfMatches(ownerPath, owner)) ? owner.pid : undefined;
   }
 
   async setForceFastMode(enabled: boolean): Promise<boolean> {
@@ -1292,6 +1411,138 @@ async function writePosixLauncher(filePath: string, nodePath: string, shimPath: 
   ].join("\n");
   await fs.writeFile(filePath, contents, { encoding: "utf8", mode: 0o700 });
   await fs.chmod(filePath, 0o700);
+}
+
+type RuntimeOwnerRecord = {
+  pid: number;
+  token: string;
+  expiresAt: number;
+};
+
+type LinuxProcessInfo = {
+  ppid: number;
+  state: string;
+  commandLine: string;
+};
+
+async function readRuntimeOwner(ownerPath: string): Promise<RuntimeOwnerRecord | undefined> {
+  try {
+    const raw = JSON.parse(await fs.readFile(path.join(ownerPath, "owner.json"), "utf8")) as Record<string, unknown>;
+    if (
+      !Number.isSafeInteger(raw["pid"]) ||
+      Number(raw["pid"]) <= 0 ||
+      typeof raw["token"] !== "string" ||
+      raw["token"].length === 0 ||
+      typeof raw["expiresAt"] !== "number" ||
+      !Number.isFinite(raw["expiresAt"])
+    ) {
+      return undefined;
+    }
+    return {
+      pid: Number(raw["pid"]),
+      token: raw["token"],
+      expiresAt: raw["expiresAt"]
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLinuxProcessInfo(pid: number): Promise<LinuxProcessInfo | undefined> {
+  try {
+    const [stat, commandLine] = await Promise.all([
+      fs.readFile(`/proc/${pid}/stat`, "utf8"),
+      fs.readFile(`/proc/${pid}/cmdline`, "utf8")
+    ]);
+    const closingName = stat.lastIndexOf(")");
+    if (closingName < 0) {
+      return undefined;
+    }
+    const fields = stat.slice(closingName + 2).trim().split(/\s+/u);
+    const ppid = Number(fields[1]);
+    if (!Number.isSafeInteger(ppid) || ppid < 0) {
+      return undefined;
+    }
+    return {
+      ppid,
+      state: fields[0] ?? "",
+      commandLine: commandLine.split("\0").filter(Boolean).join(" ")
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLiveLinuxChildPids(parentPid: number): Promise<number[]> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir("/proc");
+  } catch {
+    return [];
+  }
+
+  const children: number[] = [];
+  for (const entry of entries) {
+    if (!/^\d+$/u.test(entry)) {
+      continue;
+    }
+    const pid = Number(entry);
+    const info = await readLinuxProcessInfo(pid);
+    if (info?.ppid === parentPid && info.state !== "Z") {
+      children.push(pid);
+    }
+  }
+  return children;
+}
+
+function isExpectedManagerShim(commandLine: string, context: vscode.ExtensionContext): boolean {
+  if (!/(?:^|\s)app-server(?:\s|$)/u.test(commandLine)) {
+    return false;
+  }
+
+  const expectedShimPaths = [
+    path.join(getPrivateStatePaths(context).hotSwitchRuntime, SHIM_FILE),
+    context.globalStorageUri?.fsPath
+      ? path.join(context.globalStorageUri.fsPath, RUNTIME_DIRECTORY, SHIM_FILE)
+      : undefined
+  ].filter((value): value is string => Boolean(value));
+  return expectedShimPaths.some((shimPath) => commandLine.includes(shimPath));
+}
+
+async function removeRuntimeOwnerIfMatches(ownerPath: string, expected: RuntimeOwnerRecord): Promise<boolean> {
+  const current = await readRuntimeOwner(ownerPath);
+  if (current?.pid !== expected.pid || current?.token !== expected.token) {
+    return false;
+  }
+  try {
+    await fs.rm(ownerPath, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (isProcessAlive(pid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !isProcessAlive(pid);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return getErrorCode(error) !== "ESRCH";
+  }
+}
+
+function getErrorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
 }
 
 function quotePosixArgument(value: string): string {
