@@ -1,6 +1,6 @@
 import * as childProcess from "node:child_process";
 import * as http from "node:http";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -72,6 +72,66 @@ describe("CodexHotSwitchBridge", () => {
     currentShim.kill("SIGTERM");
     await exited;
   });
+
+  it("releases the runtime owner when the real Codex CLI cannot be spawned", async () => {
+    const root = path.resolve(__dirname, "..");
+    const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-spawn-failure-"));
+    const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
+    const ownerPath = path.join(runtimeDirectory, "runtime-owner.lease");
+    let failedShim: childProcess.ChildProcess | undefined;
+
+    try {
+      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await writeFile(
+        path.join(runtimeDirectory, "codex-app-server-shim.json"),
+        JSON.stringify({
+          realCliPath: path.join(runtimeDirectory, "missing-codex"),
+          forceHttpTransport: true,
+          runtimeOwnerPath: ownerPath
+        }),
+        "utf8"
+      );
+
+      const environment = {
+        ...process.env,
+        CODEX_HOME: path.join(runtimeDirectory, "codex-home"),
+        CODEX_ACCOUNTS_PRIVATE_DIR: runtimeDirectory
+      };
+      delete environment.CODEX_ACCOUNTS_REAL_CLI;
+      failedShim = childProcess.spawn(shimPath, ["app-server"], {
+        cwd: root,
+        env: environment,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const stderr: string[] = [];
+      failedShim.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
+
+      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          failedShim?.kill("SIGKILL");
+          reject(new Error("shim did not exit after the real CLI spawn failure"));
+        }, 5_000);
+        failedShim?.once("exit", (code, signal) => {
+          clearTimeout(timer);
+          resolve({ code, signal });
+        });
+        failedShim?.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+      });
+
+      expect(exit.code).toBe(1);
+      expect(exit.signal).toBeNull();
+      expect(stderr.join("")).toContain("failed to start the real Codex CLI");
+      await expect(access(ownerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (failedShim && failedShim.exitCode === null && failedShim.signalCode === null) {
+        failedShim.kill("SIGKILL");
+      }
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it.each([
     { caseName: "structured revocation", error: undefined },

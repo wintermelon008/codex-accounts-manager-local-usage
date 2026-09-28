@@ -482,6 +482,13 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   font-size: 17px;
   letter-spacing: 0.02em;
 }
+.brand-version {
+  color: var(--muted);
+  font-size: 0.65em;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
 .brand p {
   margin: 3px 0 0;
   font-size: 11px;

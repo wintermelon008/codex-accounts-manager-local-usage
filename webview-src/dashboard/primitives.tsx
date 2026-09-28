@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 
 export function ActionButton(props: {
   class?: string;
+  id?: string;
   pending?: boolean;
   disabled?: boolean;
   onClick: () => void;
@@ -25,6 +26,7 @@ export function ActionButton(props: {
 
   return (
     <button
+      id={props.id}
       class={className}
       type="button"
       disabled={props.disabled}

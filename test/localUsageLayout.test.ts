@@ -5,18 +5,19 @@ import { describe, expect, it } from "vitest";
 const projectRoot = path.resolve(__dirname, "..");
 
 describe("local usage dashboard placement and responsive guards", () => {
-  it("keeps the dashboard overview compact around the current email and four actions", () => {
-    const overview = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/overviewSection.tsx"), "utf8");
+  it("removes the overview panel and exposes the compact add-account entry point", () => {
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
 
-    expect(overview).toContain("overview-shell-compact");
-    expect(overview).toContain("overview-account-email");
-    expect(overview).toContain("copy.addAccount");
-    expect(overview).toContain("copy.importCurrent");
-    expect(overview).toContain("props.refreshPageLabel");
-    expect(overview).toContain("copy.lockAutoSwitchBtn");
-    expect(overview).not.toContain("MetricGauge");
-    expect(overview).not.toContain("overview-meta");
-    expect(overview).not.toContain("overview-metrics");
+    expect(main).not.toContain("<OverviewSection");
+    expect(main).not.toContain("overview-shell");
+    expect(main).toContain('id="addAccountButton"');
+    expect(main).toContain("icon={<PlusIcon />}");
+    expect(main).toContain("label={snapshot.copy.addAccount}");
+    expect(main).toContain("onClick={modals.openAddAccountModal}");
+    expect(main).toContain('class="brand-version"');
+    expect(main).toContain("v{packageJson.version}");
+    expect(main).not.toContain('id="aboutOpenButton"');
+    expect(main).not.toContain("<AboutModal");
   });
 
   it("keeps the local usage section after the saved-account grid in normal document flow", () => {
@@ -174,7 +175,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).toContain('sendAction("removeFromBalancePool"');
   });
 
-  it("exposes A/B/C account grouping and limits one-click refresh to the visible account ids", () => {
+  it("exposes A/B/C account grouping and account pagination", () => {
     const accountViews = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/accountViews.tsx"), "utf8");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
 
@@ -184,9 +185,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(accountViews).toContain("Remove Group");
     expect(main).toContain("ACCOUNT_GROUPS");
     expect(main).toContain("getDashboardVisibleAccounts");
-    expect(main).toContain(
-      'sendAction("refreshAll", undefined, { accountIds: pageAccounts.map((account) => account.id) })'
-    );
+    expect(main).not.toContain('sendAction("refreshAll"');
     expect(main).toContain("getDashboardAccountPage");
     expect(main).toContain("saved-accounts-pagination");
     expect(main).toContain("DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS");

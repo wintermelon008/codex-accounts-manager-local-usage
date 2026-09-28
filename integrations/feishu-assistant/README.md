@@ -1,13 +1,13 @@
 # Feishu Manager Assistant
 
-这是一个全新的、独立运行的飞书机器人，使用飞书官方 Node SDK 的长连接接收 `im.message.receive_v1` 事件。它与 `feishu-private-import` 使用不同的进程和飞书 App，不共享事件入口，也不会自动读取旧机器人配置。
+这是一个全新的、独立运行的飞书机器人，使用飞书官方 Node SDK 的长连接接收 `im.message.receive_v1` 事件。它使用独立的进程和飞书 App，不会自动读取旧机器人配置。
 
 当前版本通过 Manager 的本地回环控制接口和可选的 Manager Gateway 提供：
 
 - 查看账号数量、健康状态、额度窗口、无感池资格和今日 Token 用量；
 - 查看今日按模型用量；
 - 触发全部或指定账号的额度刷新，并异步回报结果；
-- 查询本地 M+ 导入任务的脱敏状态；
+- 查询本地导入任务的脱敏状态；
 - 检查 Manager 控制接口健康状况；
 - 分析 HTTPS 商品页，按条件筛选有库存的最低价商品，并保存网页使用步骤；
 - 在支付适配器确认成功后，为显式配置的网站执行器提供已保存流程。
@@ -40,7 +40,7 @@ CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN=<local-private-token>
 
 接口只绑定 `127.0.0.1`，所有请求必须携带同一个 Bearer 令牌。默认地址为 `http://127.0.0.1:43117`；如果修改端口，机器人配置中的 `MANAGER_CONTROL_URL` 也要同步修改。缺少令牌时，Manager 不会启动该接口；飞书仍可通过下方的 Gateway 配置提供 AI session 和 token 用量。
 
-启用外部控制后，Manager 会同时启动受限的本地导入收件箱，以消费支付适配器提交的已规范化 OAuth 导入任务；不需要再单独打开 `codexAccounts.localImportInboxEnabled`。如果只使用旧的独立收件箱机器人而不启用外部控制，则仍需单独打开该设置。
+启用外部控制后，Manager 会同时启动受限的本地导入收件箱，以消费支付适配器提交的已规范化 OAuth 导入任务；不需要再单独打开 `codexAccounts.localImportInboxEnabled`。如果不启用外部控制，则仍需单独打开该设置。
 
 当前回环接口为：`GET /healthz`、`GET /api/manager/status`、`GET /api/manager/accounts`、`GET /api/manager/usage/today`、`POST /api/manager/quotas/refresh`、`GET /api/manager/jobs/<uuid>`、`POST /api/manager/imports` 和 `GET /api/manager/imports/<uuid>`。除导入请求中的规范 OAuth 条目外，响应只包含脱敏账号/额度信息或计数；所有接口都需要 Bearer 令牌。
 
@@ -103,7 +103,7 @@ npm start
 | `用量`                   | 查看今日 Token 总量及按模型统计            |
 | `刷新额度`               | 刷新全部可刷新的真实账号额度               |
 | `刷新额度 <账号 ID ...>` | 只刷新指定账号                             |
-| `导入状态 <任务编号>`    | 查看 M+ 本地导入任务的脱敏状态             |
+| `导入状态 <任务编号>`    | 查看本地导入任务的脱敏状态                 |
 | `健康`                   | 检查 Manager 控制接口是否可达              |
 | `购买 <商品编号>`        | 通过已配置的支付适配器创建订单并发送二维码 |
 | `支付状态 [订单号]`      | 查询订单；机器人也会自动轮询活动订单       |

@@ -59,7 +59,7 @@ Dashboard 中关闭`无感切号（实验性）`会立即恢复 Manager 原有�
 
 Gateway 是安装后才注册的可选传输，并以一个 `accountKind: "sub2api"` 的虚拟账号出现在已保存账号和手动切换列表，但账号卡片默认隐藏。虚拟账号只持久化下游 `baseUrl`、`model`、`credentialRef` 描述；下游 API Key 仍只在集成自己的 SecretStorage 中，Manager 不读取或映射 Sub2API 上游账号。它标记为 `manualOnly`/`quotaMode: "none"`，不会进入自动切号、额度候选、额度刷新、token refresh、usage-limit recovery 或 Gateway fallback 候选。独立 Gateway 面板已移除，账号卡片接收集成提供的脱敏 Base URL、模型、密钥状态、保存/刷新/打开配置动作，以及 tracker 的真实 token 用量和按配置模型估算价格；不显示 OAuth 额度、订阅或 token 健康状态。安装集成后设置中才会出现“显示 Sub2API 账号卡片”开关，打开后才显示卡片。
 
-核心运行时保留常驻 Gateway adapter，并通过 `runtime/gateway/switch` 在 ChatGPT Auth 与 Gateway 路由之间切换；该事务复用同一 turn barrier、Goal 暂停/恢复和 operation lease。账号卡片手动切换提交到这条事务，不绕过 barrier；设置中的“显示 Sub2API 账号卡片”开关只控制 Dashboard 卡片可见性，不切换路由。首次安装 runtime 仍需 reload 一次，runtime 已运行后两向手动切换均不 reload。路由字段与 OAuth `currentAccountId` 分离，auth watcher 不会在 Gateway 路由期间覆盖原 OAuth 状态；切回 ChatGPT Auth 不写入虚拟账号 token 或伪造 `auth.json`。只有集成配置显式启用 `autoFallbackToChatGpt` 时，已确认额度耗尽才会单向触发现有 Gateway → ChatGPT Auth 自动回退；普通调度不会反向切回 Gateway。活动 turn/stream 中途不能迁移，必须等安全边界或按既有策略中断后再切换。安装、停用、卸载与不迁移边界见 [独立 Sub2API Gateway 与 S+ 导入器](integrations/sub2api-gateway.md)。
+核心运行时保留常驻 Gateway adapter，并通过 `runtime/gateway/switch` 在 ChatGPT Auth 与 Gateway 路由之间切换；该事务复用同一 turn barrier、Goal 暂停/恢复和 operation lease。账号卡片手动切换提交到这条事务，不绕过 barrier；设置中的“显示 Sub2API 账号卡片”开关只控制 Dashboard 卡片可见性，不切换路由。首次安装 runtime 仍需 reload 一次，runtime 已运行后两向手动切换均不 reload。路由字段与 OAuth `currentAccountId` 分离，auth watcher 不会在 Gateway 路由期间覆盖原 OAuth 状态；切回 ChatGPT Auth 不写入虚拟账号 token 或伪造 `auth.json`。只有集成配置显式启用 `autoFallbackToChatGpt` 时，已确认额度耗尽才会单向触发现有 Gateway → ChatGPT Auth 自动回退；普通调度不会反向切回 Gateway。活动 turn/stream 中途不能迁移，必须等安全边界或按既有策略中断后再切换。安装、停用、卸载与不迁移边界见 [独立 Sub2API Gateway](integrations/sub2api-gateway.md)。
 
 ## 启用步骤
 

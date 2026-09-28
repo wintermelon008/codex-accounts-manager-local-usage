@@ -233,6 +233,7 @@ async function startRuntime() {
 
     child.on("error", (error) => {
       safeLog(`failed to start the real Codex CLI: ${safeErrorMessage(error)}`);
+      handleChildExit(undefined, undefined, error);
     });
 
     child.stderr.pipe(process.stderr);
@@ -249,20 +250,7 @@ async function startRuntime() {
     }
 
     child.on("exit", (code, signal) => {
-      childExited = true;
-      clearAllCapacityRecoveryThreads();
-      flushUsageAttributionRecords();
-      releaseRuntimeOwner();
-      rejectPendingRequests(new Error("Codex app-server exited"));
-      closeControlServer();
-      closeGatewayAdapter();
-      if (shutdownRequested) {
-        process.stdin.pause();
-        if (typeof process.stdin.unref === "function") {
-          process.stdin.unref();
-        }
-      }
-      process.exitCode = typeof code === "number" ? code : signal ? 1 : 0;
+      handleChildExit(code, signal);
     });
 
     beginShutdownIfRequested();
@@ -270,6 +258,36 @@ async function startRuntime() {
     releaseRuntimeOwner();
     closeGatewayAdapter();
     failStartup(`Unable to start the Codex runtime: ${safeErrorMessage(error)}`);
+  }
+}
+
+function handleChildExit(code, signal, startupError) {
+  if (childExited) {
+    return;
+  }
+  childExited = true;
+  clearAllCapacityRecoveryThreads();
+  flushUsageAttributionRecords();
+  releaseRuntimeOwner();
+  rejectPendingRequests(
+    startupError
+      ? new Error(`Codex CLI failed to start: ${safeErrorMessage(startupError)}`)
+      : new Error("Codex app-server exited")
+  );
+  closeControlServer();
+  closeGatewayAdapter();
+  if (shutdownRequested || startupError) {
+    process.stdin.pause();
+    if (typeof process.stdin.unref === "function") {
+      process.stdin.unref();
+    }
+  }
+  process.exitCode = startupError ? 1 : typeof code === "number" ? code : signal ? 1 : 0;
+  if (startupError) {
+    // A spawn error may not be followed by an `exit` event. The shim must not
+    // remain alive after releasing the owner lease and blocking the next
+    // Codex app-server.
+    setImmediate(() => process.exit(1));
   }
 }
 

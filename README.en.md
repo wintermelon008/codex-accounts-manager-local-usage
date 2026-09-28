@@ -26,7 +26,6 @@ This table applies only to local builds from this repository.
 | Ready after install    | Local Codex token usage, six time categories, and multi-select Free/Plus/Pro filters                                                                                       | Local sessions and imported accounts make the relevant views available. The usage view reads metadata only, never conversation bodies.                                                                                                              |
 | Opt-in settings        | Upstream Auto Switch, quota warnings, timed quota refresh, and ChatGPT/Codex desktop restart                                                                                | Enable the relevant Dashboard setting. No automatic switch is enabled by default.                                                                                                                                                                   |
 | One-time bundled setup | Experimental seamless switching and quota bands                                                                                                                            | On Linux/macOS, run the install command, reload once, then prepare at least two fresh accounts and configure their pool; quota-band scheduling is off by default and can only be enabled in config. Windows is not supported yet.                   |
-| Optional package       | Feishu private-chat M+/S+ import                                                                                                                                           | Install the restricted private-chat bot separately. M+ still requires the explicit Manager inbox setting; S+ is consumed only by a separately started importer.                                                                                     |
 | Optional package       | Sub2API Gateway                                                                                                                                                            | Install the standalone Gateway VSIX; it registers the downstream as a saved manual-only virtual account whose card owns configuration, key storage, refresh, usage, and estimated price. Core Manager never imports provider-side accounts or keys. |
 
 The Settings overlay's **HTTPS Proxy** selector reads `codexAccounts.proxyAddresses`. Add proxy addresses to VS Code `settings.json` (each item is the value after `HTTPS_PROXY=`), then choose one from the Dashboard. For example:
@@ -60,8 +59,7 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 ## Optional local integrations
 
-- [Feishu private-chat M+/S+ import package](docs/integrations/feishu-private-import.md): accepts only administrator one-to-one text messages. M+ writes to Manager's explicit local inbox; S+ writes only to a separate private queue.
-- [Standalone Sub2API Gateway and S+ importer](docs/integrations/sub2api-gateway.md): the Gateway VSIX, administrative importer, and core Manager install and stop independently; the Gateway appears as a manual-only saved virtual account with card-local actions and tracker usage, but never becomes an OAuth account or normal pool member.
+- [Standalone Sub2API Gateway](docs/integrations/sub2api-gateway.md): the Gateway VSIX and core Manager install and stop independently; the Gateway appears as a manual-only saved virtual account with card-local actions and tracker usage, but never becomes an OAuth account or normal pool member.
 - [Manager Gateway](integrations/manager-gateway/README.md): an independent task/session companion for browser entry points, parallel Codex exec, and quota-batch recovery; the Workbench data service remains separate and Manager must be online.
 - [Manager account sharing and friend setup](docs/ACCOUNT_SHARING.md): cross-device sharing through Manager user IDs, friend acceptance, encrypted Relay envelopes, lease expiry, automatic return, and troubleshooting guidance.
 
@@ -91,13 +89,13 @@ npm run package
 Optional components are built separately:
 
 ```bash
-npm --prefix integrations/feishu-private-import run package
+npm --prefix integrations/feishu-assistant run package
 npm --prefix integrations/sub2api-gateway run package
 npm --prefix integrations/mailbox run package
-npm --prefix integrations/sub2api-importer run package
+npm --prefix integrations/manager-gateway run package
 ```
 
-Optional packages are not bundled in the core VSIX. Build and configure `integrations/feishu-private-import`, `integrations/sub2api-gateway`, `integrations/mailbox`, or `integrations/sub2api-importer` from their own READMEs; none copies existing services, credentials, accounts, or machine paths automatically.
+Optional packages are not bundled in the core VSIX. Build and configure `integrations/feishu-assistant`, `integrations/sub2api-gateway`, `integrations/mailbox`, or `integrations/manager-gateway` from their own READMEs; none copies existing services, credentials, accounts, or machine paths automatically.
 
 ### Use the upstream Marketplace build
 
@@ -106,8 +104,7 @@ If you only need upstream core account management, search the Extensions view fo
 ## Documentation index
 
 - [Seamless switching, quota bands, and thresholds](docs/HOT_SWITCH.md)
-- [Standalone Sub2API Gateway, S+ importer, and migration](docs/integrations/sub2api-gateway.md)
-- [Feishu private-chat M+/S+ importer](docs/integrations/feishu-private-import.md)
+- [Standalone Sub2API Gateway and migration](docs/integrations/sub2api-gateway.md)
 - [Manager account sharing and friend setup](docs/ACCOUNT_SHARING.md)
 - [Independent delivery, disablement, and migration](docs/integrations/README.md)
 - [Vserver session hub foundation](docs/SESSION_HUB.md)

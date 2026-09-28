@@ -11,7 +11,7 @@ import {
   type DashboardSettingKey
 } from "../../src/domain/dashboard/types";
 import { AnnouncementCenter } from "./announcementCenter";
-import { ActionButton, BatchSelectionBar, OverviewSection, RecoveryPanel } from "./components";
+import { ActionButton, BatchSelectionBar, RecoveryPanel } from "./components";
 import { postMessageToHost } from "./host";
 import {
   formatSavedAccountsSummary,
@@ -29,8 +29,6 @@ import {
   isDashboardAccountInvalid,
   isMailboxIntegrationActive,
   normalizeThresholds,
-  resolveLockMinutes,
-  resolveOverviewAccount,
   sortDashboardAccountsForDisplay,
   type DashboardAccountSort,
   type DashboardAccountSortKey,
@@ -43,14 +41,13 @@ import {
   EyeIcon,
   EyeOffIcon,
   GlobeIcon,
-  InfoIcon,
   AccountHealthFilterIcon,
   MailIcon,
+  PlusIcon,
   SharingIcon,
   UnlockIcon
 } from "./icons";
 import {
-  AboutModal,
   AddAccountModal,
   ConfirmCancelOauthModal,
   RestartServicesModal,
@@ -87,7 +84,6 @@ function getAccountGroupVisibilityKey(group: CodexAccountGroup): SeamlessSwitchG
 function App() {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
   const lastDashboardAccountOrderRef = useRef("");
-  const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
   const [restartServicesOpen, setRestartServicesOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
@@ -234,8 +230,6 @@ function App() {
     );
   }
 
-  const activeAccount = snapshot.accounts.find((account) => account.isActive);
-  const overviewAccount = resolveOverviewAccount(snapshot.accounts);
   const hiddenAccountCount = snapshot.accounts.filter((account) => account.isHidden).length;
   const displayedAccountPage = getDashboardAccountPage(displayedAccounts, accountsPage, accountsPageSize);
   const pageAccounts = displayedAccountPage.accounts;
@@ -429,15 +423,6 @@ function App() {
     setSharingOpen(true);
   };
 
-  const handleAutoSwitchLock = (): void => {
-    if (!activeAccount) {
-      return;
-    }
-    sendAction("setAutoSwitchLock", activeAccount.id, {
-      lockMinutes: activeAccount.autoSwitchLockedUntil ? 0 : resolveLockMinutes(snapshot.settings.autoSwitchLockMinutes)
-    });
-  };
-
   return (
     <>
       <div class={`panel ${state.privacyMode ? "privacy-hidden" : ""}`}>
@@ -460,11 +445,23 @@ function App() {
             <div class="brand">
               <img class="logo" src={snapshot.logoUri} alt="Codex Accounts Manager logo" />
               <div>
-                <h1>Codex Accounts Manager</h1>
+                <h1>
+                  Codex Accounts Manager <span class="brand-version">v{packageJson.version}</span>
+                </h1>
                 <p>{snapshot.brandSub}</p>
               </div>
             </div>
             <div class="hero-settings">
+              <ActionButton
+                id="addAccountButton"
+                class="settings-btn add-account-btn"
+                icon={<PlusIcon />}
+                iconOnly
+                label={snapshot.copy.addAccount}
+                pending={prepareOAuthPending}
+                disabled={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
+                onClick={modals.openAddAccountModal}
+              />
               <button
                 id="announcementsButton"
                 class={`settings-btn action-btn icon-only announcement-btn ${announcementUnreadCount > 0 ? "has-unread" : ""}`}
@@ -547,23 +544,6 @@ function App() {
                 </span>
               </button>
               <button
-                id="aboutOpenButton"
-                class="settings-btn action-btn about-btn"
-                type="button"
-                title={resolveAboutTitle(snapshot.lang)}
-                aria-label={resolveAboutTitle(snapshot.lang)}
-                onClick={() => setAboutOpen(true)}
-              >
-                <span class="button-face">
-                  <span class="button-icon">
-                    <InfoIcon />
-                  </span>
-                </span>
-                <span class="button-tip" aria-hidden="true">
-                  {resolveAboutTitle(snapshot.lang)}
-                </span>
-              </button>
-              <button
                 id="accountSharingButton"
                 class="settings-btn action-btn icon-only"
                 type="button"
@@ -608,26 +588,6 @@ function App() {
               ))}
             </div>
           </div>
-          <OverviewSection
-            account={overviewAccount}
-            hasAccounts={snapshot.accounts.length > 0}
-            lang={snapshot.lang}
-            copy={snapshot.copy}
-            settings={snapshot.settings}
-            now={state.now}
-            privacyMode={state.privacyMode}
-            disabled={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
-            addPending={prepareOAuthPending}
-            importPending={isActionPending("importCurrent")}
-            refreshAllPending={isActionPending("refreshAll")}
-            refreshPageLabel={resolveRefreshCurrentPageLabel(snapshot.lang, pageAccounts.length)}
-            onToggleAutoSwitchLock={handleAutoSwitchLock}
-            onAddAccount={modals.openAddAccountModal}
-            onImportCurrent={() => sendAction("importCurrent")}
-            onRefreshAll={() =>
-              sendAction("refreshAll", undefined, { accountIds: pageAccounts.map((account) => account.id) })
-            }
-          />
         </section>
         {snapshot.accounts.length > 0 ? (
           <section class="section">
@@ -1136,15 +1096,6 @@ function App() {
         onAction={sendAction}
       />
 
-      <AboutModal
-        open={aboutOpen}
-        lang={snapshot.lang}
-        logoUri={snapshot.logoUri}
-        version={packageJson.version}
-        onClose={() => setAboutOpen(false)}
-        onOpenExternal={(url) => sendAction("openExternalUrl", undefined, { url })}
-      />
-
       <AddAccountModal
         open={modals.addAccountModalOpen}
         tab={modals.addAccountTab}
@@ -1226,16 +1177,6 @@ function renderIntegrationTopButtonIcon(icon: "mail" | "default" | undefined) {
     return <MailIcon />;
   }
   return <GlobeIcon />;
-}
-
-function resolveAboutTitle(lang: string): string {
-  if (lang === "zh") {
-    return "关于";
-  }
-  if (lang === "zh-hant") {
-    return "關於";
-  }
-  return "About";
 }
 
 function resolveAccountSharingLabel(lang: string): string {
@@ -1579,16 +1520,6 @@ function resolveAccountPageJumpButtonLabel(lang: string): string {
     return "跳轉";
   }
   return "Go";
-}
-
-function resolveRefreshCurrentPageLabel(lang: string, count: number): string {
-  if (lang === "zh") {
-    return `刷新当前页配额（${count}）`;
-  }
-  if (lang === "zh-hant") {
-    return `重新整理目前頁面配額（${count}）`;
-  }
-  return `Refresh current page (${count})`;
 }
 
 function resolveAccountGroupFiltersLabel(lang: string): string {

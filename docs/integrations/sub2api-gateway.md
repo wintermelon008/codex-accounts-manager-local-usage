@@ -1,13 +1,12 @@
-# 独立 Sub2API Gateway 与 S+ 导入器
+# 独立 Sub2API Gateway
 
-`integrations/sub2api-gateway` 和 `integrations/sub2api-importer` 是两个可分别安装的可选组件：
+`integrations/sub2api-gateway` 是可独立安装的可选组件：
 
 - **Gateway VSIX** 将一个 Sub2API 下游 API 注册为 Manager 已保存账号中的 `Sub2API Gateway` 虚拟账号。配置、密钥、刷新和打开配置动作都在该账号卡片内；它也可以出现在手动切换列表，但不是 OAuth 账号，也不会加入任何自动账号池或候选来源。
-- **S+ 导入器** 是私有队列消费者。它只在已显式配置后，才将飞书私聊机器人的标准 `sub2api-data` 任务提交给 Sub2API 管理端。
 
-核心 Manager 不包含这两个组件的配置、SecretStorage、观察器或导入逻辑。不安装它们时，Manager 仍可正常管理 OAuth 账号、配额和无感切号，也不会创建其队列、读取其密钥或启动 Gateway。
+核心 Manager 不包含该组件的配置、SecretStorage 或观察器逻辑。不安装它时，Manager 仍可正常管理 OAuth 账号、配额和无感切号，也不会读取其密钥或启动 Gateway。
 
-核心 Manager VSIX 有意不包含这两个包的源码。请从同一已审阅源码副本或发布附件取得相应 VSIX / tarball；不要在已安装的核心 VSIX 目录中寻找或写入集成配置。
+核心 Manager VSIX 有意不包含该包的源码。请从同一已审阅源码副本或发布附件取得相应 VSIX；不要在已安装的核心 VSIX 目录中寻找或写入集成配置。
 
 ## Gateway VSIX
 
@@ -67,48 +66,13 @@ Gateway 配置错误采用隔离处理：下游必需字段无效时仅禁用虚
 
 要停用 Gateway，请在卡片中选择“使用 ChatGPT Auth”。该操作只在安全 turn/stream barrier 上切换 provider 路由，保留原 OAuth `currentAccountId` 和凭据；活动 stream 不能中途迁移，失败时恢复原路由。要卸载它，先完成该切换，再从 VS Code 扩展视图卸载 Gateway VSIX。卸载不会自动删除旧配置、远端服务、账号或已保存的密钥；如需清理，应由用户在目标设备上明确执行。
 
-## S+ 私有导入器
-
-S+ 由 [飞书私聊导入机器人](feishu-private-import.md) 写入本地受限队列。机器人本身不持有 Sub2API 管理凭据，也不会调用管理端接口。安装并显式配置 `integrations/sub2api-importer` 后，才会消费该队列。
-
-两个 Node 包也可独立生成 tarball：
-
-```bash
-npm --prefix integrations/feishu-private-import run package
-npm --prefix integrations/sub2api-importer run package
-```
-
-每个 tarball 仅包含自己的运行代码、模板和文档；不会包含私有环境文件、队列任务、账号、管理令牌或现有服务配置。
-
-在目标设备的私有环境中提供管理端地址和令牌，并按需要指定与机器人相同的受限出站队列：
-
-```dotenv
-SUB2API_ADMIN_BASE_URL=https://gateway.example.invalid
-SUB2API_ADMIN_TOKEN=<private-admin-token>
-SUB2API_IMPORT_QUEUE_DIR=<private-s-plus-outbox>
-SUB2API_IMPORT_POLL_SECONDS=5
-```
-
-先进行一次安全的单次验证：
-
-```bash
-npm --prefix integrations/sub2api-importer test
-node integrations/sub2api-importer/src/cli.cjs --once
-```
-
-常驻模式使用同一命令但不带 `--once`。成功任务只保留不含凭据的结果摘要；失败任务会标记为 `.failed`，不会自动重试。用户在检查私有队列和远端状态后，可明确决定如何处理失败任务。
-
-若替换旧的 M+/S+ 工作器，可使用导入器包内的 `scripts/migrate-legacy-env.cjs` 从旧工作器的私有环境生成一份仅含 Sub2API 管理端信息的新环境文件。该脚本不会复制飞书、店铺或 Manager 配置，且拒绝覆盖已有文件。随后用包内 `templates/codex-accounts-sub2api-importer.service.template` 以独立用户服务运行消费者。
-
-停止导入器进程即可禁用 S+ 消费；未消费的私有队列任务不会被 Manager 或 Gateway 自动处理。卸载导入器不会修改 Sub2API 服务、数据库、反向代理、旧机器人或历史账号数据。
-
 ## 逐步迁移
 
-这些组件不会迁移或读取旧的 Manager Gateway 配置、旧机器人服务定义、现有 SecretStorage、账号数据或本机路径。现有部署可继续运行，直到用户在目标设备上手动完成以下步骤：
+该组件不会迁移或读取旧的 Manager Gateway 配置、现有 SecretStorage、账号数据或本机路径。现有部署可继续运行，直到用户在目标设备上手动完成以下步骤：
 
-1. 安装新组件并仅使用占位配置验证其启动边界。
+1. 安装 Gateway VSIX 并仅使用占位配置验证其启动边界。
 2. 由用户显式输入新的目标设备配置和凭据。
-3. 用受控测试消息验证 M+ 或 S+，以及必要时的 Gateway 卡片。
+3. 用受控请求验证 Gateway 卡片和 provider 路由。
 4. 确认新路径可用后，再由用户停用旧服务。
 
 在任何一步停止，核心 Manager 和旧服务都会保持各自原有状态。

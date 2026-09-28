@@ -1,4 +1,17 @@
-import { vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, vi } from "vitest";
+
+const testDataRoot = mkdtempSync(path.join(os.tmpdir(), "codex-accounts-vitest-"));
+
+// Never allow tests to inherit the Manager's real private state directory.
+delete process.env.CODEX_ACCOUNTS_PRIVATE_DIR;
+process.env.AIDECK_DATA_DIR = path.join(testDataRoot, "aideck-data");
+
+afterAll(() => {
+  rmSync(testDataRoot, { recursive: true, force: true });
+});
 
 vi.mock("vscode", () => ({
   env: {

@@ -1,6 +1,6 @@
 # 本地文本导入收件箱
 
-扩展可消费一个由独立飞书私聊机器人写入的私有本地收件箱。该机制用于把原始 session/token JSON 转换为多账号 Shared JSON 后自动导入；它不是网络 API，也不允许外部进程直接写账号索引或 VS Code SecretStorage。
+扩展可消费一个由受信任的本地集成或 Manager Control API 写入的私有本地收件箱。该机制用于把规范化的 OAuth Shared JSON 任务自动导入；它不是网络 API，也不允许外部进程直接写账号索引或 VS Code SecretStorage。
 
 该能力默认关闭。只有在需要接收本机机器人任务的 VS Code 用户设置中显式加入下面一项并重载窗口后，扩展才会创建目录、轮询或导入文件：
 
@@ -13,16 +13,16 @@
 ## 数据流
 
 ```text
-飞书管理员私聊 → 独立 M+ 机器人 → 目标设备解析的受限收件箱
-                                           ↓
-                              Codex Accounts Manager Extension Host
-                                           ↓
-                   SecretStorage 导入 → 额度刷新/401 测活 → 合格账号进入无感池
+本地集成 / Manager Control API → 受限本地收件箱
+                                      ↓
+                         Codex Accounts Manager Extension Host
+                                      ↓
+              SecretStorage 导入 → 额度刷新/401 测活 → 合格账号进入无感池
 ```
 
-设置 `CODEX_ACCOUNTS_PRIVATE_DIR` 后，默认收件箱位于该目录下的 `import-inbox/`；机器人和 Manager 都遵循同一可移植规则。需要使用非默认目录时，为机器人和 VS Code 扩展宿主设置相同的绝对 `MANAGER_IMPORT_QUEUE_DIR`。旧的 `CODEX_IMPORT_QUEUE_DIR` 仅保留为兼容别名；若两者同时存在，以 `MANAGER_IMPORT_QUEUE_DIR` 为准。独立机器人安装、私聊限制和队列配置见 [飞书私聊 M+/S+ 导入机器人](integrations/feishu-private-import.md)。
+设置 `CODEX_ACCOUNTS_PRIVATE_DIR` 后，默认收件箱位于该目录下的 `import-inbox/`。Manager Control API 的 `POST /api/manager/imports` 会把经过规范化的任务写入该目录；Manager 和受信任的本地集成共享同一个私有根目录时即可使用同一收件箱。
 
-命令机器人以原子 rename 写入 `codex-account-import/v1` 任务，目录权限为 `0700`、任务文件权限为 `0600`。扩展完成或拒绝任务后，会删除含凭据的任务文件，并在同级 `results/` 写入仅含计数的脱敏结果。结果不包含邮箱、账号 ID、token 或原始 JSON。
+任务生产者以原子 rename 写入 `codex-account-import/v1` 任务，目录权限为 `0700`、任务文件权限为 `0600`。扩展完成或拒绝任务后，会删除含凭据的任务文件，并在同级 `results/` 写入仅含计数的脱敏结果。结果不包含邮箱、账号 ID、token 或原始 JSON。
 
 ## 导入规则
 
@@ -34,6 +34,4 @@
 
 ## 网络边界
 
-飞书私聊机器人只访问飞书和受限本地文件系统。额度刷新、refresh token 续期和 401 判定仅发生在扩展宿主，复用扩展已有的 `chatgpt.com` 与必要的 `auth.openai.com` 请求路径；不访问第三方格式转换网站。
-
-将凭据粘贴到飞书仍意味着凭据会由飞书承载和保留。请仅在私聊中使用，并限制 `FEISHU_ADMIN_OPEN_IDS` 到受信任管理员。
+本地集成只应访问受限本地文件系统或其自身的输入来源。额度刷新、refresh token 续期和 401 判定仅发生在扩展宿主，复用扩展已有的 `chatgpt.com` 与必要的 `auth.openai.com` 请求路径。

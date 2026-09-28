@@ -57,7 +57,7 @@ export type LocalImportInboxOptions = {
 };
 
 /**
- * Consume private local jobs produced by the Feishu command bot.
+ * Consume private local jobs produced by a trusted local integration.
  *
  * Credentials are read only in the extension host so AccountsRepository can
  * store them in VS Code SecretStorage.  Results are intentionally redacted:
@@ -221,15 +221,6 @@ export class LocalImportInbox {
 }
 
 export function getLocalImportInboxPath(privateRoot?: string): string {
-  const managerQueuePath = process.env["MANAGER_IMPORT_QUEUE_DIR"]?.trim();
-  const configured =
-    managerQueuePath && managerQueuePath.length > 0 ? managerQueuePath : process.env["CODEX_IMPORT_QUEUE_DIR"]?.trim();
-  if (configured) {
-    if (!path.isAbsolute(configured)) {
-      throw new Error("local import queue path must be absolute");
-    }
-    return path.normalize(configured);
-  }
   if (privateRoot?.trim()) {
     if (!path.isAbsolute(privateRoot)) {
       throw new Error("private state root must be absolute");
