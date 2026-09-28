@@ -284,6 +284,39 @@ export function PlusIcon() {
   );
 }
 
+export function MoreHorizontalIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.6" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+      <circle cx="19" cy="12" r="1.6" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function SettingsIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="m9.6 3.8.5-1.1h3.8l.5 1.1a8.8 8.8 0 0 1 1.7 1l1.2-.3 2.7 2.7-.3 1.2a8.8 8.8 0 0 1 1 1.7l1.1.5v3.8l-1.1.5a8.8 8.8 0 0 1-1 1.7l.3 1.2-2.7 2.7-1.2-.3a8.8 8.8 0 0 1-1.7 1l-.5 1.1h-3.8l-.5-1.1a8.8 8.8 0 0 1-1.7-1l-1.2.3L4 17.8l.3-1.2a8.8 8.8 0 0 1-1-1.7l-1.1-.5v-3.8l1.1-.5a8.8 8.8 0 0 1 1-1.7L4 7.2l2.7-2.7 1.2.3a8.8 8.8 0 0 1 1.7-1Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linejoin="round"
+      />
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7" />
+    </svg>
+  );
+}
+
+export function CloseIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+    </svg>
+  );
+}
+
 export function InfoIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">

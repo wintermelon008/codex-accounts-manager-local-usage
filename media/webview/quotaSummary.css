@@ -5114,3 +5114,359 @@ html[data-theme="auto"] body.vscode-light {
     min-width: 0;
   }
 }
+
+/* Compact command hierarchy for the account dashboard. */
+.hero-settings {
+  gap: 6px;
+}
+.hero-settings > .settings-btn,
+.hero-more-actions > .settings-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+}
+.hero-settings > .settings-btn:hover:not(:disabled),
+.hero-settings > .settings-btn:focus-visible,
+.hero-more-actions > .settings-btn:hover:not(:disabled),
+.hero-more-actions > .settings-btn:focus-visible {
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+}
+.hero-settings .add-account-btn {
+  color: #ffffff;
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-blue) 24%, transparent);
+}
+.hero-settings .add-account-btn:hover:not(:disabled),
+.hero-settings .add-account-btn:focus-visible {
+  color: #ffffff;
+  border-color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 86%, white);
+}
+.hero-integration-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-muted);
+}
+.hero-more-actions,
+.account-overflow,
+.batch-more-actions {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+.hero-more-menu,
+.account-overflow-menu,
+.batch-more-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+  padding: 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+.hero-menu-item,
+.hero-more-menu > button,
+.account-overflow-menu > button,
+.batch-more-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+.hero-menu-item:hover:not(:disabled),
+.hero-menu-item:focus-visible,
+.hero-more-menu > button:hover:not(:disabled),
+.hero-more-menu > button:focus-visible,
+.account-overflow-menu > button:hover:not(:disabled),
+.account-overflow-menu > button:focus-visible,
+.batch-more-menu > button:hover:not(:disabled),
+.batch-more-menu > button:focus-visible {
+  border-color: var(--border-default);
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+  outline: none;
+}
+.hero-menu-item:disabled,
+.hero-more-menu > button:disabled,
+.account-overflow-menu > button:disabled,
+.batch-more-menu > button:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.hero-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--accent-blue);
+}
+.hero-menu-icon svg {
+  width: 15px;
+  height: 15px;
+}
+.account-filter-section {
+  display: grid;
+  gap: 6px;
+}
+.account-filter-control-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.account-health-filter-menu {
+  width: min(380px, calc(100vw - 28px));
+  gap: 8px;
+}
+.account-health-filter-menu .account-group-filters,
+.account-health-filter-menu .account-plan-filters {
+  padding: 2px;
+  border-radius: 8px;
+}
+.account-health-filter-menu .account-group-filter,
+.account-health-filter-menu .account-plan-filter {
+  height: 24px;
+  border-radius: 6px;
+}
+.account-health-filter-menu .account-group-filter {
+  width: 26px;
+}
+.account-health-filter-menu .account-plan-filter {
+  min-width: 38px;
+}
+.saved-accounts-header-actions {
+  align-items: center;
+  gap: 6px;
+}
+.saved-accounts-header-actions > .settings-btn,
+.saved-accounts-header-actions > .account-health-filter > .settings-btn.action-btn.icon-only,
+.saved-accounts-header-actions > .account-overflow > .settings-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+.saved-accounts-header-actions > .settings-btn.is-active,
+.saved-accounts-header-actions > .account-health-filter > .settings-btn.is-active,
+.saved-accounts-header-actions > .account-overflow > .settings-btn.is-active {
+  color: var(--accent-blue);
+  border-color: color-mix(in srgb, var(--accent-blue) 55%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+}
+.account-sort-controls {
+  min-height: 30px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+.account-sort-select {
+  min-height: 26px;
+  max-width: 136px;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 10px;
+}
+.account-sort-direction {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+.account-sort-arrow {
+  font-size: 8px;
+}
+.account-overflow-menu {
+  min-width: 210px;
+}
+.batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 40%, var(--border-default));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-surface));
+  gap: 10px;
+}
+.batch-bar-selection {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.batch-bar-count {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 800;
+}
+.batch-clear-btn.action-btn.icon-only {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: 7px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+.batch-clear-btn.action-btn.icon-only:hover:not(:disabled),
+.batch-clear-btn.action-btn.icon-only:focus-visible {
+  border-color: var(--border-default);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  color: var(--text-primary);
+}
+.batch-bar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex: 0 1 auto;
+}
+.batch-bar .toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+.batch-bar .toolbar-btn .button-face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 5px;
+  line-height: 1;
+}
+.batch-bar .toolbar-btn .button-label {
+  line-height: 1;
+}
+.batch-bar .batch-more-btn .button-face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  gap: 5px;
+  line-height: 1;
+}
+.batch-bar .toolbar-btn .button-icon,
+.batch-bar .toolbar-btn .button-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.batch-primary-btn {
+  color: var(--accent-blue);
+  border-color: color-mix(in srgb, var(--accent-blue) 40%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+}
+.batch-secondary-btn {
+  background: transparent;
+}
+.batch-more-btn {
+  color: var(--text-secondary);
+  background: transparent;
+}
+.batch-more-btn[aria-expanded="true"] {
+  color: var(--text-primary);
+  border-color: var(--border-accent);
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+}
+.batch-danger-btn {
+  color: var(--accent-red);
+  border-color: color-mix(in srgb, var(--accent-red) 38%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-red) 7%, transparent);
+}
+.batch-danger-btn:hover:not(:disabled),
+.batch-danger-btn:focus-visible {
+  border-color: color-mix(in srgb, var(--accent-red) 65%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-red) 14%, transparent);
+}
+.batch-more-menu {
+  min-width: 190px;
+}
+.batch-menu-section-title {
+  padding: 5px 8px 3px;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.batch-menu-divider {
+  height: 1px;
+  margin: 4px 3px;
+  background: var(--border-muted);
+}
+@media (max-width: 920px) {
+  .header {
+    flex-direction: column;
+  }
+  .saved-accounts-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .batch-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .batch-bar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+@media screen and (max-width: 620px) {
+  .hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .hero-settings {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .batch-bar-actions {
+    flex-wrap: wrap;
+  }
+  .batch-bar .toolbar-btn {
+    flex: 1 1 112px;
+  }
+  .batch-more-actions {
+    flex: 1 1 80px;
+  }
+  .batch-more-actions > .batch-more-btn {
+    width: 100%;
+  }
+}

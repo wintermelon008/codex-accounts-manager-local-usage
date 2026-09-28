@@ -1,6 +1,6 @@
 {
   "name": "codex-accounts-manager",
-  "displayName": "Codex Accounts Manager",
+  "displayName": "0.1.19-dev",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
   "version": "0.1.19-dev",
   "publisher": "wannanbigpig",

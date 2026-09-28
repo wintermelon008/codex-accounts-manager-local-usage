@@ -43,8 +43,11 @@ import {
   GlobeIcon,
   AccountHealthFilterIcon,
   MailIcon,
+  MoreHorizontalIcon,
   PlusIcon,
+  renderRefreshIcon,
   SharingIcon,
+  SettingsIcon,
   UnlockIcon
 } from "./icons";
 import {
@@ -93,6 +96,10 @@ function App() {
   const [selectedSharingFilters, setSelectedSharingFilters] = useState<DashboardSharingFilter[]>([]);
   const [healthFilterOpen, setHealthFilterOpen] = useState(false);
   const healthFilterRef = useRef<HTMLDivElement>(null);
+  const [heroMoreOpen, setHeroMoreOpen] = useState(false);
+  const heroMoreRef = useRef<HTMLDivElement>(null);
+  const [accountMoreOpen, setAccountMoreOpen] = useState(false);
+  const accountMoreRef = useRef<HTMLDivElement>(null);
   const [selectedPlanFilters, setSelectedPlanFilters] = useState<DashboardAccountPlanFilter[]>([]);
   const [accountSort, setAccountSort] = useState<DashboardAccountSort>({
     key: "createdAt",
@@ -173,6 +180,54 @@ function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [healthFilterOpen]);
+
+  useEffect(() => {
+    if (!heroMoreOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (!heroMoreRef.current?.contains(event.target as Node)) {
+        setHeroMoreOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setHeroMoreOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [heroMoreOpen]);
+
+  useEffect(() => {
+    if (!accountMoreOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (!accountMoreRef.current?.contains(event.target as Node)) {
+        setAccountMoreOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setAccountMoreOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [accountMoreOpen]);
 
   useEffect(() => {
     setAccountsPage(1);
@@ -385,7 +440,7 @@ function App() {
   ).length;
   const healthFilterCounts = getDashboardHealthFilterCounts(snapshot.accounts);
   const sharingFilterCounts = getDashboardSharingFilterCounts(snapshot.accounts);
-  const selectedFilterCount = selectedHealthFilters.length + selectedSharingFilters.length;
+  const selectedFilterCount = selectedHealthFilters.length + selectedSharingFilters.length + selectedPlanFilters.length;
   const healthFilterTotalCount = DASHBOARD_HEALTH_FILTERS.reduce(
     (total, filter) => total + healthFilterCounts[filter],
     0
@@ -394,7 +449,8 @@ function App() {
     snapshot.lang,
     selectedHealthFilters,
     healthFilterTotalCount,
-    selectedSharingFilters.length
+    selectedSharingFilters.length,
+    selectedPlanFilters.length
   );
   const healthFilterOptions = DASHBOARD_HEALTH_FILTERS.map((filter) => ({
     filter,
@@ -485,50 +541,6 @@ function App() {
                 </span>
               </button>
               <button
-                id="restartServicesButton"
-                class="settings-btn action-btn icon-only"
-                type="button"
-                title={resolveRestartServicesLabel(snapshot.lang)}
-                aria-label={resolveRestartServicesLabel(snapshot.lang)}
-                disabled={isActionPending("restartServices")}
-                aria-busy={isActionPending("restartServices")}
-                onClick={() => setRestartServicesOpen(true)}
-              >
-                <span class="button-face">
-                  {isActionPending("restartServices") ? (
-                    <span class="button-spinner" aria-hidden="true"></span>
-                  ) : (
-                    <span class="button-icon">⟳</span>
-                  )}
-                </span>
-                <span class="button-tip" aria-hidden="true">
-                  {resolveRestartServicesLabel(snapshot.lang)}
-                </span>
-              </button>
-              <button
-                id="unlockCodexSessionLocksButton"
-                class="settings-btn action-btn icon-only"
-                type="button"
-                title={resolveUnlockCodexSessionLocksLabel(snapshot.lang)}
-                aria-label={resolveUnlockCodexSessionLocksLabel(snapshot.lang)}
-                disabled={hasGlobalPendingAction || unlockCodexSessionLocksPending}
-                aria-busy={unlockCodexSessionLocksPending}
-                onClick={() => sendAction("unlockCodexSessionLocks")}
-              >
-                <span class="button-face">
-                  {unlockCodexSessionLocksPending ? (
-                    <span class="button-spinner" aria-hidden="true"></span>
-                  ) : (
-                    <span class="button-icon">
-                      <UnlockIcon />
-                    </span>
-                  )}
-                </span>
-                <span class="button-tip" aria-hidden="true">
-                  {resolveUnlockCodexSessionLocksLabel(snapshot.lang)}
-                </span>
-              </button>
-              <button
                 id="settingsOpenButton"
                 class="settings-btn action-btn icon-only"
                 type="button"
@@ -537,7 +549,9 @@ function App() {
                 onClick={() => dispatch({ type: "open-settings" })}
               >
                 <span class="button-face">
-                  <span class="button-icon">⚙</span>
+                  <span class="button-icon">
+                    <SettingsIcon />
+                  </span>
                 </span>
                 <span class="button-tip" aria-hidden="true">
                   {snapshot.copy.settingsTitle}
@@ -564,28 +578,90 @@ function App() {
                   {resolveAccountSharingLabel(snapshot.lang)}
                 </span>
               </button>
-              {topButtonIntegrations.map(({ integration, topButton, action }) => (
-                <ActionButton
-                  key={integration.id}
-                  class="settings-btn integration-top-button"
-                  icon={renderIntegrationTopButtonIcon(topButton.icon)}
-                  iconOnly
-                  label={topButton.label}
-                  pending={integrationActionPending}
-                  disabled={
-                    hasGlobalPendingAction ||
-                    action.enabled === false ||
-                    snapshot.indexHealth.status === "corrupted_unrecoverable"
-                  }
-                  tooltip={topButton.tooltip ?? action.tooltip}
-                  onClick={() =>
-                    sendAction("integrationAction", undefined, {
-                      integrationId: integration.id,
-                      integrationActionId: action.id
-                    })
-                  }
-                />
-              ))}
+              {topButtonIntegrations.length > 0 ? (
+                <div class="hero-integration-actions">
+                  {topButtonIntegrations.map(({ integration, topButton, action }) => (
+                    <ActionButton
+                      key={integration.id}
+                      class="settings-btn integration-top-button"
+                      icon={renderIntegrationTopButtonIcon(topButton.icon)}
+                      iconOnly
+                      label={topButton.label}
+                      pending={integrationActionPending}
+                      disabled={
+                        hasGlobalPendingAction ||
+                        action.enabled === false ||
+                        snapshot.indexHealth.status === "corrupted_unrecoverable"
+                      }
+                      tooltip={topButton.tooltip ?? action.tooltip}
+                      onClick={() =>
+                        sendAction("integrationAction", undefined, {
+                          integrationId: integration.id,
+                          integrationActionId: action.id
+                        })
+                      }
+                    />
+                  ))}
+                </div>
+              ) : null}
+              <div ref={heroMoreRef} class="hero-more-actions">
+                <button
+                  id="heroMoreButton"
+                  class="settings-btn action-btn icon-only"
+                  type="button"
+                  aria-label={resolveHeroMoreLabel(snapshot.lang)}
+                  aria-expanded={heroMoreOpen}
+                  aria-haspopup="menu"
+                  onClick={() => setHeroMoreOpen((open) => !open)}
+                >
+                  <span class="button-face">
+                    <span class="button-icon">
+                      <MoreHorizontalIcon />
+                    </span>
+                  </span>
+                  <span class="button-tip" aria-hidden="true">
+                    {resolveHeroMoreLabel(snapshot.lang)}
+                  </span>
+                </button>
+                {heroMoreOpen ? (
+                  <div class="hero-more-menu" role="menu" aria-label={resolveHeroMoreLabel(snapshot.lang)}>
+                    <button
+                      id="restartServicesButton"
+                      type="button"
+                      role="menuitem"
+                      class="hero-menu-item"
+                      disabled={isActionPending("restartServices")}
+                      aria-busy={isActionPending("restartServices")}
+                      onClick={() => {
+                        setHeroMoreOpen(false);
+                        setRestartServicesOpen(true);
+                      }}
+                    >
+                      <span class="hero-menu-icon">
+                        {isActionPending("restartServices") ? <span class="button-spinner" /> : renderRefreshIcon()}
+                      </span>
+                      <span>{resolveRestartServicesLabel(snapshot.lang)}</span>
+                    </button>
+                    <button
+                      id="unlockCodexSessionLocksButton"
+                      type="button"
+                      role="menuitem"
+                      class="hero-menu-item"
+                      disabled={hasGlobalPendingAction || unlockCodexSessionLocksPending}
+                      aria-busy={unlockCodexSessionLocksPending}
+                      onClick={() => {
+                        setHeroMoreOpen(false);
+                        sendAction("unlockCodexSessionLocks");
+                      }}
+                    >
+                      <span class="hero-menu-icon">
+                        {unlockCodexSessionLocksPending ? <span class="button-spinner" /> : <UnlockIcon />}
+                      </span>
+                      <span>{resolveUnlockCodexSessionLocksLabel(snapshot.lang)}</span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
         </section>
@@ -639,45 +715,6 @@ function App() {
                       {accountSort.direction === "desc" ? "▼" : "▲"}
                     </span>
                   </button>
-                </div>
-                <div class="account-group-filters" aria-label={resolveAccountGroupFiltersLabel(snapshot.lang)}>
-                  {ACCOUNT_GROUPS.map((group) => {
-                    const key = getAccountGroupVisibilityKey(group);
-                    const visible = snapshot.settings[key];
-                    const label = resolveAccountGroupVisibilityLabel(snapshot.lang, group, visible);
-                    return (
-                      <button
-                        key={group}
-                        class={`account-group-filter ${visible ? "is-active" : ""}`}
-                        type="button"
-                        title={label}
-                        aria-label={label}
-                        aria-pressed={visible}
-                        onClick={() => handleAccountGroupVisibilityToggle(group)}
-                      >
-                        {group}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div class="account-plan-filters" aria-label={resolveAccountPlanFiltersLabel(snapshot.lang)}>
-                  {ACCOUNT_PLAN_FILTERS.map((plan) => {
-                    const selected = selectedPlanFilters.includes(plan);
-                    const label = resolveAccountPlanFilterLabel(snapshot.lang, plan, selected);
-                    return (
-                      <button
-                        key={plan}
-                        class={`account-plan-filter ${selected ? "is-active" : ""}`}
-                        type="button"
-                        title={label}
-                        aria-label={label}
-                        aria-pressed={selected}
-                        onClick={() => handleAccountPlanFilterToggle(plan)}
-                      >
-                        {resolveAccountPlanFilterName(plan)}
-                      </button>
-                    );
-                  })}
                 </div>
                 <button
                   id="hiddenAccountsToggleButton"
@@ -742,6 +779,57 @@ function App() {
                         </button>
                       </div>
                       <div class="account-health-filter-hint">{resolveHealthFilterPanelHint(snapshot.lang)}</div>
+                      <div class="account-filter-section">
+                        <div class="account-health-filter-subtitle">
+                          {resolveAccountFilterSectionTitle(snapshot.lang)}
+                        </div>
+                        <div class="account-filter-control-row">
+                          <div
+                            class="account-group-filters"
+                            aria-label={resolveAccountGroupFiltersLabel(snapshot.lang)}
+                          >
+                            {ACCOUNT_GROUPS.map((group) => {
+                              const key = getAccountGroupVisibilityKey(group);
+                              const visible = snapshot.settings[key];
+                              const label = resolveAccountGroupVisibilityLabel(snapshot.lang, group, visible);
+                              return (
+                                <button
+                                  key={group}
+                                  class={`account-group-filter ${visible ? "is-active" : ""}`}
+                                  type="button"
+                                  title={label}
+                                  aria-label={label}
+                                  aria-pressed={visible}
+                                  onClick={() => handleAccountGroupVisibilityToggle(group)}
+                                >
+                                  {group}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div class="account-plan-filters" aria-label={resolveAccountPlanFiltersLabel(snapshot.lang)}>
+                            {ACCOUNT_PLAN_FILTERS.map((plan) => {
+                              const selected = selectedPlanFilters.includes(plan);
+                              const label = resolveAccountPlanFilterLabel(snapshot.lang, plan, selected);
+                              return (
+                                <button
+                                  key={plan}
+                                  class={`account-plan-filter ${selected ? "is-active" : ""}`}
+                                  type="button"
+                                  title={label}
+                                  aria-label={label}
+                                  aria-pressed={selected}
+                                  onClick={() => handleAccountPlanFilterToggle(plan)}
+                                >
+                                  {resolveAccountPlanFilterName(plan)}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                      <div class="account-health-filter-divider" />
+                      <div class="account-health-filter-subtitle">{resolveHealthFilterOptionsLabel(snapshot.lang)}</div>
                       <div
                         class="account-health-filter-options"
                         role="group"
@@ -774,9 +862,7 @@ function App() {
                         })}
                       </div>
                       <div class="account-health-filter-divider" />
-                      <div class="account-health-filter-subtitle">
-                        {resolveSharingFilterPanelTitle(snapshot.lang)}
-                      </div>
+                      <div class="account-health-filter-subtitle">{resolveSharingFilterPanelTitle(snapshot.lang)}</div>
                       <div
                         class="account-health-filter-options"
                         role="group"
@@ -816,6 +902,7 @@ function App() {
                           setAccountsPage(1);
                           setSelectedHealthFilters([]);
                           setSelectedSharingFilters([]);
+                          setSelectedPlanFilters([]);
                         }}
                       >
                         {resolveHealthFilterClearLabel(snapshot.lang)}
@@ -823,49 +910,83 @@ function App() {
                     </div>
                   ) : null}
                 </div>
-                <ActionButton
-                  class="toolbar-btn"
-                  pending={hideAccountsPending}
-                  disabled={
-                    lowWeeklyQuotaAccountIds.length === 0 ||
-                    unhideAccountsPending ||
-                    hasGlobalPendingAction ||
-                    snapshot.indexHealth.status === "corrupted_unrecoverable"
-                  }
-                  onClick={() =>
-                    sendAction("hideAccounts", undefined, {
-                      accountIds: lowWeeklyQuotaAccountIds
-                    })
-                  }
-                >
-                  {resolveHideLowWeeklyQuotaLabel(
-                    snapshot.lang,
-                    lowWeeklyQuotaAccountIds.length,
-                    snapshot.settings.hideWeeklyQuotaThreshold
-                  )}
-                </ActionButton>
-                <ActionButton
-                  class="toolbar-btn"
-                  pending={unhideAccountsPending}
-                  disabled={
-                    highWeeklyQuotaHiddenAccountIds.length === 0 ||
-                    hideAccountsPending ||
-                    hasGlobalPendingAction ||
-                    snapshot.indexHealth.status === "corrupted_unrecoverable"
-                  }
-                  onClick={() =>
-                    sendAction("unhideAccounts", undefined, {
-                      accountIds: highWeeklyQuotaHiddenAccountIds,
-                      clearAccountGroup: true
-                    })
-                  }
-                >
-                  {resolveUnhideHighWeeklyQuotaLabel(
-                    snapshot.lang,
-                    highWeeklyQuotaHiddenAccountIds.length,
-                    snapshot.settings.unhideWeeklyQuotaThreshold
-                  )}
-                </ActionButton>
+                {lowWeeklyQuotaAccountIds.length > 0 || highWeeklyQuotaHiddenAccountIds.length > 0 ? (
+                  <div ref={accountMoreRef} class="account-overflow">
+                    <button
+                      id="accountMoreButton"
+                      class={`settings-btn action-btn icon-only ${accountMoreOpen ? "is-active" : ""}`}
+                      type="button"
+                      aria-label={resolveAccountMoreLabel(snapshot.lang)}
+                      aria-expanded={accountMoreOpen}
+                      aria-haspopup="menu"
+                      onClick={() => setAccountMoreOpen((open) => !open)}
+                    >
+                      <span class="button-face">
+                        <span class="button-icon">
+                          <MoreHorizontalIcon />
+                        </span>
+                      </span>
+                      <span class="button-tip" aria-hidden="true">
+                        {resolveAccountMoreLabel(snapshot.lang)}
+                      </span>
+                    </button>
+                    {accountMoreOpen ? (
+                      <div
+                        class="account-overflow-menu"
+                        role="menu"
+                        aria-label={resolveAccountMoreLabel(snapshot.lang)}
+                      >
+                        {lowWeeklyQuotaAccountIds.length > 0 ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={
+                              hideAccountsPending ||
+                              unhideAccountsPending ||
+                              hasGlobalPendingAction ||
+                              snapshot.indexHealth.status === "corrupted_unrecoverable"
+                            }
+                            onClick={() => {
+                              setAccountMoreOpen(false);
+                              sendAction("hideAccounts", undefined, { accountIds: lowWeeklyQuotaAccountIds });
+                            }}
+                          >
+                            {resolveHideLowWeeklyQuotaLabel(
+                              snapshot.lang,
+                              lowWeeklyQuotaAccountIds.length,
+                              snapshot.settings.hideWeeklyQuotaThreshold
+                            )}
+                          </button>
+                        ) : null}
+                        {highWeeklyQuotaHiddenAccountIds.length > 0 ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={
+                              unhideAccountsPending ||
+                              hideAccountsPending ||
+                              hasGlobalPendingAction ||
+                              snapshot.indexHealth.status === "corrupted_unrecoverable"
+                            }
+                            onClick={() => {
+                              setAccountMoreOpen(false);
+                              sendAction("unhideAccounts", undefined, {
+                                accountIds: highWeeklyQuotaHiddenAccountIds,
+                                clearAccountGroup: true
+                              });
+                            }}
+                          >
+                            {resolveUnhideHighWeeklyQuotaLabel(
+                              snapshot.lang,
+                              highWeeklyQuotaHiddenAccountIds.length,
+                              snapshot.settings.unhideWeeklyQuotaThreshold
+                            )}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {mailboxIntegrationActive && blockedAccountCount > 0 ? (
                   <ActionButton
                     class="toolbar-btn danger"
@@ -881,42 +1002,40 @@ function App() {
                     {formatTemplate(snapshot.copy.removeBlockedAccountsBtn, { count: blockedAccountCount })}
                   </ActionButton>
                 ) : null}
-                {selectedCount > 0 ? (
-                  <BatchSelectionBar
-                    copy={snapshot.copy}
-                    lang={snapshot.lang}
-                    selectedCount={selectedCount}
-                    onClearSelection={() => dispatch({ type: "clear-selection" })}
-                    refreshPending={batchRefreshPending}
-                    resyncPending={batchResyncPending}
-                    removePending={batchRemovePending}
-                    sharePending={sharePending}
-                    shareAccountsPending={shareAccountsPending}
-                    hidePending={hideAccountsPending}
-                    unhidePending={unhideAccountsPending}
-                    groupPending={setAccountGroupPending}
-                    onRefresh={() => sendAction("batchRefresh", undefined, { accountIds: state.selectedAccountIds })}
-                    onResync={() =>
-                      sendAction("batchResyncProfile", undefined, { accountIds: state.selectedAccountIds })
-                    }
-                    onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
-                    onShare={handleShareTokens}
-                    onShareAccounts={() => openSharingForAccounts(state.selectedAccountIds)}
-                    onSetBalancePool={() =>
-                      sendAction("setBalancePool", undefined, { accountIds: state.selectedAccountIds })
-                    }
-                    onRemoveFromBalancePool={() =>
-                      sendAction("removeFromBalancePool", undefined, { accountIds: state.selectedAccountIds })
-                    }
-                    onHide={() => sendAction("hideAccounts", undefined, { accountIds: state.selectedAccountIds })}
-                    onUnhide={() => sendAction("unhideAccounts", undefined, { accountIds: state.selectedAccountIds })}
-                    onSetAccountGroup={(accountGroup) =>
-                      sendAction("setAccountGroup", undefined, { accountIds: state.selectedAccountIds, accountGroup })
-                    }
-                  />
-                ) : null}
               </div>
             </div>
+            {selectedCount > 0 ? (
+              <BatchSelectionBar
+                copy={snapshot.copy}
+                lang={snapshot.lang}
+                selectedCount={selectedCount}
+                onClearSelection={() => dispatch({ type: "clear-selection" })}
+                refreshPending={batchRefreshPending}
+                resyncPending={batchResyncPending}
+                removePending={batchRemovePending}
+                sharePending={sharePending}
+                shareAccountsPending={shareAccountsPending}
+                hidePending={hideAccountsPending}
+                unhidePending={unhideAccountsPending}
+                groupPending={setAccountGroupPending}
+                onRefresh={() => sendAction("batchRefresh", undefined, { accountIds: state.selectedAccountIds })}
+                onResync={() => sendAction("batchResyncProfile", undefined, { accountIds: state.selectedAccountIds })}
+                onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
+                onShare={handleShareTokens}
+                onShareAccounts={() => openSharingForAccounts(state.selectedAccountIds)}
+                onSetBalancePool={() =>
+                  sendAction("setBalancePool", undefined, { accountIds: state.selectedAccountIds })
+                }
+                onRemoveFromBalancePool={() =>
+                  sendAction("removeFromBalancePool", undefined, { accountIds: state.selectedAccountIds })
+                }
+                onHide={() => sendAction("hideAccounts", undefined, { accountIds: state.selectedAccountIds })}
+                onUnhide={() => sendAction("unhideAccounts", undefined, { accountIds: state.selectedAccountIds })}
+                onSetAccountGroup={(accountGroup) =>
+                  sendAction("setAccountGroup", undefined, { accountIds: state.selectedAccountIds, accountGroup })
+                }
+              />
+            ) : null}
             <div class="accounts-grid">
               {pageAccounts.map((account) => (
                 <SavedAccountCard
@@ -1035,12 +1154,12 @@ function App() {
                 {selectedSharingFilters.length > 0
                   ? resolveSharingFilterEmptyLabel(snapshot.lang, selectedSharingFilters)
                   : selectedHealthFilters.length > 0
-                  ? resolveHealthFilterEmptyLabel(snapshot.lang, selectedHealthFilters)
-                  : selectedPlanFilters.length > 0
-                    ? resolveAccountPlanFilterEmptyLabel(snapshot.lang)
-                    : hiddenAccountCount > 0 && !showHiddenAccounts
-                      ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
-                      : resolveAccountGroupEmptyLabel(snapshot.lang)}
+                    ? resolveHealthFilterEmptyLabel(snapshot.lang, selectedHealthFilters)
+                    : selectedPlanFilters.length > 0
+                      ? resolveAccountPlanFilterEmptyLabel(snapshot.lang)
+                      : hiddenAccountCount > 0 && !showHiddenAccounts
+                        ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
+                        : resolveAccountGroupEmptyLabel(snapshot.lang)}
               </div>
             ) : null}
           </section>
@@ -1213,38 +1332,67 @@ function resolveHealthFilterToggleLabel(
   lang: string,
   selectedFilters: readonly DashboardHealthFilter[],
   totalCount: number,
-  selectedSharingCount = 0
+  selectedSharingCount = 0,
+  selectedPlanCount = 0
 ): string {
-  const selectedCount = selectedFilters.length + selectedSharingCount;
+  const selectedCount = selectedFilters.length + selectedSharingCount + selectedPlanCount;
   if (lang === "zh") {
     return selectedCount > 0 ? `清除状态筛选（${selectedCount}）` : `按颜色筛选账号（${totalCount}）`;
   }
   if (lang === "zh-hant") {
     return selectedCount > 0 ? `清除狀態篩選（${selectedCount}）` : `按顏色篩選帳號（${totalCount}）`;
   }
-  return selectedCount > 0
-    ? `Clear status filters (${selectedCount})`
-    : `Filter accounts by color (${totalCount})`;
+  return selectedCount > 0 ? `Clear status filters (${selectedCount})` : `Filter accounts by color (${totalCount})`;
 }
 
 function resolveHealthFilterPanelTitle(lang: string): string {
   if (lang === "zh") {
-    return "账号状态筛选";
+    return "账号筛选";
   }
   if (lang === "zh-hant") {
-    return "帳號狀態篩選";
+    return "帳號篩選";
   }
-  return "Account status filters";
+  return "Account filters";
 }
 
 function resolveHealthFilterPanelHint(lang: string): string {
   if (lang === "zh") {
-    return "可多选颜色；未选择时显示所有账号。";
+    return "可组合分组、套餐和状态；未选择时显示所有账号。";
   }
   if (lang === "zh-hant") {
-    return "可多選顏色；未選擇時顯示所有帳號。";
+    return "可組合分組、方案與狀態；未選擇時顯示所有帳號。";
   }
-  return "Select one or more colors. With none selected, all accounts are shown.";
+  return "Combine group, plan, and status filters. With none selected, all accounts are shown.";
+}
+
+function resolveAccountFilterSectionTitle(lang: string): string {
+  if (lang === "zh") {
+    return "分组与套餐";
+  }
+  if (lang === "zh-hant") {
+    return "分組與方案";
+  }
+  return "Groups and plans";
+}
+
+function resolveHeroMoreLabel(lang: string): string {
+  if (lang === "zh") {
+    return "维护操作";
+  }
+  if (lang === "zh-hant") {
+    return "維護操作";
+  }
+  return "Maintenance actions";
+}
+
+function resolveAccountMoreLabel(lang: string): string {
+  if (lang === "zh") {
+    return "更多账号操作";
+  }
+  if (lang === "zh-hant") {
+    return "更多帳號操作";
+  }
+  return "More account actions";
 }
 
 function resolveHealthFilterOptionsLabel(lang: string): string {
@@ -1299,10 +1447,7 @@ function resolveSharingFilterOptionCopy(
   return { label: "Teal · Received", description: "A temporary account explicitly shared by a friend." };
 }
 
-function resolveSharingFilterEmptyLabel(
-  lang: string,
-  filters: readonly DashboardSharingFilter[]
-): string {
+function resolveSharingFilterEmptyLabel(lang: string, filters: readonly DashboardSharingFilter[]): string {
   const includesShared = filters.includes("shared");
   const includesReceived = filters.includes("received");
   if (lang === "zh") {
