@@ -8,6 +8,7 @@ export type DashboardMessageHandlers = {
   onSetting: (key: DashboardSettingKey, value: DashboardSettingValue) => Promise<void>;
   onPickCodexAppPath: () => Promise<void>;
   onClearCodexAppPath: () => Promise<void>;
+  onOpenSettingsJson: () => Promise<void>;
 };
 
 export async function dispatchDashboardClientMessage(
@@ -33,11 +34,20 @@ export async function dispatchDashboardClientMessage(
     case "dashboard:clearCodexAppPath":
       await handlers.onClearCodexAppPath();
       return;
+    case "dashboard:openSettingsJson":
+      await handlers.onOpenSettingsJson();
+      return;
     default:
       return;
   }
 }
 
 export async function clearDashboardCodexAppPath(): Promise<void> {
-  await vscode.workspace.getConfiguration("codexAccounts").update("codexAppPath", "", vscode.ConfigurationTarget.Global);
+  await vscode.workspace
+    .getConfiguration("codexAccounts")
+    .update("codexAppPath", "", vscode.ConfigurationTarget.Global);
+}
+
+export async function openDashboardSettingsJson(): Promise<void> {
+  await vscode.commands.executeCommand("workbench.action.openSettingsJson");
 }

@@ -317,6 +317,21 @@ export function CloseIcon() {
   );
 }
 
+export function CodeIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function InfoIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">

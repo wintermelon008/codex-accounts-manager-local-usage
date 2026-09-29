@@ -519,6 +519,56 @@ function App() {
                 onClick={modals.openAddAccountModal}
               />
               <button
+                id="accountSharingButton"
+                class="settings-btn action-btn icon-only"
+                type="button"
+                title={resolveAccountSharingLabel(snapshot.lang)}
+                aria-label={resolveAccountSharingLabel(snapshot.lang)}
+                disabled={hasGlobalPendingAction}
+                onClick={() => {
+                  setSharingAccountIds([]);
+                  setSharingOpen(true);
+                }}
+              >
+                <span class="button-face">
+                  <span class="button-icon">
+                    <SharingIcon />
+                  </span>
+                </span>
+                <span class="button-tip" aria-hidden="true">
+                  {resolveAccountSharingLabel(snapshot.lang)}
+                </span>
+              </button>
+              {topButtonIntegrations.length > 0 ? (
+                <>
+                  <div class="hero-integration-actions">
+                    {topButtonIntegrations.map(({ integration, topButton, action }) => (
+                      <ActionButton
+                        key={integration.id}
+                        class="settings-btn integration-top-button"
+                        icon={renderIntegrationTopButtonIcon(topButton.icon)}
+                        iconOnly
+                        label={topButton.label}
+                        pending={integrationActionPending}
+                        disabled={
+                          hasGlobalPendingAction ||
+                          action.enabled === false ||
+                          snapshot.indexHealth.status === "corrupted_unrecoverable"
+                        }
+                        tooltip={topButton.tooltip ?? action.tooltip}
+                        onClick={() =>
+                          sendAction("integrationAction", undefined, {
+                            integrationId: integration.id,
+                            integrationActionId: action.id
+                          })
+                        }
+                      />
+                    ))}
+                  </div>
+                  <span class="hero-action-divider" aria-hidden="true" />
+                </>
+              ) : null}
+              <button
                 id="announcementsButton"
                 class={`settings-btn action-btn icon-only announcement-btn ${announcementUnreadCount > 0 ? "has-unread" : ""}`}
                 type="button"
@@ -557,53 +607,7 @@ function App() {
                   {snapshot.copy.settingsTitle}
                 </span>
               </button>
-              <button
-                id="accountSharingButton"
-                class="settings-btn action-btn icon-only"
-                type="button"
-                title={resolveAccountSharingLabel(snapshot.lang)}
-                aria-label={resolveAccountSharingLabel(snapshot.lang)}
-                disabled={hasGlobalPendingAction}
-                onClick={() => {
-                  setSharingAccountIds([]);
-                  setSharingOpen(true);
-                }}
-              >
-                <span class="button-face">
-                  <span class="button-icon">
-                    <SharingIcon />
-                  </span>
-                </span>
-                <span class="button-tip" aria-hidden="true">
-                  {resolveAccountSharingLabel(snapshot.lang)}
-                </span>
-              </button>
-              {topButtonIntegrations.length > 0 ? (
-                <div class="hero-integration-actions">
-                  {topButtonIntegrations.map(({ integration, topButton, action }) => (
-                    <ActionButton
-                      key={integration.id}
-                      class="settings-btn integration-top-button"
-                      icon={renderIntegrationTopButtonIcon(topButton.icon)}
-                      iconOnly
-                      label={topButton.label}
-                      pending={integrationActionPending}
-                      disabled={
-                        hasGlobalPendingAction ||
-                        action.enabled === false ||
-                        snapshot.indexHealth.status === "corrupted_unrecoverable"
-                      }
-                      tooltip={topButton.tooltip ?? action.tooltip}
-                      onClick={() =>
-                        sendAction("integrationAction", undefined, {
-                          integrationId: integration.id,
-                          integrationActionId: action.id
-                        })
-                      }
-                    />
-                  ))}
-                </div>
-              ) : null}
+              <span class="hero-action-divider" aria-hidden="true" />
               <div ref={heroMoreRef} class="hero-more-actions">
                 <button
                   id="heroMoreButton"
@@ -1199,6 +1203,7 @@ function App() {
         onThresholdCommit={handleThresholdCommit}
         onPickCodexAppPath={() => postMessageToHost({ type: "dashboard:pickCodexAppPath" })}
         onClearCodexAppPath={() => postMessageToHost({ type: "dashboard:clearCodexAppPath" })}
+        onOpenSettingsJson={() => postMessageToHost({ type: "dashboard:openSettingsJson" })}
         onIntegrationSettingToggle={(settingId, enabled) =>
           sendAction("integrationSetting", undefined, { integrationSettingId: settingId, enabled })
         }

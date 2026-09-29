@@ -854,4 +854,5 @@ export type DashboardClientMessage =
       value: DashboardSettingValue;
     }
   | { type: "dashboard:pickCodexAppPath" }
-  | { type: "dashboard:clearCodexAppPath" };
+  | { type: "dashboard:clearCodexAppPath" }
+  | { type: "dashboard:openSettingsJson" };

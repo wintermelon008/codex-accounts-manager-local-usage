@@ -15,7 +15,11 @@ import { LocalUsageAnalyticsService } from "../../services/localUsageAnalytics";
 import { renderDashboardShell } from "./shell";
 import { buildDashboardStateSignature } from "./signature";
 import { executeDashboardActionMessage } from "./actionHandlers";
-import { clearDashboardCodexAppPath, dispatchDashboardClientMessage } from "./messageDispatcher";
+import {
+  clearDashboardCodexAppPath,
+  dispatchDashboardClientMessage,
+  openDashboardSettingsJson
+} from "./messageDispatcher";
 import { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
@@ -51,7 +55,7 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
   if (localUsage?.nextRefreshAt != null) {
     params.scheduleLocalUsageRefresh?.(localUsage.nextRefreshAt);
   }
-  const sharingArgument = params.accountSharing ? [params.accountSharing.getDashboardView()] as const : [];
+  const sharingArgument = params.accountSharing ? ([params.accountSharing.getDashboardView()] as const) : [];
   const state = await buildDashboardState(
     params.repo,
     params.settingsStore,
@@ -156,6 +160,9 @@ class DashboardPanelController {
           },
           onClearCodexAppPath: async () => {
             await clearDashboardCodexAppPath();
+          },
+          onOpenSettingsJson: async () => {
+            await openDashboardSettingsJson();
           }
         });
       });
@@ -311,9 +318,7 @@ class DashboardPanelController {
     this.repo.invalidateExternalStateCaches({ invalidateTokens: false });
 
     const integrationHost = getActiveManagerIntegrationHost();
-    const refreshTasks: Promise<unknown>[] = [
-      this.announcements.forceRefresh(this.getAnnouncementOptions())
-    ];
+    const refreshTasks: Promise<unknown>[] = [this.announcements.forceRefresh(this.getAnnouncementOptions())];
     if (this.accountSharing) {
       refreshTasks.push(this.accountSharing.poll());
     }
