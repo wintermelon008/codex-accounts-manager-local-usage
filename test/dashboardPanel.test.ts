@@ -81,6 +81,7 @@ function createState(): DashboardState {
       localUsageShowEquivalentPrice: true,
       displayLanguage: "en",
       autoRefreshMinutes: 0,
+      autoStartQuotaCountdownEnabled: false,
       backgroundTokenRefreshEnabled: true,
       forceFastModeEnabled: false,
       autoSwitchEnabled: false,

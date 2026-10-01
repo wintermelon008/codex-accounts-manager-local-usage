@@ -69,8 +69,7 @@ class RegistrationEmailCodeWatcher {
     return promise;
   }
 
-  // GPT 手动注册进入外部浏览器后只做一次邮箱查询；持续查询仍由用户
-  // 点击“查询邮件/重新查询”显式启动，避免浏览器交接后长期占用 provider。
+  // 保留显式一次性查询原语；注册流程本身使用 start() 的持续 watcher。
   queryOnce(email, options = {}) {
     if (this.promise) {
       return this.promise;
@@ -82,7 +81,7 @@ class RegistrationEmailCodeWatcher {
     this.state = createEmailCodeState({
       phase: "searching",
       running: true,
-      message: "正在自动查询一次最近 30 分钟内的邮箱验证码…"
+      message: "正在查询一次最近 30 分钟内的邮箱验证码…"
     });
     this.publish();
 

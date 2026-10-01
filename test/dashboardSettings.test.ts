@@ -7,6 +7,7 @@ import {
 import {
   ExtensionSettingsStore,
   isForceFastModeEnabled,
+  isAutoStartQuotaCountdownEnabled,
   normalizeProxyAddresses
 } from "../src/infrastructure/config/extensionSettings";
 import { handleDashboardSettingUpdate } from "../src/presentation/dashboard/settings";
@@ -28,6 +29,8 @@ describe("handleDashboardSettingUpdate", () => {
     const settings = new ExtensionSettingsStore().getDashboardSettings();
     expect(settings.hideWeeklyQuotaThreshold).toBe(4.5);
     expect(settings.unhideWeeklyQuotaThreshold).toBe(87.5);
+    expect(settings.autoStartQuotaCountdownEnabled).toBe(false);
+    expect(isAutoStartQuotaCountdownEnabled()).toBe(false);
 
     get.mockImplementation((key: string, fallback: unknown) => {
       if (key === "hideWeeklyQuotaThreshold") {
@@ -56,6 +59,23 @@ describe("handleDashboardSettingUpdate", () => {
     expect(isForceFastModeEnabled()).toBe(false);
     await expect(handleDashboardSettingUpdate("forceFastModeEnabled", false)).resolves.toBe(true);
     expect(update).toHaveBeenCalledWith("forceFastModeEnabled", false, vscode.ConfigurationTarget.Global);
+  });
+
+  it("persists the automatic quota countdown start toggle", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((_key: string, fallback: unknown) => fallback),
+      update,
+      inspect: vi.fn((key: string) => ({ key: `codexAccounts.${key}`, defaultValue: false }))
+    } as never);
+
+    await expect(handleDashboardSettingUpdate("autoStartQuotaCountdownEnabled", true)).resolves.toBe(true);
+
+    expect(update).toHaveBeenCalledWith(
+      "autoStartQuotaCountdownEnabled",
+      true,
+      vscode.ConfigurationTarget.Global
+    );
   });
 
   it("rejects invalid or crossed weekly quota threshold updates", async () => {

@@ -74,7 +74,7 @@ test("registration email watcher queries the matching imported provider and expo
   assert.equal(states.at(-1).phase, "received");
 });
 
-test("registration email watcher can perform exactly one query for GPT browser entry", async () => {
+test("registration email watcher can perform an explicit one-shot query", async () => {
   const now = Date.parse("2026-08-20T12:00:00.000Z");
   let queryCount = 0;
   const watcher = new RegistrationEmailCodeWatcher({

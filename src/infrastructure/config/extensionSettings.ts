@@ -44,6 +44,7 @@ export class ExtensionSettingsStore {
       // field for backwards-compatible dashboard snapshots.
       forceFastModeEnabled: false,
       autoRefreshMinutes: normalizeAutoRefreshMinutes(config.get<number>("autoRefreshMinutes", 0)),
+      autoStartQuotaCountdownEnabled: config.get<boolean>("autoStartQuotaCountdownEnabled", false),
       autoSwitchEnabled: config.get<boolean>("autoSwitchEnabled", false),
       hotSwitchEnabled: config.get<boolean>("hotSwitchEnabled", false),
       seamlessSwitchEnabled: isSeamlessSwitchEnabled(config),
@@ -299,6 +300,10 @@ export function getCodexAccountsConfiguration(): vscode.WorkspaceConfiguration {
 
 export function getAutoRefreshMinutes(): number {
   return normalizeAutoRefreshMinutes(getCodexAccountsConfiguration().get<number>("autoRefreshMinutes", 0));
+}
+
+export function isAutoStartQuotaCountdownEnabled(): boolean {
+  return getCodexAccountsConfiguration().get<boolean>("autoStartQuotaCountdownEnabled", false);
 }
 
 export function isBackgroundTokenRefreshEnabled(): boolean {

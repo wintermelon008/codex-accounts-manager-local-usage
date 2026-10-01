@@ -23,14 +23,22 @@ class Sms688Client {
     token,
     fetchImpl = globalThis.fetch,
     timeoutMs = 30000,
-    onLog = () => {}
+    onLog = () => {},
+    providerName = "SMS688",
+    credentialLabel = "API Key",
+    requestIdPrefix = "sms688",
+    errorClass = Sms688OrderError
   } = {}) {
-    if (typeof fetchImpl !== "function") throw new Sms688OrderError("当前 Node 环境不支持网络请求");
+    if (typeof fetchImpl !== "function") throw new errorClass("当前 Node 环境不支持网络请求");
     this.baseUrl = text(baseUrl).replace(/\/+$/u, "") || DEFAULT_BASE_URL;
     this.token = text(token);
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
     this.onLog = typeof onLog === "function" ? onLog : () => {};
+    this.providerName = text(providerName) || "SMS688";
+    this.credentialLabel = text(credentialLabel) || "API Key";
+    this.requestIdPrefix = text(requestIdPrefix) || "sms688";
+    this.errorClass = typeof errorClass === "function" ? errorClass : Sms688OrderError;
   }
 
   async request(method, path, {
@@ -39,7 +47,7 @@ class Sms688Client {
     executionGeneration,
     leaseGeneration
   } = {}) {
-    if (!this.token) throw new Sms688OrderError("缺少 SMS688 API Key", { code: "MISSING_TOKEN" });
+    if (!this.token) throw new this.errorClass(`缺少 ${this.providerName} ${this.credentialLabel}`, { code: "MISSING_TOKEN" });
     const requestUrl = `${this.baseUrl}${path}`;
     const headers = {
       accept: "application/json",
@@ -56,7 +64,7 @@ class Sms688Client {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    this.onLog("info", `SMS688 请求 ${method} ${safeApiPath(path)}`);
+    this.onLog("info", `${this.providerName} 请求 ${method} ${safeApiPath(path)}`);
     try {
       const response = await this.fetchImpl(requestUrl, {
         method,
@@ -72,15 +80,15 @@ class Sms688Client {
       const payload = parsePayload(raw);
       if (!response.ok) {
         const message = responseMessage(payload) || `HTTP ${response.status}`;
-        this.onLog("error", `SMS688 响应 ${method} ${safeApiPath(path)} HTTP ${response.status}：${safeError(message, this.token)}`);
-        throw new Sms688OrderError(message, { status: response.status, code: responseCode(payload) });
+        this.onLog("error", `${this.providerName} 响应 ${method} ${safeApiPath(path)} HTTP ${response.status}：${safeError(message, this.token, `${this.providerName} 请求失败`)}`);
+        throw new this.errorClass(message, { status: response.status, code: responseCode(payload) });
       }
       return payload;
     } catch (error) {
-      if (error instanceof Sms688OrderError) throw error;
-      this.onLog("error", `SMS688 网络请求失败 ${method} ${safeApiPath(path)}`);
-      throw new Sms688OrderError(
-        error?.name === "AbortError" ? "SMS688 请求超时" : "SMS688 网络请求失败",
+      if (error instanceof this.errorClass) throw error;
+      this.onLog("error", `${this.providerName} 网络请求失败 ${method} ${safeApiPath(path)}`);
+      throw new this.errorClass(
+        error?.name === "AbortError" ? `${this.providerName} 请求超时` : `${this.providerName} 网络请求失败`,
         { code: error?.name === "AbortError" ? "TIMEOUT" : "NETWORK" }
       );
     } finally {
@@ -91,40 +99,40 @@ class Sms688Client {
   async profile() {
     const payload = await this.request("GET", "/me");
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      throw new Sms688OrderError(responseMessage(payload) || "SMS688 未返回账户资料");
+      throw new this.errorClass(responseMessage(payload) || `${this.providerName} 未返回账户资料`);
     }
     return payload;
   }
 
   async createLease() {
-    const payload = await this.request("POST", "/leases", { idempotencyKey: uniqueRequestId("lease") });
-    return normalizeLease(payload, "SMS688 未返回有效号码租约");
+    const payload = await this.request("POST", "/leases", { idempotencyKey: uniqueRequestId("lease", this.requestIdPrefix) });
+    return normalizeLease(payload, `${this.providerName} 未返回有效号码租约`, this.errorClass);
   }
 
   async orderStatus(jobId) {
     const id = text(jobId);
-    if (!id) throw new Sms688OrderError("租约缺少编号，无法查询状态");
-    return normalizeLease(await this.request("GET", `/leases/${encodeURIComponent(id)}`), "SMS688 未返回有效租约状态");
+    if (!id) throw new this.errorClass("租约缺少编号，无法查询状态");
+    return normalizeLease(await this.request("GET", `/leases/${encodeURIComponent(id)}`), `${this.providerName} 未返回有效租约状态`, this.errorClass);
   }
 
   async changeLease(order) {
     const id = orderId(order);
-    if (!id) throw new Sms688OrderError("租约缺少编号，无法换号");
+    if (!id) throw new this.errorClass("租约缺少编号，无法换号");
     return normalizeLease(await this.request("POST", `/leases/${encodeURIComponent(id)}/change`, {
-      idempotencyKey: uniqueRequestId("change"),
+      idempotencyKey: uniqueRequestId("change", this.requestIdPrefix),
       executionGeneration: order?.execution_generation,
       leaseGeneration: order?.lease_generation
-    }), "SMS688 未返回换号结果");
+    }), `${this.providerName} 未返回换号结果`, this.errorClass);
   }
 
   async releaseLease(order) {
     const id = orderId(order);
-    if (!id) throw new Sms688OrderError("租约缺少编号，无法释放");
+    if (!id) throw new this.errorClass("租约缺少编号，无法释放");
     return normalizeLease(await this.request("POST", `/leases/${encodeURIComponent(id)}/release`, {
-      idempotencyKey: uniqueRequestId("release"),
+      idempotencyKey: uniqueRequestId("release", this.requestIdPrefix),
       executionGeneration: order?.execution_generation,
       leaseGeneration: order?.lease_generation
-    }), "SMS688 未返回释放结果");
+    }), `${this.providerName} 未返回释放结果`, this.errorClass);
   }
 }
 
@@ -136,11 +144,17 @@ class Sms688PhoneOrderSession {
     orderTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS,
     fetchImpl,
     clientFactory,
+    providerName = "SMS688",
+    credentialLabel = "API Key",
+    errorClass = Sms688OrderError,
     onStateChange = () => {},
     onLog = () => {}
   } = {}) {
     this.baseUrl = text(baseUrl).replace(/\/+$/u, "") || DEFAULT_BASE_URL;
     this.sourceId = text(sourceId).toLowerCase() || "sms688";
+    this.providerName = text(providerName) || "SMS688";
+    this.credentialLabel = text(credentialLabel) || "API Key";
+    this.errorClass = typeof errorClass === "function" ? errorClass : Sms688OrderError;
     this.pollIntervalMs = clampNumber(pollIntervalMs, DEFAULT_POLL_INTERVAL_MS, 250, 30000);
     this.orderTimeoutMs = clampNumber(orderTimeoutMs, DEFAULT_ORDER_TIMEOUT_MS, 10000, 15 * 60 * 1000);
     this.fetchImpl = typeof fetchImpl === "function" ? fetchImpl : undefined;
@@ -148,6 +162,10 @@ class Sms688PhoneOrderSession {
       baseUrl: this.baseUrl,
       token,
       fetchImpl: this.fetchImpl,
+      providerName: this.providerName,
+      credentialLabel: this.credentialLabel,
+      requestIdPrefix: this.sourceId,
+      errorClass: this.errorClass,
       onLog: (level, message) => this.onLog(level, message)
     }));
     this.onStateChange = typeof onStateChange === "function" ? onStateChange : () => {};
@@ -204,28 +222,28 @@ class Sms688PhoneOrderSession {
   }
 
   async refreshInfo(token) {
-    if (this.state.running) throw new Sms688OrderError("当前会话已有取号任务正在运行");
+    if (this.state.running) throw new this.errorClass("当前会话已有取号任务正在运行");
     this.setClient(token);
     this.state.phase = "logging_in";
-    this.state.message = "正在查询 SMS688 可用次数…";
+    this.state.message = `正在查询 ${this.providerName} 可用次数…`;
     this.state.error = "";
     this.touch();
     try {
       const profile = await this.client.profile();
       this.adoptProfile(profile);
       this.state.phase = "idle";
-      this.state.message = "SMS688 账户信息已更新";
+      this.state.message = `${this.providerName} 账户信息已更新`;
       this.state.error = "";
       this.touch();
       return this.snapshot();
     } catch (error) {
-      this.setError(safeError(error, token));
+      this.setError(safeError(error, token, `${this.providerName} 请求失败`));
       return this.snapshot();
     }
   }
 
   async start(token) {
-    if (this.state.running) throw new Sms688OrderError("已有 SMS688 取号任务正在运行");
+    if (this.state.running) throw new this.errorClass(`已有 ${this.providerName} 取号任务正在运行`);
     this.setClient(token);
     this.order = null;
     this.phoneReadyAt = 0;
@@ -234,7 +252,7 @@ class Sms688PhoneOrderSession {
     this.state.running = true;
     this.state.humanConfirmed = true;
     this.state.phase = "logging_in";
-    this.state.message = "正在验证 SMS688 API Key 并获取号码…";
+    this.state.message = `正在验证 ${this.providerName} ${this.credentialLabel} 并获取号码…`;
     this.state.error = "";
     this.state.order = null;
     this.state.startedAt = Date.now();
@@ -246,12 +264,12 @@ class Sms688PhoneOrderSession {
       const order = await this.client.createLease();
       this.adoptOrder(order);
       if (this.state.running) {
-        this.beginPolling(this.order?.phone ? "已获取 SMS688 号码，正在自动读取验证码…" : "SMS688 正在分配号码…");
-        this.onLog("ok", "已获取 SMS688 取号任务，自动读取验证码");
+        this.beginPolling(this.order?.phone ? `已获取 ${this.providerName} 号码，正在自动读取验证码…` : `${this.providerName} 正在分配号码…`);
+        this.onLog("ok", `已获取 ${this.providerName} 取号任务，自动读取验证码`);
       }
       return this.snapshot();
     } catch (error) {
-      this.setError(safeError(error, token));
+      this.setError(safeError(error, token, `${this.providerName} 请求失败`));
       return this.snapshot();
     }
   }
@@ -259,22 +277,22 @@ class Sms688PhoneOrderSession {
   async confirmNumber() {
     this.requireOrder();
     if (!this.state.running || !["purchasing", "waiting", "polling"].includes(this.state.phase)) {
-      throw new Sms688OrderError("当前没有可读取验证码的号码");
+      throw new this.errorClass("当前没有可读取验证码的号码");
     }
-    this.beginPolling("已开始读取 SMS688 验证码…");
+    this.beginPolling(`已开始读取 ${this.providerName} 验证码…`);
     return this.snapshot();
   }
 
   async replaceNumber() {
     this.requireOrder();
     if (!this.state.running || !["waiting", "polling"].includes(this.state.phase) || this.order.can_change === false) {
-      throw new Sms688OrderError("当前号码不在可换号状态");
+      throw new this.errorClass("当前号码不在可换号状态");
     }
     const previousPhase = this.state.phase;
     ++this.pollGeneration;
     this.pollPromise = null;
     this.state.phase = "replacing";
-    this.state.message = "正在向 SMS688 申请换号…";
+    this.state.message = `正在向 ${this.providerName} 申请换号…`;
     this.state.error = "";
     this.touch();
     try {
@@ -286,8 +304,8 @@ class Sms688PhoneOrderSession {
       ++this.state.replacements;
       this.state.running = true;
       this.state.humanConfirmed = true;
-      this.beginPolling("SMS688 换号请求已受理，正在等待新号码…");
-      this.onLog("info", "已按用户确认向 SMS688 请求换号");
+      this.beginPolling(`${this.providerName} 换号请求已受理，正在等待新号码…`);
+      this.onLog("info", `已按用户确认向 ${this.providerName} 请求换号`);
       return this.snapshot();
     } catch (error) {
       const recovered = await this.recoverAfterActionRace(error, previousPhase);
@@ -295,8 +313,8 @@ class Sms688PhoneOrderSession {
       this.state.running = true;
       this.state.humanConfirmed = true;
       this.state.phase = previousPhase === "polling" ? "polling" : "waiting";
-      this.state.message = "SMS688 换号失败，请重试或取消取号";
-      this.state.error = safeError(error);
+      this.state.message = `${this.providerName} 换号失败，请重试或取消取号`;
+      this.state.error = safeError(error, "", `${this.providerName} 请求失败`);
       this.touch();
       throw error;
     }
@@ -305,11 +323,11 @@ class Sms688PhoneOrderSession {
   async cancelNumber() {
     this.requireOrder();
     if (!this.state.running || ["received", "completed", "cancelled", "error", "timed_out"].includes(this.state.phase) || this.order.can_release === false) {
-      throw new Sms688OrderError("当前没有可取消的取号任务");
+      throw new this.errorClass("当前没有可取消的取号任务");
     }
     ++this.pollGeneration;
     this.state.phase = "cancelling";
-    this.state.message = "正在向 SMS688 请求释放号码…";
+    this.state.message = `正在向 ${this.providerName} 请求释放号码…`;
     this.state.error = "";
     this.touch();
     try {
@@ -328,8 +346,8 @@ class Sms688PhoneOrderSession {
       this.state.running = true;
       this.state.humanConfirmed = true;
       this.state.phase = "waiting";
-      this.state.message = "SMS688 取消失败，请重试";
-      this.state.error = safeError(error);
+      this.state.message = `${this.providerName} 取消失败，请重试`;
+      this.state.error = safeError(error, "", `${this.providerName} 请求失败`);
       this.touch();
       throw error;
     }
@@ -349,7 +367,7 @@ class Sms688PhoneOrderSession {
     this.state.humanConfirmed = true;
     this.state.phase = this.order.phone ? "polling" : "purchasing";
     this.state.error = "";
-    this.state.message = message || (this.order.phone ? "正在等待 SMS688 短信验证码…" : "SMS688 正在分配号码…");
+    this.state.message = message || (this.order.phone ? `正在等待 ${this.providerName} 短信验证码…` : `${this.providerName} 正在分配号码…`);
     this.touch();
     if (this.pollPromise) return;
     const generation = ++this.pollGeneration;
@@ -369,7 +387,7 @@ class Sms688PhoneOrderSession {
         this.state.phase = "timed_out";
         this.state.running = false;
         this.state.humanConfirmed = false;
-        this.state.message = "读取 SMS688 验证码超时，请手动取消或重新取号";
+        this.state.message = `读取 ${this.providerName} 验证码超时，请手动取消或重新取号`;
         this.touch();
         return;
       }
@@ -383,13 +401,13 @@ class Sms688PhoneOrderSession {
         }
         if (!this.state.running) return;
         this.state.phase = this.order.phone ? "polling" : "purchasing";
-        this.state.message = this.order.phone ? "正在等待 SMS688 短信验证码…" : "SMS688 正在分配号码…";
+        this.state.message = this.order.phone ? `正在等待 ${this.providerName} 短信验证码…` : `${this.providerName} 正在分配号码…`;
         this.state.error = "";
         this.touch();
       } catch (error) {
         if (generation !== this.pollGeneration || !this.state.running) return;
-        this.state.error = safeError(error);
-        this.state.message = "读取 SMS688 状态失败，稍后重试…";
+        this.state.error = safeError(error, "", `${this.providerName} 请求失败`);
+        this.state.message = `读取 ${this.providerName} 状态失败，稍后重试…`;
         this.touch();
       }
       const interval = this.order?.phone ? Math.min(this.pollIntervalMs, 500) : this.pollIntervalMs;
@@ -418,7 +436,7 @@ class Sms688PhoneOrderSession {
   }
 
   adoptOrder(order, { resetTimer = true } = {}) {
-    const normalized = normalizeLease(order, "SMS688 未返回有效租约");
+    const normalized = normalizeLease(order, `${this.providerName} 未返回有效租约`, this.errorClass);
     this.order = { ...(this.order || {}), ...normalized };
     this.state.order = publicOrder(this.order);
     if (resetTimer || !this.state.startedAt) this.state.startedAt = Date.now();
@@ -442,7 +460,7 @@ class Sms688PhoneOrderSession {
       this.state.phase = "error";
       this.state.running = false;
       this.state.humanConfirmed = false;
-      this.state.message = orderErrorMessage(this.order) || "SMS688 租约已结束，但未返回验证码";
+      this.state.message = orderErrorMessage(this.order) || `${this.providerName} 租约已结束，但未返回验证码`;
       this.state.error = this.state.message;
     } else {
       this.state.running = true;
@@ -455,10 +473,10 @@ class Sms688PhoneOrderSession {
     this.state.phase = "received";
     this.state.running = false;
     this.state.humanConfirmed = false;
-    this.state.message = "已读取 SMS688 验证码，请手动填写并提交";
+    this.state.message = `已读取 ${this.providerName} 验证码，请手动填写并提交`;
     this.state.error = "";
     this.touch();
-    this.onLog("ok", "已读取 SMS688 验证码");
+    this.onLog("ok", `已读取 ${this.providerName} 验证码`);
   }
 
   async recoverAfterActionRace(error, previousPhase) {
@@ -479,7 +497,7 @@ class Sms688PhoneOrderSession {
     this.state.humanConfirmed = true;
     this.state.phase = previousPhase === "polling" ? "polling" : "waiting";
     this.state.message = "操作未执行，已恢复读取当前号码验证码…";
-    this.state.error = safeError(error);
+    this.state.error = safeError(error, "", `${this.providerName} 请求失败`);
     this.touch();
     this.beginPolling("正在继续读取当前号码验证码…");
     return false;
@@ -487,12 +505,12 @@ class Sms688PhoneOrderSession {
 
   setClient(token) {
     const secret = text(token);
-    if (!secret) throw new Sms688OrderError("请先保存 SMS688 API Key");
+    if (!secret) throw new this.errorClass(`请先保存 ${this.providerName} ${this.credentialLabel}`);
     this.client = this.clientFactory(secret);
   }
 
   requireOrder() {
-    if (!this.client || !this.order) throw new Sms688OrderError("当前没有运行中的 SMS688 取号任务");
+    if (!this.client || !this.order) throw new this.errorClass(`当前没有运行中的 ${this.providerName} 取号任务`);
   }
 
   setError(message) {
@@ -511,11 +529,11 @@ class Sms688PhoneOrderSession {
   }
 }
 
-function normalizeLease(payload, fallbackMessage) {
+function normalizeLease(payload, fallbackMessage, ErrorClass = Sms688OrderError) {
   const raw = leaseFromPayload(payload);
-  if (!raw) throw new Sms688OrderError(fallbackMessage || "SMS688 未返回有效租约");
+  if (!raw) throw new ErrorClass(fallbackMessage || "SMS688 未返回有效租约");
   const id = orderId(raw);
-  if (!id) throw new Sms688OrderError(fallbackMessage || "SMS688 租约缺少编号");
+  if (!id) throw new ErrorClass(fallbackMessage || "SMS688 租约缺少编号");
   return {
     ...raw,
     id,
@@ -579,18 +597,18 @@ function orderErrorMessage(order) {
   return "";
 }
 
-function uniqueRequestId(action) {
-  return `sms688-${action}-${Date.now()}-${crypto.randomUUID()}`;
+function uniqueRequestId(action, prefix = "sms688") {
+  return `${text(prefix) || "sms688"}-${action}-${Date.now()}-${crypto.randomUUID()}`;
 }
 
 function safeApiPath(path) {
   return text(path).replace(/\/leases\/[^/]+(?=\/|$)/u, "/leases/[job-id]");
 }
 
-function safeError(error, secret = "") {
+function safeError(error, secret = "", fallback = "SMS688 请求失败") {
   let message = error instanceof Error ? error.message : text(error);
   if (secret) message = message.split(secret).join("[已隐藏]");
-  return (message || "SMS688 请求失败").replace(/[\r\n\t]+/gu, " ").slice(0, 180);
+  return (message || fallback).replace(/[\r\n\t]+/gu, " ").slice(0, 180);
 }
 
 function parsePayload(raw) {

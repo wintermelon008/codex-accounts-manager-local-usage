@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-09-codex-accounts-0-1-19-l4-dashboard-storage",
+      "id": "ann-2026-10-codex-accounts-0-1-19-l5-mailbox-quota-automation",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.19-l4",
-      "title": "Codex Accounts Manager 0.1.19-l4 — dashboard and storage improvements",
-      "summary": "Simplifies Dashboard controls, organizes settings, and keeps upgrades compatible with existing private state and optional integrations.",
-      "content": "This local release focuses on a cleaner Dashboard and a safer upgrade path.\n1. Dashboard: reorganizes the top actions, normalizes compact button sizing, removes unsupported shortcuts, and adds service restart and integration refresh actions.\n2. Settings: groups options into focused categories and adds a direct link to VS Code settings.json for low-frequency JSON configuration.\n3. Optional integrations: Mailbox, registration helpers, Gateway, and other providers remain independent; missing registrations no longer block the core Dashboard or expose provider-only actions.\n4. Private state: installed upgrades keep the stable VS Code globalStorage root, preserve existing account/sharing data, create the host scaffold, and lazily migrate legacy SecretStorage credentials.",
+      "releaseVersion": "0.1.19-l5",
+      "title": "Codex Accounts Manager 0.1.19-l5 — mailbox and quota automation",
+      "summary": "Keeps registration verification running in the background and automatically starts eligible quota countdowns across all accounts.",
+      "content": "This local release improves registration automation and account quota scheduling.\n1. Mailbox: keeps registration email verification querying in the background, aligns GPT registration with the Codex import flow, and adds the only-connected-to-Codex mailbox filter.\n2. Phone sources: adds the Future phone provider, CDK redemption, persistent server-side token storage, and shared SMS688/Future lease handling.\n3. Quota countdowns: when enabled, scans all refreshable accounts once at startup, starts fresh eligible windows immediately, and then uses a persisted nextCheckAt priority queue plus quota refresh events instead of repeated full scans.\n4. Safety: disabling the setting preserves refresh-only behavior; state versioning and post-start reset tracking prevent missed initial accounts and duplicate starts.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-09-29T00:00:00Z",
+      "createdAt": "2026-10-01T00:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.19-l4 — Dashboard 与存储改进",
-          "summary": "精简 Dashboard 操作、重排设置界面，并兼容现有私有存储与可选集成升级。",
-          "content": "本地版本重点改进 Dashboard 和升级路径。\n1. Dashboard：重排顶部操作，统一紧凑按钮尺寸，移除不支持的快捷入口，并增加服务重启与集成刷新。\n2. 设置：按常用场景分组设置，并提供直接打开 VS Code settings.json 的入口，低频配置可继续使用 JSON。\n3. 可选集成：Mailbox、注册助手、Gateway 等组件保持独立；未安装或未注册时不会阻塞核心 Dashboard，也不会显示 provider 专属操作。\n4. 私有存储：已安装版本继续使用稳定的 VS Code globalStorage 根目录，保留已有账号/共享数据，首次启动补齐 host 文件，并惰性迁移旧 SecretStorage 凭据。"
+          "title": "Codex Accounts Manager 0.1.19-l5 — Mailbox 与额度自动化",
+          "summary": "让注册验证持续后台查询，并在所有符合条件的账号上自动启动额度倒计时。",
+          "content": "本地版本重点改进注册自动化和账号额度调度。\n1. Mailbox：注册助手邮箱验证持续后台查询，GPT 注册与 Codex 导入流程保持一致，邮箱库新增“仅已接入 Codex”筛选。\n2. 手机来源：新增 Future 手机来源、CDK 兑换、扩展宿主服务器持久化 token，以及复用 SMS688/Future 的租约处理。\n3. 额度倒计时：开启后 Manager 启动时扫描全部可刷新账号，符合条件但尚未启动的额度窗口立即触发短对话；之后使用持久化 nextCheckAt 优先队列和额度刷新事件，不再重复全盘扫描。\n4. 安全性：关闭开关仍保持只刷新额度；状态版本升级和启动后的 reset 状态同步避免遗漏首次账号或重复启动。"
         }
       }
     },

@@ -91,6 +91,36 @@ function resolveSettingsCloseLabel(lang: DashboardState["lang"]): string {
   return "Close settings";
 }
 
+function resolveQuotaCountdownAutoStartCopy(lang: DashboardState["lang"]): {
+  title: string;
+  sub: string;
+  onDesc: string;
+  offDesc: string;
+} {
+  if (lang === "zh") {
+    return {
+      title: "自动启动额度倒计时",
+      sub: "额度窗口恢复后自动发送一次短对话，重新启动额度倒计时。",
+      onDesc: "已开启：额度刷新后会自动发送一次短对话启动倒计时。",
+      offDesc: "已关闭：额度到期后只刷新额度，不自动发送短对话。"
+    };
+  }
+  if (lang === "zh-hant") {
+    return {
+      title: "自動啟動配額倒數",
+      sub: "配額視窗恢復後自動發送一次短對話，重新啟動配額倒數。",
+      onDesc: "已開啟：配額重新整理後會自動發送一次短對話啟動倒數。",
+      offDesc: "已關閉：配額到期後只重新整理配額，不會自動發送短對話。"
+    };
+  }
+  return {
+    title: "Automatic quota countdown start",
+    sub: "Send one short conversation after a quota window resets to start the next countdown.",
+    onDesc: "Enabled: a short conversation starts the countdown after the quota refresh.",
+    offDesc: "Disabled: expired quotas are refreshed without sending a conversation."
+  };
+}
+
 export function SettingsOverlay(props: {
   open: boolean;
   copy: DashboardCopy;
@@ -116,6 +146,7 @@ export function SettingsOverlay(props: {
     props.onPatchSettings({ [key]: value } as Partial<DashboardSettings>);
     props.onSendSetting(key, value);
   };
+  const quotaCountdownAutoStartCopy = resolveQuotaCountdownAutoStartCopy(props.lang);
 
   const toggleUsageRange = (range: (typeof LOCAL_USAGE_RANGE_OPTIONS)[number]): void => {
     const enabled = new Set(props.settings.localUsageEnabledRanges);
@@ -334,6 +365,18 @@ export function SettingsOverlay(props: {
                       {props.settings.hourlyQuotaControlEnabled
                         ? props.copy.hourlyQuotaControlOnDesc
                         : props.copy.hourlyQuotaControlOffDesc}
+                    </div>
+                  </SettingsToggleBlock>
+                  <SettingsToggleBlock
+                    title={props.copy.quotaCountdownAutoStartTitle ?? quotaCountdownAutoStartCopy.title}
+                    sub={props.copy.quotaCountdownAutoStartSub ?? quotaCountdownAutoStartCopy.sub}
+                    enabled={props.settings.autoStartQuotaCountdownEnabled}
+                    onToggle={(enabled) => patchAndSend("autoStartQuotaCountdownEnabled", enabled)}
+                  >
+                    <div class="settings-note">
+                      {props.settings.autoStartQuotaCountdownEnabled
+                        ? props.copy.quotaCountdownAutoStartOnDesc ?? quotaCountdownAutoStartCopy.onDesc
+                        : props.copy.quotaCountdownAutoStartOffDesc ?? quotaCountdownAutoStartCopy.offDesc}
                     </div>
                   </SettingsToggleBlock>
                   <SettingsToggleBlock

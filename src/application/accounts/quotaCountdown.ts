@@ -22,12 +22,32 @@ export function startQuotaCountdownForAccount(
   repo: AccountsRepository,
   accountId: string
 ): Promise<QuotaCountdownStartResult> {
+  return startQuotaCountdownTask(repo, accountId, true);
+}
+
+/**
+ * Start the countdown after the caller has already persisted a successful
+ * quota refresh. This avoids querying the same account twice when the quota
+ * refresh pipeline itself detects an expired reset window.
+ */
+export function startQuotaCountdownAfterRefreshForAccount(
+  repo: AccountsRepository,
+  accountId: string
+): Promise<QuotaCountdownStartResult> {
+  return startQuotaCountdownTask(repo, accountId, false);
+}
+
+function startQuotaCountdownTask(
+  repo: AccountsRepository,
+  accountId: string,
+  refreshBeforeStart: boolean
+): Promise<QuotaCountdownStartResult> {
   const inflight = inflightStarts.get(accountId);
   if (inflight) {
     return inflight;
   }
 
-  const task = runQuotaCountdownStart(repo, accountId);
+  const task = runQuotaCountdownStart(repo, accountId, refreshBeforeStart);
   inflightStarts.set(accountId, task);
   const clearInflight = (): void => {
     if (inflightStarts.get(accountId) === task) {
@@ -38,7 +58,11 @@ export function startQuotaCountdownForAccount(
   return task;
 }
 
-async function runQuotaCountdownStart(repo: AccountsRepository, accountId: string): Promise<QuotaCountdownStartResult> {
+async function runQuotaCountdownStart(
+  repo: AccountsRepository,
+  accountId: string,
+  refreshBeforeStart: boolean
+): Promise<QuotaCountdownStartResult> {
   const now = Date.now();
   pruneRecentStarts(now);
   if (recentStarts.has(accountId)) {
@@ -50,12 +74,14 @@ async function runQuotaCountdownStart(repo: AccountsRepository, accountId: strin
     throw new Error("Gateway accounts do not expose quota countdowns");
   }
 
-  await refreshSingleQuota(repo, { refresh: () => undefined }, accountId, {
-    announce: false,
-    forceRefresh: true,
-    refreshView: false,
-    warnQuota: false
-  });
+  if (refreshBeforeStart) {
+    await refreshSingleQuota(repo, { refresh: () => undefined }, accountId, {
+      announce: false,
+      forceRefresh: true,
+      refreshView: false,
+      warnQuota: false
+    });
+  }
   const account = await repo.getAccount(accountId);
   if (!account) {
     throw new Error("The selected account no longer exists");

@@ -427,6 +427,7 @@ export class AccountsWorkbench {
     await measureStep("registerQuotaCountdownRefreshScheduler", () => {
       this.context.subscriptions.push(
         registerQuotaCountdownRefreshScheduler({
+          context: this.context,
           repo: this.repo,
           onRefresh: refreshers.refresh
         })

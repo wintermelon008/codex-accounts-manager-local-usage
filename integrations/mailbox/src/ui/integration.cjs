@@ -32,6 +32,11 @@ const {
   createLocalSms688TokenStore,
   Sms688TokenStore
 } = require("../operations/sms688-token-store.cjs");
+const {
+  createLocalFutureTokenStore,
+  FutureTokenStore
+} = require("../operations/future-token-store.cjs");
+const { FutureClient } = require("../operations/future-phone-order.cjs");
 const { RegistrationExchangeRateStore } = require("../operations/registration-exchange-rate.cjs");
 const { TwoFactorManager, resolveTotpConfigFilePath } = require("../totp/manager.cjs");
 const { resolvePrivateStateRoot } = require("../private-state.cjs");
@@ -44,6 +49,7 @@ const {
 const INTEGRATION_ID = "mailbox";
 const REGISTRATION_INTEGRATION_ID = "mailbox-registration";
 const SELECTED_MAILBOX_KEY = "codexAccounts.mailbox.selected.v1";
+const REGISTRATION_DEFAULT_PHONE_SOURCE_KEY = "codexAccounts.mailbox.registration.defaultPhoneSource.v1";
 const OPERATION_LABELS = {
   query: "查询邮件",
   wait: "接收验证码",
@@ -111,6 +117,7 @@ class MailboxIntegration {
     this.registrationPanel = undefined;
     this.registrationTotpQueries = new Map();
     this.selectedMailboxId = undefined;
+    this.registrationDefaultPhoneSource = "fivesim";
     this.automaticRenewalScanTimer = undefined;
     this.automaticRenewalScanPromise = undefined;
     // mailbox id -> opaque Manager OAuth operation id. Keeping this separate
@@ -132,6 +139,9 @@ class MailboxIntegration {
         ? (input, init) => this.api.fetchWithManagerProxy(input, init)
         : undefined,
       sms688Fetch: typeof this.api?.fetchWithManagerProxy === "function"
+        ? (input, init) => this.api.fetchWithManagerProxy(input, init)
+        : undefined,
+      futureFetch: typeof this.api?.fetchWithManagerProxy === "function"
         ? (input, init) => this.api.fetchWithManagerProxy(input, init)
         : undefined,
     });
@@ -160,6 +170,11 @@ class MailboxIntegration {
       secretStore: serverSms688TokenStore || context.secrets,
       backupStore: serverSms688TokenStore ? context.secrets : undefined
     });
+    const serverFutureTokenStore = createLocalFutureTokenStore({ fsPath: this.privateStateRoot });
+    this.futureTokenStore = new FutureTokenStore({
+      secretStore: serverFutureTokenStore || context.secrets,
+      backupStore: serverFutureTokenStore ? context.secrets : undefined
+    });
     this.registrationExchangeRateStore = exchangeRateStore || (this.privateStateRoot
       ? new RegistrationExchangeRateStore({
         metadataStore: this.sharedMailboxStores.metadataStore,
@@ -169,17 +184,16 @@ class MailboxIntegration {
     this.registrationExchangeRateState = undefined;
     this.registrationPhoneKeyClaims = new Map();
     this.registrationManager.on("stateChange", (event) => {
-      // GPT-only is a browser handoff. Once the external page is actually
-      // open, perform one mailbox query; continuous polling remains explicit.
+      // Once the registration browser is ready, both routes use the same
+      // background mailbox watcher. The watcher only displays the code;
+      // submitting it remains an explicit user action in the browser.
       if (
         event?.state === STATES.AWAITING_MANUAL_REGISTRATION &&
         event.mode === "manual-browser" &&
         event.browserOpened === true
       ) {
-        this.startRegistrationEmailQueryOnce(event.sessionId);
+        this.startRegistrationEmailWatcher(event.sessionId);
       }
-      // The original Codex route keeps its watcher. GPT-only never starts a
-      // continuous watcher automatically.
       if (event?.state === STATES.STARTING && event.mode !== "manual-browser") {
         this.startRegistrationEmailWatcher(event.sessionId);
       }
@@ -243,6 +257,8 @@ class MailboxIntegration {
         this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
         await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
       }
+      const savedPhoneSource = await this.sharedMailboxStores.metadataStore.get(REGISTRATION_DEFAULT_PHONE_SOURCE_KEY);
+      this.registrationDefaultPhoneSource = getRegistrationPhoneSource(savedPhoneSource)?.id || "fivesim";
       const restored = this.registrationManager.restoreSessions(await this.registrationSessionStore.load());
       if (restored.interrupted > 0) {
         await this.persistRegistrationSessions();
@@ -703,6 +719,18 @@ class MailboxIntegration {
           return;
         case "registrationRefreshSms688":
           await this.refreshRegistrationSms688(message.sessionId);
+          return;
+        case "registrationSaveFutureToken":
+          await this.saveFutureToken(message.token);
+          return;
+        case "registrationClearFutureToken":
+          await this.clearFutureToken();
+          return;
+        case "registrationRefreshFuture":
+          await this.refreshRegistrationFuture(message.sessionId);
+          return;
+        case "registrationSetDefaultPhoneSource":
+          await this.setRegistrationDefaultPhoneSource(message.sourceId);
           return;
         case "registrationConfirmPhone":
           await this.confirmRegistrationPhone(message.sessionId);
@@ -1310,44 +1338,6 @@ class MailboxIntegration {
       .finally(() => this.cleanupRegistrationEmailWatcher(sessionId, watcher));
   }
 
-  startRegistrationEmailQueryOnce(sessionId) {
-    if (typeof sessionId !== "string" || this.registrationEmailWatchers.has(sessionId)) {
-      return;
-    }
-    const session = this.registrationManager.getSessionState(sessionId);
-    if (!session || session.mode !== "manual-browser" || session.state !== STATES.AWAITING_MANUAL_REGISTRATION) {
-      return;
-    }
-
-    const watcher = new RegistrationEmailCodeWatcher({
-      pool: this.pool,
-      providers: this.providers,
-      onStateChange: (emailCode) => {
-        try {
-          this.registrationManager.setEmailCodeState(sessionId, emailCode);
-        } catch {
-          // The registration session may be cleaned while a provider request is finishing.
-        }
-      }
-    });
-    this.registrationEmailWatchers.set(sessionId, watcher);
-    const promise = watcher.queryOnce(session.email);
-    void promise
-      .catch((error) => {
-        try {
-          this.registrationManager.setEmailCodeState(sessionId, {
-            phase: "error",
-            running: false,
-            error: safeError(error, "邮箱验证码查询失败"),
-            message: "邮箱验证码查询失败"
-          });
-        } catch {
-          // The registration session may no longer exist.
-        }
-      })
-      .finally(() => this.cleanupRegistrationEmailWatcher(sessionId, watcher));
-  }
-
   stopRegistrationEmailWatcher(sessionId) {
     const watcher = this.registrationEmailWatchers.get(sessionId);
     if (!watcher) {
@@ -1512,6 +1502,16 @@ class MailboxIntegration {
       await this.publishPanelState();
       return;
     }
+    if (source.id === "future") {
+      const token = await this.futureTokenStore.get();
+      if (!token) throw new Error("请先兑换并保存 Future CDK");
+      const result = await this.registrationManager.acquirePhoneNumber(id, token, {
+        sourceId: source.id
+      });
+      if (result?.phase === "error") throw new Error(result.error || "Future 取号失败");
+      await this.publishPanelState();
+      return;
+    }
     if (legacyCardCode) {
       const result = await this.registrationManager.acquirePhoneNumber(id, legacyCardCode, { sourceId });
       if (result?.phase === "error") throw new Error(result.error || "取号失败");
@@ -1583,6 +1583,35 @@ class MailboxIntegration {
     await this.publishPanelState();
   }
 
+  async saveFutureToken(value) {
+    const cdk = String(value ?? "").trim();
+    if (!cdk) throw new Error("请填写 Future CDK");
+    const client = new FutureClient({
+      fetchImpl: this.registrationManager.futureFetch,
+      onLog: (level, message) => this.registrationManager.emit("log", { level, message })
+    });
+    const sessionToken = await client.redeem(cdk);
+    const result = await this.futureTokenStore.set(sessionToken);
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationSaveFutureToken",
+      message: `Future CDK 已兑换并保存 Session Token（${result.masked}）`
+    });
+    await this.publishPanelState();
+  }
+
+  async clearFutureToken() {
+    await this.futureTokenStore.clear();
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationClearFutureToken",
+      message: "Future Session Token 已清除"
+    });
+    await this.publishPanelState();
+  }
+
   async refreshRegistrationFiveSim(sessionId, selection = {}) {
     const id = this.requireRegistrationSessionId(sessionId);
     const token = await this.fiveSimTokenStore.get();
@@ -1605,6 +1634,31 @@ class MailboxIntegration {
       sourceId: "sms688"
     });
     if (result?.phase === "error") throw new Error(result.error || "SMS688 信息刷新失败");
+    await this.publishPanelState();
+  }
+
+  async refreshRegistrationFuture(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    const token = await this.futureTokenStore.get();
+    if (!token) throw new Error("请先兑换并保存 Future CDK");
+    const result = await this.registrationManager.refreshPhoneInfo(id, token, {
+      sourceId: "future"
+    });
+    if (result?.phase === "error") throw new Error(result.error || "Future 信息刷新失败");
+    await this.publishPanelState();
+  }
+
+  async setRegistrationDefaultPhoneSource(sourceId) {
+    const source = getRegistrationPhoneSource(sourceId);
+    if (!source) throw new Error("请选择有效的默认接码来源");
+    this.registrationDefaultPhoneSource = source.id;
+    await this.sharedMailboxStores.metadataStore.update(REGISTRATION_DEFAULT_PHONE_SOURCE_KEY, source.id);
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationSetDefaultPhoneSource",
+      message: `默认接码来源已设为 ${source.displayName}`
+    });
     await this.publishPanelState();
   }
 
@@ -2095,6 +2149,7 @@ class MailboxIntegration {
     const codexImportState = await this.getCodexImportState();
     const registrationKeyPool = await this.getRegistrationKeyPoolState();
     const registrationFiveSimToken = await this.getRegistrationFiveSimTokenState();
+    const registrationFutureToken = await this.getRegistrationFutureTokenState();
     const registrationSms688Token = await this.getRegistrationSms688TokenState();
     const registrationFiveSimExchangeRate = await this.getRegistrationExchangeRateState();
     let totpSummary = { configured: false, baseUrl: "", links: {}, error: this.totpLoadError || "" };
@@ -2119,8 +2174,10 @@ class MailboxIntegration {
       managedAccountDirectoryAvailable: codexImportState.directoryAvailable,
       managedAccountRemovalAvailable: codexImportState.removalAvailable,
       phoneSources: listRegistrationPhoneSources(),
+      registrationDefaultPhoneSource: getRegistrationPhoneSource(this.registrationDefaultPhoneSource)?.id || "fivesim",
       registrationKeyPool,
       registrationFiveSimToken,
+      registrationFutureToken,
       registrationSms688Token,
       registrationFiveSimExchangeRate,
       totp: {
@@ -2197,6 +2254,14 @@ class MailboxIntegration {
       return await this.fiveSimTokenStore.snapshot();
     } catch {
       return { configured: false, masked: "", error: "5SIM API Token 存储不可用" };
+    }
+  }
+
+  async getRegistrationFutureTokenState() {
+    try {
+      return await this.futureTokenStore.snapshot();
+    } catch {
+      return { configured: false, masked: "", error: "Future Session Token 存储不可用" };
     }
   }
 

@@ -7,6 +7,7 @@ import {
 import type { HotSwitchStatus } from "../src/codex";
 import {
   getAutomaticQuotaRefreshAccountIds,
+  getAutomaticQuotaCountdownAccountIds,
   getExpiredQuotaCountdownRefreshTargets,
   registerAutoRefreshScheduler,
   registerQuotaCountdownRefreshScheduler,
@@ -20,6 +21,7 @@ import {
   getCurrentWindowRuntimeAccountId,
   setCurrentWindowRuntimeAccountId
 } from "../src/presentation/workbench/windowRuntimeAccount";
+import type { QuotaChangeListener } from "../src/storage";
 
 type TestableCoordinator = {
   lastObservedAuthIdentity?: string;
@@ -280,6 +282,120 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     }
   });
 
+  it("refreshes expired visible accounts so the quota event can start their countdown", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000 * 1000);
+    const configurationDisposable = { dispose: vi.fn() };
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoRefreshMinutes: 1, autoStartQuotaCountdownEnabled: true })
+    );
+    vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
+    const release = vi.fn().mockResolvedValue(undefined);
+    const baseQuota = {
+      hourlyPercentage: 100,
+      hourlyWindowPresent: true,
+      weeklyPercentage: 100,
+      weeklyWindowPresent: true,
+      codeReviewPercentage: 0
+    };
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([
+        {
+          id: "expired",
+          email: "expired@example.invalid",
+          isActive: false,
+          isHidden: false,
+          createdAt: 1,
+          updatedAt: 1,
+          quotaSummary: {
+            ...baseQuota,
+            hourlyResetTime: 1_800_000_000 - 1,
+            weeklyResetTime: 1_800_003_600
+          }
+        },
+        {
+          id: "fresh",
+          email: "fresh@example.invalid",
+          isActive: true,
+          isHidden: false,
+          createdAt: 2,
+          updatedAt: 1,
+          quotaSummary: {
+            ...baseQuota,
+            hourlyResetTime: 1_800_000_000 + 3_600,
+            weeklyResetTime: 1_800_003_600
+          }
+        }
+      ]),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const registration = registerAutoRefreshScheduler({
+      context: { subscriptions: [] } as never,
+      repo: repo as never,
+      onRefresh: vi.fn()
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith("codexAccounts.refreshAllQuotas", {
+        silent: true,
+        forceRefresh: true,
+        accountIds: ["expired", "fresh"]
+      });
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("includes hidden accounts in the automatic countdown refresh sweep", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000 * 1000);
+    const configurationDisposable = { dispose: vi.fn() };
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoRefreshMinutes: 1, autoStartQuotaCountdownEnabled: true })
+    );
+    vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
+    vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
+    const release = vi.fn().mockResolvedValue(undefined);
+    const accounts = [
+      { id: "visible", email: "visible@example.invalid", isHidden: false, createdAt: 1, updatedAt: 1 },
+      { id: "hidden", email: "hidden@example.invalid", isHidden: true, createdAt: 2, updatedAt: 1 },
+      {
+        id: "gateway",
+        email: "gateway@example.invalid",
+        accountKind: "sub2api" as const,
+        manualOnly: true,
+        quotaMode: "none" as const,
+        isHidden: true,
+        createdAt: 3,
+        updatedAt: 1
+      }
+    ];
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue(accounts),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const registration = registerAutoRefreshScheduler({
+      context: { subscriptions: [] } as never,
+      repo: repo as never,
+      onRefresh: vi.fn()
+    });
+
+    try {
+      expect(getAutomaticQuotaCountdownAccountIds(accounts)).toEqual(["visible", "hidden"]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith("codexAccounts.refreshAllQuotas", {
+        silent: true,
+        forceRefresh: true,
+        accountIds: ["visible", "hidden"]
+      });
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("renews a long-running quota refresh lease before it expires", async () => {
     vi.useFakeTimers();
     const configurationDisposable = { dispose: vi.fn() };
@@ -445,9 +561,12 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     ]);
   });
 
-  it("refreshes an expired hidden-account countdown once per reset window", async () => {
+  it("refreshes an expired hidden-account countdown without starting it by default", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000 * 1000);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoStartQuotaCountdownEnabled: false })
+    );
     const release = vi.fn().mockResolvedValue(undefined);
     const account = {
       id: "hidden-expired",
@@ -472,14 +591,16 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
       tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
     };
     const onRefresh = vi.fn();
-    vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
+    const startQuotaCountdown = vi.fn().mockResolvedValue("started");
     const registration = registerQuotaCountdownRefreshScheduler({
       repo: repo as never,
-      onRefresh
+      onRefresh,
+      startQuotaCountdown
     });
 
     try {
       await vi.advanceTimersByTimeAsync(0);
+      expect(startQuotaCountdown).not.toHaveBeenCalled();
       expect(vscode.commands.executeCommand).toHaveBeenCalledWith("codexAccounts.refreshAllQuotas", {
         silent: true,
         forceRefresh: true,
@@ -490,6 +611,364 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
       await vi.advanceTimersByTimeAsync(QUOTA_COUNTDOWN_REFRESH_POLL_INTERVAL_MS);
       expect(vscode.commands.executeCommand).toHaveBeenCalledOnce();
       expect(repo.tryAcquireSchedulerLease).toHaveBeenCalledOnce();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts every expired countdown when automatic countdown start is enabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000 * 1000);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoStartQuotaCountdownEnabled: true })
+    );
+    const release = vi.fn().mockResolvedValue(undefined);
+    const account = {
+      id: "hidden-expired",
+      email: "hidden-expired@example.invalid",
+      isActive: false,
+      isHidden: true,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 0,
+        hourlyResetTime: 1_800_000_000 - 1,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 100,
+        weeklyResetTime: 1_800_003_600,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0
+      }
+    };
+    const visibleAccount = {
+      ...account,
+      id: "visible-expired",
+      email: "visible-expired@example.invalid",
+      isHidden: false
+    };
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([account, visibleAccount]),
+      getAccount: vi.fn(async (accountId: string) => [account, visibleAccount].find((item) => item.id === accountId)),
+      invalidateExternalStateCaches: vi.fn(),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const startQuotaCountdown = vi.fn().mockResolvedValue("started");
+    const registration = registerQuotaCountdownRefreshScheduler({
+      repo: repo as never,
+      onRefresh: vi.fn(),
+      startQuotaCountdown
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startQuotaCountdown).toHaveBeenCalledWith("hidden-expired");
+      expect(startQuotaCountdown).toHaveBeenCalledWith("visible-expired");
+      expect(startQuotaCountdown).toHaveBeenCalledTimes(2);
+      expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts fresh eligible countdowns during the initial scan", async () => {
+    vi.useFakeTimers();
+    const nowSeconds = 1_800_000_000;
+    vi.setSystemTime(nowSeconds * 1000);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoStartQuotaCountdownEnabled: true })
+    );
+    const account = {
+      id: "fresh-eligible",
+      email: "fresh-eligible@example.invalid",
+      isActive: false,
+      isHidden: false,
+      accountKind: "chatgpt" as const,
+      quotaMode: "chatgpt" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 100,
+        hourlyResetTime: nowSeconds + 5 * 60 * 60,
+        hourlyWindowMinutes: 5 * 60,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 100,
+        weeklyResetTime: nowSeconds + 30 * 24 * 60 * 60,
+        weeklyWindowMinutes: 30 * 24 * 60,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0
+      }
+    };
+    const release = vi.fn().mockResolvedValue(undefined);
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([account]),
+      getAccount: vi.fn().mockResolvedValue(account),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const startQuotaCountdown = vi.fn().mockResolvedValue("started");
+    const registration = registerQuotaCountdownRefreshScheduler({
+      repo: repo as never,
+      onRefresh: vi.fn(),
+      startQuotaCountdown
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startQuotaCountdown).toHaveBeenCalledWith(account.id);
+      expect(startQuotaCountdown).toHaveBeenCalledOnce();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries the automatic countdown start when the short conversation fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000 * 1000);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoStartQuotaCountdownEnabled: true })
+    );
+    const release = vi.fn().mockResolvedValue(undefined);
+    const account = {
+      id: "hidden-expired",
+      email: "hidden-expired@example.invalid",
+      isActive: false,
+      isHidden: true,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 0,
+        hourlyResetTime: 1_800_000_000 - 1,
+        weeklyPercentage: 100,
+        weeklyResetTime: 1_800_003_600,
+        hourlyWindowPresent: true,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0
+      }
+    };
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([account]),
+      getAccount: vi.fn().mockResolvedValue(account),
+      invalidateExternalStateCaches: vi.fn(),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const startQuotaCountdown = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("short conversation failed"))
+      .mockResolvedValue("started");
+    const registration = registerQuotaCountdownRefreshScheduler({
+      repo: repo as never,
+      onRefresh: vi.fn(),
+      startQuotaCountdown
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startQuotaCountdown).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(QUOTA_COUNTDOWN_REFRESH_POLL_INTERVAL_MS);
+      expect(startQuotaCountdown).toHaveBeenCalledTimes(2);
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the earliest reset boundary instead of polling the full account list", async () => {
+    vi.useFakeTimers();
+    const nowSeconds = 1_800_000_000;
+    vi.setSystemTime(nowSeconds * 1000);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoStartQuotaCountdownEnabled: true })
+    );
+    const account = {
+      id: "fresh-account",
+      email: "fresh@example.invalid",
+      isHidden: true,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 100,
+        hourlyResetTime: nowSeconds + 5,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 100,
+        weeklyResetTime: nowSeconds + 3_600,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0
+      }
+    };
+    const release = vi.fn().mockResolvedValue(undefined);
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([account]),
+      getAccount: vi.fn().mockResolvedValue(account),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const startQuotaCountdown = vi.fn().mockResolvedValue("started");
+    const registration = registerQuotaCountdownRefreshScheduler({
+      repo: repo as never,
+      onRefresh: vi.fn(),
+      startQuotaCountdown
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(repo.listAccounts).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(repo.listAccounts).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(startQuotaCountdown).toHaveBeenCalledWith("fresh-account");
+      expect(repo.listAccounts).toHaveBeenCalledOnce();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses a valid persisted scan and does not re-evaluate every quota window", async () => {
+    vi.useFakeTimers();
+    const nowSeconds = 1_800_000_000;
+    vi.setSystemTime(nowSeconds * 1000);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoStartQuotaCountdownEnabled: true })
+    );
+    let persistedState: unknown;
+    const globalState = {
+      get: vi.fn(() => persistedState),
+      update: vi.fn(async (_key: string, value: unknown) => {
+        persistedState = value;
+      })
+    };
+    const account = {
+      id: "persisted-account",
+      email: "persisted@example.invalid",
+      isHidden: true,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 100,
+        hourlyResetTime: nowSeconds + 3_600,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 100,
+        weeklyResetTime: nowSeconds + 7_200,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0
+      }
+    };
+    const firstRepo = {
+      listAccounts: vi.fn().mockResolvedValue([account]),
+      getExternalStateRevision: vi.fn().mockResolvedValue("revision-a")
+    };
+    const first = registerQuotaCountdownRefreshScheduler({
+      context: { globalState } as never,
+      repo: firstRepo as never,
+      onRefresh: vi.fn()
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(persistedState).toMatchObject({ version: 2, scanValid: true });
+    } finally {
+      first.dispose();
+    }
+
+    const expiredAccount = {
+      ...account,
+      quotaSummary: {
+        ...account.quotaSummary,
+        hourlyResetTime: nowSeconds - 1,
+        weeklyResetTime: nowSeconds - 1
+      }
+    };
+    const startQuotaCountdown = vi.fn().mockResolvedValue("started");
+    const secondRepo = {
+      listAccounts: vi.fn().mockResolvedValue([expiredAccount]),
+      getExternalStateRevision: vi.fn().mockResolvedValue("revision-a"),
+      getAccount: vi.fn().mockResolvedValue(expiredAccount),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release: vi.fn().mockResolvedValue(undefined) })
+    };
+    const second = registerQuotaCountdownRefreshScheduler({
+      context: { globalState } as never,
+      repo: secondRepo as never,
+      onRefresh: vi.fn(),
+      startQuotaCountdown
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(secondRepo.listAccounts).toHaveBeenCalledOnce();
+      expect(startQuotaCountdown).not.toHaveBeenCalled();
+    } finally {
+      second.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a countdown from the quota refresh event without rescanning all accounts", async () => {
+    vi.useFakeTimers();
+    const nowSeconds = 1_800_000_000;
+    vi.setSystemTime(nowSeconds * 1000);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoStartQuotaCountdownEnabled: true })
+    );
+    const account = {
+      id: "refreshed-account",
+      email: "refreshed@example.invalid",
+      isHidden: false,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 100,
+        hourlyResetTime: nowSeconds + 3_600,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 100,
+        weeklyResetTime: nowSeconds + 3_600,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0
+      }
+    };
+    const previousQuota = {
+      ...account.quotaSummary,
+      hourlyResetTime: nowSeconds - 1,
+      weeklyResetTime: nowSeconds - 1
+    };
+    let notifyQuota: QuotaChangeListener | undefined;
+    const release = vi.fn().mockResolvedValue(undefined);
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([account]),
+      getAccount: vi.fn().mockResolvedValue(account),
+      onDidUpdateQuota: vi.fn((listener: QuotaChangeListener) => {
+        notifyQuota = listener;
+        return { dispose: vi.fn() };
+      }),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const startQuotaCountdown = vi.fn().mockResolvedValue("started");
+    const startQuotaCountdownAfterRefresh = vi.fn().mockResolvedValue("started");
+    const registration = registerQuotaCountdownRefreshScheduler({
+      repo: repo as never,
+      onRefresh: vi.fn(),
+      startQuotaCountdown,
+      startQuotaCountdownAfterRefresh
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startQuotaCountdown).not.toHaveBeenCalled();
+      notifyQuota?.({
+        accountId: account.id,
+        previousQuota,
+        nextQuota: account.quotaSummary,
+        refreshed: true,
+        failed: false
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(startQuotaCountdownAfterRefresh).toHaveBeenCalledWith(account.id);
+      expect(startQuotaCountdown).not.toHaveBeenCalled();
+      expect(repo.listAccounts).toHaveBeenCalledOnce();
     } finally {
       registration.dispose();
       vi.useRealTimers();

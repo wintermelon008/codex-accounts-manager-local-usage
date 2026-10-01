@@ -78,7 +78,21 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .mailbox-list-header { align-items: flex-start; }
     .mailbox-list-toolbar { padding: 10px 12px; border-bottom: 1px solid var(--border); }
     .mailbox-list-tools, .selection-tools, .batch-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
-    .mailbox-account-filters { display: inline-flex; flex: 0 0 auto; flex-wrap: nowrap; align-items: center; gap: 7px; }
+    .mailbox-filter-menu { position: relative; flex: 0 0 auto; }
+    .mailbox-filter-menu > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-soft); color: var(--muted); cursor: pointer; list-style: none; white-space: nowrap; }
+    .mailbox-filter-menu > summary::-webkit-details-marker { display: none; }
+    .mailbox-filter-menu > summary::after { content: "▾"; color: var(--accent); font-size: 11px; }
+    .mailbox-filter-menu[open] > summary { border-color: var(--accent); color: var(--text); }
+    .mailbox-filter-menu[open] > summary::after { content: "▴"; }
+    .mailbox-filter-count { display: inline-grid; min-width: 18px; height: 18px; place-items: center; padding: 0 5px; border-radius: 999px; color: var(--accent-text); background: var(--accent-strong); font-size: 11px; font-weight: 700; }
+    .mailbox-filter-popover { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; display: grid; gap: 6px; min-width: 230px; padding: 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--vscode-editorWidget-background); box-shadow: 0 8px 24px #0005; }
+    .mailbox-filter-heading { padding: 1px 3px 3px; color: var(--muted); font-size: 11px; font-weight: 700; }
+    .mailbox-filter-option { display: flex; align-items: center; gap: 7px; min-height: 29px; padding: 4px 5px; border-radius: 5px; color: var(--text); cursor: pointer; white-space: nowrap; }
+    .mailbox-list-tools .mailbox-filter-option { gap: 7px; color: var(--text); }
+    .mailbox-filter-option:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .mailbox-filter-option input { flex: 0 0 auto; width: auto; min-width: 0; margin: 0; padding: 0; }
+    .mailbox-filter-actions { display: flex; justify-content: flex-end; padding-top: 5px; border-top: 1px solid var(--border); }
+    .mailbox-filter-clear { padding: 4px 7px; color: var(--muted); font-size: 11px; }
     .mailbox-list-tools input { flex: 1 1 150px; min-width: 120px; padding: 7px 9px; }
     .mailbox-list-tools select { width: auto; min-width: 112px; padding: 7px 8px; }
     .mailbox-list-tools label { display: inline-flex; align-items: center; gap: 1px; color: var(--muted); white-space: nowrap; }
@@ -319,6 +333,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-standalone-card { width: 100%; max-width: none; margin: 0; padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--vscode-editorWidget-background); }
     .registration-standalone-card + .registration-standalone-card { margin-top: 14px; }
     .registration-standalone-card h2 { margin-bottom: 6px; }
+    .registration-channel-center { margin-bottom: 14px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--accent) 4%, transparent); }
+    .registration-channel-center-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .registration-channel-center-head .field { flex: 0 1 240px; margin: 0; }
+    .registration-channel-center-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 12px; }
+    .registration-channel-center-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--text) 3%, transparent); }
+    .registration-channel-center-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .registration-channel-center-item small { color: var(--muted); white-space: nowrap; }
     .registration-mailbox-picker { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--accent) 3%, transparent); }
     .registration-mailbox-picker-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
     .registration-mailbox-picker-tools { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
@@ -397,6 +418,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let mailboxSortKey = "name";
       let mailboxSortDirection = "asc";
       let onlyUnlinkedCodex = false;
+      let onlyLinkedCodex = false;
       let onlyQueryFailed = false;
       let onlyReauthorization = false;
       let onlyOpenAiDeactivated = false;
@@ -422,11 +444,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationPhoneSourceSelections = {};
       let registrationPhoneKeySelections = {};
       let registrationFiveSimTokenInputs = {};
+      let registrationFutureTokenInputs = {};
       let registrationSms688TokenInputs = {};
       let registrationFiveSimSelections = {};
       let registrationFiveSimCountrySelections = {};
       let registrationFiveSimFilters = {};
       let registrationFiveSimAutoRefreshRequested = new Set();
+      let registrationFutureAutoRefreshRequested = new Set();
       let registrationSms688AutoRefreshRequested = new Set();
       let registrationInputValues = {};
       let modalFormValues = { importForm: {}, editForm: {} };
@@ -463,7 +487,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           pendingCodexImports = Object.fromEntries((state.codexImports || []).map((mailboxId) => [mailboxId, true]));
           const knownMailboxIds = new Set((state.mailboxes || []).map((mailbox) => mailbox.id));
           selectedMailboxIds = new Set([...selectedMailboxIds].filter((mailboxId) => knownMailboxIds.has(mailboxId)));
-          if (!state.codexImportAvailable) onlyUnlinkedCodex = false;
+          if (!isCodexAccountDirectoryAvailable()) {
+            onlyUnlinkedCodex = false;
+            onlyLinkedCodex = false;
+          }
           if (!state.managedAccountDirectoryAvailable) onlyReauthorization = false;
           if (providerFilter && !(state.providers || []).some((provider) => provider.id === providerFilter)) providerFilter = "";
           if (registrationMailboxProviderFilter && !(state.providers || []).some((provider) => provider.id === registrationMailboxProviderFilter)) registrationMailboxProviderFilter = "";
@@ -615,6 +642,16 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "toggle-registration-mailbox-sort-direction") { registrationMailboxSortDirection = registrationMailboxSortDirection === "asc" ? "desc" : "asc"; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); updateSortDirectionButton("toggle-registration-mailbox-sort-direction", registrationMailboxSortDirection); }
         else if (action === "select-visible") selectVisibleMailboxes();
         else if (action === "clear-selection") { selectedMailboxIds.clear(); render(); }
+        else if (action === "clear-mailbox-filters") {
+          onlyUnlinkedCodex = false;
+          onlyLinkedCodex = false;
+          onlyQueryFailed = false;
+          onlyReauthorization = false;
+          onlyOpenAiDeactivated = false;
+          mailboxPage = 1;
+          mailboxPageJumpInput = "";
+          render();
+        }
         else if (action === "batch-query") requestBatchAction("batchQuery");
         else if (action === "batch-wait") requestBatchAction("batchWait");
         else if (action === "batch-renewal") requestBatchAction("batchRenewal");
@@ -785,6 +822,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             send("registrationAcquirePhone", { sessionId, sourceId });
             return;
           }
+          if (sourceId === "future") {
+            if (!state.registrationFutureToken?.configured) {
+              showNotice("请先兑换并保存 Future CDK", "warning");
+              return;
+            }
+            send("registrationAcquirePhone", { sessionId, sourceId });
+            return;
+          }
           const keyId = registrationPhoneKeySelections[sessionId] || document.getElementById("registrationPhoneKey-" + sessionId)?.value || "";
           if (!sessionId || !keyId) {
             showNotice("请先选择接码平台 Key", "warning");
@@ -820,6 +865,20 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "registration-clear-sms688-token") {
           send("registrationClearSms688Token");
         }
+        else if (action === "registration-save-future-token") {
+          const sessionId = target.dataset.sessionId || "";
+          const input = document.getElementById("registrationFutureTokenInput-" + sessionId)?.value?.trim() || registrationFutureTokenInputs[sessionId] || "";
+          if (!input) {
+            showNotice("请先粘贴 Future CDK", "warning");
+            return;
+          }
+          registrationFutureTokenInputs[sessionId] = "";
+          send("registrationSaveFutureToken", { token: input });
+          render();
+        }
+        else if (action === "registration-clear-future-token") {
+          send("registrationClearFutureToken");
+        }
         else if (action === "registration-refresh-fivesim") {
           const sessionId = target.dataset.sessionId || "";
           if (!sessionId) return;
@@ -829,6 +888,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "registration-refresh-sms688") {
           const sessionId = target.dataset.sessionId || "";
           if (sessionId) send("registrationRefreshSms688", { sessionId });
+        }
+        else if (action === "registration-refresh-future") {
+          const sessionId = target.dataset.sessionId || "";
+          if (sessionId) send("registrationRefreshFuture", { sessionId });
         }
         else if (action === "registration-select-fivesim-offer") {
           const sessionId = target.dataset.sessionId || "";
@@ -908,12 +971,16 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         if (target.id === "editProviderId") { editProvider = target.value || ""; refreshEditProviderFields(); }
         if (target.id === "mailboxSort") { mailboxSortKey = target.value || "name"; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "onlyUnlinkedCodex") { onlyUnlinkedCodex = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
+        if (target.id === "onlyLinkedCodex") { onlyLinkedCodex = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "onlyQueryFailed") { onlyQueryFailed = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "onlyReauthorization") { onlyReauthorization = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "onlyOpenAiDeactivated") { onlyOpenAiDeactivated = target.checked === true; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "mailboxProviderFilter") { providerFilter = target.value || ""; mailboxPage = 1; mailboxPageJumpInput = ""; refreshMailboxList(); }
         if (target.id === "registrationMailboxSort") { registrationMailboxSortKey = target.value || "name"; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
         if (target.id === "registrationMailboxProviderFilter") { registrationMailboxProviderFilter = target.value || ""; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
+        if (target.id === "registrationDefaultPhoneSource") {
+          send("registrationSetDefaultPhoneSource", { sourceId: target.value || "" });
+        }
         if (target.id === "registrationOnlyUnregisteredGpt") { registrationOnlyUnregisteredGpt = target.checked === true; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
         if (target.id === "registrationOnlyGptSevenDays") { registrationOnlyGptSevenDays = target.checked === true; registrationMailboxPage = 1; registrationMailboxPageJumpInput = ""; refreshRegistrationMailboxList(); }
         if (target.id.startsWith("registrationPhoneSource-")) {
@@ -922,6 +989,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           registrationPhoneSourceSelections[sessionId] = sourceId;
           if (!updateRegistrationPhoneSourcePanels(sessionId, sourceId)) render();
           if (sourceId === "fivesim") requestRegistrationFiveSimRefresh(sessionId);
+          if (sourceId === "future") requestRegistrationFutureRefresh(sessionId);
           if (sourceId === "sms688") requestRegistrationSms688Refresh(sessionId);
         }
         if (target.id.startsWith("registrationPhoneKey-")) {
@@ -970,6 +1038,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         }
         if (event.target.id.startsWith("registrationFiveSimTokenInput-")) {
           registrationFiveSimTokenInputs[event.target.id.slice("registrationFiveSimTokenInput-".length)] = event.target.value || "";
+        }
+        if (event.target.id.startsWith("registrationFutureTokenInput-")) {
+          registrationFutureTokenInputs[event.target.id.slice("registrationFutureTokenInput-".length)] = event.target.value || "";
         }
         if (event.target.id.startsWith("registrationSms688TokenInput-")) {
           registrationSms688TokenInputs[event.target.id.slice("registrationSms688TokenInput-".length)] = event.target.value || "";
@@ -1141,7 +1212,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sessions = [...(state.registrationSessions || [])].reverse();
         const nextSessions = sessions.length
           ? sessions.map(renderRegistrationSession).join("")
-          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱；进入 GPT 注册网页后会自动查询一次邮箱验证码。</p>';
+          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱；进入 GPT 注册网页后会在后台持续查询邮箱验证码。</p>';
         if (sessionsRegion.innerHTML !== nextSessions) sessionsRegion.innerHTML = nextSessions;
       }
 
@@ -1309,9 +1380,16 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function refreshMailboxToolbar(mailboxView = getMailboxPageView()) {
         const count = document.querySelector('[data-role="mailbox-count"]');
         if (count) {
-          const filterActive = Boolean(mailboxSearch.trim() || providerFilter || onlyUnlinkedCodex || onlyQueryFailed || onlyReauthorization || onlyOpenAiDeactivated);
+          const filterActive = Boolean(mailboxSearch.trim() || providerFilter || activeMailboxFilterCount());
           count.textContent = (filterActive ? mailboxView.mailboxes.length + "/" : "") + mailboxView.allMailboxes.length;
         }
+        const filterSummary = document.querySelector('[data-role="mailbox-filter-summary"]');
+        if (filterSummary) {
+          const count = activeMailboxFilterCount();
+          filterSummary.innerHTML = "筛选" + (count > 0 ? '<span class="mailbox-filter-count" aria-label="已启用 ' + count + ' 个筛选条件">' + count + '</span>' : "");
+        }
+        const filterClear = document.querySelector('[data-action="clear-mailbox-filters"]');
+        if (filterClear) filterClear.disabled = activeMailboxFilterCount() === 0;
         const selectionCount = document.querySelector(".selection-tools > span");
         if (selectionCount) selectionCount.textContent = "已选 " + selectedMailboxIds.size + " / " + mailboxView.mailboxes.length;
         const selectedHasRenewal = [...selectedMailboxIds].some((mailboxId) => {
@@ -1342,8 +1420,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const progressHtml = renderMailboxOperationProgress();
           if (progress.innerHTML !== progressHtml) progress.innerHTML = progressHtml;
         }
+        const codexFilterAvailable = isCodexAccountDirectoryAvailable();
         const codexFilter = document.getElementById("onlyUnlinkedCodex");
-        if (codexFilter) codexFilter.disabled = state.codexImportAvailable !== true;
+        if (codexFilter) codexFilter.disabled = !codexFilterAvailable;
+        const linkedCodexFilter = document.getElementById("onlyLinkedCodex");
+        if (linkedCodexFilter) linkedCodexFilter.disabled = !codexFilterAvailable;
         const reauthorizationFilter = document.getElementById("onlyReauthorization");
         if (reauthorizationFilter) reauthorizationFilter.disabled = state.managedAccountDirectoryAvailable !== true;
         const deactivatedSummary = document.querySelector('[data-role="deactivated-summary"]');
@@ -1465,6 +1546,48 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         return columns * REGISTRATION_MAILBOX_ROWS;
       }
 
+      function renderRegistrationChannelCenter() {
+        const sources = Array.isArray(state.phoneSources) && state.phoneSources.length
+          ? state.phoneSources
+          : [
+            { id: "fivesim", displayName: "5SIM" },
+            { id: "future", displayName: "Future" },
+            { id: "sms688", displayName: "SMS688" },
+            { id: "liye", displayName: "LIYE" }
+          ];
+        const defaultSourceId = sources.some((source) => source.id === state.registrationDefaultPhoneSource)
+          ? state.registrationDefaultPhoneSource
+          : sources[0]?.id || "fivesim";
+        const sourceOptions = sources.map((source) =>
+          '<option value="' + esc(source.id) + '" ' + (source.id === defaultSourceId ? "selected" : "") + '>' + esc(source.displayName || source.id) + '</option>'
+        ).join("");
+        const keyPool = state.registrationKeyPool || {};
+        const statuses = sources.map((source) => {
+          let configured = false;
+          let detail = "未配置";
+          if (source.id === "fivesim") {
+            configured = state.registrationFiveSimToken?.configured === true;
+            detail = configured ? "Token 已保存" : "未保存 Token";
+          } else if (source.id === "future") {
+            configured = state.registrationFutureToken?.configured === true;
+            detail = configured ? "Session Token 已保存" : "未兑换 CDK";
+          } else if (source.id === "sms688") {
+            configured = state.registrationSms688Token?.configured === true;
+            detail = configured ? "API Key 已保存" : "未保存 API Key";
+          } else if (source.id === "liye") {
+            const available = Number(keyPool.available || 0);
+            const inUse = Number(keyPool.inUse || 0);
+            configured = available > 0 || inUse > 0;
+            detail = configured ? available + " 个可用 · " + inUse + " 个使用中" : "Key 池为空";
+          }
+          return '<div class="registration-channel-center-item"><strong>' + esc(source.displayName || source.id) + '</strong><span><span class="tag' + (configured ? ' success' : '') + '">' + (configured ? '已配置' : '待配置') + '</span><small> ' + esc(detail) + '</small></span></div>';
+        }).join("");
+        return '<section class="registration-channel-center" aria-label="接码渠道中心">' +
+          '<div class="registration-channel-center-head"><div><h2>接码渠道中心</h2><p class="muted">集中查看渠道状态；具体凭据仍在注册卡片的渠道面板中维护。</p></div><div class="field"><label for="registrationDefaultPhoneSource">默认接码来源</label><select id="registrationDefaultPhoneSource" aria-label="选择默认接码来源">' + sourceOptions + '</select></div></div>' +
+          '<div class="registration-channel-center-grid">' + statuses + '</div>' +
+        '</section>';
+      }
+
       function ensureRegistrationMailboxResizeObserver() {
         const list = document.querySelector(".registration-mailbox-list");
         if (!list || typeof ResizeObserver !== "function") return;
@@ -1491,7 +1614,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sessions = [...(state.registrationSessions || [])].reverse();
         const sessionsHtml = sessions.length
           ? sessions.map(renderRegistrationSession).join("")
-          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱；进入 GPT 注册网页后会自动查询一次邮箱验证码。</p>';
+          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱；进入 GPT 注册网页后会在后台持续查询邮箱验证码。</p>';
         return '<div class="registration-standalone">' +
           '<section class="registration-standalone-card">' +
             '<h2>选择注册邮箱</h2>' +
@@ -1630,7 +1753,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           ? '<button type="button" class="secondary small" data-action="registration-copy-email-code" data-session-id="' + esc(session.id) + '" data-value="' + esc(code) + '">复制邮箱验证码</button>'
           : '<button type="button" class="secondary small" disabled>复制邮箱验证码</button>';
         const manualBrowser = session.mode === "manual-browser";
-        const emailCodeMode = manualBrowser ? "进入后自动查询一次，可手动查询" : "自动查询";
+        const emailCodeMode = manualBrowser ? "进入后后台持续查询" : "自动查询";
         // Completing GPT registration hands this card to the subsequent Codex
         // import. Keep manual mailbox assistance available for that handoff.
         const terminal = ["completed", "failed", "cancelled"].includes(session.state) && !(manualBrowser && session.state === "completed");
@@ -1648,7 +1771,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             '<div class="registration-email-code-result"><label>最新邮箱验证码</label><strong>' + esc(code || "— — —") + '</strong>' + copyButton + '</div>' +
             '<div class="registration-email-code-result"><label>邮件收到时间</label><strong>' + esc(receivedAt ? formatDate(receivedAt) : "— — —") + '</strong></div>' +
           '</div>' +
-          '<div class="field-note" aria-live="polite">' + esc(emailCode.message || (manualBrowser ? "进入 GPT 注册网页后自动查询一次；之后可点击“查询邮件”查询最近 30 分钟的邮件" : "注册开始后自动查询最近 30 分钟的邮件")) + detail + '</div>' +
+          '<div class="field-note" aria-live="polite">' + esc(emailCode.message || (manualBrowser ? "进入 GPT 注册网页后自动查询最近 30 分钟的邮件；找到验证码后会停止" : "注册开始后自动查询最近 30 分钟的邮件")) + detail + '</div>' +
           (emailCode.error ? '<div class="tag error" style="margin-top:8px">' + esc(emailCode.error) + '</div>' : "") +
         '</div>';
       }
@@ -1814,24 +1937,31 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const phase = String(orderState.phase || "idle");
         const active = orderState.running === true;
         const manualBrowser = session.mode === "manual-browser";
-        // A completed GPT-only session can still need a phone while its
-        // follow-up Codex OAuth browser is running.
-        const terminal = ["completed", "failed", "cancelled"].includes(session.state) && !(manualBrowser && session.state === "completed");
+        // Phone assistance remains independent from the registration route's
+        // completion state, including after a Codex OAuth handoff completes.
+        // Registration completion does not end the independent phone helper.
+        // Only a failed or explicitly cancelled registration session blocks
+        // starting another phone order; an OAuth-completed session may still
+        // switch sources, refresh a provider, or acquire a new number.
+        const terminal = ["failed", "cancelled"].includes(session.state);
         const canReplace = !terminal && active && ["waiting", "polling"].includes(phase) && !code && order.can_change !== false;
         const canCancel = !terminal && active && !["received", "completed", "cancelled", "error", "timed_out"].includes(phase) && order.can_release !== false;
         const sources = Array.isArray(state.phoneSources) && state.phoneSources.length
           ? state.phoneSources
           : [
             { id: "fivesim", displayName: "5SIM", websiteUrl: "https://5sim.net", credentialType: "api-token" },
+            { id: "future", displayName: "Future", websiteUrl: "https://sms.futurepixelai.com/docs", purchaseUrl: "https://www.16688.com.cn/shop/AIAISHARE", credentialType: "cdk" },
             { id: "sms688", displayName: "SMS688", websiteUrl: "https://cdk.sms688.cc", credentialType: "api-key" },
             { id: "liye", displayName: "LIYE", websiteUrl: "https://liye.5x20.cn", credentialType: "key" }
           ];
-        const storedSourceId = registrationPhoneSourceSelections[session.id] || orderState.card?.source || sources[0].id;
+        const storedSourceId = registrationPhoneSourceSelections[session.id] || orderState.card?.source || state.registrationDefaultPhoneSource || sources[0].id;
         const source = sources.find((item) => item.id === storedSourceId) || sources[0];
         registrationPhoneSourceSelections[session.id] = source.id;
         const isFiveSim = source.id === "fivesim";
+        const isFuture = source.id === "future";
         const isSms688 = source.id === "sms688";
         const refreshingFiveSim = isFiveSim && phase === "logging_in";
+        const refreshingFuture = isFuture && phase === "logging_in";
         const refreshingSms688 = isSms688 && phase === "logging_in";
         const keyPool = state.registrationKeyPool || { keys: [], available: 0, inUse: 0, count: 0 };
         const keys = Array.isArray(keyPool.keys) ? keyPool.keys : [];
@@ -1861,6 +1991,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           : "";
         const configDisabled = active || terminal ? " disabled" : "";
         const keyInput = registrationPhoneKeyInputs[session.id] || "";
+        const futureToken = state.registrationFutureToken || { configured: false, masked: "" };
+        const futureTokenInput = registrationFutureTokenInputs[session.id] || "";
+        const futureAccount = orderState.card || {};
+        const futureAvailableUses = Number.isFinite(Number(futureAccount.availableUses))
+          ? Number(futureAccount.availableUses)
+          : Number.isFinite(Number(futureAccount.balance))
+            ? Number(futureAccount.balance)
+            : null;
         const sms688Token = state.registrationSms688Token || { configured: false, masked: "" };
         const sms688TokenInput = registrationSms688TokenInputs[session.id] || "";
         const sms688Account = orderState.card || {};
@@ -1869,8 +2007,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           : Number.isFinite(Number(sms688Account.balance))
             ? Number(sms688Account.balance)
             : null;
-        const canAcquireAfterGpt = manualBrowser && session.state === "completed";
-        const canAcquire = !terminal && !active && (canAcquireAfterGpt || !["received", "completed"].includes(phase));
+        const canAcquire = !terminal && !active;
         const initialFiveSimSelection = getFiveSimSelection(session.id);
         const fiveSimFilters = registrationFiveSimFilters[session.id] || {};
         const fiveSimPriceMax = Object.prototype.hasOwnProperty.call(fiveSimFilters, "priceMax")
@@ -1973,6 +2110,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '<div class="registration-fivesim-offer-tools"><div class="field"><label for="registrationFiveSimPriceMax-' + esc(session.id) + '">最高价格</label><input id="registrationFiveSimPriceMax-' + esc(session.id) + '" type="text" inputmode="decimal" value="' + esc(fiveSimPriceMax) + '" placeholder="不限"' + configDisabled + '></div><div class="field"><label for="registrationFiveSimSuccessMin-' + esc(session.id) + '">最低成功率 (%)</label><input id="registrationFiveSimSuccessMin-' + esc(session.id) + '" type="text" inputmode="decimal" value="' + esc(fiveSimSuccessMin) + '" placeholder="不限"' + configDisabled + '></div></div>' +
           '<div class="registration-fivesim-section"><div class="registration-fivesim-section-title"><span>选择地区</span><span>按内部最低价递增</span></div><div class="registration-fivesim-country-list" data-scroll-preserve="registration-fivesim-country-list-' + esc(session.id) + '" aria-label="5SIM 地区列表">' + fiveSimCountryRows + '</div></div>' +
           '<div class="registration-fivesim-section"><div class="registration-fivesim-section-title"><span>' + (selectedFiveSimCountryGroup ? '选择运营商 · ' + esc(selectedFiveSimCountryGroup.minOffer.countryName || selectedFiveSimCountry) : '选择运营商') + '</span><span>推荐项优先</span></div><div class="registration-fivesim-operator-list" data-scroll-preserve="registration-fivesim-operator-list-' + esc(session.id) + '" aria-label="5SIM 运营商列表">' + fiveSimOperatorRows + '</div></div>' +
+          '</div>';
+        const futureCatalog = '<div class="registration-fivesim-account">' +
+          '<div class="registration-fivesim-token-row"><input id="registrationFutureTokenInput-' + esc(session.id) + '" type="password" value="' + esc(futureTokenInput) + '" placeholder="粘贴 Future CDK" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-future-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>兑换并保存</button><button type="button" class="secondary small danger" data-action="registration-clear-future-token"' + (futureToken.configured && !active ? "" : " disabled") + '>清除</button></div>' +
+          '<div class="field-note">' + (futureToken.configured ? '当前 Session Token：' + esc(futureToken.masked || "已配置") : '尚未配置 Future Session Token') + '。输入 CDK 后会先兑换 Session Token，Token 单独保存，不进入 LIYE Key 池。</div>' +
+          '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>可用次数</label><strong>' + esc(formatSms688Uses(futureAvailableUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>剩余次数</label><strong>' + esc(formatSms688Uses(futureAccount.remainingUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>接口</label><strong>manual-sms</strong></div></div>' +
+          '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-future" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingFuture || !futureToken.configured ? " disabled" : "") + '>刷新余额</button>' + (futureAccount.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(futureAccount.updatedAt)) + '</span>' : '') + '</div>' +
+          '<div class="field-note">Future 使用文档中的 CDK 兑换 Session Token，再调用 manual-sms 接口；点击开始取号后自动轮询号码和短信，换号/取消仍需你点击。</div>' +
         '</div>';
         const sms688Catalog = '<div class="registration-fivesim-account">' +
           '<div class="registration-fivesim-token-row"><input id="registrationSms688TokenInput-' + esc(session.id) + '" type="password" value="' + esc(sms688TokenInput) + '" placeholder="粘贴 SMS688 账户 API Key" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-sms688-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>保存 Key</button><button type="button" class="secondary small danger" data-action="registration-clear-sms688-token"' + (sms688Token.configured && !active ? "" : " disabled") + '>清除</button></div>' +
@@ -1984,13 +2128,15 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sourcePanel = (sourceId, content, hidden) => '<div data-registration-phone-source-panel="' + sourceId + '"' + (hidden ? ' hidden' : '') + '>' + content + '</div>';
         const liyeKeyField = '<div class="field"><label for="registrationPhoneKey-' + esc(session.id) + '">选择 Key（SecretStorage）</label><select id="registrationPhoneKey-' + esc(session.id) + '"' + configDisabled + '><option value="">请选择 Key</option>' + keyOptions + '</select>' + keyVisibilityNote + '</div>';
         const fiveSimServiceField = '<div class="field"><label>服务</label><input value="OpenAI/ChatGPT（openai）" disabled></div>';
+        const futureServiceField = '<div class="field"><label>服务</label><input value="Manual SMS（manual-sms）" disabled></div>';
         const sms688ServiceField = '<div class="field"><label>服务</label><input value="Manual SMS（manual-sms）" disabled></div>';
         const acquireHtml = '<div class="registration-phone-source-root" data-registration-phone-source-root="' + esc(session.id) + '">' +
           '<div class="registration-phone-config"><div class="field"><label for="registrationPhoneSource-' + esc(session.id) + '">接码来源</label><select id="registrationPhoneSource-' + esc(session.id) + '"' + configDisabled + '>' + sourceOptions + '</select></div>' +
-          sourcePanel("fivesim", fiveSimServiceField, !isFiveSim) + sourcePanel("sms688", sms688ServiceField, !isSms688) + sourcePanel("liye", liyeKeyField, isFiveSim || isSms688) + '</div>' +
+          sourcePanel("fivesim", fiveSimServiceField, !isFiveSim) + sourcePanel("future", futureServiceField, !isFuture) + sourcePanel("sms688", sms688ServiceField, !isSms688) + sourcePanel("liye", liyeKeyField, isFiveSim || isFuture || isSms688) + '</div>' +
           sourcePanel("fivesim", fiveSimCatalog, !isFiveSim) +
+          sourcePanel("future", futureCatalog, !isFuture) +
           sourcePanel("sms688", sms688Catalog, !isSms688) +
-          sourcePanel("liye", keyPoolDetails + (!active && !selectedKeyAvailable ? '<div class="field-note">请选择一个可用 Key，再开始取号。</div>' : ""), isFiveSim || isSms688) +
+          sourcePanel("liye", keyPoolDetails + (!active && !selectedKeyAvailable ? '<div class="field-note">请选择一个可用 Key，再开始取号。</div>' : ""), isFiveSim || isFuture || isSms688) +
         '</div>';
         const phoneButton = isCompletePhoneNumber(phone)
           ? '<button type="button" class="secondary small" data-action="registration-copy-phone" data-session-id="' + esc(session.id) + '" data-value="' + esc(phone) + '">复制手机号</button>'
@@ -2011,9 +2157,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sourceLink = source.websiteUrl
           ? '<a href="' + esc(source.websiteUrl) + '" target="_blank" rel="noreferrer">打开接码网页</a>'
           : "";
+        const purchaseLink = source.purchaseUrl
+          ? '<a href="' + esc(source.purchaseUrl) + '" target="_blank" rel="noreferrer">购买 CDK</a>'
+          : "";
         const successRateLabel = isFiveSim
           ? '即时成功率：' + formatPhoneSuccessRate(fiveSimInstantSuccessRateRaw(selectedFiveSimOffer)) + ' · 平均成功率：' + formatPhoneSuccessRate(fiveSimAverageSuccessRateRaw(selectedFiveSimOffer))
-          : isSms688
+          : isFuture
+            ? '可用次数：' + formatSms688Uses(futureAvailableUses)
+            : isSms688
             ? '可用次数：' + formatSms688Uses(sms688AvailableUses)
             : '成功率：' + formatPhoneSuccessRate(orderState.card?.successRate);
         const selectedPrice = isFiveSim ? formatFiveSimOfferPrice(selectedFiveSimOffer?.price) : "";
@@ -2022,7 +2173,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           : "";
         const acquireReady = isFiveSim
           ? Boolean(fiveSimToken.configured && selectedFiveSimOffer)
-          : isSms688
+          : isFuture
+            ? Boolean(futureToken.configured && (futureAvailableUses === null || futureAvailableUses > 0))
+            : isSms688
             ? Boolean(sms688Token.configured && (sms688AvailableUses === null || sms688AvailableUses > 0))
             : selectedKeyAvailable;
         const actionHtml = '<div class="registration-phone-order-actions">' +
@@ -2032,9 +2185,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '</div>';
         const phoneNote = registrationOnly
           ? ""
-          : (isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : isSms688 ? "SMS688 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "");
+          : (isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : isFuture ? "Future 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : isSms688 ? "SMS688 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "");
         return '<div class="registration-phone-order" data-registration-phone-order-session-id="' + esc(session.id) + '" aria-keyshortcuts="N">' +
-          '<div class="registration-phone-order-head"><strong>接码平台（' + (manualBrowser ? "手动控制" : "手动确认，自动读取短信") + '）</strong><span class="registration-phone-order-source">' + sourceLink + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' ' + esc(successRateLabel) + selectedOfferLabel + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
+          '<div class="registration-phone-order-head"><strong>接码平台（' + (manualBrowser ? "手动控制" : "手动确认，自动读取短信") + '）</strong><span class="registration-phone-order-source">' + sourceLink + (purchaseLink ? ' · ' + purchaseLink : '') + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' ' + esc(successRateLabel) + selectedOfferLabel + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
           acquireHtml +
           '<div class="registration-phone-order-grid">' +
             '<div class="registration-phone-result"><label>当前手机号</label><strong>' + esc(phone || "— — —") + '</strong>' + phoneButton + '</div>' +
@@ -2083,7 +2236,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const deactivatedMailboxCount = allMailboxes.filter((mailbox) => mailbox.openaiAccountDeactivated === true).length;
         const deactivatedCandidates = getDeactivatedMailboxCandidates();
         const hasActiveMailboxOperation = (state.operations || []).length > 0 || (state.codexImports || []).length > 0;
-        const codexFilterAvailable = state.codexImportAvailable === true;
+        const codexFilterAvailable = isCodexAccountDirectoryAvailable();
         const reauthorizationFilterAvailable = state.managedAccountDirectoryAvailable === true;
         const selectedHasRenewal = [...selectedMailboxIds].some((mailboxId) => {
           const mailbox = allMailboxes.find((item) => item.id === mailboxId);
@@ -2094,14 +2247,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           ? mailboxView.page.items.map((mailbox, index) => renderMailboxRow(mailbox, mailboxView.page.startIndex + index)).join("")
           : '<div class="empty-list">' + (allMailboxes.length ? '没有匹配的邮箱。' : '还没有邮箱。<br>点击“添加邮箱”并在导入时选择来源。') + '</div>';
         const selected = state.selected;
-        const filterActive = Boolean(query || providerFilter || onlyUnlinkedCodex || onlyQueryFailed || onlyReauthorization || onlyOpenAiDeactivated);
+        const filterActive = Boolean(query || providerFilter || activeMailboxFilterCount());
         const providerOptions = (state.providers || []).map((provider) => '<option value="' + esc(provider.id) + '" ' + (providerFilter === provider.id ? "selected" : "") + '>' + esc(provider.displayName || provider.id) + '</option>').join("");
-        const deactivatedSummary = '<label title="依据最近一轮邮箱查询结果判断"><input id="onlyQueryFailed" type="checkbox" ' + (onlyQueryFailed ? "checked" : "") + '>仅查询失败</label><span data-role="deactivated-summary"' + (deactivatedMailboxCount > 0 ? ' class="tag blocked"' : '') + '>' + (deactivatedMailboxCount > 0 ? 'OpenAI 封禁：' + deactivatedMailboxCount : '') + '</span>';
+        const deactivatedSummary = '<span data-role="deactivated-summary"' + (deactivatedMailboxCount > 0 ? ' class="tag blocked"' : '') + '>' + (deactivatedMailboxCount > 0 ? 'OpenAI 封禁：' + deactivatedMailboxCount : '') + '</span>';
         const deactivatedDeleteButton = state.managedAccountRemovalAvailable === true
           ? '<button type="button" class="danger" data-role="deactivated-delete" data-action="delete-deactivated-mailboxes" ' + (deactivatedCandidates.length > 0 && !pendingBatchAction && !hasActiveMailboxOperation ? '' : 'disabled') + '>删除封禁账号（' + deactivatedCandidates.length + '）</button>'
           : '';
         return '<div class="layout">' +
-          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag" data-role="mailbox-count">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="邮箱排序"><label class="mailbox-sort-label" for="mailboxSort">邮箱排序</label><select id="mailboxSort" class="mailbox-sort-select" aria-label="选择邮箱排序字段"><option value="name" ' + (mailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (mailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="code" ' + (mailboxSortKey === "code" ? "selected" : "") + '>验证码状态</option><option value="renewal" ' + (mailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-mailbox-sort-direction" title="' + (mailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (mailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (mailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div><div class="mailbox-account-filters"><label title="' + (codexFilterAvailable ? '依据当前 Manager 已接入账号目录判断' : '当前 Manager 未提供账号目录') + '"><input id="onlyUnlinkedCodex" type="checkbox" ' + (onlyUnlinkedCodex ? "checked" : "") + (codexFilterAvailable ? "" : " disabled") + '>仅未接入 Codex</label><label title="' + (reauthorizationFilterAvailable ? '依据当前 Manager 账号目录同步' : '当前 Manager 未提供账号目录') + '"><input id="onlyReauthorization" type="checkbox" ' + (onlyReauthorization ? "checked" : "") + (reauthorizationFilterAvailable ? "" : " disabled") + '>仅状态异常</label><label title="依据已保存的 OpenAI account deactivated 邮件标记判断"><input id="onlyOpenAiDeactivated" type="checkbox" ' + (onlyOpenAiDeactivated ? "checked" : "") + '>仅 OpenAI 封禁</label></div>' + deactivatedSummary + '</div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button><button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button>' + deactivatedDeleteButton + '</div><div data-role="mailbox-operation-progress">' + renderMailboxOperationProgress() + '</div></div><div class="mailbox-list">' + rows + '</div>' + renderMailboxPagination(mailboxView.page, "mailbox-page-prev", "mailbox-page-next", "", "mailbox-pagination", "mailbox-page-jump-input", mailboxPageJumpInput, "mailbox-page-jump") + '</section>' +
+          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag" data-role="mailbox-count">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="邮箱排序"><label class="mailbox-sort-label" for="mailboxSort">邮箱排序</label><select id="mailboxSort" class="mailbox-sort-select" aria-label="选择邮箱排序字段"><option value="name" ' + (mailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (mailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="code" ' + (mailboxSortKey === "code" ? "selected" : "") + '>验证码状态</option><option value="renewal" ' + (mailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-mailbox-sort-direction" title="' + (mailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (mailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (mailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div>' + renderMailboxFilterMenu(codexFilterAvailable, reauthorizationFilterAvailable) + deactivatedSummary + '</div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button><button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button>' + deactivatedDeleteButton + '</div><div data-role="mailbox-operation-progress">' + renderMailboxOperationProgress() + '</div></div><div class="mailbox-list">' + rows + '</div>' + renderMailboxPagination(mailboxView.page, "mailbox-page-prev", "mailbox-page-next", "", "mailbox-pagination", "mailbox-page-jump-input", mailboxPageJumpInput, "mailbox-page-jump") + '</section>' +
           '<section class="box detail"><div class="detail-region">' + (selected ? renderSelected(selected) : '<div class="empty-detail"><div><h2>选择一个邮箱</h2><p class="muted" style="margin-top:8px">其他邮箱的邮件详情不会在未选中时渲染或查询。</p></div></div>') + '</div></section>' +
           '</div>';
       }
@@ -2148,12 +2301,35 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         return (state.mailboxes || []).filter((mailbox) => {
           if (query && !matchesMailboxSearch(mailbox, query)) return false;
           if (providerFilter && mailbox.providerId !== providerFilter) return false;
-          if (onlyUnlinkedCodex && (!state.codexImportAvailable || isCodexLinked(mailbox))) return false;
+          if (onlyUnlinkedCodex && (!isCodexAccountDirectoryAvailable() || isCodexLinked(mailbox))) return false;
+          if (onlyLinkedCodex && (!isCodexAccountDirectoryAvailable() || !isCodexLinked(mailbox))) return false;
           if (onlyQueryFailed && !mailbox.lastQueryError) return false;
           if (onlyReauthorization && (!state.managedAccountDirectoryAvailable || !isCodexStatusAbnormal(mailbox))) return false;
           if (onlyOpenAiDeactivated && mailbox.openaiAccountDeactivated !== true) return false;
           return true;
         });
+      }
+
+      function activeMailboxFilterCount() {
+        return [onlyUnlinkedCodex, onlyLinkedCodex, onlyReauthorization, onlyQueryFailed, onlyOpenAiDeactivated].filter(Boolean).length;
+      }
+
+      function isCodexAccountDirectoryAvailable() {
+        return typeof state.managedAccountEmailsAvailable === "boolean"
+          ? state.managedAccountEmailsAvailable
+          : state.codexImportAvailable === true;
+      }
+
+      function renderMailboxFilterMenu(codexFilterAvailable, reauthorizationFilterAvailable) {
+        const activeCount = activeMailboxFilterCount();
+        const countTag = activeCount > 0 ? '<span class="mailbox-filter-count" aria-label="已启用 ' + activeCount + ' 个筛选条件">' + activeCount + '</span>' : '';
+        return '<details class="mailbox-filter-menu"><summary data-role="mailbox-filter-summary" aria-label="打开邮箱筛选">筛选' + countTag + '</summary><div class="mailbox-filter-popover"><div class="mailbox-filter-heading">账号与查询状态</div>' +
+          '<label class="mailbox-filter-option" title="' + (codexFilterAvailable ? '依据当前 Manager 已接入账号目录判断' : '当前 Manager 未提供账号目录') + '"><input id="onlyUnlinkedCodex" type="checkbox" ' + (onlyUnlinkedCodex ? "checked" : "") + (codexFilterAvailable ? "" : " disabled") + '>未接入 Codex</label>' +
+          '<label class="mailbox-filter-option" title="' + (codexFilterAvailable ? '依据当前 Manager 已接入账号目录判断' : '当前 Manager 未提供账号目录') + '"><input id="onlyLinkedCodex" type="checkbox" ' + (onlyLinkedCodex ? "checked" : "") + (codexFilterAvailable ? "" : " disabled") + '>已接入 Codex</label>' +
+          '<label class="mailbox-filter-option" title="' + (reauthorizationFilterAvailable ? '依据当前 Manager 账号目录同步' : '当前 Manager 未提供账号目录') + '"><input id="onlyReauthorization" type="checkbox" ' + (onlyReauthorization ? "checked" : "") + (reauthorizationFilterAvailable ? "" : " disabled") + '>状态异常</label>' +
+          '<label class="mailbox-filter-option" title="依据最近一轮邮箱查询结果判断"><input id="onlyQueryFailed" type="checkbox" ' + (onlyQueryFailed ? "checked" : "") + '>查询失败</label>' +
+          '<label class="mailbox-filter-option" title="依据已保存的 OpenAI account deactivated 邮件标记判断"><input id="onlyOpenAiDeactivated" type="checkbox" ' + (onlyOpenAiDeactivated ? "checked" : "") + '>OpenAI 封禁</label>' +
+          '<div class="mailbox-filter-actions"><button type="button" class="mailbox-filter-clear" data-action="clear-mailbox-filters" ' + (activeCount > 0 ? "" : "disabled") + '>清除筛选</button></div></div></details>';
       }
 
       function renderMailboxRow(mailbox, index) {
@@ -2838,6 +3014,17 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         send("registrationRefreshSms688", { sessionId });
       }
 
+      function requestRegistrationFutureRefresh(sessionId) {
+        if (!registrationOnly || !sessionId || state.registrationFutureToken?.configured !== true) return;
+        if (registrationFutureAutoRefreshRequested.has(sessionId)) return;
+        const session = (state.registrationSessions || []).find((item) => item.id === sessionId);
+        if (!session) return;
+        registrationFutureAutoRefreshRequested.add(sessionId);
+        const orderState = session?.phoneOrder || {};
+        if (orderState.running === true || orderState.phase === "logging_in") return;
+        send("registrationRefreshFuture", { sessionId });
+      }
+
       function updateRegistrationAcquireButton(sessionId) {
         const session = (state.registrationSessions || []).find((item) => item.id === sessionId);
         const sourceId = registrationPhoneSourceSelections[sessionId] || session?.phoneOrder?.card?.source || "fivesim";
@@ -2857,6 +3044,19 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
               ? Number(account.balance)
               : null;
           const enabled = Boolean(state.registrationSms688Token?.configured && (availableUses === null || availableUses > 0));
+          document.querySelectorAll('[data-action="registration-acquire-phone"]').forEach((button) => {
+            if (button.dataset.sessionId === sessionId) button.disabled = !enabled;
+          });
+          return;
+        }
+        if (sourceId === "future") {
+          const account = session?.phoneOrder?.card || {};
+          const availableUses = Number.isFinite(Number(account.availableUses))
+            ? Number(account.availableUses)
+            : Number.isFinite(Number(account.balance))
+              ? Number(account.balance)
+              : null;
+          const enabled = Boolean(state.registrationFutureToken?.configured && (availableUses === null || availableUses > 0));
           document.querySelectorAll('[data-action="registration-acquire-phone"]').forEach((button) => {
             if (button.dataset.sessionId === sessionId) button.disabled = !enabled;
           });

@@ -196,6 +196,7 @@ describe("local usage dashboard placement and responsive guards", () => {
   it("renders account sorting as a field selector with a separate direction toggle", () => {
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
     const helpers = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/helpers.tsx"), "utf8");
+    const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
 
     expect(main).toContain('class="account-sort-select"');
     expect(main).toContain('class="account-sort-direction"');
@@ -208,6 +209,14 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(helpers).toContain("getQuotaResetAt");
     expect(helpers).toContain("metric.resetAt");
     expect(helpers).toContain("getDashboardAccountActivityRank");
+    const sortSelectStyles = stylesheet.slice(
+      stylesheet.indexOf(".account-sort-select {"),
+      stylesheet.indexOf(".account-sort-direction {", stylesheet.indexOf(".account-sort-select {"))
+    );
+    expect(sortSelectStyles).toContain("outline: none;");
+    expect(sortSelectStyles).toContain(".account-sort-select option");
+    expect(sortSelectStyles).toContain("background: var(--bg-surface);");
+    expect(sortSelectStyles).toContain("color: var(--text-primary);");
   });
 
   it("exposes a per-account seamless-switch pool toggle at the left of the card action row", () => {

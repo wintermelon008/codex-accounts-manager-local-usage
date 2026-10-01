@@ -29,6 +29,7 @@ export type DashboardSettingKey =
   | "backgroundTokenRefreshEnabled"
   | "forceFastModeEnabled"
   | "autoRefreshMinutes"
+  | "autoStartQuotaCountdownEnabled"
   | "autoSwitchEnabled"
   | "seamlessSwitchEnabled"
   | "seamlessSwitchQuotaBandsEnabled"
@@ -65,6 +66,7 @@ export interface DashboardSettings {
   backgroundTokenRefreshEnabled: boolean;
   forceFastModeEnabled: boolean;
   autoRefreshMinutes: number;
+  autoStartQuotaCountdownEnabled: boolean;
   autoSwitchEnabled: boolean;
   hotSwitchEnabled: boolean;
   seamlessSwitchEnabled: boolean;
@@ -332,6 +334,10 @@ export interface DashboardCopy {
   autoRefreshOffDesc: string;
   autoRefreshValueTemplate: string;
   autoRefreshValueDescTemplate: string;
+  quotaCountdownAutoStartTitle?: string;
+  quotaCountdownAutoStartSub?: string;
+  quotaCountdownAutoStartOnDesc?: string;
+  quotaCountdownAutoStartOffDesc?: string;
   hourlyQuotaControlTitle: string;
   hourlyQuotaControlSub: string;
   hourlyQuotaControlOnDesc: string;

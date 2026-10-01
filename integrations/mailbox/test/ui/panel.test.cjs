@@ -1031,6 +1031,70 @@ test("OAuth registration sessions point to the external browser and keep panel d
   assert.doesNotMatch(renderedHtml, /registration-submit-email-code/u);
 });
 
+test("completed Codex OAuth sessions keep the phone helper available", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [],
+      providers: [],
+      phoneSources: [{
+        id: "future",
+        displayName: "Future",
+        websiteUrl: "https://sms.futurepixelai.com/docs",
+        purchaseUrl: "https://www.16688.com.cn/shop/AIAISHARE",
+        credentialType: "cdk"
+      }],
+      registrationFutureToken: { configured: true, masked: "futu…oken" },
+      registrationSessions: [{
+        id: "session:oauth-complete",
+        email: "oauth-complete@example.com",
+        mode: "oauth",
+        state: "completed",
+        phoneOrder: {
+          phase: "received",
+          running: false,
+          card: { source: "future", availableUses: 1 },
+          order: { phone: "+8613800000000", smsCode: "123456" }
+        },
+        emailCode: { phase: "received", code: "email-code" }
+      }]
+    }
+  } });
+
+  const acquireButton = renderedHtml.match(/<button type="button" class="primary" data-action="registration-acquire-phone"[^>]*>开始取号/u)?.[0];
+  assert.ok(acquireButton);
+  assert.doesNotMatch(acquireButton, /disabled/u);
+  assert.doesNotMatch(renderedHtml, /id="registrationPhoneSource-session:oauth-complete" disabled/u);
+});
+
 test("completed GPT sessions keep manual helpers and expose Codex import termination", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -1611,6 +1675,70 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   assert.equal(messages.filter((message) => message.action === "registrationRefreshFiveSim").length, 1);
 });
 
+test("Future registration panel exposes the docs and CDK purchase links", () => {
+  const html = createRegistrationPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {}
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [],
+      providers: [],
+      phoneSources: [
+        { id: "fivesim", displayName: "5SIM", websiteUrl: "https://5sim.net", credentialType: "api-token" },
+        { id: "future", displayName: "Future", websiteUrl: "https://sms.futurepixelai.com/docs", purchaseUrl: "https://www.16688.com.cn/shop/AIAISHARE", credentialType: "cdk" },
+        { id: "sms688", displayName: "SMS688", websiteUrl: "https://cdk.sms688.cc", credentialType: "api-key" }
+      ],
+      registrationDefaultPhoneSource: "future",
+      registrationFutureToken: { configured: false, masked: "" },
+      registrationKeyPool: { count: 0, available: 0, inUse: 0, keys: [] },
+      registrationSessions: [{
+        id: "session:future",
+        email: "future@example.com",
+        mode: "manual-browser",
+        state: "awaiting_phone_input",
+        phoneOrder: { phase: "idle", running: false, card: { source: "future" } },
+        emailCode: { phase: "idle" }
+      }]
+    }
+  } });
+
+  assert.match(renderedHtml, /https:\/\/sms\.futurepixelai\.com\/docs/u);
+  assert.match(renderedHtml, /https:\/\/www\.16688\.com\.cn\/shop\/AIAISHARE/u);
+  assert.match(renderedHtml, /购买 CDK/u);
+  assert.match(renderedHtml, /registrationFutureTokenInput-session:future/u);
+  assert.match(renderedHtml, /兑换并保存/u);
+  assert.ok(renderedHtml.indexOf('value="fivesim"') < renderedHtml.indexOf('value="future"'));
+  assert.ok(renderedHtml.indexOf('value="future"') < renderedHtml.indexOf('value="sms688"'));
+  assert.doesNotMatch(renderedHtml, /接码渠道中心/u);
+  assert.doesNotMatch(renderedHtml, /<select id="registrationDefaultPhoneSource"[^>]*>/u);
+});
+
 test("registration panel refreshes 5SIM once for a mailbox session regardless of the selected phone source", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -1950,6 +2078,12 @@ test("Mailbox can filter only OpenAI-deactivated mailboxes", () => {
     }
   } });
 
+  assert.match(renderedHtml, /class="mailbox-filter-menu"/u);
+  assert.match(renderedHtml, /data-role="mailbox-filter-summary"[^>]*>筛选/u);
+  assert.match(renderedHtml, /id="onlyUnlinkedCodex"/u);
+  assert.match(renderedHtml, /id="onlyLinkedCodex"/u);
+  assert.match(renderedHtml, /id="onlyReauthorization"/u);
+  assert.match(renderedHtml, /id="onlyQueryFailed"/u);
   assert.match(renderedHtml, /id="onlyOpenAiDeactivated"/u);
   assert.match(renderedHtml, /blocked@example\.com/u);
   assert.match(renderedHtml, /ordinary@example\.com/u);
@@ -1965,6 +2099,81 @@ test("Mailbox can filter only OpenAI-deactivated mailboxes", () => {
   assert.match(renderedHtml, /blocked@example\.com/u);
   assert.doesNotMatch(renderedHtml, /ordinary@example\.com/u);
   assert.match(renderedHtml, />1\/2<\/span>/u);
+  assert.match(renderedHtml, /data-role="mailbox-filter-summary"[^>]*>筛选<span class="mailbox-filter-count"[^>]*>1<\/span>/u);
+
+  documentListeners.get("click")({ target: {
+    disabled: false,
+    dataset: { action: "clear-mailbox-filters" },
+    closest() { return this; }
+  } });
+  assert.doesNotMatch(renderedHtml, /id="onlyOpenAiDeactivated" type="checkbox" checked/u);
+  assert.match(renderedHtml, /blocked@example\.com/u);
+  assert.match(renderedHtml, /ordinary@example\.com/u);
+});
+
+test("Mailbox can filter only Codex-linked mailboxes", () => {
+  const html = createMailboxPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: [
+        { id: "mailbox:linked", providerId: "mock", address: "linked@example.com", displayName: "linked@example.com" },
+        { id: "mailbox:unlinked", providerId: "mock", address: "unlinked@example.com", displayName: "unlinked@example.com" }
+      ],
+      providers: [{ id: "mock", displayName: "Mock", capabilities: {}, importSchema: {} }],
+      operations: [],
+      codexImportAvailable: false,
+      managedAccountEmailsAvailable: true,
+      managedAccountEmails: ["LINKED@example.com"],
+      codexImports: []
+    }
+  } });
+
+  assert.match(renderedHtml, /id="onlyLinkedCodex" type="checkbox"/u);
+  assert.doesNotMatch(renderedHtml, /id="onlyLinkedCodex"[^>]*disabled/u);
+  assert.match(renderedHtml, /linked@example\.com/u);
+  assert.match(renderedHtml, /unlinked@example\.com/u);
+
+  documentListeners.get("change")({ target: {
+    id: "onlyLinkedCodex",
+    checked: true,
+    matches() { return false; },
+    closest() { return this; }
+  } });
+
+  assert.match(renderedHtml, /id="onlyLinkedCodex" type="checkbox" checked/u);
+  assert.match(renderedHtml, /linked@example\.com/u);
+  assert.doesNotMatch(renderedHtml, /unlinked@example\.com/u);
+  assert.match(renderedHtml, />1\/2<\/span>/u);
+  assert.match(renderedHtml, /data-role="mailbox-filter-summary"[^>]*>筛选<span class="mailbox-filter-count"[^>]*>1<\/span>/u);
 });
 
 test("Mailbox tags use compact semantic colors and do not expose code_found", () => {

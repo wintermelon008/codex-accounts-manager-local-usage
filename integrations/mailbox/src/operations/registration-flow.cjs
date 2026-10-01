@@ -14,6 +14,7 @@ const { isDisplayLaunchError, prepareBrowserEnvironment } = require("./browser-m
 const { LIYEPhoneOrderSession } = require("./liye-phone-order.cjs");
 const { FiveSimPhoneOrderSession } = require("./fivesim-phone-order.cjs");
 const { Sms688PhoneOrderSession } = require("./sms688-phone-order.cjs");
+const { FuturePhoneOrderSession } = require("./future-phone-order.cjs");
 const { createEmailCodeState } = require("./registration-email-code.cjs");
 
 const REGISTER_URL = "https://chatgpt.com/auth/login";
@@ -169,6 +170,7 @@ class RegistrationSession {
     this.openRegistrationBrowser = typeof options.openRegistrationBrowser === "function" ? options.openRegistrationBrowser : null;
     this.fiveSimFetch = typeof options.fiveSimFetch === "function" ? options.fiveSimFetch : undefined;
     this.sms688Fetch = typeof options.sms688Fetch === "function" ? options.sms688Fetch : this.fiveSimFetch;
+    this.futureFetch = typeof options.futureFetch === "function" ? options.futureFetch : this.sms688Fetch;
 
     this.state = STATES.IDLE;
     this.mode = this.importCodex
@@ -287,8 +289,8 @@ class RegistrationSession {
       throw new Error("GPT 注册网页未能打开");
     }
     const browserFeedback = result.incognito === true
-      ? "已打开无痕 GPT 注册网页。已自动查询一次邮箱验证码；取号和接码仍由下方按钮手动控制，网页注册完成后点击“完成 GPT 注册”。"
-      : "GPT 注册网页已打开，但当前环境未确认无痕模式；请手动确认浏览器处于无痕/隐私窗口。已自动查询一次邮箱验证码；取号和接码仍由下方按钮手动控制，网页注册完成后点击“完成 GPT 注册”。";
+      ? "已打开无痕 GPT 注册网页。邮箱验证码会在后台持续查询；取号和接码仍由下方按钮手动控制，网页注册完成后点击“完成 GPT 注册”。"
+      : "GPT 注册网页已打开，但当前环境未确认无痕模式；请手动确认浏览器处于无痕/隐私窗口。邮箱验证码会在后台持续查询；取号和接码仍由下方按钮手动控制，网页注册完成后点击“完成 GPT 注册”。";
     this.setState(STATES.AWAITING_MANUAL_REGISTRATION, {
       browserOpened: true,
       feedback: browserFeedback,
@@ -713,6 +715,20 @@ class RegistrationSession {
       this.onStateChange({ sessionId: this.id, phoneOrder });
       return phoneOrder;
     }
+    if (String(sourceId).trim().toLowerCase() === "future") {
+      if (!(this.phoneOrder instanceof FuturePhoneOrderSession)) {
+        await this.phoneOrder?.dispose?.();
+        this.phoneOrder = new FuturePhoneOrderSession({
+          sourceId,
+          fetchImpl: this.futureFetch,
+          onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
+          onLog: (level, msg) => this.log(level, msg),
+        });
+      }
+      const phoneOrder = await this.phoneOrder.start(credential);
+      this.onStateChange({ sessionId: this.id, phoneOrder });
+      return phoneOrder;
+    }
     if (!(this.phoneOrder instanceof LIYEPhoneOrderSession)) {
       await this.phoneOrder?.dispose?.();
     }
@@ -730,7 +746,7 @@ class RegistrationSession {
 
   async refreshPhoneInfo(credential, { sourceId = "fivesim", country = "", operator = "any", product = "openai" } = {}) {
     const normalizedSourceId = String(sourceId).trim().toLowerCase();
-    if (!["fivesim", "sms688"].includes(normalizedSourceId)) {
+    if (!["fivesim", "future", "sms688"].includes(normalizedSourceId)) {
       throw new Error("当前接码来源不支持账户信息刷新");
     }
     if (this.phoneOrder?.state?.running) {
@@ -744,6 +760,20 @@ class RegistrationSession {
           fetchImpl: this.sms688Fetch,
           onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
           onLog: (level, msg) => this.log(level, msg)
+        });
+      }
+      const phoneOrder = await this.phoneOrder.refreshInfo(credential);
+      this.onStateChange({ sessionId: this.id, phoneOrder });
+      return phoneOrder;
+    }
+    if (normalizedSourceId === "future") {
+      if (!(this.phoneOrder instanceof FuturePhoneOrderSession)) {
+        await this.phoneOrder?.dispose?.();
+        this.phoneOrder = new FuturePhoneOrderSession({
+          sourceId,
+          fetchImpl: this.futureFetch,
+          onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
+          onLog: (level, msg) => this.log(level, msg),
         });
       }
       const phoneOrder = await this.phoneOrder.refreshInfo(credential);

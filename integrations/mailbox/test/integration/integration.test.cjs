@@ -385,9 +385,11 @@ test("registration assistant uses the Manager Codex OAuth flow when it is availa
   integration.dispose();
 });
 
-test("registration assistant starts the GPT-only route without OAuth and queries email once after browser entry", async () => {
+test("registration assistant starts the GPT-only route without OAuth and keeps watching email after browser entry", async () => {
   const vscode = createVscode();
   const context = createContext();
+  let releaseFirstQuery;
+  const firstQuery = new Promise((resolve) => { releaseFirstQuery = resolve; });
   const provider = {
     apiVersion: 1,
     id: "mock",
@@ -400,6 +402,16 @@ test("registration assistant starts the GPT-only route without OAuth and queries
     },
     async query(account) {
       queryCalls += 1;
+      if (queryCalls === 1) {
+        await firstQuery;
+        return {
+          ok: true,
+          providerId: "mock",
+          address: account.address,
+          messages: [],
+          codes: []
+        };
+      }
       return {
         ok: true,
         providerId: "mock",
@@ -442,10 +454,16 @@ test("registration assistant starts the GPT-only route without OAuth and queries
   assert.equal(session.mode, "manual-browser");
   assert.equal(oauthCalls, 0);
   assert.deepEqual(browserOptions, { clipboardText: "gpt-only@example.com", incognito: true });
-  await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.emailCode?.phase === "received");
+  await waitFor(() => integration.registrationEmailWatchers.has(sessionId) && queryCalls >= 1);
   assert.equal(queryCalls, 1);
+  const watcher = integration.registrationEmailWatchers.get(sessionId);
+  assert.equal(watcher.isRunning(), true);
+  watcher.pollMs = 1;
+  releaseFirstQuery();
+  await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.emailCode?.phase === "received");
+  assert.equal(queryCalls, 2);
   assert.equal(integration.registrationManager.getSessionState(sessionId).emailCode.code, "246810");
-  assert.equal(integration.registrationEmailWatchers.has(sessionId), false);
+  await waitFor(() => !integration.registrationEmailWatchers.has(sessionId));
 
   await integration.completeManualRegistrationSession(sessionId);
   const state = await integration.getPanelState();
@@ -1504,7 +1522,7 @@ test("registration phone keys are claimed for取号, consumed on SMS, and releas
 
   await integration.addRegistrationPhoneKeys("POOL-KEY-1\nPOOL-KEY-2");
   const before = await integration.getPanelState();
-  assert.deepEqual(before.phoneSources.map((source) => source.id), ["fivesim", "sms688", "liye"]);
+  assert.deepEqual(before.phoneSources.map((source) => source.id), ["fivesim", "future", "sms688", "liye"]);
   const keyId = before.registrationKeyPool.keys[0].id;
   await integration.acquireRegistrationPhone(sessionId, { sourceId: "liye", keyId });
   assert.equal(acquired.code, "POOL-KEY-1");
@@ -1577,6 +1595,62 @@ test("SMS688 registration uses its own API Key and never claims the LIYE Key poo
   assert.deepEqual(acquired.options, { sourceId: "sms688" });
   assert.equal(integration.registrationPhoneKeyClaims.has(sessionId), false);
   assert.deepEqual((await integration.getPanelState()).registrationSms688Token, { configured: true, masked: "sms6…-key" });
+  integration.dispose();
+});
+
+test("Future registration redeems a CDK, stores the session token, and keeps the purchase source separate", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const requests = [];
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    fetchWithManagerProxy: async (url, options) => {
+      requests.push({ url, options });
+      const path = new URL(url).pathname;
+      if (path === "/api/v1/auth/redeem") {
+        assert.deepEqual(JSON.parse(options.body), { code: "future-cdk" });
+        return fakeResponse({ session_token: "future-session-token" });
+      }
+      if (path === "/api/v1/manual-sms/me") {
+        return fakeResponse({ quota: { available_uses: 5, remaining_uses: 6 } });
+      }
+      throw new Error(`unexpected Future request ${url}`);
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  const sessionId = integration.registrationManager.createSession({ email: "future@example.com", password: "password" });
+  let acquired;
+  integration.registrationManager.acquirePhoneNumber = async (_id, credential, options) => {
+    acquired = { credential, options };
+    return { phase: "polling", running: true };
+  };
+
+  await integration.saveFutureToken("future-cdk");
+  await integration.refreshRegistrationFuture(sessionId);
+  await integration.acquireRegistrationPhone(sessionId, { sourceId: "future" });
+
+  assert.equal(acquired.credential, "future-session-token");
+  assert.deepEqual(acquired.options, { sourceId: "future" });
+  assert.deepEqual((await integration.getPanelState()).registrationFutureToken, { configured: true, masked: "futu…oken" });
+  assert.equal(requests[0].url, "https://sms.futurepixelai.com/api/v1/auth/redeem");
+  assert.equal(requests[1].url, "https://sms.futurepixelai.com/api/v1/manual-sms/me");
+  integration.dispose();
+});
+
+test("registration channel center persists the default phone source without touching credentials", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+
+  assert.equal((await integration.getPanelState()).registrationDefaultPhoneSource, "fivesim");
+  await integration.setRegistrationDefaultPhoneSource("future");
+  const state = await integration.getPanelState();
+
+  assert.equal(state.registrationDefaultPhoneSource, "future");
+  assert.deepEqual(state.registrationFutureToken, { configured: false, masked: "" });
   integration.dispose();
 });
 

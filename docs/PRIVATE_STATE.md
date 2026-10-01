@@ -24,7 +24,7 @@ account credentials and some Mailbox provider values may also remain in the
 old VS Code SecretStorage mirror for compatibility; the private files are the
 new source of truth.
 
-The `0.1.19-l4` release keeps the installed-extension root at the existing
+The `0.1.19-l5` release keeps the installed-extension root at the existing
 VS Code `globalStorageUri`. Devices upgrading from `0.1.19-l3` do not need to
 move `accounts-index.json` or sharing state manually: the host policy/state
 scaffold is created on first activation, and legacy SecretStorage credentials

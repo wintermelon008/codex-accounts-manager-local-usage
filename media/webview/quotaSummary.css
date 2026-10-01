@@ -253,11 +253,20 @@ html[data-theme="auto"] body.vscode-light .panel {
   font-size: 11px;
   font-weight: 800;
   cursor: pointer;
+  outline: none;
 }
 .account-sort-select:hover,
 .account-sort-select:focus-visible {
   color: var(--text);
   background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+}
+.account-sort-select:focus-visible {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 1px rgba(56, 139, 253, 0.16) inset;
+}
+.account-sort-select option {
+  background: var(--bg-surface);
+  color: var(--text-primary);
 }
 .account-sort-direction {
   width: 24px;

@@ -147,6 +147,13 @@ type TokenCacheEntry = {
 
 export type TokenChangeListener = (accountIds?: readonly string[]) => void;
 export type AccountChangeListener = (accountIds?: readonly string[]) => void;
+export type QuotaChangeListener = (event: {
+  accountId: string;
+  previousQuota?: CodexQuotaSummary;
+  nextQuota?: CodexQuotaSummary;
+  refreshed: boolean;
+  failed: boolean;
+}) => void;
 
 export type TokenRefreshStatusUpdate = {
   tokenRefreshLastAttemptAt?: number;
@@ -170,6 +177,7 @@ export class AccountsRepository {
   private readonly subscriptionRefreshes = new Map<string, Promise<void>>();
   private readonly tokenChangeListeners = new Set<TokenChangeListener>();
   private readonly accountChangeListeners = new Set<AccountChangeListener>();
+  private readonly quotaChangeListeners = new Set<QuotaChangeListener>();
   /**
    * Changes that affect the sanitized account directory exposed to optional
    * integrations.  Sharing/pool/visibility metadata deliberately stays on
@@ -248,6 +256,16 @@ export class AccountsRepository {
     };
   }
 
+  /** Subscribe to persisted quota refresh results without exposing tokens. */
+  onDidUpdateQuota(listener: QuotaChangeListener): vscode.Disposable {
+    this.quotaChangeListeners.add(listener);
+    return {
+      dispose: (): void => {
+        this.quotaChangeListeners.delete(listener);
+      }
+    };
+  }
+
   /** Subscribe only to additions/removals or credential/health changes visible to integrations. */
   onDidChangeAccountDirectory(listener: AccountChangeListener): vscode.Disposable {
     this.accountDirectoryChangeListeners.add(listener);
@@ -287,6 +305,16 @@ export class AccountsRepository {
         listener(normalizedIds);
       } catch (error) {
         console.warn("[codexAccounts] account change listener failed:", error);
+      }
+    }
+  }
+
+  private notifyQuotaChanged(event: Parameters<QuotaChangeListener>[0]): void {
+    for (const listener of [...this.quotaChangeListeners]) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.warn("[codexAccounts] quota change listener failed:", error);
       }
     }
   }
@@ -1582,6 +1610,7 @@ export class AccountsRepository {
     }
 
     const previousQuotaIssueKind = getQuotaIssueKind(account.quotaError);
+    const previousQuota = account.quotaSummary ? { ...account.quotaSummary } : undefined;
     const now = Date.now();
     const effectivePlanType = applyQuotaUpdate({
       account,
@@ -1645,6 +1674,15 @@ export class AccountsRepository {
     }
 
     this.writeIndex(index);
+    if (quotaSummary !== undefined || quotaError !== undefined) {
+      this.notifyQuotaChanged({
+        accountId,
+        previousQuota,
+        nextQuota: account.quotaSummary ? { ...account.quotaSummary } : undefined,
+        refreshed: quotaSummary !== undefined,
+        failed: quotaError !== undefined
+      });
+    }
     if (previousQuotaIssueKind !== getQuotaIssueKind(account.quotaError) || (storedTokens && nextStoredTokens)) {
       this.notifyAccountsChanged([accountId]);
       this.notifyAccountDirectoryChanged([accountId]);
