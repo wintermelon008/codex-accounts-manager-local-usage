@@ -11,6 +11,7 @@ const path = require("node:path");
 const tls = require("node:tls");
 const { randomBytes, randomUUID, timingSafeEqual, createHash } = require("node:crypto");
 const { spawn } = require("node:child_process");
+const { SessionQueueCoordinator } = require("./codex-session-queue.cjs");
 
 const INTERNAL_ID_PREFIX = "__codex_accounts_manager__";
 const INTERNAL_REQUEST_TIMEOUT_MS = 30_000;
@@ -55,7 +56,7 @@ const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
 const MAX_RUNTIME_THREAD_METADATA = 4_096;
-const RUNTIME_PROTOCOL_VERSION = 15;
+const RUNTIME_PROTOCOL_VERSION = 16;
 const availabilityRuntimeId = randomUUID();
 let availabilitySequence = 0;
 let runtimeCredential;
@@ -179,6 +180,9 @@ const runtimeThreadLastUsageSignatures = new Map();
 let pendingUsageAttributionRecords = [];
 let usageAttributionFlushTimer;
 let usageAttributionWriteFailureReported = false;
+const sessionQueue = new SessionQueueCoordinator({
+  isThreadBusy: isRuntimeThreadBusy
+});
 let child;
 let gatewayAdapter;
 let startupModelRefreshNotificationSent = false;
@@ -267,6 +271,7 @@ function handleChildExit(code, signal, startupError) {
   }
   childExited = true;
   clearAllCapacityRecoveryThreads();
+  sessionQueue.clear();
   flushUsageAttributionRecords();
   releaseRuntimeOwner();
   rejectPendingRequests(
@@ -577,6 +582,20 @@ function handleOfficialLine(line) {
     );
   }
 
+  if ((isWorkStartMethod(message.method) || isGoalMutationMethod(message.method)) && isSwitchBarrierActive()) {
+    deferredOfficialLines.push(line);
+    return;
+  }
+
+  const queueAction = sessionQueue.prepareOfficialRequest(message);
+  if (queueAction.kind === "queued") {
+    return;
+  }
+  if (queueAction.kind === "reject") {
+    writeOfficialLine(JSON.stringify(queueAction.response));
+    return;
+  }
+
   if (isWorkStartMethod(message.method)) {
     const threadId = readThreadId(message.params);
     // New work demonstrates that the current runtime is still usable (or that
@@ -591,11 +610,6 @@ function handleOfficialLine(line) {
     if (workGeneration !== undefined && Object.prototype.hasOwnProperty.call(message, "id")) {
       submittedTurnStartGenerations.set(requestIdKey(message.id), workGeneration);
     }
-  }
-
-  if ((isWorkStartMethod(message.method) || isGoalMutationMethod(message.method)) && isSwitchBarrierActive()) {
-    deferredOfficialLines.push(line);
-    return;
   }
 
   if (isWorkStartMethod(message.method) && Object.prototype.hasOwnProperty.call(message, "id")) {
@@ -737,6 +751,15 @@ function handleCodexLine(line) {
     writeOfficialLine(line);
     return;
   }
+
+  const queueResult = sessionQueue.handleChildResponse(message);
+  if (queueResult.suppress) {
+    for (const childMessage of queueResult.childMessages) {
+      handleOfficialLine(JSON.stringify(childMessage));
+    }
+    return;
+  }
+  const outputMessage = queueResult.message || message;
 
   if (message.method === "thread/started") {
     rememberRuntimeThreadMetadata(readRuntimeThreadMetadata(message.params));
@@ -922,7 +945,11 @@ function handleCodexLine(line) {
     void drainPendingSwitch();
   }
 
-  writeOfficialLine(line);
+  const queuedMessages = sessionQueue.handleNotification(message);
+  writeOfficialLine(queueResult.message ? JSON.stringify(outputMessage) : line);
+  for (const queuedMessage of [...queueResult.childMessages, ...queuedMessages]) {
+    handleOfficialLine(JSON.stringify(queuedMessage));
+  }
 }
 
 function rewriteThreadListProviderFilter(message) {
@@ -2591,6 +2618,23 @@ function getActiveThreadIds() {
     }
   }
   return threadIds;
+}
+
+function isRuntimeThreadBusy(threadId) {
+  if (typeof threadId !== "string" || threadId.length === 0) {
+    return false;
+  }
+  for (const submittedThreadId of submittedTurnStarts.values()) {
+    if (submittedThreadId === threadId) {
+      return true;
+    }
+  }
+  for (const activeThreadId of activeTurns.values()) {
+    if (activeThreadId === threadId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function getQuotaTrackedActiveThreadIds() {

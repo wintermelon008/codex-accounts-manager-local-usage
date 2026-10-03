@@ -49,10 +49,11 @@ const TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
 const RUNTIME_DIRECTORY = "hot-switch-runtime";
 const SHIM_LAUNCHER_FILE = "codex-app-server-shim";
 const SHIM_FILE = "codex-app-server-shim.cjs";
+const SESSION_QUEUE_FILE = "codex-session-queue.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const RUNTIME_OWNER_FILE = "runtime-owner.lease";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 15;
+const RUNTIME_PROTOCOL_VERSION = 16;
 const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
 const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 const USAGE_ATTRIBUTION_RETRY_DELAY_MS = 5_000;
@@ -740,6 +741,8 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const legacyRuntimeDirectory = path.join(this.context.globalStorageUri.fsPath, RUNTIME_DIRECTORY);
       const shimSource = this.context.asAbsolutePath(path.join("runtime", SHIM_FILE));
       const shimDestination = path.join(runtimeDirectory, SHIM_FILE);
+      const sessionQueueSource = this.context.asAbsolutePath(path.join("runtime", SESSION_QUEUE_FILE));
+      const sessionQueueDestination = path.join(runtimeDirectory, SESSION_QUEUE_FILE);
       const launcherDestination = path.join(runtimeDirectory, SHIM_LAUNCHER_FILE);
       const shimConfigDestination = path.join(runtimeDirectory, SHIM_CONFIG_FILE);
       const runtimeOwnerPath = path.join(getCodexHome(), RUNTIME_OWNER_FILE);
@@ -750,6 +753,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       await fs.mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
       await fs.mkdir(usageAttributionDirectory, { recursive: true, mode: 0o700 });
       await fs.copyFile(shimSource, shimDestination);
+      await fs.copyFile(sessionQueueSource, sessionQueueDestination);
       await fs.chmod(shimDestination, 0o700);
       await writePosixLauncher(launcherDestination, process.execPath, shimDestination);
       // The official extension resolves its bundled CLI independently on each

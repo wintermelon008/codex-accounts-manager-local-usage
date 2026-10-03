@@ -81,7 +81,7 @@ describe("CodexHotSwitchBridge", () => {
     let failedShim: childProcess.ChildProcess | undefined;
 
     try {
-      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await copyRuntimeShim(root, shimPath);
       await writeFile(
         path.join(runtimeDirectory, "codex-app-server-shim.json"),
         JSON.stringify({
@@ -200,7 +200,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 15,
+      runtimeProtocolVersion: 16,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -436,6 +436,7 @@ describe("CodexHotSwitchBridge", () => {
     shim.stdin.write(`${JSON.stringify({ id: "activity-unscoped-complete", method: "test/complete", params: {} })}\n`);
     await messages.next((message) => message.method === "turn/completed");
     await messages.next((message) => message.id === "activity-unscoped-complete");
+    await waitFor(() => accountConcurrencyTracker.get("local-a")?.current === 0);
     expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 0, max: 1, totalTokens: 600 });
 
     shim.stdin.write(
@@ -453,11 +454,13 @@ describe("CodexHotSwitchBridge", () => {
         params: { threadId: "activity-shared-thread", input: [], testTurnResponse: "turnId" }
       })}\n`
     );
-    await messages.next((message) => message.id === "activity-shared-turn-start-2");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(messages.all.some((message) => message.id === "activity-shared-turn-start-2")).toBe(false);
     expect(accountConcurrencyTracker.get("local-a")).toMatchObject({ current: 1, max: 1 });
     shim.stdin.write(`${JSON.stringify({ id: "activity-shared-turn-complete-1", method: "test/complete", params: {} })}\n`);
     await messages.next((message) => message.method === "turn/completed");
     await messages.next((message) => message.id === "activity-shared-turn-complete-1");
+    await messages.next((message) => message.id === "activity-shared-turn-start-2");
     shim.stdin.write(`${JSON.stringify({ id: "activity-shared-turn-complete-2", method: "test/complete", params: {} })}\n`);
     await messages.next((message) => message.method === "turn/completed");
     await messages.next((message) => message.id === "activity-shared-turn-complete-2");
@@ -652,14 +655,13 @@ describe("CodexHotSwitchBridge", () => {
     const secondDirectory = path.join(parentDirectory, "second");
     const ownerPath = path.join(parentDirectory, "runtime-owner.lease");
     const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
-    const sourceShimPath = path.join(root, "runtime", "codex-app-server-shim.cjs");
     let second: childProcess.ChildProcessWithoutNullStreams | undefined;
 
     try {
       await mkdir(firstDirectory, { recursive: true });
       await mkdir(secondDirectory, { recursive: true });
       for (const directory of [firstDirectory, secondDirectory]) {
-        await copyFile(sourceShimPath, path.join(directory, "codex-app-server-shim.cjs"));
+        await copyRuntimeShim(root, path.join(directory, "codex-app-server-shim.cjs"));
         await writeFile(
           path.join(directory, "codex-app-server-shim.json"),
           JSON.stringify({
@@ -1003,7 +1005,7 @@ describe("CodexHotSwitchBridge", () => {
     }
 
     try {
-      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await copyRuntimeShim(root, shimPath);
       const gatewayBaseUrl = `http://127.0.0.1:${upstreamAddress.port}/v1`;
       await writeFile(
         path.join(runtimeDirectory, "codex-app-server-shim.json"),
@@ -1218,7 +1220,7 @@ describe("CodexHotSwitchBridge", () => {
     }
 
     try {
-      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await copyRuntimeShim(root, shimPath);
       await writeFile(
         path.join(runtimeDirectory, "codex-app-server-shim.json"),
         JSON.stringify({
@@ -1350,7 +1352,7 @@ describe("CodexHotSwitchBridge", () => {
     }
 
     try {
-      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await copyRuntimeShim(root, shimPath);
       await writeFile(
         path.join(runtimeDirectory, "codex-app-server-shim.json"),
         JSON.stringify({
@@ -1430,7 +1432,7 @@ describe("CodexHotSwitchBridge", () => {
     const runtimeDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-gateway-route-"));
     const shimPath = path.join(runtimeDirectory, "codex-app-server-shim.cjs");
     try {
-      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await copyRuntimeShim(root, shimPath);
       await writeFile(
         path.join(runtimeDirectory, "codex-app-server-shim.json"),
         JSON.stringify({
@@ -1527,7 +1529,7 @@ describe("CodexHotSwitchBridge", () => {
     }
 
     try {
-      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await copyRuntimeShim(root, shimPath);
       await writeFile(
         path.join(runtimeDirectory, "codex-app-server-shim.json"),
         JSON.stringify({
@@ -1625,7 +1627,7 @@ describe("CodexHotSwitchBridge", () => {
     }
 
     try {
-      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await copyRuntimeShim(root, shimPath);
       await writeFile(
         path.join(runtimeDirectory, "codex-app-server-shim.json"),
         JSON.stringify({
@@ -1705,7 +1707,7 @@ describe("CodexHotSwitchBridge", () => {
     const attributionDirectory = path.join(runtimeDirectory, "account-usage-attribution");
     const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
     try {
-      await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), shimPath);
+      await copyRuntimeShim(root, shimPath);
       await writeFile(
         path.join(runtimeDirectory, "codex-app-server-shim.json"),
         JSON.stringify({
@@ -4186,6 +4188,11 @@ function readGatewayAdapterBaseUrl(message: Message): string {
     throw new Error("The fake app-server did not receive a Gateway base URL");
   }
   return baseUrl;
+}
+
+async function copyRuntimeShim(root: string, destination: string): Promise<void> {
+  await copyFile(path.join(root, "runtime", "codex-app-server-shim.cjs"), destination);
+  await copyFile(path.join(root, "runtime", "codex-session-queue.cjs"), path.join(path.dirname(destination), "codex-session-queue.cjs"));
 }
 
 async function postGatewayResponse(baseUrl: string): Promise<{ statusCode: number; body: string }> {
