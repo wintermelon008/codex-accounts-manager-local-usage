@@ -115,20 +115,29 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).not.toContain("账号排序");
   });
 
-  it("presents seamless switching separately from the auto-switch trigger", () => {
+  it("removes upstream auto-switch settings and places the Sub2API card setting under switching", () => {
     const settings = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/settingsOverlay.tsx"), "utf8");
-    const autoSwitchHiddenStack = settings.indexOf(
-      '<div class={`settings-stack ${props.settings.autoSwitchEnabled ? "" : "is-hidden"}`}>'
-    );
-    const seamlessBoundary = settings.indexOf('? "无感切号（实验性）"', autoSwitchHiddenStack);
+    const baseBoundary = settings.indexOf('activeSection === "base"');
+    const switchingBoundary = settings.indexOf('activeSection === "switching"');
+    const baseIntegrationSettings = settings.indexOf("baseIntegrationSettings.map");
+    const switchingIntegrationSettings = settings.indexOf("accountSwitchingIntegrationSettings.map");
+    const seamlessBoundary = settings.indexOf('? "无感切号（实验性）"', switchingBoundary);
     const quotaBandWait = settings.indexOf('? "等待时间"');
     const lowQuotaSwitch = settings.indexOf('? "低额度切号"');
     const lowQuotaThreshold = settings.indexOf('? "低额度阈值"');
     const policy = settings.indexOf('key: "hot-switch-defer"');
     const waitBlock = settings.lastIndexOf('<div class="settings-block">', quotaBandWait);
 
-    expect(autoSwitchHiddenStack).toBeGreaterThan(-1);
-    expect(seamlessBoundary).toBeGreaterThan(autoSwitchHiddenStack);
+    expect(baseIntegrationSettings).toBeGreaterThan(baseBoundary);
+    expect(baseIntegrationSettings).toBeLessThan(switchingBoundary);
+    expect(switchingIntegrationSettings).toBeGreaterThan(switchingBoundary);
+    expect(switchingIntegrationSettings).toBeLessThan(seamlessBoundary);
+    expect(settings).toContain('SUB2API_CARD_VISIBILITY_SETTING_ID = "sub2api-gateway-card-visible"');
+    expect(settings).not.toContain("props.copy.autoSwitchTitle");
+    expect(settings).not.toContain('patchAndSend("autoSwitchEnabled"');
+    expect(settings).not.toContain("autoSwitchHourlyThreshold");
+    expect(settings).not.toContain("autoSwitchReloadWindowEnabled");
+    expect(settings).not.toContain("autoSwitchLockMinutes");
     expect(lowQuotaSwitch).toBeGreaterThan(seamlessBoundary);
     expect(lowQuotaThreshold).toBeGreaterThan(lowQuotaSwitch);
     expect(policy).toBeGreaterThan(lowQuotaThreshold);
@@ -147,7 +156,6 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(settings).toContain('patchAndSend("seamlessSwitchLowQuotaEnabled"');
     expect(settings).toContain('patchAndSend("seamlessSwitchThreshold"');
     expect(settings).toContain('patchAndSend("hotSwitchGraceSeconds"');
-    expect(settings.slice(autoSwitchHiddenStack, seamlessBoundary)).not.toContain("seamlessSwitchQuotaBandsEnabled");
     expect(settings).not.toContain("seamlessSwitchQuotaBandsEnabled");
     expect(settings).not.toContain("seamlessSwitchQuotaBandSize");
     expect(settings).toContain("下方开关只控制无感切号行为");

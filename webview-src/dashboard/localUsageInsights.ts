@@ -66,6 +66,10 @@ const API_RATE_CARDS: Array<{ matches: (model: string) => boolean; rates: ApiRat
     rates: { inputPerMillionUsd: 10, cachedInputPerMillionUsd: 1, outputPerMillionUsd: 50 }
   },
   {
+    matches: (model) => model.startsWith("gpt-6.1-sol"),
+    rates: { inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.1, outputPerMillionUsd: 10 }
+  },
+  {
     matches: (model) => model.startsWith("gpt-6-sol"),
     rates: { inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.2, outputPerMillionUsd: 10 }
   },

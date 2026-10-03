@@ -122,6 +122,21 @@ describe("estimateStandardApiCost", () => {
     expect(price.unpricedTokens).toBe(0);
   });
 
+  it("charges GPT-6.1 Sol with its lower cached-input rate", () => {
+    const price = estimateStandardApiCost([
+      modelUsage("gpt-6.1-sol", {
+        inputTokens: 1_000_000,
+        cachedInputTokens: 500_000,
+        outputTokens: 1_000_000,
+        totalTokens: 2_000_000
+      })
+    ]);
+
+    expect(price.amountUsd).toBeCloseTo(11.05, 8);
+    expect(price.pricedTokens).toBe(2_000_000);
+    expect(price.unpricedTokens).toBe(0);
+  });
+
   it("covers the remaining standard and specialized token-priced rows", () => {
     const rows = [
       "gpt-5.5-pro",

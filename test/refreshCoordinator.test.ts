@@ -827,6 +827,80 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     }
   });
 
+  it("requeues and starts the next quota countdown after the first window expires", async () => {
+    vi.useFakeTimers();
+    const nowSeconds = 1_800_000_000;
+    vi.setSystemTime(nowSeconds * 1000);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoStartQuotaCountdownEnabled: true })
+    );
+
+    const firstResetTime = nowSeconds + 600;
+    const secondResetTime = firstResetTime + 600;
+    const firstWindowAccount = {
+      id: "continuous-account",
+      email: "continuous@example.invalid",
+      isHidden: true,
+      accountKind: "chatgpt" as const,
+      quotaMode: "chatgpt" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 100,
+        hourlyResetTime: firstResetTime,
+        hourlyWindowMinutes: 10,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 100,
+        weeklyResetTime: nowSeconds + 3_600,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0
+      }
+    };
+    const expiredFirstWindowAccount = {
+      ...firstWindowAccount,
+      quotaSummary: {
+        ...firstWindowAccount.quotaSummary,
+        hourlyPercentage: 0,
+        hourlyResetTime: firstResetTime
+      }
+    };
+    const secondWindowAccount = {
+      ...firstWindowAccount,
+      quotaSummary: {
+        ...firstWindowAccount.quotaSummary,
+        hourlyResetTime: secondResetTime
+      }
+    };
+    const release = vi.fn().mockResolvedValue(undefined);
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([firstWindowAccount]),
+      getAccount: vi
+        .fn()
+        .mockResolvedValueOnce(firstWindowAccount)
+        .mockResolvedValueOnce(firstWindowAccount)
+        .mockResolvedValueOnce(expiredFirstWindowAccount)
+        .mockResolvedValueOnce(secondWindowAccount),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const startQuotaCountdown = vi.fn().mockResolvedValue("started");
+    const registration = registerQuotaCountdownRefreshScheduler({
+      repo: repo as never,
+      onRefresh: vi.fn(),
+      startQuotaCountdown
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startQuotaCountdown).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(startQuotaCountdown).toHaveBeenCalledTimes(2);
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("reuses a valid persisted scan and does not re-evaluate every quota window", async () => {
     vi.useFakeTimers();
     const nowSeconds = 1_800_000_000;

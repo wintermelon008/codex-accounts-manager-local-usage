@@ -11,24 +11,21 @@ import { DASHBOARD_LOCAL_USAGE_RANGE_OPTIONS as LOCAL_USAGE_RANGE_OPTIONS } from
 import {
   SettingsDiscreteSlider,
   SettingsLanguageBlock,
-  SettingsPathBlock,
   SettingsProxyBlock,
   SettingsSegmentBlock,
   SettingsThemeBlock,
   SettingsThresholdBlock,
-  SettingsToggleBlock,
-  SettingsWeeklyQuotaThresholdBlock
+  SettingsToggleBlock
 } from "./components";
 import { formatTemplate, formatTimestamp } from "./helpers";
 import { CodeIcon } from "./icons";
 
 const AUTO_REFRESH_VALUES = Array.from({ length: 60 }, (_, index) => index + 1);
 const AUTO_REFRESH_SCALE_VALUES = [1, 15, 30, 45, 60];
-const AUTO_SWITCH_VALUES = Array.from({ length: 21 }, (_, index) => index);
-const AUTO_SWITCH_LOCK_VALUES = [0, 5, 10, 15, 30, 60, 120];
 const HOT_SWITCH_GRACE_VALUES = [10, 30, 60, 90, 120, 180, 300];
 const WARNING_VALUES = Array.from({ length: 18 }, (_, index) => 5 + index * 5);
 const WARNING_SCALE_VALUES = [5, 20, 35, 50, 65, 80, 90];
+const SUB2API_CARD_VISIBILITY_SETTING_ID = "sub2api-gateway-card-visible";
 
 type SettingsSectionId = "base" | "switching" | "quota" | "advanced";
 
@@ -39,24 +36,24 @@ function resolveSettingsSectionLabels(lang: DashboardState["lang"]): Array<{
 }> {
   if (lang === "zh") {
     return [
-      { id: "base", title: "基础设置", sub: "外观、用量与自动刷新" },
-      { id: "switching", title: "账号切换", sub: "自动切换与无感切号" },
-      { id: "quota", title: "配额与提醒", sub: "颜色、阈值与隐藏规则" },
+      { id: "base", title: "基础设置", sub: "外观、用量与连接" },
+      { id: "switching", title: "账号切换", sub: "无感切号与账号选项" },
+      { id: "quota", title: "配额自动化", sub: "刷新、倒计时、提醒与颜色" },
       { id: "advanced", title: "高级与诊断", sub: "低频配置与调试" }
     ];
   }
   if (lang === "zh-hant") {
     return [
-      { id: "base", title: "基礎設定", sub: "外觀、用量與自動重新整理" },
-      { id: "switching", title: "帳號切換", sub: "自動切換與無感切換" },
-      { id: "quota", title: "配額與提醒", sub: "顏色、閾值與隱藏規則" },
+      { id: "base", title: "基礎設定", sub: "外觀、用量與連線" },
+      { id: "switching", title: "帳號切換", sub: "無感切換與帳號選項" },
+      { id: "quota", title: "配額自動化", sub: "重新整理、倒數、警示與顏色" },
       { id: "advanced", title: "進階與診斷", sub: "低頻設定與除錯" }
     ];
   }
   return [
-    { id: "base", title: "Basics", sub: "Appearance, usage, and refresh" },
-    { id: "switching", title: "Account switching", sub: "Automatic and seamless switching" },
-    { id: "quota", title: "Quota and alerts", sub: "Colors, thresholds, and visibility" },
+    { id: "base", title: "Basics", sub: "Appearance, usage, and connection" },
+    { id: "switching", title: "Account switching", sub: "Seamless switching and account options" },
+    { id: "quota", title: "Quota automation", sub: "Refresh, countdown, alerts, and colors" },
     { id: "advanced", title: "Advanced and diagnostics", sub: "Low-frequency settings and debug" }
   ];
 }
@@ -135,8 +132,6 @@ export function SettingsOverlay(props: {
   onAutoRefreshValue: (minutes: number) => void;
   onThresholdPreview: (key: "yellow" | "green", value: number) => void;
   onThresholdCommit: (key: "yellow" | "green", value: number) => void;
-  onPickCodexAppPath: () => void;
-  onClearCodexAppPath: () => void;
   onOpenSettingsJson: () => void;
   onIntegrationSettingToggle: (settingId: string, enabled: boolean) => void;
   onResetSeamlessSwitchRuntime: () => void;
@@ -147,6 +142,12 @@ export function SettingsOverlay(props: {
     props.onSendSetting(key, value);
   };
   const quotaCountdownAutoStartCopy = resolveQuotaCountdownAutoStartCopy(props.lang);
+  const baseIntegrationSettings = props.integrationSettings.filter(
+    (setting) => setting.id !== SUB2API_CARD_VISIBILITY_SETTING_ID
+  );
+  const accountSwitchingIntegrationSettings = props.integrationSettings.filter(
+    (setting) => setting.id === SUB2API_CARD_VISIBILITY_SETTING_ID
+  );
 
   const toggleUsageRange = (range: (typeof LOCAL_USAGE_RANGE_OPTIONS)[number]): void => {
     const enabled = new Set(props.settings.localUsageEnabledRanges);
@@ -230,7 +231,7 @@ export function SettingsOverlay(props: {
                     settings={props.settings}
                     onChange={(value) => patchAndSend("proxyAddress", value)}
                   />
-                  {props.integrationSettings.map((setting) => (
+                  {baseIntegrationSettings.map((setting) => (
                     <SettingsToggleBlock
                       key={setting.id}
                       title={setting.title}
@@ -296,159 +297,19 @@ export function SettingsOverlay(props: {
                   >
                     <div class="settings-note">{props.copy.localUsagePriceSettingsNote}</div>
                   </SettingsToggleBlock>
-                  <SettingsToggleBlock
-                    title={props.copy.codexAppRestartTitle}
-                    sub={props.copy.codexAppRestartSub}
-                    enabled={props.settings.codexAppRestartEnabled}
-                    onToggle={(enabled) => patchAndSend("codexAppRestartEnabled", enabled)}
-                  >
-                    <div class={`settings-stack ${props.settings.codexAppRestartEnabled ? "" : "is-hidden"}`}>
-                      <div class="settings-segment">
-                        <button
-                          class={`segment-btn ${props.settings.codexAppRestartMode === "auto" ? "active" : ""}`}
-                          type="button"
-                          onClick={() => patchAndSend("codexAppRestartMode", "auto")}
-                        >
-                          <span class="segment-title">{props.copy.restartModeAuto}</span>
-                          <span class="segment-copy">{props.copy.restartModeAutoDesc}</span>
-                        </button>
-                        <button
-                          class={`segment-btn ${props.settings.codexAppRestartMode === "manual" ? "active" : ""}`}
-                          type="button"
-                          onClick={() => patchAndSend("codexAppRestartMode", "manual")}
-                        >
-                          <span class="segment-title">{props.copy.restartModeManual}</span>
-                          <span class="segment-copy">{props.copy.restartModeManualDesc}</span>
-                        </button>
-                      </div>
-                      <div class="settings-note">{props.copy.restartModeNote}</div>
-                      <SettingsPathBlock
-                        copy={props.copy}
-                        pathValue={props.settings.resolvedCodexAppPath}
-                        hasCustomPath={Boolean(props.settings.codexAppPath)}
-                        compact
-                        onPick={props.onPickCodexAppPath}
-                        onClear={props.onClearCodexAppPath}
-                      />
-                    </div>
-                  </SettingsToggleBlock>
-                  <SettingsToggleBlock
-                    title={props.copy.autoRefreshTitle}
-                    sub={props.copy.autoRefreshSub}
-                    enabled={props.settings.autoRefreshMinutes > 0}
-                    onToggle={props.onAutoRefreshToggle}
-                  >
-                    <div class={`settings-stack ${props.settings.autoRefreshMinutes > 0 ? "" : "is-hidden"}`}>
-                      <SettingsDiscreteSlider
-                        value={props.settings.autoRefreshMinutes}
-                        values={AUTO_REFRESH_VALUES}
-                        accent="violet"
-                        scaleValues={AUTO_REFRESH_SCALE_VALUES}
-                        valueLabel={(value) => formatTemplate(props.copy.autoRefreshValueTemplate, value)}
-                        description={(value) => formatTemplate(props.copy.autoRefreshValueDescTemplate, value)}
-                        onPreview={(value) => props.onPatchSettings({ autoRefreshMinutes: value })}
-                        onCommit={props.onAutoRefreshValue}
-                      />
-                    </div>
-                  </SettingsToggleBlock>
                 </section>
               ) : null}
               {activeSection === "switching" ? (
                 <section id="settings-section-switching" class="settings-section-panel" role="tabpanel">
-                  <SettingsToggleBlock
-                    title={props.copy.hourlyQuotaControlTitle}
-                    sub={props.copy.hourlyQuotaControlSub}
-                    enabled={props.settings.hourlyQuotaControlEnabled}
-                    onToggle={(enabled) => patchAndSend("hourlyQuotaControlEnabled", enabled)}
-                  >
-                    <div class="settings-note">
-                      {props.settings.hourlyQuotaControlEnabled
-                        ? props.copy.hourlyQuotaControlOnDesc
-                        : props.copy.hourlyQuotaControlOffDesc}
-                    </div>
-                  </SettingsToggleBlock>
-                  <SettingsToggleBlock
-                    title={props.copy.quotaCountdownAutoStartTitle ?? quotaCountdownAutoStartCopy.title}
-                    sub={props.copy.quotaCountdownAutoStartSub ?? quotaCountdownAutoStartCopy.sub}
-                    enabled={props.settings.autoStartQuotaCountdownEnabled}
-                    onToggle={(enabled) => patchAndSend("autoStartQuotaCountdownEnabled", enabled)}
-                  >
-                    <div class="settings-note">
-                      {props.settings.autoStartQuotaCountdownEnabled
-                        ? props.copy.quotaCountdownAutoStartOnDesc ?? quotaCountdownAutoStartCopy.onDesc
-                        : props.copy.quotaCountdownAutoStartOffDesc ?? quotaCountdownAutoStartCopy.offDesc}
-                    </div>
-                  </SettingsToggleBlock>
-                  <SettingsToggleBlock
-                    title={props.copy.autoSwitchTitle}
-                    sub={props.copy.autoSwitchSub}
-                    enabled={props.settings.autoSwitchEnabled}
-                    onToggle={(enabled) => patchAndSend("autoSwitchEnabled", enabled)}
-                  >
-                    <div class={`settings-stack ${props.settings.autoSwitchEnabled ? "" : "is-hidden"}`}>
-                      {props.settings.hourlyQuotaControlEnabled ? (
-                        <SettingsDiscreteSlider
-                          value={props.settings.autoSwitchHourlyThreshold}
-                          values={AUTO_SWITCH_VALUES}
-                          accent="violet"
-                          sparseScale
-                          valueLabel={(value) => `${value}%`}
-                          description={(value) =>
-                            formatTemplate(props.copy.autoSwitchThresholdDescTemplate, {
-                              label: props.copy.hourlyLabel,
-                              value
-                            })
-                          }
-                          onPreview={(value) => props.onPatchSettings({ autoSwitchHourlyThreshold: value })}
-                          onCommit={(value) => patchAndSend("autoSwitchHourlyThreshold", value)}
-                        />
-                      ) : null}
-                      <SettingsDiscreteSlider
-                        value={props.settings.autoSwitchWeeklyThreshold}
-                        values={AUTO_SWITCH_VALUES}
-                        accent="sky"
-                        sparseScale
-                        valueLabel={(value) => `${value}%`}
-                        description={(value) =>
-                          formatTemplate(props.copy.autoSwitchThresholdDescTemplate, {
-                            label: props.copy.weeklyLabel,
-                            value
-                          })
-                        }
-                        onPreview={(value) => props.onPatchSettings({ autoSwitchWeeklyThreshold: value })}
-                        onCommit={(value) => patchAndSend("autoSwitchWeeklyThreshold", value)}
-                      />
-                      <SettingsToggleBlock
-                        title={props.copy.autoSwitchReloadTitle}
-                        sub={props.copy.autoSwitchReloadSub}
-                        enabled={props.settings.autoSwitchReloadWindowEnabled}
-                        onToggle={(enabled) => patchAndSend("autoSwitchReloadWindowEnabled", enabled)}
-                      />
-                      <div class="settings-block-head">
-                        <div class="settings-block-title">{props.copy.autoSwitchLockMinutesTitle}</div>
-                        <div class="settings-block-sub">{props.copy.autoSwitchLockMinutesSub}</div>
-                      </div>
-                      <SettingsDiscreteSlider
-                        value={props.settings.autoSwitchLockMinutes}
-                        values={AUTO_SWITCH_LOCK_VALUES}
-                        accent="violet"
-                        valueLabel={(value) =>
-                          value === 0
-                            ? props.copy.autoSwitchLockOff
-                            : formatTemplate(props.copy.autoSwitchLockValueTemplate, value)
-                        }
-                        description={(value) =>
-                          value === 0
-                            ? props.copy.autoSwitchLockMinutesSub
-                            : formatTemplate(props.copy.autoSwitchLockValueDescTemplate, value)
-                        }
-                        scaleValues={AUTO_SWITCH_LOCK_VALUES}
-                        onPreview={(value) => props.onPatchSettings({ autoSwitchLockMinutes: value })}
-                        onCommit={(value) => patchAndSend("autoSwitchLockMinutes", value)}
-                      />
-                      <div class="settings-note">{props.copy.autoSwitchAnyNote}</div>
-                    </div>
-                  </SettingsToggleBlock>
+                  {accountSwitchingIntegrationSettings.map((setting) => (
+                    <SettingsToggleBlock
+                      key={setting.id}
+                      title={setting.title}
+                      sub={setting.description ?? ""}
+                      enabled={setting.enabled}
+                      onToggle={(enabled) => props.onIntegrationSettingToggle(setting.id, enabled)}
+                    />
+                  ))}
                   <SettingsToggleBlock
                     title={
                       props.lang === "zh"
@@ -669,6 +530,49 @@ export function SettingsOverlay(props: {
               {activeSection === "quota" ? (
                 <section id="settings-section-quota" class="settings-section-panel" role="tabpanel">
                   <SettingsToggleBlock
+                    title={props.copy.autoRefreshTitle}
+                    sub={props.copy.autoRefreshSub}
+                    enabled={props.settings.autoRefreshMinutes > 0}
+                    onToggle={props.onAutoRefreshToggle}
+                  >
+                    <div class={`settings-stack ${props.settings.autoRefreshMinutes > 0 ? "" : "is-hidden"}`}>
+                      <SettingsDiscreteSlider
+                        value={props.settings.autoRefreshMinutes}
+                        values={AUTO_REFRESH_VALUES}
+                        accent="violet"
+                        scaleValues={AUTO_REFRESH_SCALE_VALUES}
+                        valueLabel={(value) => formatTemplate(props.copy.autoRefreshValueTemplate, value)}
+                        description={(value) => formatTemplate(props.copy.autoRefreshValueDescTemplate, value)}
+                        onPreview={(value) => props.onPatchSettings({ autoRefreshMinutes: value })}
+                        onCommit={props.onAutoRefreshValue}
+                      />
+                    </div>
+                  </SettingsToggleBlock>
+                  <SettingsToggleBlock
+                    title={props.copy.hourlyQuotaControlTitle}
+                    sub={props.copy.hourlyQuotaControlSub}
+                    enabled={props.settings.hourlyQuotaControlEnabled}
+                    onToggle={(enabled) => patchAndSend("hourlyQuotaControlEnabled", enabled)}
+                  >
+                    <div class="settings-note">
+                      {props.settings.hourlyQuotaControlEnabled
+                        ? props.copy.hourlyQuotaControlOnDesc
+                        : props.copy.hourlyQuotaControlOffDesc}
+                    </div>
+                  </SettingsToggleBlock>
+                  <SettingsToggleBlock
+                    title={props.copy.quotaCountdownAutoStartTitle ?? quotaCountdownAutoStartCopy.title}
+                    sub={props.copy.quotaCountdownAutoStartSub ?? quotaCountdownAutoStartCopy.sub}
+                    enabled={props.settings.autoStartQuotaCountdownEnabled}
+                    onToggle={(enabled) => patchAndSend("autoStartQuotaCountdownEnabled", enabled)}
+                  >
+                    <div class="settings-note">
+                      {props.settings.autoStartQuotaCountdownEnabled
+                        ? props.copy.quotaCountdownAutoStartOnDesc ?? quotaCountdownAutoStartCopy.onDesc
+                        : props.copy.quotaCountdownAutoStartOffDesc ?? quotaCountdownAutoStartCopy.offDesc}
+                    </div>
+                  </SettingsToggleBlock>
+                  <SettingsToggleBlock
                     title={props.copy.warningTitle}
                     sub={
                       props.settings.hourlyQuotaControlEnabled ? props.copy.warningSub : props.copy.warningWeeklyOnlySub
@@ -694,11 +598,6 @@ export function SettingsOverlay(props: {
                     settings={props.settings}
                     onPreview={props.onThresholdPreview}
                     onCommit={props.onThresholdCommit}
-                  />
-                  <SettingsWeeklyQuotaThresholdBlock
-                    lang={props.lang}
-                    settings={props.settings}
-                    onCommit={(key, value) => patchAndSend(key, value)}
                   />
                 </section>
               ) : null}

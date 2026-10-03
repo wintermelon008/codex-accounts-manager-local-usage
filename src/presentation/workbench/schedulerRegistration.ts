@@ -777,7 +777,7 @@ class QuotaCountdownAutomationController {
     })[0];
     const freshTarget = getFreshQuotaCountdownStartTarget(account, now);
     const target = mergeQuotaCountdownTargets(account.id, expiredTarget, freshTarget);
-    if (!accountState.pendingStart && target && hasUnhandledTarget(target, accountState)) {
+    if (!accountState.pendingStart && target && hasUnhandledTarget(target, accountState, now)) {
       markPendingTarget(accountState, target, false);
       return;
     }
@@ -805,14 +805,14 @@ class QuotaCountdownAutomationController {
     const previousTarget = getExpiredTargetFromQuota(account.id, event.previousQuota, now);
     const freshTarget = getFreshQuotaCountdownStartTarget(account, now);
     const refreshedTarget = mergeQuotaCountdownTargets(account.id, previousTarget, freshTarget);
-    if (event.refreshed && refreshedTarget && hasUnhandledTarget(refreshedTarget, accountState)) {
+    if (event.refreshed && refreshedTarget && hasUnhandledTarget(refreshedTarget, accountState, now)) {
       markPendingTarget(accountState, refreshedTarget, true);
     } else if (!accountState.pendingStart) {
       accountState.nextCheckAt = getNextQuotaCheckAt(event.nextQuota ?? account.quotaSummary, now);
       this.cancelQueuedAccount(account.id);
     }
 
-    if (event.failed && previousTarget && hasUnhandledTarget(previousTarget, accountState)) {
+    if (event.failed && previousTarget && hasUnhandledTarget(previousTarget, accountState, now)) {
       markPendingTarget(accountState, previousTarget, false);
       accountState.nextCheckAt = now + QUOTA_COUNTDOWN_RETRY_DELAY_MS;
     }
@@ -903,7 +903,7 @@ class QuotaCountdownAutomationController {
       })[0];
       const freshTarget = getFreshQuotaCountdownStartTarget(account, now);
       const target = mergeQuotaCountdownTargets(account.id, expiredTarget, freshTarget);
-      if (!target || !hasUnhandledTarget(target, accountState)) {
+      if (!target || !hasUnhandledTarget(target, accountState, now)) {
         accountState.nextCheckAt = getNextQuotaCheckAt(account.quotaSummary, now);
         this.cancelQueuedAccount(accountId);
         this.persistState();
@@ -942,7 +942,7 @@ class QuotaCountdownAutomationController {
         latestState.handledWeeklyResetTime = latestFreshTarget.weeklyResetTime;
       }
       latestState.nextCheckAt = latest ? getNextQuotaCheckAt(latest.quotaSummary, Date.now()) : undefined;
-      this.cancelQueuedAccount(accountId);
+      this.enqueueState(accountId, latestState);
       this.persistState();
       if (result === "started" || result === "already-started") {
         this.params.onRefresh();
@@ -1226,12 +1226,23 @@ function mergeQuotaCountdownTargets(
 
 function hasUnhandledTarget(
   target: ExpiredQuotaCountdownRefreshTarget,
-  accountState: QuotaCountdownAccountState
+  accountState: QuotaCountdownAccountState,
+  nowMs: number
 ): boolean {
   return (
-    (target.hourlyResetTime !== undefined && target.hourlyResetTime !== accountState.handledHourlyResetTime) ||
-    (target.weeklyResetTime !== undefined && target.weeklyResetTime !== accountState.handledWeeklyResetTime)
+    isUnhandledResetTime(target.hourlyResetTime, accountState.handledHourlyResetTime, nowMs) ||
+    isUnhandledResetTime(target.weeklyResetTime, accountState.handledWeeklyResetTime, nowMs)
   );
+}
+
+function isUnhandledResetTime(target: number | undefined, handled: number | undefined, nowMs: number): boolean {
+  if (target === undefined || handled === undefined) {
+    return target !== undefined;
+  }
+  if (target !== handled) {
+    return target > handled;
+  }
+  return target <= Math.floor(nowMs / 1000);
 }
 
 function markPendingTarget(

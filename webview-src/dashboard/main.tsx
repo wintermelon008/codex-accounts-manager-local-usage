@@ -1201,8 +1201,6 @@ function App() {
         onAutoRefreshValue={handleAutoRefreshValue}
         onThresholdPreview={handleThresholdPreview}
         onThresholdCommit={handleThresholdCommit}
-        onPickCodexAppPath={() => postMessageToHost({ type: "dashboard:pickCodexAppPath" })}
-        onClearCodexAppPath={() => postMessageToHost({ type: "dashboard:clearCodexAppPath" })}
         onOpenSettingsJson={() => postMessageToHost({ type: "dashboard:openSettingsJson" })}
         onIntegrationSettingToggle={(settingId, enabled) =>
           sendAction("integrationSetting", undefined, { integrationSettingId: settingId, enabled })
