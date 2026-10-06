@@ -103,7 +103,8 @@ class DashboardPanelController {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly repo: AccountsRepository,
-    private readonly accountSharing?: AccountSharingService
+    private readonly accountSharing?: AccountSharingService,
+    private readonly requestQuotaCountdownAfterManualReset?: (accountId: string) => void
   ) {
     this.announcements = new AnnouncementService(context.globalStorageUri.fsPath, context.extensionUri.fsPath);
     this.oauth = new DashboardOAuthCoordinator(repo, () => {
@@ -266,7 +267,8 @@ class DashboardPanelController {
         oauth: this.oauth,
         announcements: this.announcements,
         getAnnouncementOptions: () => this.getAnnouncementOptions(),
-        accountSharing: this.accountSharing
+        accountSharing: this.accountSharing,
+        requestQuotaCountdownAfterManualReset: this.requestQuotaCountdownAfterManualReset
       },
       message
     );
@@ -375,9 +377,15 @@ export function getDashboardLocalUsageRefreshDelay(nextRefreshAt: number, now = 
 export function openQuotaSummaryPanel(
   context: vscode.ExtensionContext,
   repo: AccountsRepository,
-  accountSharing?: AccountSharingService
+  accountSharing?: AccountSharingService,
+  requestQuotaCountdownAfterManualReset?: (accountId: string) => void
 ): void {
-  dashboardPanelController ??= new DashboardPanelController(context, repo, accountSharing);
+  dashboardPanelController ??= new DashboardPanelController(
+    context,
+    repo,
+    accountSharing,
+    requestQuotaCountdownAfterManualReset
+  );
   dashboardPanelController.open();
 }
 

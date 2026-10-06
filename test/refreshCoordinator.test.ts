@@ -723,6 +723,76 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     }
   });
 
+  it("queues a manual quota reset even when the reset timestamp was already handled", async () => {
+    vi.useFakeTimers();
+    const nowSeconds = 1_800_000_000;
+    vi.setSystemTime(nowSeconds * 1000);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(
+      configuration({ autoStartQuotaCountdownEnabled: true })
+    );
+
+    const account = {
+      id: "manual-reset-account",
+      email: "manual-reset@example.invalid",
+      isHidden: true,
+      accountKind: "chatgpt" as const,
+      quotaMode: "chatgpt" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 100,
+        hourlyResetTime: nowSeconds + 3_600,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 100,
+        weeklyResetTime: nowSeconds + 7_200,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0
+      }
+    };
+    const globalState = {
+      get: vi.fn(() => ({
+        version: 2,
+        scanValid: true,
+        accountIds: [account.id],
+        accounts: {
+          [account.id]: {
+            observedUpdatedAt: account.updatedAt,
+            handledHourlyResetTime: account.quotaSummary.hourlyResetTime,
+            handledWeeklyResetTime: account.quotaSummary.weeklyResetTime
+          }
+        }
+      })),
+      update: vi.fn().mockResolvedValue(undefined)
+    };
+    const release = vi.fn().mockResolvedValue(undefined);
+    const repo = {
+      listAccounts: vi.fn().mockResolvedValue([account]),
+      getAccount: vi.fn().mockResolvedValue(account),
+      tryAcquireSchedulerLease: vi.fn().mockResolvedValue({ release })
+    };
+    const startQuotaCountdown = vi.fn().mockResolvedValue("started");
+    const registration = registerQuotaCountdownRefreshScheduler({
+      context: { globalState } as never,
+      repo: repo as never,
+      onRefresh: vi.fn(),
+      startQuotaCountdown
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startQuotaCountdown).not.toHaveBeenCalled();
+
+      registration.requestManualReset(account.id);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(startQuotaCountdown).toHaveBeenCalledWith(account.id);
+      expect(startQuotaCountdown).toHaveBeenCalledOnce();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("retries the automatic countdown start when the short conversation fails", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000 * 1000);

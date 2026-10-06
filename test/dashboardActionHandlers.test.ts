@@ -366,6 +366,7 @@ describe("executeDashboardActionMessage", () => {
     vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Reset Rate Limit" as never);
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined);
     const executeCommandMock = vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
+    const requestQuotaCountdownAfterManualReset = vi.fn();
     const repo = {
       getAccount: vi.fn(async () => ({
         id: "account-1",
@@ -389,6 +390,7 @@ describe("executeDashboardActionMessage", () => {
         publishState: vi.fn(),
         oauth: {} as DashboardActionContext["oauth"],
         announcements: {} as DashboardActionContext["announcements"],
+        requestQuotaCountdownAfterManualReset,
         getAnnouncementOptions: () => ({
           version: "0.1.15",
           locale: "en"
@@ -406,6 +408,7 @@ describe("executeDashboardActionMessage", () => {
       "codexAccounts.refreshQuota",
       expect.objectContaining({ id: "account-1" })
     );
+    expect(requestQuotaCountdownAfterManualReset).toHaveBeenCalledWith("account-1");
     expect(result.status).toBe("completed");
   });
 

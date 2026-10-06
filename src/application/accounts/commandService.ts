@@ -39,7 +39,8 @@ export class AccountsCommandService {
     private readonly view: RefreshView,
     private readonly hotSwitchRuntime: CodexHotSwitchRuntime,
     private readonly resetSeamlessSwitchRuntime?: () => void | Promise<void>,
-    private readonly accountSharing?: AccountSharingService
+    private readonly accountSharing?: AccountSharingService,
+    private readonly requestQuotaCountdownAfterManualReset?: (accountId: string) => void
   ) {}
 
   async enableHotSwitch(): Promise<void> {
@@ -448,7 +449,12 @@ export class AccountsCommandService {
   }
 
   showQuotaSummary(): void {
-    openQuotaSummaryPanel(this.context, this.repo, this.accountSharing);
+    openQuotaSummaryPanel(
+      this.context,
+      this.repo,
+      this.accountSharing,
+      this.requestQuotaCountdownAfterManualReset
+    );
   }
 
   async restoreAccountsFromBackup(): Promise<void> {

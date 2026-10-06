@@ -79,6 +79,7 @@ import {
   registerQuotaCountdownRefreshScheduler,
   registerSeamlessUsageLimitMonitor,
   registerTokenRefreshScheduler,
+  type QuotaCountdownRefreshScheduler,
   type SeamlessUsageLimitMonitor
 } from "./schedulerRegistration";
 import { AccountSharingService } from "../../sharing";
@@ -405,11 +406,15 @@ export class AccountsWorkbench {
         source: RuntimeSwitchSource = "automatic"
       ): Promise<RuntimeAccountSwitchOutcome> => this.switchRuntimeAccount(accountId, options, source)
     };
+    let quotaCountdownScheduler: QuotaCountdownRefreshScheduler | undefined;
     await measureStep("registerCommands", () => {
       registerCommands(this.context, this.repo, refreshers, this.hotSwitchRuntime, {
         resetSeamlessSwitchRuntime: () => this.resetSeamlessSwitchRuntime(),
         repairSeamlessSwitchRuntime: () => this.repairSeamlessSwitchRuntime(),
-        accountSharing: this.accountSharing
+        accountSharing: this.accountSharing,
+        requestQuotaCountdownAfterManualReset: (accountId) => {
+          quotaCountdownScheduler?.requestManualReset(accountId);
+        }
       });
     });
     await measureStep("registerAuthFileWatcher", () => {
@@ -425,13 +430,12 @@ export class AccountsWorkbench {
       );
     });
     await measureStep("registerQuotaCountdownRefreshScheduler", () => {
-      this.context.subscriptions.push(
-        registerQuotaCountdownRefreshScheduler({
-          context: this.context,
-          repo: this.repo,
-          onRefresh: refreshers.refresh
-        })
-      );
+      quotaCountdownScheduler = registerQuotaCountdownRefreshScheduler({
+        context: this.context,
+        repo: this.repo,
+        onRefresh: refreshers.refresh
+      });
+      this.context.subscriptions.push(quotaCountdownScheduler);
     });
     await measureStep("registerSeamlessUsageLimitMonitor", () => {
       this.seamlessUsageLimitMonitor = registerSeamlessUsageLimitMonitor({

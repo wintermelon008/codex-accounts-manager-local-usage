@@ -32,6 +32,7 @@ export function registerCommands(
     resetSeamlessSwitchRuntime?: () => void | Promise<void>;
     repairSeamlessSwitchRuntime?: () => Promise<HotSwitchRuntimeRepairResult>;
     accountSharing?: AccountSharingService;
+    requestQuotaCountdownAfterManualReset?: (accountId: string) => void;
   } = {}
 ): void {
   const service = new AccountsCommandService(
@@ -40,7 +41,8 @@ export function registerCommands(
     view,
     hotSwitchRuntime,
     options.resetSeamlessSwitchRuntime,
-    options.accountSharing
+    options.accountSharing,
+    options.requestQuotaCountdownAfterManualReset
   );
 
   context.subscriptions.push(

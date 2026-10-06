@@ -458,6 +458,7 @@ type QuotaCountdownAccountState = {
   observedUpdatedAt?: number;
   observedLastQuotaAt?: number;
   pendingStart?: boolean;
+  manualResetPending?: boolean;
   startAfterRefresh?: boolean;
   pendingHourlyResetTime?: number;
   pendingWeeklyResetTime?: number;
@@ -575,6 +576,7 @@ function readPersistedQuotaCountdownState(context?: vscode.ExtensionContext): Pe
       observedUpdatedAt: readFiniteNumber(value["observedUpdatedAt"]),
       observedLastQuotaAt: readFiniteNumber(value["observedLastQuotaAt"]),
       pendingStart: value["pendingStart"] === true,
+      manualResetPending: value["manualResetPending"] === true,
       startAfterRefresh: value["startAfterRefresh"] === true,
       pendingHourlyResetTime: readFiniteNumber(value["pendingHourlyResetTime"]),
       pendingWeeklyResetTime: readFiniteNumber(value["pendingWeeklyResetTime"]),
@@ -658,6 +660,13 @@ class QuotaCountdownAutomationController {
     void this.applyMode();
   }
 
+  requestManualReset(accountId: string): void {
+    if (this.disposed) {
+      return;
+    }
+    void this.enqueueManualReset(accountId);
+  }
+
   dispose(): void {
     this.disposed = true;
     this.generation += 1;
@@ -731,6 +740,7 @@ class QuotaCountdownAutomationController {
     const nextAccounts: Record<string, QuotaCountdownAccountState> = {};
     accounts.forEach((account) => {
       const accountState: QuotaCountdownAccountState = {
+        manualResetPending: this.state.accounts[account.id]?.manualResetPending,
         handledHourlyResetTime: this.state.accounts[account.id]?.handledHourlyResetTime,
         handledWeeklyResetTime: this.state.accounts[account.id]?.handledWeeklyResetTime
       };
@@ -759,13 +769,14 @@ class QuotaCountdownAutomationController {
     accountState.observedUpdatedAt = account.updatedAt;
     accountState.observedLastQuotaAt = account.lastQuotaAt;
     if (!preservePending) {
-      accountState.pendingStart = false;
+      accountState.pendingStart = accountState.manualResetPending === true;
       accountState.startAfterRefresh = false;
       accountState.pendingHourlyResetTime = undefined;
       accountState.pendingWeeklyResetTime = undefined;
     }
     if (!isQuotaCountdownRefreshable(account, true)) {
       accountState.pendingStart = false;
+      accountState.manualResetPending = false;
       accountState.startAfterRefresh = false;
       accountState.nextCheckAt = undefined;
       this.cancelQueuedAccount(account.id);
@@ -801,6 +812,9 @@ class QuotaCountdownAutomationController {
 
     const scanWasValid = this.state.scanValid;
     const accountState = this.ensureAccountState(account.id);
+    if (accountState.manualResetPending) {
+      accountState.pendingStart = true;
+    }
     const now = Date.now();
     const previousTarget = getExpiredTargetFromQuota(account.id, event.previousQuota, now);
     const freshTarget = getFreshQuotaCountdownStartTarget(account, now);
@@ -822,6 +836,35 @@ class QuotaCountdownAutomationController {
     accountState.observedLastQuotaAt = account.lastQuotaAt;
     this.enqueueState(account.id, accountState);
     this.state.scanValid = scanWasValid;
+    this.persistState();
+    this.scheduleTimer();
+    void this.processDueAccounts();
+  }
+
+  private async enqueueManualReset(accountId: string): Promise<void> {
+    if (this.mode === undefined) {
+      await this.applyMode();
+    }
+    if (this.disposed || this.mode !== true) {
+      return;
+    }
+
+    const account = await this.params.repo.getAccount(accountId);
+    if (!account || this.disposed || this.mode !== true || !isQuotaCountdownRefreshable(account, true)) {
+      return;
+    }
+
+    const accountState = this.ensureAccountState(accountId);
+    accountState.manualResetPending = true;
+    accountState.pendingStart = true;
+    accountState.startAfterRefresh = false;
+    accountState.pendingHourlyResetTime = undefined;
+    accountState.pendingWeeklyResetTime = undefined;
+    accountState.nextCheckAt = Date.now();
+    accountState.observedUpdatedAt = account.updatedAt;
+    accountState.observedLastQuotaAt = account.lastQuotaAt;
+    this.state.accountIds = [...new Set([...this.state.accountIds, accountId])].sort();
+    this.enqueueState(accountId, accountState);
     this.persistState();
     this.scheduleTimer();
     void this.processDueAccounts();
@@ -897,6 +940,9 @@ class QuotaCountdownAutomationController {
     }
 
     const now = Date.now();
+    if (accountState.manualResetPending) {
+      accountState.pendingStart = true;
+    }
     if (!accountState.pendingStart) {
       const expiredTarget = getExpiredQuotaCountdownRefreshTargets([account], now, {
         includeVisibleAccounts: true
@@ -922,7 +968,17 @@ class QuotaCountdownAutomationController {
       if (!latestState) {
         return;
       }
+      const latestFreshTarget = latest ? getFreshQuotaCountdownStartTarget(latest, Date.now()) : undefined;
+      if (latestState.manualResetPending && result === "already-started" && !latestFreshTarget) {
+        latestState.pendingStart = true;
+        latestState.startAfterRefresh = false;
+        latestState.nextCheckAt = Date.now() + QUOTA_COUNTDOWN_RETRY_DELAY_MS;
+        this.enqueueState(accountId, latestState);
+        this.persistState();
+        return;
+      }
       latestState.pendingStart = false;
+      latestState.manualResetPending = false;
       latestState.startAfterRefresh = false;
       if (latestState.pendingHourlyResetTime !== undefined) {
         latestState.handledHourlyResetTime = latestState.pendingHourlyResetTime;
@@ -934,7 +990,6 @@ class QuotaCountdownAutomationController {
       latestState.pendingWeeklyResetTime = undefined;
       latestState.observedUpdatedAt = latest?.updatedAt;
       latestState.observedLastQuotaAt = latest?.lastQuotaAt;
-      const latestFreshTarget = latest ? getFreshQuotaCountdownStartTarget(latest, Date.now()) : undefined;
       if (latestFreshTarget?.hourlyResetTime !== undefined) {
         latestState.handledHourlyResetTime = latestFreshTarget.hourlyResetTime;
       }
@@ -1127,16 +1182,21 @@ class QuotaCountdownAutomationController {
   }
 }
 
+export type QuotaCountdownRefreshScheduler = vscode.Disposable & {
+  requestManualReset(accountId: string): void;
+};
+
 export function registerQuotaCountdownRefreshScheduler(params: {
   context?: vscode.ExtensionContext;
   repo: AccountsRepository;
   onRefresh: () => void;
   startQuotaCountdown?: (accountId: string) => Promise<QuotaCountdownStartResult>;
   startQuotaCountdownAfterRefresh?: (accountId: string) => Promise<QuotaCountdownStartResult>;
-}): vscode.Disposable {
+}): QuotaCountdownRefreshScheduler {
   const controller = new QuotaCountdownAutomationController(params);
   controller.start();
   return {
+    requestManualReset: (accountId: string): void => controller.requestManualReset(accountId),
     dispose: (): void => controller.dispose()
   };
 }

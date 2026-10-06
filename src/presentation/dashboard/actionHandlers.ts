@@ -41,6 +41,7 @@ export type DashboardActionContext = {
   announcements: AnnouncementService;
   getAnnouncementOptions: () => AnnouncementOptions;
   accountSharing?: AccountSharingService;
+  requestQuotaCountdownAfterManualReset?: (accountId: string) => void;
 };
 
 const CODEX_BATCH_REFRESH_CONCURRENCY = 1;
@@ -383,7 +384,13 @@ async function runDashboardAction(
     case "getResetCredits":
       return handleGetResetCredits(ctx.repo, account);
     case "consumeResetCredit":
-      return handleConsumeResetCredit(ctx.repo, account, ctx.schedulePublishState, ctx.resolveLanguage());
+      return handleConsumeResetCredit(
+        ctx.repo,
+        account,
+        ctx.schedulePublishState,
+        ctx.resolveLanguage(),
+        ctx.requestQuotaCountdownAfterManualReset
+      );
     default:
       return undefined;
   }
@@ -1218,7 +1225,8 @@ async function handleConsumeResetCredit(
   repo: AccountsRepository,
   account?: Awaited<ReturnType<AccountsRepository["getAccount"]>>,
   schedulePublishState?: () => void,
-  lang?: string
+  lang?: string,
+  requestQuotaCountdownAfterManualReset?: (accountId: string) => void
 ) {
   if (!account) {
     throw new Error("Account not found");
@@ -1261,6 +1269,8 @@ async function handleConsumeResetCredit(
     } catch (error) {
       console.warn(`[codexAccounts] refresh quota after consuming reset credit failed: ${toFailureMessage(error)}`);
       schedulePublishState?.();
+    } finally {
+      requestQuotaCountdownAfterManualReset?.(account.id);
     }
   }
   return undefined;
