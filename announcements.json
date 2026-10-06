@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-10-codex-accounts-0-1-19-l5-mailbox-quota-automation",
+      "id": "ann-2026-10-codex-accounts-0-1-19-l6-command-center-solar",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.19-l5",
-      "title": "Codex Accounts Manager 0.1.19-l5 — mailbox and quota automation",
-      "summary": "Keeps registration verification running in the background and automatically starts eligible quota countdowns across all accounts.",
-      "content": "This local release improves registration automation and account quota scheduling.\n1. Mailbox: keeps registration email verification querying in the background, aligns GPT registration with the Codex import flow, and adds the only-connected-to-Codex mailbox filter.\n2. Phone sources: adds the Future phone provider, CDK redemption, persistent server-side token storage, and shared SMS688/Future lease handling.\n3. Quota countdowns: when enabled, scans all refreshable accounts once at startup, starts fresh eligible windows immediately, and then uses a persisted nextCheckAt priority queue plus quota refresh events instead of repeated full scans.\n4. Safety: disabling the setting preserves refresh-only behavior; state versioning and post-start reset tracking prevent missed initial accounts and duplicate starts.",
+      "releaseVersion": "0.1.19-l6",
+      "title": "Codex Accounts Manager 0.1.19-l6 — solar Command Center",
+      "summary": "Adds an opt-in solar Command Center view with focused account actions and quota countdown reset fixes.",
+      "content": "This local release adds an optional visual account workspace while preserving the standard Dashboard.\n1. Command Center: enable Advanced appearance to view the active account as a star and ordered accounts as slow orbiting planets.\n2. Focus actions: click a planet to inspect its quota, health, subscription, workspace, and card-equivalent account actions in the right panel.\n3. Layout choice: advanced mode hides the lower account cards but keeps sorting and filtering controls; disabling Advanced appearance restores the normal cards.\n4. Visual polish: improves orbit brightness, quota rings, transitions, and the compact selected-account panel.\n5. Quota countdown: manually consuming reset credits now requeues the account until a fresh countdown start is observed.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-10-01T00:00:00Z",
+      "createdAt": "2026-10-06T00:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.19-l5 — Mailbox 与额度自动化",
-          "summary": "让注册验证持续后台查询，并在所有符合条件的账号上自动启动额度倒计时。",
-          "content": "本地版本重点改进注册自动化和账号额度调度。\n1. Mailbox：注册助手邮箱验证持续后台查询，GPT 注册与 Codex 导入流程保持一致，邮箱库新增“仅已接入 Codex”筛选。\n2. 手机来源：新增 Future 手机来源、CDK 兑换、扩展宿主服务器持久化 token，以及复用 SMS688/Future 的租约处理。\n3. 额度倒计时：开启后 Manager 启动时扫描全部可刷新账号，符合条件但尚未启动的额度窗口立即触发短对话；之后使用持久化 nextCheckAt 优先队列和额度刷新事件，不再重复全盘扫描。\n4. 安全性：关闭开关仍保持只刷新额度；状态版本升级和启动后的 reset 状态同步避免遗漏首次账号或重复启动。"
+          "title": "Codex Accounts Manager 0.1.19-l6 — 太阳系 Command Center",
+          "summary": "新增可选太阳系 Command Center、选中账号操作面板，并修复重置配额后的倒计时调度。",
+          "content": "本地版本新增可选的高级账号工作区，同时保留标准 Dashboard。\n1. Command Center：开启高级外观后，以当前账号为恒星、按账号顺序展示缓慢运行的行星。\n2. 选中账号操作：点击行星即可在右侧查看配额、健康、订阅、工作区和与账号卡片等价的操作。\n3. 布局选择：高级模式隐藏下方账号卡片但保留排序和筛选工具条；关闭高级外观后恢复普通账号卡片。\n4. 视觉优化：改善行星亮度、额度光环、切换过渡和右侧账号面板。\n5. 额度倒计时：手动消耗重置次数后会重新排队，直到观察到新的倒计时启动。"
         }
       }
     },
