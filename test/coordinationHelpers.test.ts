@@ -282,6 +282,7 @@ describe("workbench refresh signature helpers", () => {
       logoUri: "logo",
       settings: {
         dashboardTheme: "auto",
+        advancedAppearanceEnabled: false,
         localUsageDefaultRange: "7d",
         localUsageEnabledRanges: ["7d"],
         proxyAddress: "",
@@ -362,6 +363,7 @@ describe("workbench refresh signature helpers", () => {
       logoUri: "logo",
       settings: {
         dashboardTheme: "auto",
+        advancedAppearanceEnabled: false,
         localUsageDefaultRange: "7d",
         localUsageEnabledRanges: ["7d"],
         proxyAddress: "",

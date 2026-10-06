@@ -39,6 +39,10 @@ export type DashboardAccountSort = {
   direction: DashboardAccountSortDirection;
 };
 
+export function getDashboardAccountCardDomId(accountId: string): string {
+  return `saved-account-${encodeURIComponent(accountId)}`;
+}
+
 /** Stable color buckets shared by the account cards and the health filter. */
 export const DASHBOARD_HEALTH_FILTERS = ["unknown", "usable", "warning", "error"] as const;
 export type DashboardHealthFilter = (typeof DASHBOARD_HEALTH_FILTERS)[number];

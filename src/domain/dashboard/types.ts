@@ -21,6 +21,7 @@ export const DEFAULT_WEEKLY_QUOTA_UNHIDE_THRESHOLD = 90;
 
 export type DashboardSettingKey =
   | "dashboardTheme"
+  | "advancedAppearanceEnabled"
   | "localUsageDefaultRange"
   | "localUsageEnabledRanges"
   | "localUsageShowEquivalentPrice"
@@ -58,6 +59,7 @@ export type DashboardSettingKey =
 
 export interface DashboardSettings {
   dashboardTheme: DashboardThemeOption;
+  advancedAppearanceEnabled: boolean;
   localUsageDefaultRange: DashboardLocalUsageRange;
   localUsageEnabledRanges: DashboardLocalUsageRange[];
   localUsageShowEquivalentPrice: boolean;

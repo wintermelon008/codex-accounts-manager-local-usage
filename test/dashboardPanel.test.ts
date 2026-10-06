@@ -34,6 +34,7 @@ import {
   parsePercentageInput
 } from "../webview-src/dashboard/helpers";
 import { createInitialState, reducer } from "../webview-src/dashboard/state";
+import { rotateAccountsAfterActive } from "../webview-src/dashboard/advancedAppearance";
 
 const localUsage = {
   status: "ready" as const,
@@ -74,6 +75,7 @@ function createState(): DashboardState {
     logoUri: "logo",
     settings: {
       dashboardTheme: "dark",
+      advancedAppearanceEnabled: false,
       localUsageDefaultRange: "7d",
       localUsageEnabledRanges: ["24h", "7d"],
       proxyAddress: "",
@@ -152,6 +154,27 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | "ti
 }
 
 describe("Dashboard account selection", () => {
+  it("starts the solar-system order with the account after the active account", () => {
+    const accounts = [
+      { id: "account-a" },
+      { id: "account-b" },
+      { id: "account-c" },
+      { id: "account-d" }
+    ] as DashboardState["accounts"];
+
+    expect(rotateAccountsAfterActive(accounts, "account-b").map((account) => account.id)).toEqual([
+      "account-c",
+      "account-d",
+      "account-a"
+    ]);
+    expect(rotateAccountsAfterActive(accounts, "missing").map((account) => account.id)).toEqual([
+      "account-a",
+      "account-b",
+      "account-c",
+      "account-d"
+    ]);
+  });
+
   it("paginates the displayed account set and clamps a removed last page", () => {
     const accounts = Array.from({ length: 101 }, (_, index) => `account-${index + 1}`);
 

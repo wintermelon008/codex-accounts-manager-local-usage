@@ -11,6 +11,7 @@ import {
   type DashboardSettingKey
 } from "../../src/domain/dashboard/types";
 import { AnnouncementCenter } from "./announcementCenter";
+import { AdvancedAppearanceSummary } from "./advancedAppearance";
 import { ActionButton, BatchSelectionBar, RecoveryPanel } from "./components";
 import { postMessageToHost } from "./host";
 import {
@@ -18,6 +19,7 @@ import {
   formatTemplate,
   DASHBOARD_SHARING_FILTERS,
   DASHBOARD_HEALTH_FILTERS,
+  getDashboardAccountCardDomId,
   getAccountHealthCategory,
   getDashboardAccountPage,
   getDashboardHealthFilterCounts,
@@ -128,6 +130,20 @@ function App() {
     );
     return sortDashboardAccountsForDisplay(visibleAccounts, accountSort);
   }, [accountSort, selectedHealthFilters, selectedPlanFilters, selectedSharingFilters, showHiddenAccounts, snapshot]);
+  const orderedAccounts = useMemo(
+    () => (snapshot ? sortDashboardAccountsForDisplay(snapshot.accounts, accountSort) : []),
+    [accountSort, snapshot]
+  );
+  const advancedActiveAccount =
+    orderedAccounts.find((account) => account.isCurrentWindowAccount) ??
+    orderedAccounts.find((account) => account.isActive && !account.isHidden);
+  const advancedAccounts = useMemo(() => {
+    const visibleAccountIds = new Set(displayedAccounts.map((account) => account.id));
+    if (advancedActiveAccount) {
+      visibleAccountIds.add(advancedActiveAccount.id);
+    }
+    return orderedAccounts.filter((account) => visibleAccountIds.has(account.id));
+  }, [advancedActiveAccount, displayedAccounts, orderedAccounts]);
   const modals = useDashboardModals({
     dispatch,
     sendAction,
@@ -325,6 +341,13 @@ function App() {
     setAccountPageJumpInput("");
   };
 
+  const focusAccountCard = (accountId: string): void => {
+    document.getElementById(getDashboardAccountCardDomId(accountId))?.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+  };
+
   const handleAutoRefreshToggle = (enabled: boolean): void => {
     const nextMinutes = enabled ? state.lastEnabledAutoRefreshMinutes || 15 : 0;
     patchSettings({ autoRefreshMinutes: nextMinutes });
@@ -481,7 +504,11 @@ function App() {
 
   return (
     <>
-      <div class={`panel ${state.privacyMode ? "privacy-hidden" : ""}`}>
+      <div
+        class={`panel ${state.privacyMode ? "privacy-hidden" : ""} ${
+          snapshot.settings.advancedAppearanceEnabled ? "advanced-appearance" : ""
+        }`}
+      >
         {snapshot.indexHealth.status !== "healthy" ? (
           <section class="section">
             <RecoveryPanel
@@ -496,7 +523,7 @@ function App() {
             />
           </section>
         ) : null}
-        <section class="section">
+        <section class="section hero-section">
           <div class="hero">
             <div class="brand">
               <img class="logo" src={snapshot.logoUri} alt="Codex Accounts Manager logo" />
@@ -669,8 +696,31 @@ function App() {
             </div>
           </div>
         </section>
+        {snapshot.settings.advancedAppearanceEnabled ? (
+          <section class="section advanced-appearance-section">
+            <AdvancedAppearanceSummary
+              accounts={advancedAccounts}
+              activeAccount={advancedActiveAccount}
+              copy={snapshot.copy}
+              lang={snapshot.lang}
+              indexHealthStatus={snapshot.indexHealth.status}
+              privacyMode={state.privacyMode}
+              now={state.now}
+              isAccountBusy={isAccountBusy}
+              isActionPending={isActionPending}
+              onAction={sendAction}
+              onFocusAccount={focusAccountCard}
+              onRequestShare={(accountId) => openSharingForAccounts([accountId])}
+              copyFeedbackKey={modals.copyFeedbackKey}
+            />
+          </section>
+        ) : null}
         {snapshot.accounts.length > 0 ? (
-          <section class="section">
+          <section
+            class={`section saved-accounts-section ${
+              snapshot.settings.advancedAppearanceEnabled ? "advanced-account-controls-section" : ""
+            }`}
+          >
             <div class="header" style={{ marginBottom: "12px" }}>
               <div>
                 <div class="header-title header-title-with-meta" style={{ fontSize: "14px" }}>
@@ -1008,6 +1058,8 @@ function App() {
                 ) : null}
               </div>
             </div>
+            {!snapshot.settings.advancedAppearanceEnabled ? (
+            <div class="saved-account-cards-content">
             {selectedCount > 0 ? (
               <BatchSelectionBar
                 copy={snapshot.copy}
@@ -1165,6 +1217,8 @@ function App() {
                         ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
                         : resolveAccountGroupEmptyLabel(snapshot.lang)}
               </div>
+            ) : null}
+            </div>
             ) : null}
           </section>
         ) : null}

@@ -123,6 +123,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.panelTitle,
     state.brandSub,
     state.settings.dashboardTheme,
+    state.settings.advancedAppearanceEnabled ? "1" : "0",
     state.settings.displayLanguage,
     state.settings.localUsageDefaultRange,
     (state.settings.localUsageEnabledRanges ?? [state.settings.localUsageDefaultRange ?? "24h"]).join(","),

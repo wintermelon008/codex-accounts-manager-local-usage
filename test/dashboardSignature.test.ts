@@ -21,6 +21,7 @@ function createState(overrides?: {
     logoUri: "logo",
     settings: {
       dashboardTheme: "dark",
+      advancedAppearanceEnabled: false,
       localUsageDefaultRange: "7d",
       localUsageEnabledRanges: ["7d"],
       proxyAddress: "",
@@ -372,6 +373,16 @@ describe("buildDashboardStateSignature", () => {
     };
 
     expect(buildDashboardStateSignature(disabled)).not.toBe(buildDashboardStateSignature(base));
+  });
+
+  it("changes when the advanced appearance is enabled", () => {
+    const base = createState();
+    const advanced = {
+      ...base,
+      settings: { ...base.settings, advancedAppearanceEnabled: true }
+    };
+
+    expect(buildDashboardStateSignature(advanced)).not.toBe(buildDashboardStateSignature(base));
   });
 
   it("changes when the selected proxy or proxy choices change", () => {

@@ -29,6 +29,7 @@ describe("handleDashboardSettingUpdate", () => {
     const settings = new ExtensionSettingsStore().getDashboardSettings();
     expect(settings.hideWeeklyQuotaThreshold).toBe(4.5);
     expect(settings.unhideWeeklyQuotaThreshold).toBe(87.5);
+    expect(settings.advancedAppearanceEnabled).toBe(false);
     expect(settings.autoStartQuotaCountdownEnabled).toBe(false);
     expect(isAutoStartQuotaCountdownEnabled()).toBe(false);
 
@@ -76,6 +77,19 @@ describe("handleDashboardSettingUpdate", () => {
       true,
       vscode.ConfigurationTarget.Global
     );
+  });
+
+  it("persists the advanced appearance toggle", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn((_key: string, fallback: unknown) => fallback),
+      update,
+      inspect: vi.fn(() => ({ key: "codexAccounts.advancedAppearanceEnabled", defaultValue: false }))
+    } as never);
+
+    await expect(handleDashboardSettingUpdate("advancedAppearanceEnabled", true)).resolves.toBe(true);
+
+    expect(update).toHaveBeenCalledWith("advancedAppearanceEnabled", true, vscode.ConfigurationTarget.Global);
   });
 
   it("rejects invalid or crossed weekly quota threshold updates", async () => {

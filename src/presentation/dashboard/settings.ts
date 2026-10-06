@@ -37,6 +37,7 @@ export async function handleDashboardSettingUpdate(
       }
       break;
     case "codexAppRestartEnabled":
+    case "advancedAppearanceEnabled":
     case "forceFastModeEnabled":
     case "autoStartQuotaCountdownEnabled":
     case "autoSwitchEnabled":

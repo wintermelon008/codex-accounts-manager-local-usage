@@ -13,6 +13,7 @@ import {
   getAccountHealthCategory,
   getDashboardHealthFilter,
   getDashboardSharingFilter,
+  getDashboardAccountCardDomId,
   getSensitiveDisplayValue,
   isAccountInvalid,
   isAccountReauthorizationRequired
@@ -176,7 +177,7 @@ export function SavedAccountCard(props: {
   };
 
   return (
-    <article class={`saved-card-container ${cardStateClass}`}>
+    <article id={getDashboardAccountCardDomId(account.id)} class={`saved-card-container ${cardStateClass}`}>
       <div class={`saved-card-inner ${flipped ? "flipped" : ""}`}>
         <section
           class={`saved-card saved-card-front ${cardStateClass}`}

@@ -48,6 +48,11 @@
           "default": "auto",
           "markdownDescription": "Theme used by the Codex Accounts dashboard. `auto` follows the current VS Code color theme."
         },
+        "codexAccounts.advancedAppearanceEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Use the experimental Command Center appearance for the Dashboard. When disabled, keep the standard Dashboard appearance; account data and core actions remain the same."
+        },
         "codexAccounts.displayLanguage": {
           "type": "string",
           "enum": [

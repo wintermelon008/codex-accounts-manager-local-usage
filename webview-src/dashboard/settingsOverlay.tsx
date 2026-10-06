@@ -88,6 +88,37 @@ function resolveSettingsCloseLabel(lang: DashboardState["lang"]): string {
   return "Close settings";
 }
 
+function resolveAdvancedAppearanceCopy(lang: DashboardState["lang"]): {
+  title: string;
+  sub: string;
+  enabled: string;
+  disabled: string;
+} {
+  if (lang === "zh") {
+    return {
+      title: "高级外观",
+      sub: "启用 Command Center 风格的 Dashboard 视觉布局。",
+      enabled: "已开启：仅改变外观与只读总览，账号数据和核心操作保持一致。",
+      disabled: "已关闭：使用标准 Dashboard 外观。"
+    };
+  }
+  if (lang === "zh-hant") {
+    return {
+      title: "進階外觀",
+      sub: "啟用 Command Center 風格的 Dashboard 視覺佈局。",
+      enabled: "已開啟：只改變外觀與唯讀總覽，帳號資料和核心操作保持一致。",
+      disabled: "已關閉：使用標準 Dashboard 外觀。"
+    };
+  }
+  return {
+    title: "Advanced appearance",
+    sub: "Use the Command Center visual layout for the Dashboard.",
+    enabled:
+      "Enabled: changes the appearance and read-only overview only; account data and core actions stay equivalent.",
+    disabled: "Disabled: use the standard Dashboard appearance."
+  };
+}
+
 function resolveQuotaCountdownAutoStartCopy(lang: DashboardState["lang"]): {
   title: string;
   sub: string;
@@ -162,6 +193,7 @@ export function SettingsOverlay(props: {
 
   const sectionLabels = resolveSettingsSectionLabels(props.lang);
   const openSettingsJsonLabel = resolveOpenSettingsJsonLabel(props.lang);
+  const advancedAppearanceCopy = resolveAdvancedAppearanceCopy(props.lang);
 
   return (
     <div class={`overlay ${props.open ? "open" : ""}`} onClick={props.onClose}>
@@ -218,6 +250,18 @@ export function SettingsOverlay(props: {
                       props.onSendSetting("dashboardTheme", value);
                     }}
                   />
+                  <SettingsToggleBlock
+                    title={advancedAppearanceCopy.title}
+                    sub={advancedAppearanceCopy.sub}
+                    enabled={props.settings.advancedAppearanceEnabled}
+                    onToggle={(enabled) => patchAndSend("advancedAppearanceEnabled", enabled)}
+                  >
+                    <div class="settings-note">
+                      {props.settings.advancedAppearanceEnabled
+                        ? advancedAppearanceCopy.enabled
+                        : advancedAppearanceCopy.disabled}
+                    </div>
+                  </SettingsToggleBlock>
                   <SettingsLanguageBlock
                     copy={props.copy}
                     settings={props.settings}

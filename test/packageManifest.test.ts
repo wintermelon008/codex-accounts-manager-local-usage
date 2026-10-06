@@ -3,6 +3,25 @@ import fs from "node:fs";
 import path from "node:path";
 
 describe("extension manifest configuration", () => {
+  it("declares the opt-in advanced appearance setting", () => {
+    const manifestPath = path.resolve(__dirname, "../package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      contributes?: {
+        configuration?: {
+          properties?: Record<string, { type?: string; default?: unknown; markdownDescription?: string }>;
+        };
+      };
+    };
+
+    const property = manifest.contributes?.configuration?.properties?.["codexAccounts.advancedAppearanceEnabled"];
+
+    expect(property).toMatchObject({
+      type: "boolean",
+      default: false
+    });
+    expect(property?.markdownDescription).toContain("core actions remain the same");
+  });
+
   it("declares the auto switch reload window setting", () => {
     const manifestPath = path.resolve(__dirname, "../package.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {

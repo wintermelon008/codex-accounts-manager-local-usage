@@ -35,6 +35,7 @@ export class ExtensionSettingsStore {
 
     return {
       dashboardTheme: normalizeDashboardTheme(config.get<string>("dashboardTheme", "auto")),
+      advancedAppearanceEnabled: config.get<boolean>("advancedAppearanceEnabled", false),
       ...resolveLocalUsageRanges(config),
       localUsageShowEquivalentPrice: config.get<boolean>("localUsageShowEquivalentPrice", true),
       codexAppRestartEnabled: config.get<boolean>("codexAppRestartEnabled", false),
