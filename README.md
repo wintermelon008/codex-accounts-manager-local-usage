@@ -50,7 +50,7 @@
 
 1. 导入并刷新至少两个有权限使用的账号。
 2. 运行 `Codex Accounts: Install Experimental Seamless Runtime`，然后 reload 一次。
-3. 在账号卡片中加入无感池；按需使用隐藏、`A/B/C` 分组和套餐筛选整理可见范围。
+3. 在账号卡片中加入无感池；按需使用隐藏、`A/B/C` 分组、健康状态、套餐和共享筛选整理可见范围。Dashboard 打开时，无感切号只从当前筛选结果中选择，分页和排序不影响候选；关闭 Dashboard 后恢复按无感池选择。
 4. 在 Dashboard 打开“无感切号（实验性）”和“低额度切号”（按需）；分档调度默认关闭，设置页不提供入口，如需开启或调整分档粒度，仅在 config 层设置 `codexAccounts.seamlessSwitchQuotaBandsEnabled` 与 `codexAccounts.seamlessSwitchQuotaBandSize`。
 5. “低额度切号”下选择“耗尽后切换”、`1%`、`3%`（默认）或 `5%`，再选择通用的“切换策略”；“等待时间”位于切换策略下方，用于配置额度分档和手动无感切号等待活动会话自然结束的时间。
 

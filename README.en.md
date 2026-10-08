@@ -50,7 +50,7 @@ This is separate from upstream Auto Switch. It updates authentication at a safe 
 
 1. Import and refresh at least two accounts you are authorized to use.
 2. Run `Codex Accounts: Install Experimental Seamless Runtime`, then reload once.
-3. Add accounts to the seamless pool from their cards; use hidden accounts, `A/B/C` groups, and plan filters to organize the visible scope.
+3. Add accounts to the seamless pool from their cards; use hidden accounts, `A/B/C` groups, health, plan, and sharing filters to organize the visible scope. While the Dashboard is open, seamless switching targets only the filtered result set; pagination and sorting do not change the candidate scope. Closing the Dashboard restores pool-based selection.
 4. Enable **Seamless account switching (experimental)** and, if needed, **Low-quota switching**. Quota-band scheduling is off by default and has no Settings entry; enable or tune it only through `codexAccounts.seamlessSwitchQuotaBandsEnabled` and `codexAccounts.seamlessSwitchQuotaBandSize` in config. A one-minute quota refresh is recommended.
 5. Choose **After exhaustion**, `1%`, `3%` (default), or `5%` under **Low-quota switching**, then choose the shared **Switch policy**. The **Wait time** control is directly below the switch policy and configures how long quota-band and manual seamless switches wait for active turns to finish.
 

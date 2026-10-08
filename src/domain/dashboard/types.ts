@@ -849,6 +849,7 @@ export type DashboardHostMessage =
 export type DashboardClientMessage =
   | { type: "dashboard:ready" }
   | { type: "dashboard:account-order"; accountIds: string[] }
+  | { type: "dashboard:account-scope"; accountIds: string[] }
   | {
       type: "dashboard:action";
       requestId: string;

@@ -1309,7 +1309,8 @@ export class AccountsRepository {
       effectiveTokens =
         (await ensureFreshAccountTokens(this, accountId, {
           fallbackTokens: tokens,
-          providerAccountId: account.accountId
+          providerAccountId: account.accountId,
+          allowValidAccessTokenFallback: true
         })) ?? effectiveTokens;
     }
 

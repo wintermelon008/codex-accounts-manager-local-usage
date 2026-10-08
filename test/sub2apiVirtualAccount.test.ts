@@ -72,6 +72,9 @@ describe("Sub2API virtual account boundaries", () => {
       })?.id
     ).toBe("target");
     expect(selectGatewayFallbackCandidates(accounts, config).map((account) => account.id)).not.toContain(provider.id);
+    expect(
+      selectGatewayFallbackCandidates(accounts, config, Date.now(), new Set([active.id])).map((account) => account.id)
+    ).toEqual([active.id]);
     expect(getAutomaticQuotaRefreshAccountIds(accounts, config as never)).toEqual(["active", "target"]);
   });
 

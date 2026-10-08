@@ -331,7 +331,6 @@ function AdvancedAccountFocus(props: {
   isAccountBusy: (accountId: string) => boolean;
   isActionPending: (action: DashboardActionName, accountId?: string) => boolean;
   onAction: SendAction;
-  onFocusAccount?: (accountId: string) => void;
   onRequestShare?: (accountId: string) => void;
   copyFeedbackKey?: string | null;
 }) {
@@ -352,7 +351,7 @@ function AdvancedAccountFocus(props: {
   const incomingSharedAccount = sharingFilter === "received";
   const outgoingSharedAccount = sharingFilter === "shared";
   const healthFilter = getDashboardHealthFilter(account);
-  const hasUsableRenewalWarning = healthFilter === "usable";
+  const hasUsableRenewalWarning = healthFilter === "usable_no_renewal";
   const hasUnknownHealth = healthFilter === "unknown";
   const hasRecoverableRenewalWarning =
     !account.dismissedHealth &&
@@ -399,8 +398,6 @@ function AdvancedAccountFocus(props: {
       : incomingSharedAccount
         ? "Return account"
         : "Share account";
-  const focusCardLabel =
-    props.lang === "zh" ? "定位账号卡片" : props.lang === "zh-hant" ? "定位帳號卡片" : "Locate account card";
   const copyEmailLabel =
     props.lang === "zh" ? "复制邮箱" : props.lang === "zh-hant" ? "複製郵箱" : "Copy email";
   const accountStatus = account.isCurrentWindowAccount
@@ -628,17 +625,6 @@ function AdvancedAccountFocus(props: {
           pending={props.isActionPending("remove", account.id)}
           onClick={() => props.onAction("remove", account.id)}
         />
-        {props.onFocusAccount ? (
-          <ActionButton
-            class="advanced-account-action advanced-account-action-wide"
-            icon={renderDetailsIcon()}
-            label={focusCardLabel}
-            disabled={busy}
-            onClick={() => props.onFocusAccount?.(account.id)}
-          >
-            {focusCardLabel}
-          </ActionButton>
-        ) : null}
       </div>
     </div>
   );
@@ -655,7 +641,6 @@ export function AdvancedAppearanceSummary(props: {
   isAccountBusy: (accountId: string) => boolean;
   isActionPending: (action: DashboardActionName, accountId?: string) => boolean;
   onAction: SendAction;
-  onFocusAccount?: (accountId: string) => void;
   onRequestShare?: (accountId: string) => void;
   copyFeedbackKey?: string | null;
 }) {
@@ -737,7 +722,6 @@ export function AdvancedAppearanceSummary(props: {
                 isAccountBusy={props.isAccountBusy}
                 isActionPending={props.isActionPending}
                 onAction={props.onAction}
-                onFocusAccount={props.onFocusAccount}
                 onRequestShare={props.onRequestShare}
                 copyFeedbackKey={props.copyFeedbackKey}
               />

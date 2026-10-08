@@ -13,6 +13,7 @@
 - Saved Accounts 右上角的“隐藏周额度 ≤3%”按钮会检查全部账号，不受当前页面、套餐、分组或隐藏筛选影响；只处理周额度不高于 `3%` 的未隐藏账号，无周额度窗口或已隐藏账号不会被处理。
 - 同一区域的“显示周额度 ≥90%”按钮会检查全部隐藏账号，不受当前页面、套餐或分组显示状态影响；只有周额度不低于 `90%` 且存在周窗口的账号会被恢复。恢复在同一次写入中自动加入无感切号池并移出 `A/B/C` 分组，普通批量解除隐藏继续保留原分组。
 - 同一批量选择可将账号放入 `A`、`B`、`C` 分组或移出分组。面板右上角的 `A/B/C` 按钮同时控制该分组卡片是否显示、该分组是否进入无感候选；未分组且未隐藏账号固定显示并始终进入无感候选。分组筛选不改池成员、不影响手动切号或官方自动切号；已激活的关闭分组账号仅在原有切换条件满足时才会转出，且目标只能来自当前显示范围。
+- Dashboard 打开时，无感切号目标进一步限制为当前筛选后的全部结果集，包括健康状态、套餐、共享、隐藏和分组筛选；分页与排序只改变展示顺序，不改变候选范围。隐藏账号即使通过眼睛按钮显示，也不会成为无感目标。Dashboard 关闭后恢复仅按无感池选择候选。
 - 已保存账号支持每页 `10`、`20`、`50` 张卡片分页，默认 `10`；隐藏、解除隐藏及分组显示变化会立即重新分页，页码越界时自动回到有效页。
 - Dashboard 的“刷新当前页配额”只刷新当前显示页；单卡、明确选中的批量刷新和命令面板的显式全量刷新不受此页范围限制。
 - “自动启动额度倒计时”关闭时，定时配额刷新仍只处理未隐藏且分组已启用的第 `1` 页（最多 `50` 个账号），保持原有范围；开启后 Manager 启动时只做一次本地全量额度状态扫描，之后通过每账号 `nextCheckAt` 优先队列和额度刷新事件驱动，不再每分钟扫描全部账号。需要持续参与分钟级调度时，请同时保持“配额自动刷新”的时间间隔开启。
@@ -174,7 +175,7 @@ Mac、Windows 和 Remote-SSH 窗口可能同时读写同一个远端扩展存储
 - shim 在收到成功的 `initialize` 响应或客户端 `initialized` 通知后即可进入 ready；状态接口同时报告两个握手信号，便于区分官方扩展版本差异。热切换已启用但 bridge 未 ready 时，Manager 必须失败关闭，不能回退为磁盘切号。
 - runtime protocol v16 的状态接口必须同时报告 `httpTransportForced=true`、`forceFastMode`、`attributionActive` 和 `attributionFailureReason`；旧 shim 即使 socket 可连接也会要求一次 reload，避免认证状态已变化但旧 WebSocket 继续计费。`operationId` 仅是短期不透明标识，shim 最多保留 64 条、十分钟内的无凭据终态；诊断身份接口只返回 app-server 当前账号的非凭据字段与 Manager 本地账号 ID，不返回 access token。
 - access token 只通过进程内存和本地 IPC 传递，不写入 shim 配置，也不输出到日志。runtime 配置文件只保存官方 Codex CLI 的绝对路径、受保护的归因 journal 目录和不含凭据的 Fast 开关状态；这些字段均不含账号身份或凭据。
-- token 临近过期时由 manager 使用原有 OAuth 刷新逻辑更新；app-server 的 refresh 回调必须匹配原 ChatGPT account ID，否则拒绝返回凭据。
+- token 临近过期时由 Manager 优先使用原有 OAuth 刷新逻辑更新；若 refresh token 已明确不可用但 access token 仍未实际过期，切换事务可以继续使用现有 access token，access token 实际过期时仍安全失败。app-server 的 refresh 回调必须匹配原 ChatGPT account ID，否则拒绝返回凭据。
 - 同一 workspace ID 可能对应多个已导入用户。manager 在切换前校验 access token 的 user ID 与本地账号记录一致，再把 access token 的 runtime email 交给 app-server 身份校验；稳定账号记录邮箱与 runtime email 允许是同一 user ID 的不同别名。refresh 与失败回滚以 manager 本地账号 ID 和 workspace ID 为主；缺少本地身份且 workspace ID 不唯一时安全失败，不按数组顺序猜测账号。
 - 该能力依赖 Codex app-server 的 experimental API。当前实现按本机 Codex `0.144.5` schema 和官方 VS Code 扩展 `26.707.91948` 验证；官方扩展升级后必须重新跑测试。协议在初始化前即不可用时可走原 reload 路径；事务已经开始后发生的不兼容会安全失败并保持/回滚旧账号。
 - 持久 Goal 的暂停/恢复依赖同一 schema 中的 `thread/goal/get`、`thread/goal/set` 与 `active`/`paused` 状态；任何一步无法确认都会终止切换并尝试恢复原 Goal，而不是清除 Goal。

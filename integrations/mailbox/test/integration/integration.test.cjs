@@ -303,12 +303,18 @@ test("Manager account directory changes refresh the open Mailbox panel", async (
     vscode.panels[0].webview.messages.at(-1).state.managedAccounts[0].requiresReauthorization,
     false
   );
+  assert.equal(
+    vscode.panels[0].webview.messages.at(-1).state.managedAccounts[0].accountState,
+    "usable"
+  );
   managedAccounts = [
     { accountId: "account-1", email: "current@example.com", requiresReauthorization: true }
   ];
   notifyManagerChange();
   await waitFor(() => vscode.panels[0].webview.messages.some(
-    (message) => message.type === "state" && message.state.managedAccounts[0]?.requiresReauthorization === true
+    (message) => message.type === "state" &&
+      message.state.managedAccounts[0]?.accountState === "auth_invalid" &&
+      message.state.managedAccounts[0]?.reauthorizationRequired === true
   ));
   integration.dispose();
 });
@@ -542,17 +548,21 @@ test("completed GPT-only registration can hand off the same mailbox to Codex imp
   };
   const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
   await integration.initialize();
-  await integration.pool.importProvider({ provider, input: "handoff@example.com|credential" });
+  const [{ id: mailboxId }] = (await integration.pool.importProvider({
+    provider,
+    input: "handoff@example.com|credential"
+  })).imported;
   const sessionId = await integration.createRegistrationSession({ email: "handoff@example.com", importCodex: false });
   await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.state === "awaiting_manual_registration");
 
   await integration.completeManualRegistrationSession(sessionId);
-  await waitFor(() => integration.pool.listMetadata()[0]?.gptRegistered === true);
+  await waitFor(() => integration.pool.listMetadata().find((mailbox) => mailbox.id === mailboxId)?.gptRegistered === true);
   await integration.runRegistrationCodexImport(sessionId);
   await waitFor(() => importOptions && integration.codexImports.size === 0);
 
   assert.equal(importOptions.expectedEmail, "handoff@example.com");
   assert.match(importOptions.operationId, /^mailbox-codex-import:/u);
+  await integration.pool.deleteAccount(mailboxId);
   integration.dispose();
 });
 
@@ -591,7 +601,10 @@ test("registration assistant can terminate an in-flight Codex handoff without ca
   const integration = new MailboxIntegration(vscode, context, api, { providers: [provider] });
   await integration.initialize();
   await integration.openRegistrationPanel();
-  await integration.pool.importProvider({ provider, input: "cancel-handoff@example.com|credential" });
+  const [{ id: mailboxId }] = (await integration.pool.importProvider({
+    provider,
+    input: "cancel-handoff@example.com|credential"
+  })).imported;
   const sessionId = await integration.createRegistrationSession({ email: "cancel-handoff@example.com", importCodex: false });
   await waitFor(() => integration.registrationManager.getSessionState(sessionId)?.state === "awaiting_manual_registration");
   await integration.completeManualRegistrationSession(sessionId);
@@ -619,6 +632,7 @@ test("registration assistant can terminate an in-flight Codex handoff without ca
     ),
     false
   );
+  await integration.pool.deleteAccount(mailboxId);
   integration.dispose();
 });
 
@@ -1121,7 +1135,11 @@ test("an OpenAI-deactivated mailbox can remove its reauthorization-required Code
   assert.deepEqual(state.managedAccounts, [{
     accountId: "codex-account-1",
     email: "deactivated@example.com",
-    requiresReauthorization: true
+    requiresReauthorization: true,
+    accountState: "auth_invalid",
+    quotaLimited: false,
+    reauthorizationRecommended: true,
+    reauthorizationRequired: true
   }]);
   assert.equal(state.managedAccountRemovalAvailable, true);
 

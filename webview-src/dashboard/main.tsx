@@ -19,7 +19,6 @@ import {
   formatTemplate,
   DASHBOARD_SHARING_FILTERS,
   DASHBOARD_HEALTH_FILTERS,
-  getDashboardAccountCardDomId,
   getAccountHealthCategory,
   getDashboardAccountPage,
   getDashboardHealthFilterCounts,
@@ -89,6 +88,7 @@ function getAccountGroupVisibilityKey(group: CodexAccountGroup): SeamlessSwitchG
 function App() {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
   const lastDashboardAccountOrderRef = useRef("");
+  const lastDashboardAccountScopeRef = useRef("");
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
   const [restartServicesOpen, setRestartServicesOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
@@ -279,6 +279,23 @@ function App() {
       return;
     }
 
+    const accountIds = displayedAccounts.map((account) => account.id);
+    const scopeSignature = accountIds.join("\u0000");
+    if (lastDashboardAccountScopeRef.current === scopeSignature) {
+      return;
+    }
+    lastDashboardAccountScopeRef.current = scopeSignature;
+    postMessageToHost({
+      type: "dashboard:account-scope",
+      accountIds
+    });
+  }, [displayedAccounts, snapshot]);
+
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+
     const accountIds = sortDashboardAccountsForDisplay(snapshot.accounts, accountSort).map((account) => account.id);
     const orderSignature = accountIds.join("\u0000");
     if (lastDashboardAccountOrderRef.current === orderSignature) {
@@ -339,13 +356,6 @@ function App() {
     }
     setAccountsPage(Math.min(displayedAccountPage.pageCount, Math.max(1, requestedPage)));
     setAccountPageJumpInput("");
-  };
-
-  const focusAccountCard = (accountId: string): void => {
-    document.getElementById(getDashboardAccountCardDomId(accountId))?.scrollIntoView({
-      behavior: "smooth",
-      block: "center"
-    });
   };
 
   const handleAutoRefreshToggle = (enabled: boolean): void => {
@@ -709,7 +719,6 @@ function App() {
               isAccountBusy={isAccountBusy}
               isActionPending={isActionPending}
               onAction={sendAction}
-              onFocusAccount={focusAccountCard}
               onRequestShare={(accountId) => openSharingForAccounts([accountId])}
               copyFeedbackKey={modals.copyFeedbackKey}
             />
@@ -1394,12 +1403,12 @@ function resolveHealthFilterToggleLabel(
 ): string {
   const selectedCount = selectedFilters.length + selectedSharingCount + selectedPlanCount;
   if (lang === "zh") {
-    return selectedCount > 0 ? `清除状态筛选（${selectedCount}）` : `按颜色筛选账号（${totalCount}）`;
+    return selectedCount > 0 ? `清除状态筛选（${selectedCount}）` : `按状态筛选账号（${totalCount}）`;
   }
   if (lang === "zh-hant") {
-    return selectedCount > 0 ? `清除狀態篩選（${selectedCount}）` : `按顏色篩選帳號（${totalCount}）`;
+    return selectedCount > 0 ? `清除狀態篩選（${selectedCount}）` : `按狀態篩選帳號（${totalCount}）`;
   }
-  return selectedCount > 0 ? `Clear status filters (${selectedCount})` : `Filter accounts by color (${totalCount})`;
+  return selectedCount > 0 ? `Clear status filters (${selectedCount})` : `Filter accounts by status (${totalCount})`;
 }
 
 function resolveHealthFilterPanelTitle(lang: string): string {
@@ -1454,12 +1463,12 @@ function resolveAccountMoreLabel(lang: string): string {
 
 function resolveHealthFilterOptionsLabel(lang: string): string {
   if (lang === "zh") {
-    return "账号状态颜色";
+    return "账号状态";
   }
   if (lang === "zh-hant") {
-    return "帳號狀態顏色";
+    return "帳號狀態";
   }
-  return "Account status colors";
+  return "Account status";
 }
 
 function resolveSharingFilterPanelTitle(lang: string): string {
@@ -1540,12 +1549,12 @@ function resolveHealthFilterCloseLabel(lang: string): string {
 
 function resolveHealthFilterClearLabel(lang: string): string {
   if (lang === "zh") {
-    return "清除颜色筛选";
+    return "清除状态筛选";
   }
   if (lang === "zh-hant") {
-    return "清除顏色篩選";
+    return "清除狀態篩選";
   }
-  return "Clear color filters";
+  return "Clear status filters";
 }
 
 function resolveHealthFilterOptionCopy(
@@ -1559,20 +1568,20 @@ function resolveHealthFilterOptionCopy(
     switch (filter) {
       case "unknown":
         return {
-          label: "黄色 · 会话状态未知",
+          label: "黄色 · 状态未知",
           description: "续期验证尚未建立，当前会话是否可用还未确认。"
         };
-      case "usable":
+      case "usable_no_renewal":
         return {
           label: "青色 · 仍可使用",
           description: "自动续期不可用，但当前访问令牌仍可能正常工作。"
         };
-      case "warning":
+      case "usable":
         return {
-          label: "橙色 · 需要留意",
-          description: "令牌即将过期、续期暂时失败或配额状态异常。"
+          label: "绿色 · 正常可用",
+          description: "当前访问令牌可用，额度受限也不会改变这个认证状态。"
         };
-      case "error":
+      case "auth_invalid":
         return {
           label: "红色 · 账号失效",
           description: "需要重新授权、访问令牌无效或工作区已停用。"
@@ -1583,20 +1592,20 @@ function resolveHealthFilterOptionCopy(
     switch (filter) {
       case "unknown":
         return {
-          label: "黃色 · 會話狀態未知",
+          label: "黃色 · 狀態未知",
           description: "尚未建立續期驗證，目前會話是否可用仍未確認。"
         };
-      case "usable":
+      case "usable_no_renewal":
         return {
           label: "青色 · 仍可使用",
           description: "自動續期不可用，但目前存取權杖仍可能正常工作。"
         };
-      case "warning":
+      case "usable":
         return {
-          label: "橙色 · 需要留意",
-          description: "權杖即將過期、續期暫時失敗或配額狀態異常。"
+          label: "綠色 · 正常可用",
+          description: "目前存取權杖可用，額度受限也不會改變這個認證狀態。"
         };
-      case "error":
+      case "auth_invalid":
         return {
           label: "紅色 · 帳號失效",
           description: "需要重新授權、存取權杖無效或工作區已停用。"
@@ -1607,20 +1616,20 @@ function resolveHealthFilterOptionCopy(
   switch (filter) {
     case "unknown":
       return {
-        label: "Yellow · Session status unknown",
+        label: "Yellow · Status unknown",
         description: "Renewal evidence is not established, so session usability is unconfirmed."
       };
-    case "usable":
+    case "usable_no_renewal":
       return {
         label: "Cyan · Still usable",
         description: "Automatic renewal is unavailable, but the current access token may still work."
       };
-    case "warning":
+    case "usable":
       return {
-        label: "Orange · Needs attention",
-        description: "The token may expire soon, renewal failed temporarily, or quota is abnormal."
+        label: "Green · Usable",
+        description: "The current access token works; quota limits do not change this authentication state."
       };
-    case "error":
+    case "auth_invalid":
       return {
         label: "Red · Account invalid",
         description: "Reauthorization is required, the access token is invalid, or the workspace is disabled."

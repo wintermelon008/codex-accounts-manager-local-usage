@@ -14,7 +14,8 @@ import type {
 } from "../../presentation/workbench/tokenAutomationState";
 import type { AccountHealthKind } from "../../domain/accountHealth";
 
-export type { AccountHealthKind } from "../../domain/accountHealth";
+export { getManagedAccountState } from "../../domain/accountHealth";
+export type { AccountHealthKind, ManagedAccountState } from "../../domain/accountHealth";
 
 export type AccountHealthInfo = {
   kind: AccountHealthKind;

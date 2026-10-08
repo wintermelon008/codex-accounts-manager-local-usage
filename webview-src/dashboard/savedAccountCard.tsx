@@ -107,9 +107,10 @@ export function SavedAccountCard(props: {
   const sharingFilter = getDashboardSharingFilter(account);
   const incomingSharedAccount = sharingFilter === "received";
   const outgoingSharedAccount = sharingFilter === "shared";
-  const hasErrorHealth = healthFilter === "error";
-  const hasUsableRenewalWarning = healthFilter === "usable";
-  const hasWarningHealth = healthFilter === "warning";
+  const hasErrorHealth = healthFilter === "auth_invalid";
+  const hasUsableRenewalWarning = healthFilter === "usable_no_renewal";
+  const hasWarningHealth =
+    !account.dismissedHealth && ["expiring", "refresh_failed", "refresh_token_invalid", "quota"].includes(account.healthKind);
   const hasUnknownHealth = healthFilter === "unknown";
   const hasRecoverableRenewalWarning =
     !account.dismissedHealth &&
@@ -243,7 +244,7 @@ export function SavedAccountCard(props: {
                           : "Shared"}
                   </span>
                 ) : null}
-                {!virtual ? renderHealthPill(account) : null}
+                {!virtual ? renderHealthPill(account, props.lang) : null}
               </div>
             </div>
           </div>

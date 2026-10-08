@@ -132,15 +132,15 @@ html[data-theme="auto"] body.vscode-light .panel {
   background: var(--health-unknown-color);
   color: var(--health-unknown-color);
 }
-.account-health-filter-option.health-filter-usable .account-health-filter-dot {
+.account-health-filter-option.health-filter-usable_no_renewal .account-health-filter-dot {
   background: var(--health-usable-color);
   color: var(--health-usable-color);
 }
-.account-health-filter-option.health-filter-warning .account-health-filter-dot {
-  background: var(--accent-orange);
-  color: var(--accent-orange);
+.account-health-filter-option.health-filter-usable .account-health-filter-dot {
+  background: var(--accent-green);
+  color: var(--accent-green);
 }
-.account-health-filter-option.health-filter-error .account-health-filter-dot {
+.account-health-filter-option.health-filter-auth_invalid .account-health-filter-dot {
   background: var(--accent-red);
   color: var(--accent-red);
 }
@@ -148,15 +148,15 @@ html[data-theme="auto"] body.vscode-light .panel {
   border-color: color-mix(in srgb, var(--health-unknown-color) 48%, transparent);
   background: color-mix(in srgb, var(--health-unknown-color) 10%, transparent);
 }
-.account-health-filter-option.is-selected.health-filter-usable {
+.account-health-filter-option.is-selected.health-filter-usable_no_renewal {
   border-color: color-mix(in srgb, var(--health-usable-color) 48%, transparent);
   background: color-mix(in srgb, var(--health-usable-color) 10%, transparent);
 }
-.account-health-filter-option.is-selected.health-filter-warning {
-  border-color: color-mix(in srgb, var(--accent-orange) 48%, transparent);
-  background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
+.account-health-filter-option.is-selected.health-filter-usable {
+  border-color: color-mix(in srgb, var(--accent-green) 48%, transparent);
+  background: color-mix(in srgb, var(--accent-green) 10%, transparent);
 }
-.account-health-filter-option.is-selected.health-filter-error {
+.account-health-filter-option.is-selected.health-filter-auth_invalid {
   border-color: color-mix(in srgb, var(--accent-red) 48%, transparent);
   background: color-mix(in srgb, var(--accent-red) 10%, transparent);
 }
@@ -5676,92 +5676,11 @@ html[data-theme="auto"] body.vscode-light {
 .panel.advanced-appearance > .hero-section {
   position: relative;
   z-index: 20;
+  padding: 14px;
 }
 .panel.advanced-appearance > .advanced-appearance-section {
   position: relative;
   z-index: 1;
-}
-.panel.advanced-appearance .hero {
-  position: relative;
-  z-index: 20;
-  min-height: 82px;
-  margin: 0;
-  padding: 18px 20px;
-  overflow: visible;
-  border: 1px solid var(--advanced-line);
-  border-radius: 24px;
-  background:
-    linear-gradient(115deg, color-mix(in srgb, var(--advanced-cyan) 9%, transparent), transparent 43%),
-    linear-gradient(135deg, var(--advanced-panel-strong), var(--advanced-panel));
-  box-shadow:
-    0 16px 38px color-mix(in srgb, var(--advanced-violet) 12%, transparent),
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
-}
-.panel.advanced-appearance .hero::before {
-  position: absolute;
-  top: -88px;
-  right: 18%;
-  width: 230px;
-  height: 230px;
-  content: "";
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--advanced-cyan) 22%, transparent), transparent 68%);
-  filter: blur(8px);
-  pointer-events: none;
-}
-.panel.advanced-appearance .hero::after {
-  position: absolute;
-  right: 24px;
-  bottom: 0;
-  width: 40%;
-  height: 1px;
-  content: "";
-  background: linear-gradient(90deg, transparent, var(--advanced-cyan), transparent);
-  opacity: 0.8;
-}
-.panel.advanced-appearance .brand,
-.panel.advanced-appearance .hero-settings {
-  position: relative;
-  z-index: 1;
-}
-.panel.advanced-appearance .brand {
-  align-items: center;
-}
-.panel.advanced-appearance .logo {
-  width: 42px;
-  height: 42px;
-  border-radius: 13px;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--advanced-cyan) 36%, transparent), 0 0 26px color-mix(in srgb, var(--advanced-cyan) 20%, transparent);
-}
-.panel.advanced-appearance .brand h1 {
-  letter-spacing: 0.045em;
-  text-shadow: 0 0 20px color-mix(in srgb, var(--advanced-cyan) 18%, transparent);
-}
-.panel.advanced-appearance .brand p {
-  color: color-mix(in srgb, var(--text-secondary) 86%, var(--advanced-cyan));
-}
-.panel.advanced-appearance .hero-settings > .settings-btn,
-.panel.advanced-appearance .hero-more-actions > .settings-btn {
-  border-color: color-mix(in srgb, var(--advanced-cyan) 22%, var(--border-default));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--advanced-panel-strong) 82%, transparent);
-  box-shadow: 0 6px 18px color-mix(in srgb, #000 20%, transparent);
-}
-.panel.advanced-appearance .hero-settings .add-account-btn {
-  border-color: transparent;
-  background: linear-gradient(135deg, var(--advanced-cyan), var(--accent-blue));
-  color: #071018;
-  box-shadow: 0 0 20px color-mix(in srgb, var(--advanced-cyan) 25%, transparent);
-}
-.panel.advanced-appearance .hero-settings .add-account-btn:hover:not(:disabled),
-.panel.advanced-appearance .hero-settings .add-account-btn:focus-visible {
-  border-color: transparent;
-  background: linear-gradient(135deg, #a5f3fc, #60a5fa);
-  color: #071018;
-}
-.panel.advanced-appearance .hero-action-divider,
-.panel.advanced-appearance .hero-integration-actions {
-  border-color: color-mix(in srgb, var(--advanced-violet) 30%, var(--border-muted));
 }
 .panel.advanced-appearance .advanced-appearance-section {
   padding-top: 0;
@@ -5955,9 +5874,6 @@ html[data-theme="auto"] body.vscode-light {
   }
 }
 @media (max-width: 760px) {
-  .panel.advanced-appearance .hero {
-    padding: 16px;
-  }
   .advanced-command-center {
     padding: 17px;
   }
@@ -5968,9 +5884,6 @@ html[data-theme="auto"] body.vscode-light {
 @media (max-width: 520px) {
   .panel.advanced-appearance > .section {
     padding: 12px 10px;
-  }
-  .panel.advanced-appearance .hero-settings {
-    flex-wrap: wrap;
   }
   .advanced-command-center-head {
     align-items: flex-start;
@@ -6427,17 +6340,27 @@ html[data-theme="auto"] body.vscode-light {
   white-space: nowrap;
 }
 .advanced-account-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
   padding-top: 2px;
 }
 .advanced-account-action {
-  min-width: 30px;
-  min-height: 30px;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 8px;
   border-color: color-mix(in srgb, var(--advanced-violet) 30%, var(--border-default));
-  border-radius: 9px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--advanced-panel-strong) 84%, transparent);
+}
+.advanced-account-action.action-btn.icon-only {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 8px;
 }
 .advanced-account-action:hover:not(:disabled),
 .advanced-account-action:focus-visible:not(:disabled) {
@@ -6453,19 +6376,28 @@ html[data-theme="auto"] body.vscode-light {
   color: #fda4af;
 }
 .advanced-account-action-wide {
-  flex: 1 1 100%;
+  grid-column: 1 / -1;
   justify-content: center;
 }
 .advanced-account-profile-select {
+  grid-column: 1 / -1;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
-  min-height: 30px;
+  height: 34px;
+  min-height: 34px;
   padding: 0 8px;
+  box-sizing: border-box;
   border: 1px solid color-mix(in srgb, var(--advanced-violet) 30%, var(--border-default));
-  border-radius: 9px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--advanced-panel-strong) 84%, transparent);
   color: var(--text-secondary);
   font-size: 10px;
+}
+@media (max-width: 520px) {
+  .advanced-account-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 @keyframes advanced-account-focus-in {
   from {

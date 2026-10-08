@@ -473,12 +473,26 @@ describe("Dashboard account selection", () => {
     ).toEqual(["received", "return-pending"]);
   });
 
-  it("filters account cards by their yellow, cyan, orange, and red health colors", () => {
+  it("filters account cards by the four stable account states", () => {
     const dashboardState = createState();
     dashboardState.accounts = [
       { id: "unknown", healthKind: "unverified", dismissedHealth: false, isHidden: false },
-      { id: "usable", healthKind: "refresh_unavailable", dismissedHealth: false, isHidden: false },
-      { id: "warning", healthKind: "quota", dismissedHealth: false, isHidden: false },
+      {
+        id: "usable-no-renewal",
+        healthKind: "refresh_unavailable",
+        availability: "usable",
+        renewal: "unavailable",
+        dismissedHealth: false,
+        isHidden: false
+      },
+      {
+        id: "quota-usable",
+        healthKind: "quota",
+        availability: "quota_limited",
+        renewal: "succeeded",
+        dismissedHealth: false,
+        isHidden: false
+      },
       { id: "error", healthKind: "reauthorize", dismissedHealth: false, isHidden: false },
       { id: "healthy", healthKind: "healthy", dismissedHealth: false, isHidden: false },
       { id: "dismissed", healthKind: "disabled", dismissedHealth: true, isHidden: false }
@@ -486,17 +500,17 @@ describe("Dashboard account selection", () => {
 
     expect(dashboardState.accounts.map(getDashboardHealthFilter)).toEqual([
       "unknown",
+      "usable_no_renewal",
       "usable",
-      "warning",
-      "error",
-      undefined,
+      "auth_invalid",
+      "usable",
       undefined
     ]);
     expect(getDashboardHealthFilterCounts(dashboardState.accounts)).toEqual({
       unknown: 1,
-      usable: 1,
-      warning: 1,
-      error: 1
+      usable_no_renewal: 1,
+      usable: 2,
+      auth_invalid: 1
     });
     expect(
       getDashboardVisibleAccounts(
@@ -504,7 +518,7 @@ describe("Dashboard account selection", () => {
         dashboardState.settings,
         false,
         [],
-        ["unknown", "error"]
+        ["unknown", "auth_invalid"]
       ).map((account) => account.id)
     ).toEqual(["unknown", "error"]);
   });

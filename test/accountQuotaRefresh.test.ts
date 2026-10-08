@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import * as vscode from "vscode";
 import type { CodexAccountRecord, CodexTokens } from "../src/core/types";
 import type { AccountsRepository } from "../src/storage";
+import { clearAccountStates, recordRenewal } from "../src/application/accounts/accountState";
+import { resolveAccountHealth } from "../src/application/accounts/health";
 
 const {
   refreshQuotaMock,
@@ -51,6 +53,7 @@ type QuotaRefreshRepo = Pick<
 describe("refreshSingleQuota token automation state", () => {
   const account: CodexAccountRecord = {
     id: "account-1",
+    accountId: "workspace",
     email: "dev@example.com",
     isActive: true,
     createdAt: 1,
@@ -60,10 +63,13 @@ describe("refreshSingleQuota token automation state", () => {
   const tokens: CodexTokens = {
     idToken: "id-token",
     accessToken: "access-token",
-    refreshToken: "refresh-token"
+    refreshToken: "refresh-token",
+    accountId: "workspace"
   };
 
   beforeEach(() => {
+    clearAccountStates();
+    recordRenewal(account.id, tokens, "unknown");
     refreshQuotaMock.mockReset();
     fetchResetCreditsMock.mockReset();
     clearTokenAutomationErrorMock.mockReset();
@@ -73,6 +79,7 @@ describe("refreshSingleQuota token automation state", () => {
   });
 
   afterEach(() => {
+    clearAccountStates();
     vi.restoreAllMocks();
     setCurrentWindowRuntimeAccountId(undefined);
   });
@@ -103,6 +110,7 @@ describe("refreshSingleQuota token automation state", () => {
   });
 
   it("keeps the refresh failure visible after a successful access-token probe", async () => {
+    recordRenewal(account.id, tokens, "unavailable");
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
       getTokens: vi.fn(async () => tokens),
@@ -113,6 +121,7 @@ describe("refreshSingleQuota token automation state", () => {
 
     refreshQuotaMock.mockResolvedValue({
       quota: { hourlyPercentage: 90, weeklyPercentage: 90, codeReviewPercentage: 100 },
+      accessTokenAccepted: true,
       updatedTokens: tokens,
       tokenRefreshFailure: {
         kind: "reauthorize",
@@ -133,6 +142,13 @@ describe("refreshSingleQuota token automation state", () => {
       "reauthorize"
     );
     expect(clearTokenAutomationErrorMock).not.toHaveBeenCalled();
+    expect(
+      resolveAccountHealth(account, tokens, { enabled: false, intervalMs: 0, skewSeconds: 300, accounts: {} })
+    ).toMatchObject({
+      kind: "refresh_unavailable",
+      availability: "usable",
+      renewal: "unavailable"
+    });
   });
 
   it("marks thrown manual refresh failures so the account asks for reauthorization", async () => {

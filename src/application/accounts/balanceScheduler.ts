@@ -41,6 +41,8 @@ export function selectBalanceCandidate(params: {
   requireFreshFreeCandidates?: boolean;
   /** The account order currently shown by the Dashboard, when it is open. */
   accountOrder?: readonly string[];
+  /** Account IDs currently exposed by the Dashboard's active filters. */
+  visibleAccountIds?: ReadonlySet<string>;
   now?: number;
 }): CodexAccountRecord | undefined {
   const now = params.now ?? Date.now();
@@ -63,6 +65,7 @@ export function selectBalanceCandidate(params: {
       isAutomaticAccount(account) &&
       account.quotaMode !== "none" &&
       account.balancePoolEnabled === true &&
+      (!params.visibleAccountIds || params.visibleAccountIds.has(account.id)) &&
       getBalanceQuotaCapability(account, now) !== "unknown" &&
       (!params.requireFreshFreeCandidates ||
         !isFreePlanType(account.planType) ||

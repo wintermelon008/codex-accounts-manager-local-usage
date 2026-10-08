@@ -2,39 +2,39 @@ import type {
   DashboardAccountViewModel,
   DashboardCopy,
   DashboardMetricViewModel,
-  DashboardSettings,
-  DashboardState
+  DashboardState,
+  DashboardSettings
 } from "../../src/domain/dashboard/types";
-import { clampPercent, colorForPercentage, formatPercent, formatRequestsLabel, formatResetLabel } from "./helpers";
+import {
+  clampPercent,
+  colorForPercentage,
+  formatPercent,
+  formatRequestsLabel,
+  formatResetLabel,
+  getDashboardHealthFilter
+} from "./helpers";
 
-export function renderHealthPill(account: DashboardAccountViewModel) {
-  if (account.dismissedHealth) {
+export function renderHealthPill(account: DashboardAccountViewModel, lang: DashboardState["lang"] = "en") {
+  const state = getDashboardHealthFilter(account);
+  if (!state) {
     return null;
   }
 
-  switch (account.healthKind) {
-    case "refreshing":
-      return <span class="pill">{account.healthLabel}</span>;
-    case "unverified":
-    case "refresh_unavailable_unverified":
-      return <span class="pill health-unknown">{account.healthLabel}</span>;
-    case "refresh_unavailable":
-      return <span class="pill health-usable">{account.healthLabel}</span>;
-    case "healthy":
-      return null;
-    case "expiring":
-      return <span class="pill warning">{account.healthLabel}</span>;
-    case "access_token_invalid":
-    case "reauthorize":
-    case "disabled":
-      return <span class="pill error">{account.healthLabel}</span>;
-    case "refresh_failed":
-    case "refresh_token_invalid":
-    case "quota":
-      return <span class="pill warning">{account.healthLabel}</span>;
-    default:
-      return null;
-  }
+  const labels =
+    lang === "zh"
+      ? { usable: "正常", usable_no_renewal: "不可续期", unknown: "未知", auth_invalid: "失效" }
+      : lang === "zh-hant"
+        ? { usable: "正常", usable_no_renewal: "不可續期", unknown: "未知", auth_invalid: "失效" }
+        : { usable: "Usable", usable_no_renewal: "No renewal", unknown: "Unknown", auth_invalid: "Invalid" };
+  const className =
+    state === "usable"
+      ? "pill ok"
+      : state === "usable_no_renewal"
+        ? "pill health-usable"
+        : state === "unknown"
+          ? "pill health-unknown"
+          : "pill error";
+  return <span class={className}>{labels[state]}</span>;
 }
 
 export function MetricGauge(props: {
@@ -57,7 +57,9 @@ export function MetricGauge(props: {
         <div class="metric-gauge-value">{formatPercent(props.metric.percentage)}</div>
       </div>
       <div class="metric-gauge-label">{props.metric.label}</div>
-      <div class="metric-gauge-foot">{formatResetLabel(props.metric.resetAt, props.copy.resetUnknown, props.now, props.lang)}</div>
+      <div class="metric-gauge-foot">
+        {formatResetLabel(props.metric.resetAt, props.copy.resetUnknown, props.now, props.lang)}
+      </div>
     </div>
   );
 }

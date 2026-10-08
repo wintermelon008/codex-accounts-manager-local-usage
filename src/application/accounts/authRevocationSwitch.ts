@@ -19,7 +19,8 @@ export function selectAuthRevocationCandidates(
   activeAccountId: string,
   configuration: AuthRevocationConfiguration,
   accountOrder: readonly string[] | undefined = getDashboardAccountOrder(),
-  excludedAccountIds: ReadonlySet<string> = new Set()
+  excludedAccountIds: ReadonlySet<string> = new Set(),
+  visibleAccountIds?: ReadonlySet<string>
 ): CodexAccountRecord[] {
   const fallbackOrder = new Map(accounts.map((account, index) => [account.id, index]));
   const visibleOrder = new Map((accountOrder ?? []).map((accountId, index) => [accountId, index]));
@@ -34,6 +35,7 @@ export function selectAuthRevocationCandidates(
         !account.isHidden &&
         isAutomaticAccount(account) &&
         account.balancePoolEnabled === true &&
+        (!visibleAccountIds || visibleAccountIds.has(account.id)) &&
         isVisibleGroup(account, configuration)
     )
     .slice()

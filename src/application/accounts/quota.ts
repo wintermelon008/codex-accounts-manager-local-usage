@@ -4,6 +4,7 @@ import type { RuntimeSwitchSource } from "./runtimeSwitchCoordinator";
 import { createError, getErrorMessage } from "../../core";
 import {
   CodexAccountRecord,
+  CodexTokens,
   isAutomaticAccount,
   isCurrentProviderAccount,
   isSub2ApiAccount
@@ -27,6 +28,7 @@ import {
   recordAutoSwitchReason
 } from "../../presentation/workbench/autoSwitchState";
 import { getDashboardAccountOrder } from "../../presentation/dashboard/accountOrder";
+import { getDashboardAccountScope } from "../../presentation/dashboard/accountScope";
 import {
   acknowledgeSeamlessQuotaBand,
   observeSeamlessQuotaBand,
@@ -36,6 +38,7 @@ import {
   clearTokenAutomationError,
   markTokenAutomationRefreshFailure
 } from "../../presentation/workbench/tokenAutomationState";
+import { recordQuotaAuthenticationSuccess } from "./accountState";
 import { getCommandCopy, getLanguage, getQuotaWarningCopy, resolveLongQuotaLabel } from "../../utils";
 import { getDashboardCopy } from "../dashboard/copy";
 import { runAuthenticatedAccountRequest } from "./authenticatedAccountRequest";
@@ -161,6 +164,9 @@ export async function refreshSingleQuota(
     result.updatedPlanType,
     result.updatedSubscriptionActiveUntil
   );
+  if (result.accessTokenAccepted === true) {
+    recordSuccessfulQuotaAccess(accountId, account, updatedAccount, tokens, result.updatedTokens);
+  }
   const subscriptionRefresh = repo.refreshSubscriptionState(accountId, forceSubscriptionRefresh).catch(() => undefined);
   if (awaitSubscriptionRefresh) {
     // 账号信息同步需要等订阅写入完成后再发布页面状态，避免继续展示旧套餐和旧到期时间。
@@ -236,6 +242,9 @@ export async function refreshImportedAccountQuota(
     result.updatedPlanType,
     result.updatedSubscriptionActiveUntil
   );
+  if (result.accessTokenAccepted === true) {
+    recordSuccessfulQuotaAccess(accountId, account, updatedAccount, tokens, result.updatedTokens);
+  }
   // 后台异步刷新订阅到期时间
   void repo.refreshSubscriptionState(accountId, true).catch(() => undefined);
   if (!result.error && updatedAccount.quotaSummary) {
@@ -248,6 +257,24 @@ export async function refreshImportedAccountQuota(
   }
   await maybeWarnForAccount(repo, accountId);
   return result;
+}
+
+function recordSuccessfulQuotaAccess(
+  localAccountId: string,
+  account: Pick<CodexAccountRecord, "accountId">,
+  updatedAccount: Pick<CodexAccountRecord, "accountId">,
+  tokens: CodexTokens,
+  updatedTokens?: CodexTokens
+): void {
+  const effectiveTokens = updatedTokens ?? tokens;
+  const providerAccountId = updatedAccount.accountId ?? account.accountId ?? effectiveTokens.accountId;
+  if (!providerAccountId || !effectiveTokens.accessToken) {
+    return;
+  }
+  recordQuotaAuthenticationSuccess(localAccountId, {
+    ...effectiveTokens,
+    accountId: providerAccountId
+  });
 }
 
 async function syncResetCreditsSnapshot(
@@ -377,11 +404,17 @@ async function runSeamlessBalanceSwitchForActiveQuota(
 
   const now = Date.now();
   const activeCapability = active ? getBalanceQuotaCapability(active, now) : "unknown";
+  const dashboardAccountScope = getDashboardAccountScope();
   // A disabled group only removes potential targets. Keep the currently active
   // account in this one decision so it can safely rotate out after reaching its
   // existing band/threshold condition instead of being forced away immediately.
   const scopedAccounts = active
-    ? accounts.filter((account) => account.id === active.id || isAccountVisibleToSeamlessSwitch(account, config))
+    ? accounts.filter(
+        (account) =>
+          account.id === active.id ||
+          (isAccountVisibleToSeamlessSwitch(account, config) &&
+            (!dashboardAccountScope || dashboardAccountScope.has(account.id)))
+      )
     : accounts;
   if (
     !active?.quotaSummary ||
@@ -410,7 +443,8 @@ async function runSeamlessBalanceSwitchForActiveQuota(
         options.trigger === "runtimeUsageLimit" || options.trigger === "runtimeUsageLimitExhaustion",
       capacityRecovery: capacityRecoveryTrigger,
       quotaBandSwitchEnabled,
-      lowQuotaSwitchEnabled
+      lowQuotaSwitchEnabled,
+      visibleAccountIds: dashboardAccountScope
     });
   } finally {
     await lease.release();
@@ -445,6 +479,7 @@ async function executeSeamlessBalanceSwitch(params: {
   capacityRecovery: boolean;
   quotaBandSwitchEnabled: boolean;
   lowQuotaSwitchEnabled: boolean;
+  visibleAccountIds?: ReadonlySet<string>;
 }): Promise<boolean> {
   const {
     accounts,
@@ -456,7 +491,8 @@ async function executeSeamlessBalanceSwitch(params: {
     runtimeUsageLimit,
     capacityRecovery,
     quotaBandSwitchEnabled,
-    lowQuotaSwitchEnabled
+    lowQuotaSwitchEnabled,
+    visibleAccountIds
   } = params;
   const quotaBandSize = normalizeSeamlessQuotaBandSize(config.get<number>(SEAMLESS_QUOTA_BAND_SIZE, 20));
   const configuredSwitchThreshold = getSeamlessSwitchThreshold(config);
@@ -498,6 +534,7 @@ async function executeSeamlessBalanceSwitch(params: {
     thresholdQuota,
     forceRecoveryMode: capacityRecovery || (thresholdSwitch && runtimeUsageLimit),
     requireFreshFreeCandidates: capacityRecovery || (thresholdSwitch && activeIsFree),
+    visibleAccountIds,
     now
   });
   if (!next) {

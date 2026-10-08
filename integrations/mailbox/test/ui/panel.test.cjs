@@ -2176,6 +2176,130 @@ test("Mailbox can filter only Codex-linked mailboxes", () => {
   assert.match(renderedHtml, /data-role="mailbox-filter-summary"[^>]*>筛选<span class="mailbox-filter-count"[^>]*>1<\/span>/u);
 });
 
+test("Mailbox status filter follows the four account states and ignores quota-only limits", () => {
+  const html = createMailboxPanelHtml();
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
+  assert.ok(script);
+
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  let renderedHtml = "";
+  const app = {};
+  Object.defineProperty(app, "innerHTML", {
+    configurable: true,
+    get() { return renderedHtml; },
+    set(value) { renderedHtml = value; }
+  });
+  const document = {
+    activeElement: null,
+    body: { insertAdjacentHTML() {} },
+    getElementById(id) { return id === "app" ? app : id === "notice" ? {} : null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener(type, listener) { documentListeners.set(type, listener); }
+  };
+  const window = { addEventListener(type, listener) { windowListeners.set(type, listener); } };
+  vm.runInNewContext(script, {
+    window,
+    document,
+    acquireVsCodeApi: () => ({ postMessage() {} }),
+    console
+  });
+
+  const addresses = [
+    "renewal-unavailable@example.com",
+    "unknown@example.com",
+    "invalid@example.com",
+    "quota-only@example.com",
+    "normal@example.com"
+  ];
+  windowListeners.get("message")({ data: {
+    type: "state",
+    state: {
+      mailboxes: addresses.map((address, index) => ({
+        id: `mailbox:${index}`,
+        providerId: "mock",
+        address,
+        displayName: address
+      })),
+      providers: [{ id: "mock", displayName: "Mock", capabilities: {}, importSchema: {} }],
+      operations: [],
+      codexImports: [],
+      managedAccountEmails: addresses,
+      managedAccounts: [
+        {
+          accountId: "account:renewal-unavailable",
+          email: addresses[0],
+          accountState: "usable_no_renewal",
+          quotaLimited: false,
+          reauthorizationRecommended: true,
+          reauthorizationRequired: false,
+          requiresReauthorization: false
+        },
+        {
+          accountId: "account:unknown",
+          email: addresses[1],
+          accountState: "unknown",
+          quotaLimited: false,
+          reauthorizationRecommended: false,
+          reauthorizationRequired: false,
+          requiresReauthorization: false
+        },
+        {
+          accountId: "account:invalid",
+          email: addresses[2],
+          accountState: "auth_invalid",
+          quotaLimited: false,
+          reauthorizationRecommended: true,
+          reauthorizationRequired: true,
+          requiresReauthorization: true
+        },
+        {
+          accountId: "account:quota",
+          email: addresses[3],
+          accountState: "usable",
+          quotaLimited: true,
+          reauthorizationRecommended: false,
+          reauthorizationRequired: false,
+          requiresReauthorization: false
+        },
+        {
+          accountId: "account:normal",
+          email: addresses[4],
+          accountState: "usable",
+          quotaLimited: false,
+          reauthorizationRecommended: false,
+          reauthorizationRequired: false,
+          requiresReauthorization: false
+        }
+      ],
+      managedAccountDirectoryAvailable: true,
+      managedAccountRemovalAvailable: true
+    }
+  } });
+
+  assert.match(renderedHtml, /id="onlyReauthorization"/u);
+  assert.match(renderedHtml, /renewal-unavailable@example\.com/u);
+  assert.match(renderedHtml, /unknown@example\.com/u);
+  assert.match(renderedHtml, /invalid@example\.com/u);
+  assert.match(renderedHtml, /quota-only@example\.com/u);
+  assert.match(renderedHtml, /normal@example\.com/u);
+
+  documentListeners.get("change")({ target: {
+    id: "onlyReauthorization",
+    checked: true,
+    matches() { return false; },
+    closest() { return this; }
+  } });
+
+  assert.match(renderedHtml, /renewal-unavailable@example\.com/u);
+  assert.match(renderedHtml, /unknown@example\.com/u);
+  assert.match(renderedHtml, /invalid@example\.com/u);
+  assert.doesNotMatch(renderedHtml, /quota-only@example\.com/u);
+  assert.doesNotMatch(renderedHtml, /normal@example\.com/u);
+  assert.match(renderedHtml, />3\/5<\/span>/u);
+});
+
 test("Mailbox tags use compact semantic colors and do not expose code_found", () => {
   const html = createMailboxPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];

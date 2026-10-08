@@ -16,6 +16,8 @@ export type FreshGatewayFallbackCandidateOptions = {
   excludedAccountIds?: Set<string>;
   /** Candidates that completed the mandatory refresh in this transaction. */
   refreshedAccountIds?: Set<string>;
+  /** Account IDs currently exposed by the Dashboard's active filters. */
+  visibleAccountIds?: ReadonlySet<string>;
   now?: () => number;
 };
 
@@ -31,7 +33,8 @@ const GROUP_C_VISIBLE = "seamlessSwitchGroupCVisible";
 export function selectGatewayFallbackCandidates(
   accounts: readonly CodexAccountRecord[],
   configuration: GatewayFallbackConfiguration,
-  now = Date.now()
+  now = Date.now(),
+  visibleAccountIds?: ReadonlySet<string>
 ): CodexAccountRecord[] {
   const switchThreshold = getSeamlessSwitchThreshold(configuration);
   return accounts
@@ -41,6 +44,7 @@ export function selectGatewayFallbackCandidates(
         account.quotaMode === "none" ||
         account.isHidden ||
         account.balancePoolEnabled !== true ||
+        (visibleAccountIds !== undefined && !visibleAccountIds.has(account.id)) ||
         !isGroupVisible(account, configuration)
       ) {
         return false;
@@ -68,7 +72,7 @@ export async function selectFreshGatewayFallbackCandidate(
   let remainingRefreshes = accounts.length;
 
   while (remainingRefreshes >= 0) {
-    const candidate = selectGatewayFallbackCandidates(accounts, configuration, now()).find(
+    const candidate = selectGatewayFallbackCandidates(accounts, configuration, now(), options.visibleAccountIds).find(
       (account) => !excludedAccountIds.has(account.id)
     );
     if (!candidate) {

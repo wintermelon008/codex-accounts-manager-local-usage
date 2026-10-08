@@ -222,6 +222,56 @@ describe("token refresh coordinator", () => {
     expect(refreshTokensMock).toHaveBeenCalledWith(oldTokens.refreshToken, oldTokens.idToken);
     expect(save).not.toHaveBeenCalled();
   });
+
+  it("uses a still-valid access token when a switch refresh receives invalid_grant", async () => {
+    const tokens = makeTokens("switch", 60);
+    refreshTokensMock.mockRejectedValue(
+      Object.assign(new Error("Token refresh failed (401): invalid_grant"), {
+        statusCode: 401,
+        context: { errorCode: "invalid_grant" }
+      })
+    );
+    const repo = {
+      ...makeLeaseRepo(),
+      getTokens: async () => tokens,
+      updateTokens: vi.fn(async () => undefined)
+    };
+
+    await expect(
+      ensureFreshAccountTokens(repo, "account-switch", {
+        allowValidAccessTokenFallback: true
+      })
+    ).resolves.toEqual(tokens);
+    expect(refreshTokensMock).toHaveBeenCalledOnce();
+
+    await expect(
+      ensureFreshAccountTokens(repo, "account-switch", {
+        allowValidAccessTokenFallback: true
+      })
+    ).resolves.toEqual(tokens);
+    expect(refreshTokensMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not use an expired access token after invalid_grant", async () => {
+    const tokens = makeTokens("expired-switch", -1);
+    refreshTokensMock.mockRejectedValue(
+      Object.assign(new Error("Token refresh failed (401): invalid_grant"), {
+        statusCode: 401,
+        context: { errorCode: "invalid_grant" }
+      })
+    );
+    const repo = {
+      ...makeLeaseRepo(),
+      getTokens: async () => tokens,
+      updateTokens: vi.fn(async () => undefined)
+    };
+
+    await expect(
+      ensureFreshAccountTokens(repo, "account-expired-switch", {
+        allowValidAccessTokenFallback: true
+      })
+    ).rejects.toThrow("invalid_grant");
+  });
 });
 
 function makeLease() {

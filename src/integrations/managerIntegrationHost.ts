@@ -15,7 +15,7 @@ import type {
   DashboardProviderAccountCardViewModel
 } from "../domain/dashboard/types";
 import type { CodexVirtualRouteDescriptor, SharedCodexAccountJson } from "../core/types";
-import type { AccountHealthKind } from "../domain/accountHealth";
+import type { AccountHealthKind, ManagedAccountState } from "../domain/accountHealth";
 
 const INTEGRATION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 export const MANAGER_INTEGRATION_API_VERSION = 1 as const;
@@ -163,7 +163,16 @@ export type BalancePoolAccountResult = {
 export type ManagedAccountDirectoryEntry = {
   accountId: string;
   email: string;
+  /** @deprecated Use reauthorizationRequired or accountState instead. */
   requiresReauthorization: boolean;
+  /** Stable four-state classification for integrations such as Mailbox. */
+  accountState?: ManagedAccountState;
+  /** Quota is orthogonal to authentication state. */
+  quotaLimited?: boolean;
+  /** Reauthorization is recommended for hard auth failure or unusable renewal. */
+  reauthorizationRecommended?: boolean;
+  /** Reauthorization is required because the current credential is invalid. */
+  reauthorizationRequired?: boolean;
   healthKind?: AccountHealthKind;
 };
 

@@ -18,6 +18,19 @@ import {
   getCurrentWindowRuntimeAccountId,
   setCurrentWindowRuntimeAccountId
 } from "../src/presentation/workbench/windowRuntimeAccount";
+import { clearAccountStates } from "../src/application/accounts/accountState";
+
+const { refreshTokensMock } = vi.hoisted(() => ({
+  refreshTokensMock: vi.fn()
+}));
+
+vi.mock("../src/auth/oauth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/auth/oauth")>();
+  return {
+    ...actual,
+    refreshTokens: refreshTokensMock
+  };
+});
 
 vi.mock("../src/codex/authFile", () => ({
   getCodexHome: vi.fn(() => path.join(os.homedir(), ".codex")),
@@ -28,6 +41,8 @@ vi.mock("../src/codex/authFile", () => ({
 describe("Codex hot-switch runtime setup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    refreshTokensMock.mockReset();
+    clearAccountStates();
     vi.mocked(readAuthFile).mockResolvedValue(undefined);
     vi.mocked(writeAuthFile).mockResolvedValue(undefined);
     setCurrentWindowRuntimeAccountId(undefined);
@@ -453,6 +468,104 @@ describe("Codex hot-switch runtime setup", () => {
         gracePeriodMs: 0,
         longTurnPolicy: "interruptAndContinue",
         recoverRecentUsageLimitedTurns: true
+      })
+    );
+  });
+
+  it("switches with a still-valid access token when the refresh token is rejected", async () => {
+    const enabledConfiguration = {
+      get: (key: string, defaultValue?: unknown) => (key === "hotSwitchEnabled" ? true : defaultValue),
+      update: vi.fn(),
+      inspect: vi.fn()
+    } as unknown as vscode.WorkspaceConfiguration;
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue(enabledConfiguration);
+
+    const accounts = new Map<string, CodexAccountRecord>([
+      [
+        "local-a",
+        {
+          id: "local-a",
+          email: "previous@example.invalid",
+          userId: "user-a",
+          accountId: "workspace-a",
+          isActive: true,
+          createdAt: 1,
+          updatedAt: 1
+        }
+      ],
+      [
+        "local-b",
+        {
+          id: "local-b",
+          email: "target@example.invalid",
+          userId: "user-b",
+          accountId: "workspace-b",
+          isActive: false,
+          createdAt: 1,
+          updatedAt: 1
+        }
+      ]
+    ]);
+    const targetAccessToken = createUnsignedJwt({
+      exp: Math.floor(Date.now() / 1_000) + 60,
+      "https://api.openai.com/auth": { chatgpt_user_id: "user-b" },
+      "https://api.openai.com/profile": { email: "target@example.invalid" }
+    });
+    const tokens = new Map<string, { idToken: string; accessToken: string; refreshToken: string; accountId: string }>([
+      [
+        "local-a",
+        {
+          idToken: "unused-id-a",
+          accessToken: createUnsignedJwt({
+            exp: Math.floor(Date.now() / 1_000) + 3_600,
+            "https://api.openai.com/auth": { chatgpt_user_id: "user-a" },
+            "https://api.openai.com/profile": { email: "previous@example.invalid" }
+          }),
+          refreshToken: "previous-refresh-token",
+          accountId: "workspace-a"
+        }
+      ],
+      [
+        "local-b",
+        {
+          idToken: createUnsignedJwt({ exp: Math.floor(Date.now() / 1_000) + 60 }),
+          accessToken: targetAccessToken,
+          refreshToken: "expired-refresh-token",
+          accountId: "workspace-b"
+        }
+      ]
+    ]);
+    refreshTokensMock.mockRejectedValue(
+      Object.assign(new Error("Token refresh failed (401): invalid_grant"), {
+        statusCode: 401,
+        context: { errorCode: "invalid_grant" }
+      })
+    );
+    const switchAccount = vi.fn().mockResolvedValue({
+      status: "switched",
+      accountId: "workspace-b",
+      email: "target@example.invalid",
+      activeTurns: 0,
+      interruptedTurns: 0,
+      continuedThreads: 0
+    });
+    const runtime = new CodexHotSwitchRuntime(
+      {} as vscode.ExtensionContext,
+      {
+        getAccount: vi.fn(async (id: string) => accounts.get(id)),
+        getTokens: vi.fn(async (id: string) => tokens.get(id)),
+        tryAcquireSchedulerLease: vi.fn(async () => ({ release: vi.fn(async () => undefined) }))
+      } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+    );
+    (runtime as unknown as { bridge: { switchAccount: typeof switchAccount } }).bridge = { switchAccount };
+    setCurrentWindowRuntimeAccountId("local-a");
+
+    await expect(runtime.switchAccount("local-b")).resolves.toMatchObject({ status: "switched" });
+    expect(refreshTokensMock).toHaveBeenCalledOnce();
+    expect(switchAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localAccountId: "local-b",
+        accessToken: targetAccessToken
       })
     );
   });

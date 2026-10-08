@@ -74,6 +74,23 @@ describe("5-hour quota band balancing", () => {
     ).toBe(dashboardFirst.id);
   });
 
+  it("limits seamless targets to the Dashboard's current filtered scope", () => {
+    const now = 10_000_000;
+    const active = account("active", 59, now);
+    const filteredIn = account("filtered-in", 82, now);
+    const filteredOut = account("filtered-out", 100, now);
+
+    expect(
+      selectBalanceCandidate({
+        accounts: [active, filteredIn, filteredOut],
+        activeAccountId: active.id,
+        activeBand: getFiveHourQuotaBand(active.quotaSummary!.hourlyPercentage),
+        visibleAccountIds: new Set([active.id, filteredIn.id]),
+        now
+      })?.id
+    ).toBe(filteredIn.id);
+  });
+
   it("does not switch to an account in a lower band", () => {
     const now = 10_000_000;
     const active = account("active", 61, now);

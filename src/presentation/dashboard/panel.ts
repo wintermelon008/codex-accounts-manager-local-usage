@@ -24,6 +24,7 @@ import { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
 import { clearDashboardAccountOrder, getDashboardAccountOrder, setDashboardAccountOrder } from "./accountOrder";
+import { clearDashboardAccountScope, setDashboardAccountScope } from "./accountScope";
 import type { AccountSharingService } from "../../sharing";
 import { getActiveManagerIntegrationHost } from "../../integrations";
 
@@ -135,6 +136,7 @@ class DashboardPanelController {
         this.configWatcher?.dispose();
         this.configWatcher = undefined;
         clearDashboardAccountOrder();
+        clearDashboardAccountScope();
         this.lastPublishedStateSignature = undefined;
         this.publishRevision += 1;
         this.panel = undefined;
@@ -144,11 +146,15 @@ class DashboardPanelController {
       this.panel.webview.onDidReceiveMessage((message: DashboardClientMessage) => {
         void dispatchDashboardClientMessage(message, {
           onReady: () => {
+            clearDashboardAccountScope();
             this.webviewReady = true;
             this.schedulePublishState();
           },
           onAccountOrder: (accountIds) => {
             setDashboardAccountOrder(accountIds);
+          },
+          onAccountScope: (accountIds) => {
+            setDashboardAccountScope(accountIds);
           },
           onAction: async (actionMessage) => {
             await this.handleActionMessage(actionMessage);

@@ -93,6 +93,7 @@ describe("quota cache invalidation", () => {
       kind: "reauthorize",
       message: "Token refresh failed (401): refresh_token_invalidated"
     });
+    expect(result.accessTokenAccepted).toBe(true);
   });
 
   it("does not report unchanged tokens as a credential update", async () => {
@@ -102,7 +103,19 @@ describe("quota cache invalidation", () => {
     const result = await refreshQuota(account, tokens, true, {} as never);
 
     expect(result.quota?.hourlyPercentage).toBe(90);
+    expect(result.accessTokenAccepted).toBe(true);
     expect(result.updatedTokens).toBeUndefined();
+  });
+
+  it("does not treat a cached quota summary as a new access-token probe", async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(createUsageResponse(10));
+
+    const live = await refreshQuota(account, tokens, true);
+    const cached = await refreshQuota(account, tokens);
+
+    expect(live.accessTokenAccepted).toBe(true);
+    expect(cached.accessTokenAccepted).toBeUndefined();
+    expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
   });
 
   it("does not repopulate cache from an invalidated inflight refresh", async () => {

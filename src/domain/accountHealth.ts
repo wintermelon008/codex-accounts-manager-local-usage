@@ -26,6 +26,60 @@ export type AccountHealthCategory =
   | "disabled"
   | "quota_limited";
 
+/** Stable four-state account classification for local integrations. */
+export type ManagedAccountState = "usable" | "usable_no_renewal" | "unknown" | "auth_invalid";
+
+/**
+ * Collapse detailed diagnostics into the four-state contract shared by the
+ * Dashboard and local integrations. Quota is deliberately not a state.
+ */
+export function getManagedAccountState(health: {
+  kind: AccountHealthKind;
+  availability?: AvailabilityKind;
+  renewal?: RenewalKind;
+}): ManagedAccountState {
+  if (
+    health.kind === "reauthorize" ||
+    health.kind === "access_token_invalid" ||
+    health.kind === "disabled" ||
+    health.availability === "auth_unavailable"
+  ) {
+    return "auth_invalid";
+  }
+  if (
+    (health.availability === "usable" || health.availability === "quota_limited" || health.kind === "quota") &&
+    health.renewal === "unavailable"
+  ) {
+    return "usable_no_renewal";
+  }
+  // Older Dashboard snapshots exposed this detailed kind without the two
+  // evidence fields. Preserve its established meaning for those snapshots.
+  if (health.kind === "refresh_unavailable") {
+    return "usable_no_renewal";
+  }
+  if (
+    health.kind === "refreshing" ||
+    health.kind === "refresh_failed" ||
+    health.kind === "refresh_token_invalid" ||
+    health.kind === "refresh_unavailable_unverified" ||
+    health.kind === "unverified" ||
+    health.availability === "unknown"
+  ) {
+    return "unknown";
+  }
+  if (
+    health.availability === "usable" ||
+    health.availability === "quota_limited" ||
+    health.renewal === "succeeded" ||
+    health.kind === "healthy" ||
+    health.kind === "expiring" ||
+    health.kind === "quota"
+  ) {
+    return "usable";
+  }
+  return "unknown";
+}
+
 /** Keeps reauthorization-dependent integrations aligned with actual credential availability. */
 export function isAccountReauthorizationRequired(kind: AccountHealthKind): boolean {
   return kind === "reauthorize" || kind === "access_token_invalid";

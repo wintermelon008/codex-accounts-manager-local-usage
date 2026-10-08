@@ -10,7 +10,7 @@ import {
   type DashboardSettings,
   type DashboardState
 } from "../../src/domain/dashboard/types";
-import { isAccountInvalid } from "../../src/domain/accountHealth";
+import { getManagedAccountState, isAccountInvalid, type ManagedAccountState } from "../../src/domain/accountHealth";
 import { formatResetRelativeTime } from "../../src/utils/resetTime";
 
 export {
@@ -43,9 +43,14 @@ export function getDashboardAccountCardDomId(accountId: string): string {
   return `saved-account-${encodeURIComponent(accountId)}`;
 }
 
-/** Stable color buckets shared by the account cards and the health filter. */
-export const DASHBOARD_HEALTH_FILTERS = ["unknown", "usable", "warning", "error"] as const;
-export type DashboardHealthFilter = (typeof DASHBOARD_HEALTH_FILTERS)[number];
+/** Stable four-state buckets shared by the account cards and health filter. */
+export const DASHBOARD_HEALTH_FILTERS: readonly ManagedAccountState[] = [
+  "unknown",
+  "usable_no_renewal",
+  "usable",
+  "auth_invalid"
+];
+export type DashboardHealthFilter = ManagedAccountState;
 
 export const DASHBOARD_SHARING_FILTERS = ["shared", "received"] as const;
 export type DashboardSharingFilterValue = (typeof DASHBOARD_SHARING_FILTERS)[number];
@@ -96,7 +101,7 @@ export function getDashboardVisibleAccounts(
   // bundles. Its former meaning was exactly the red/error bucket.
   const normalizedHealthFilters =
     selectedHealthFilters === true
-      ? (["error"] as const)
+      ? (["auth_invalid"] as const)
       : selectedHealthFilters === false
         ? []
         : selectedHealthFilters;
@@ -139,43 +144,29 @@ export function getDashboardSharingFilterCounts(
   return counts;
 }
 
-/** Maps an account's detailed health diagnostic to the color shown on its card. */
+/** Maps detailed health evidence to the stable account state shown by Dashboard filters. */
 export function getDashboardHealthFilter(
-  account: Pick<DashboardAccountViewModel, "healthKind" | "dismissedHealth">
+  account: Pick<DashboardAccountViewModel, "healthKind" | "availability" | "renewal" | "dismissedHealth">
 ): DashboardHealthFilter | undefined {
   if (account.dismissedHealth) {
     return undefined;
   }
-
-  switch (account.healthKind) {
-    case "unverified":
-    case "refresh_unavailable_unverified":
-      return "unknown";
-    case "refresh_unavailable":
-      return "usable";
-    case "expiring":
-    case "refresh_failed":
-    case "refresh_token_invalid":
-    case "quota":
-      return "warning";
-    case "access_token_invalid":
-    case "reauthorize":
-    case "disabled":
-      return "error";
-    default:
-      return undefined;
-  }
+  return getManagedAccountState({
+    kind: account.healthKind,
+    availability: account.availability,
+    renewal: account.renewal
+  });
 }
 
-/** Counts the four visible health buckets without applying group/plan filters. */
+/** Counts the four visible account states without applying group/plan filters. */
 export function getDashboardHealthFilterCounts(
   accounts: readonly DashboardAccountViewModel[]
 ): DashboardHealthFilterCounts {
   const counts: DashboardHealthFilterCounts = {
     unknown: 0,
+    usable_no_renewal: 0,
     usable: 0,
-    warning: 0,
-    error: 0
+    auth_invalid: 0
   };
 
   for (const account of accounts) {

@@ -4,6 +4,7 @@ import type { DashboardClientMessage, DashboardSettingKey, DashboardSettingValue
 export type DashboardMessageHandlers = {
   onReady: () => void | Promise<void>;
   onAccountOrder: (accountIds: string[]) => void;
+  onAccountScope: (accountIds: string[]) => void;
   onAction: (message: Extract<DashboardClientMessage, { type: "dashboard:action" }>) => Promise<void>;
   onSetting: (key: DashboardSettingKey, value: DashboardSettingValue) => Promise<void>;
   onPickCodexAppPath: () => Promise<void>;
@@ -21,6 +22,9 @@ export async function dispatchDashboardClientMessage(
       return;
     case "dashboard:account-order":
       handlers.onAccountOrder(message.accountIds);
+      return;
+    case "dashboard:account-scope":
+      handlers.onAccountScope(message.accountIds);
       return;
     case "dashboard:action":
       await handlers.onAction(message);

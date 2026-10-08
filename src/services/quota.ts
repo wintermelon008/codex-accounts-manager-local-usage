@@ -59,6 +59,8 @@ export interface QuotaRefreshResult {
   updatedTokens?: CodexTokens;
   updatedPlanType?: string;
   updatedSubscriptionActiveUntil?: string;
+  /** The quota endpoint accepted the effective access token. Cached results do not set this. */
+  accessTokenAccepted?: boolean;
   /** The result belongs to credentials superseded while the request was in flight. */
   stale?: boolean;
   /** The refresh failed, but the existing access token was used successfully. */
@@ -167,6 +169,7 @@ export async function refreshQuota(
 
     return {
       quota: quotaSummary,
+      accessTokenAccepted: true,
       updatedTokens: getChangedTokens(tokens, effectiveTokens),
       updatedPlanType: usage.plan_type,
       updatedSubscriptionActiveUntil: readUsageSubscriptionActiveUntil(usage),

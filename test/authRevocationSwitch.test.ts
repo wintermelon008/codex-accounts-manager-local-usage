@@ -70,4 +70,19 @@ describe("token-revocation switch candidates", () => {
       ["group-b"]
     );
   });
+
+  it("limits revocation fallback targets to the Dashboard's current filtered scope", () => {
+    const accounts = [account("active"), account("filtered-in"), account("filtered-out")];
+
+    expect(
+      selectAuthRevocationCandidates(
+        accounts,
+        "active",
+        allGroupsVisible,
+        undefined,
+        new Set(),
+        new Set(["active", "filtered-in"])
+      ).map((candidate) => candidate.id)
+    ).toEqual(["filtered-in"]);
+  });
 });

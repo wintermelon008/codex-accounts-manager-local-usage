@@ -485,7 +485,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("The selected account is hidden. Unhide it before switching to it.");
     }
     if (needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
-      tokens = await this.refreshAccountTokens(account, tokens);
+      tokens = await this.refreshAccountTokens(account, tokens, { allowValidAccessTokenFallback: true });
     }
     const runtimeIdentity = resolveRuntimeAccessTokenIdentity(account, tokens.accessToken);
     const remoteAccountId = account.accountId ?? tokens.accountId;
@@ -500,7 +500,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       previousTokens?.accessToken &&
       needsRefresh(previousTokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)
     ) {
-      previousTokens = await this.refreshAccountTokens(previousAccount, previousTokens);
+      previousTokens = await this.refreshAccountTokens(previousAccount, previousTokens, {
+        allowValidAccessTokenFallback: true
+      });
     }
     const baseParams = {
       operationId: options.operationId,
@@ -576,7 +578,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       throw new Error("The selected fallback account is hidden. Unhide it before using it.");
     }
     if (needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
-      tokens = await this.refreshAccountTokens(account, tokens);
+      tokens = await this.refreshAccountTokens(account, tokens, { allowValidAccessTokenFallback: true });
     }
     const runtimeIdentity = resolveRuntimeAccessTokenIdentity(account, tokens.accessToken);
     const remoteAccountId = account.accountId ?? tokens.accountId;
@@ -602,7 +604,9 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       previousTokens?.accessToken &&
       needsRefresh(previousTokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)
     ) {
-      previousTokens = await this.refreshAccountTokens(previousAccount, previousTokens);
+      previousTokens = await this.refreshAccountTokens(previousAccount, previousTokens, {
+        allowValidAccessTokenFallback: true
+      });
     }
     const previousRemoteAccountId = previousAccount?.accountId ?? previousTokens?.accountId;
     let result: HotSwitchAccountResult;
@@ -1068,6 +1072,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     const refreshed = await ensureFreshTokensWithLease(this.repo, {
       key: `unmanaged-auth:${coordinationKey}`,
       fallbackTokens: tokens,
+      allowValidAccessTokenFallback: true,
       load: async () => {
         const current = await readAuthFile();
         if (!current?.tokens?.id_token || !current.tokens.access_token) {
@@ -1123,11 +1128,16 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     this.releaseUnmanagedRollbackSnapshot(rollbackContextId);
   }
 
-  private async refreshAccountTokens(account: CodexAccountRecord, tokens: CodexTokens): Promise<CodexTokens> {
+  private async refreshAccountTokens(
+    account: CodexAccountRecord,
+    tokens: CodexTokens,
+    options: { allowValidAccessTokenFallback?: boolean } = {}
+  ): Promise<CodexTokens> {
     return (
       (await ensureFreshAccountTokens(this.repo, account.id, {
         fallbackTokens: tokens,
-        providerAccountId: account.accountId
+        providerAccountId: account.accountId,
+        allowValidAccessTokenFallback: options.allowValidAccessTokenFallback
       })) ?? {
         ...tokens,
         accountId: tokens.accountId ?? account.accountId

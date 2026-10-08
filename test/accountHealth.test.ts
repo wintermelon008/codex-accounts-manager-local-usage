@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAccountRecord } from "../src/core/types";
-import { resolveAccountHealth } from "../src/application/accounts/health";
+import { getManagedAccountState, resolveAccountHealth } from "../src/application/accounts/health";
 import { isAccountInvalid } from "../src/domain/accountHealth";
 import {
   accessCredentialFingerprint,
   AVAILABILITY_TTL_MS,
   clearAccountStates,
+  recordQuotaAuthenticationSuccess,
   recordAvailability,
   recordRenewal,
   setAvailabilityRuntime,
@@ -42,6 +43,21 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("independent account availability and renewal", () => {
+  it.each([
+    [{ kind: "healthy", availability: "usable", renewal: "unknown" }, "usable"],
+    [{ kind: "refresh_unavailable", availability: "usable", renewal: "unavailable" }, "usable_no_renewal"],
+    [{ kind: "refresh_unavailable" }, "usable_no_renewal"],
+    [{ kind: "quota", availability: "quota_limited", renewal: "succeeded" }, "usable"],
+    [{ kind: "quota", availability: "quota_limited", renewal: "unavailable" }, "usable_no_renewal"],
+    [{ kind: "refresh_failed", availability: "usable", renewal: "network_failed" }, "unknown"],
+    [{ kind: "refresh_token_invalid", availability: "usable", renewal: "unknown" }, "unknown"],
+    [{ kind: "refresh_unavailable_unverified", availability: "unknown", renewal: "unavailable" }, "unknown"],
+    [{ kind: "access_token_invalid", availability: "auth_unavailable", renewal: "unavailable" }, "auth_invalid"],
+    [{ kind: "disabled", availability: "unknown", renewal: "unknown" }, "auth_invalid"]
+  ] as const)("maps detailed health %o to the four-state integration contract", (health, expected) => {
+    expect(getManagedAccountState(health)).toBe(expected);
+  });
+
   it("keeps the local Mailbox deactivation signal as an explicit disabled state", () => {
     const health = resolveAccountHealth(
       {
@@ -111,6 +127,18 @@ describe("independent account availability and renewal", () => {
     const updated = { ...tokens, accessToken: "new-token", refreshToken: "new-refresh" };
     recordRenewal(base.id, updated, "succeeded");
     expect(health(base, updated)).toMatchObject({ kind: "healthy", availability: "usable", renewal: "succeeded" });
+  });
+
+  it("successful quota authentication confirms access without confirming renewal", () => {
+    recordRenewal(base.id, tokens, "unavailable");
+    recordQuotaAuthenticationSuccess(base.id, tokens);
+
+    expect(health()).toMatchObject({
+      kind: "refresh_unavailable",
+      availability: "usable",
+      renewal: "unavailable"
+    });
+    expect(getManagedAccountState(health())).toBe("usable_no_renewal");
   });
 
   it("renewal success confirms inactive accounts without a resident model runtime", () => {

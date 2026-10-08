@@ -2375,10 +2375,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           requestedAction === "stop"
         );
         const codexLinked = isCodexLinked(mailbox);
-        const managedAccount = getManagedAccountForMailbox(mailbox);
         const canDeleteMailboxAndCodex = Boolean(
           mailbox.openaiAccountDeactivated === true &&
-          managedAccount?.requiresReauthorization === true &&
+          requiresReauthorization(mailbox) &&
           state.managedAccountRemovalAvailable === true
         );
         const accountStatusTag = renderAccountStatusTag(mailbox);
@@ -2554,22 +2553,23 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       }
 
       function requiresReauthorization(mailbox) {
-        return getManagedAccountForMailbox(mailbox)?.requiresReauthorization === true;
+        const account = getManagedAccountForMailbox(mailbox);
+        return account?.accountState === "auth_invalid" || account?.reauthorizationRequired === true || account?.requiresReauthorization === true;
       }
 
       function isCodexStatusAbnormal(mailbox) {
         const managedAccount = getManagedAccountForMailbox(mailbox);
         if (!managedAccount) return false;
+        if (managedAccount.accountState) return managedAccount.accountState !== "usable";
         return managedAccount.healthKind
-          ? managedAccount.healthKind !== "healthy"
+          ? managedAccount.healthKind !== "healthy" && managedAccount.healthKind !== "quota"
           : managedAccount.requiresReauthorization === true;
       }
 
       function getDeactivatedMailboxCandidates() {
         if (state.managedAccountRemovalAvailable !== true) return [];
         return (state.mailboxes || []).filter((mailbox) => {
-          const managedAccount = getManagedAccountForMailbox(mailbox);
-          return mailbox.openaiAccountDeactivated === true && managedAccount?.requiresReauthorization === true;
+          return mailbox.openaiAccountDeactivated === true && requiresReauthorization(mailbox);
         });
       }
 
@@ -3180,7 +3180,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function requestDeleteMailboxAndCodex(mailboxId) {
         const mailbox = (state.mailboxes || []).find((item) => item.id === mailboxId);
         const managedAccount = mailbox && getManagedAccountForMailbox(mailbox);
-        if (!mailbox || mailbox.openaiAccountDeactivated !== true || managedAccount?.requiresReauthorization !== true || state.managedAccountRemovalAvailable !== true) return;
+        if (!mailbox || mailbox.openaiAccountDeactivated !== true || !requiresReauthorization(mailbox) || state.managedAccountRemovalAvailable !== true) return;
         importOpen = false;
         editOpenMailboxId = "";
         deleteConfirm = { kind: "singleAndCodex", mailboxId, address: mailbox.address };

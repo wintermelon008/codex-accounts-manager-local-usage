@@ -117,14 +117,17 @@ describe("saved account reauthorization key", () => {
   });
 
   it.each([
-    ["refresh_unavailable", "pill health-usable"],
-    ["refresh_unavailable_unverified", "pill health-unknown"],
-    ["unverified", "pill health-unknown"],
-    ["refresh_failed", "pill warning"]
-  ] as const)("maps %s to its updated color class", (kind, className) => {
-    const pill = renderHealthPill({ healthKind: kind, healthLabel: "原中文标签" } as DashboardAccountViewModel);
+    ["healthy", "pill ok", "正常"],
+    ["quota", "pill ok", "正常"],
+    ["refresh_unavailable", "pill health-usable", "不可续期"],
+    ["refresh_unavailable_unverified", "pill health-unknown", "未知"],
+    ["unverified", "pill health-unknown", "未知"],
+    ["refresh_failed", "pill health-unknown", "未知"],
+    ["reauthorize", "pill error", "失效"]
+  ] as const)("maps %s to a short four-state tag", (kind, className, label) => {
+    const pill = renderHealthPill({ healthKind: kind, healthLabel: "原中文标签" } as DashboardAccountViewModel, "zh");
     expect(pill?.props.class).toBe(className);
-    expect(pill?.props.children).toBe("原中文标签");
+    expect(pill?.props.children).toBe(label);
   });
 
   it.each<AccountHealthKind>(["healthy", "quota", "expiring"])("does not add a key to %s", (kind) => {

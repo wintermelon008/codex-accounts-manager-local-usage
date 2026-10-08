@@ -1005,7 +1005,7 @@ class MailboxIntegration {
     if (!managedAccount) {
       throw new Error("未找到与该邮箱匹配的 Codex 账号");
     }
-    if (!managedAccount.requiresReauthorization) {
+    if (!managedAccount.reauthorizationRequired) {
       throw new Error("对应 Codex 账号当前不需要重新授权，已取消联删");
     }
 
@@ -1110,7 +1110,7 @@ class MailboxIntegration {
         continue;
       }
       const managedAccount = directory.find(
-        (account) => normalizeEmail(account.email) === normalizeEmail(mailbox.address) && account.requiresReauthorization
+        (account) => normalizeEmail(account.email) === normalizeEmail(mailbox.address) && account.reauthorizationRequired
       );
       if (managedAccount) {
         candidates.push({ mailbox, managedAccount });
@@ -1461,6 +1461,7 @@ class MailboxIntegration {
       throw new Error("当前会话不是 GPT 手动注册会话");
     }
     const result = await this.registrationManager.completeManualRegistration(id);
+    await this.registrationGptStatusSync;
     this.postPanelMessage({
       type: "toast",
       level: "success",
@@ -2501,13 +2502,48 @@ function normalizeManagedAccountDirectory(entries) {
   }
   return entries
     .filter((entry) => entry && typeof entry === "object")
-    .map((entry) => ({
-      accountId: typeof entry.accountId === "string" ? entry.accountId.trim() : "",
-      email: typeof entry.email === "string" ? entry.email.trim() : "",
-      requiresReauthorization: entry.requiresReauthorization === true,
-      ...(typeof entry.healthKind === "string" ? { healthKind: entry.healthKind } : {})
-    }))
+    .map((entry) => {
+      const healthKind = typeof entry.healthKind === "string" ? entry.healthKind : undefined;
+      const hardReauthorization =
+        entry.reauthorizationRequired === true ||
+        entry.requiresReauthorization === true ||
+        entry.accountState === "auth_invalid" ||
+        ["reauthorize", "access_token_invalid"].includes(healthKind);
+      const accountState = normalizeManagedAccountState(entry.accountState, healthKind, hardReauthorization);
+      const quotaLimited = entry.quotaLimited === true || healthKind === "quota";
+      const reauthorizationRecommended =
+        entry.reauthorizationRecommended === true || hardReauthorization || accountState === "usable_no_renewal";
+      return {
+        accountId: typeof entry.accountId === "string" ? entry.accountId.trim() : "",
+        email: typeof entry.email === "string" ? entry.email.trim() : "",
+        requiresReauthorization: hardReauthorization,
+        accountState,
+        quotaLimited,
+        reauthorizationRecommended,
+        reauthorizationRequired: hardReauthorization,
+        ...(healthKind ? { healthKind } : {})
+      };
+    })
     .filter((entry) => Boolean(entry.accountId && entry.email));
+}
+
+function normalizeManagedAccountState(value, healthKind, hardReauthorization) {
+  if (hardReauthorization) return "auth_invalid";
+  if (["usable", "usable_no_renewal", "unknown", "auth_invalid"].includes(value)) {
+    return value;
+  }
+  switch (healthKind) {
+    case "refresh_unavailable":
+      return "usable_no_renewal";
+    case "healthy":
+    case "expiring":
+    case "quota":
+      return "usable";
+    case undefined:
+      return "usable";
+    default:
+      return "unknown";
+  }
 }
 
 function hasOpenAiAccountDeactivationMessage(detail) {

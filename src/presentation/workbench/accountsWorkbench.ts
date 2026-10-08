@@ -36,8 +36,7 @@ import {
   isSub2ApiAccount,
   type SharedCodexAccountJson
 } from "../../core/types";
-import { resolveAccountHealth } from "../../application/accounts/health";
-import { isAccountReauthorizationRequired } from "../../domain/accountHealth";
+import { getManagedAccountState, resolveAccountHealth } from "../../application/accounts/health";
 import { observeAccountAvailability } from "../../application/accounts/observeAvailability";
 import {
   clearAccountStates,
@@ -70,6 +69,7 @@ import {
 import { launchIncognitoBrowser } from "../../integrations/registrationBrowser";
 import { extractClaims } from "../../utils/jwt";
 import { refreshQuotaSummaryPanel } from "../dashboard/panel";
+import { getDashboardAccountScope } from "../dashboard/accountScope";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
 import { selectAuthRevocationCandidates } from "../../application/accounts/authRevocationSwitch";
 import { getCurrentWindowRuntimeAccountId } from "./windowRuntimeAccount";
@@ -310,12 +310,18 @@ export class AccountsWorkbench {
 
     return managedAccounts.map((account) => {
       const tokens = this.managedAccountTokenCache.get(account.id);
-      const healthKind = resolveAccountHealth(account, tokens, automation).kind;
+      const health = resolveAccountHealth(account, tokens, automation);
+      const accountState = getManagedAccountState(health);
+      const reauthorizationRequired = accountState === "auth_invalid";
       return {
         accountId: account.id,
         email: account.email,
-        requiresReauthorization: isAccountReauthorizationRequired(healthKind),
-        healthKind
+        requiresReauthorization: reauthorizationRequired,
+        accountState,
+        quotaLimited: health.kind === "quota" || health.availability === "quota_limited",
+        reauthorizationRecommended: reauthorizationRequired || accountState === "usable_no_renewal",
+        reauthorizationRequired,
+        healthKind: health.kind
       };
     });
   }
@@ -807,7 +813,11 @@ export class AccountsWorkbench {
               })
           },
           getCodexAccountsConfiguration(),
-          { excludedAccountIds, refreshedAccountIds }
+          {
+            excludedAccountIds,
+            refreshedAccountIds,
+            visibleAccountIds: getDashboardAccountScope()
+          }
         );
         if (!candidate) {
           break;
@@ -868,7 +878,8 @@ export class AccountsWorkbench {
       activeAccount.id,
       getCodexAccountsConfiguration(),
       undefined,
-      new Set(this.authRevokedAccountIds.keys())
+      new Set(this.authRevokedAccountIds.keys()),
+      getDashboardAccountScope()
     );
     if (candidates.length === 0) {
       return { handled: false, reason: "no eligible seamless-switch account is available" };

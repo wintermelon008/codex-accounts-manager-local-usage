@@ -1,6 +1,7 @@
 import type { CodexTokens } from "../core/types";
 import { needsTokenRefresh, refreshTokens } from "./oauth";
 import { classifyRenewalFailure, readRenewal, recordRenewal } from "../application/accounts/accountState";
+import { isTokenExpired } from "../utils/jwt";
 
 const TOKEN_REFRESH_LEASE_MS = 60_000;
 const TOKEN_REFRESH_LEASE_WAIT_MS = 5_000;
@@ -36,6 +37,8 @@ type CoordinatedTokenSource = {
   fallbackTokens?: CodexTokens;
   /** Refresh a still-valid token after an authenticated endpoint rejects it. */
   forceRefresh?: boolean;
+  /** Allow account switching to use an access token that is still valid when renewal is unavailable. */
+  allowValidAccessTokenFallback?: boolean;
 };
 
 const inFlightRefreshes = new Map<string, Promise<CodexTokens | undefined>>();
@@ -71,12 +74,14 @@ export function ensureFreshAccountTokens(
     notifyTokenChange?: boolean;
     providerAccountId?: string;
     forceRefresh?: boolean;
+    allowValidAccessTokenFallback?: boolean;
   } = {}
 ): Promise<CodexTokens | undefined> {
   return ensureFreshTokensWithLease(repo, {
     key: `account:${accountId}`,
     fallbackTokens: options.fallbackTokens,
     forceRefresh: options.forceRefresh,
+    allowValidAccessTokenFallback: options.allowValidAccessTokenFallback,
     load: async () => {
       const current = await repo.getTokens(accountId, { forceReload: true });
       if (!current) {
@@ -138,6 +143,11 @@ async function refreshTokensWithLease(
   generation: number
 ): Promise<CodexTokens | undefined> {
   const loadLatest = async (): Promise<CodexTokens | undefined> => (await source.load()) ?? source.fallbackTokens;
+  const canUseValidAccessTokenFallback = (tokens: CodexTokens | undefined): boolean =>
+    source.allowValidAccessTokenFallback === true &&
+    source.forceRefresh !== true &&
+    tokens?.accessToken !== undefined &&
+    !isTokenExpired(tokens.accessToken, 0);
   const initial = await loadLatest();
   if (!isRefreshGenerationCurrent(source.key, generation)) {
     return loadLatest();
@@ -147,12 +157,18 @@ async function refreshTokensWithLease(
   }
 
   if (source.key.startsWith("account:") && readRenewal(source.key.slice(8), initial) === "unavailable") {
+    if (canUseValidAccessTokenFallback(initial)) {
+      return initial;
+    }
     throw Object.assign(new Error("Refresh token unavailable (invalid_grant); update credentials before retrying"), {
       context: { errorCode: "invalid_grant" }
     });
   }
 
   if (!initial.refreshToken) {
+    if (canUseValidAccessTokenFallback(initial)) {
+      return initial;
+    }
     if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), initial, "unavailable");
     throw new Error("Token expired and no refresh token is available");
   }
@@ -166,7 +182,7 @@ async function refreshTokensWithLease(
     const afterWait = await loadLatest();
     if (
       afterWait &&
-      !needsTokenRefresh(afterWait) &&
+      (!needsTokenRefresh(afterWait) || canUseValidAccessTokenFallback(afterWait)) &&
       (!source.forceRefresh || !initial || hasCredentialChanged(initial, afterWait))
     ) {
       return afterWait;
@@ -189,6 +205,9 @@ async function refreshTokensWithLease(
     }
 
     if (!current.refreshToken) {
+      if (canUseValidAccessTokenFallback(current)) {
+        return current;
+      }
       if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), current, "unavailable");
       throw new Error("Token expired and no refresh token is available");
     }
@@ -211,7 +230,11 @@ async function refreshTokensWithLease(
       if (!isRefreshGenerationCurrent(source.key, generation)) {
         return loadLatest();
       }
-      if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), current, classifyRenewalFailure(error));
+      const renewalFailure = classifyRenewalFailure(error);
+      if (source.key.startsWith("account:")) recordRenewal(source.key.slice(8), current, renewalFailure);
+      if (renewalFailure === "unavailable" && canUseValidAccessTokenFallback(current)) {
+        return current;
+      }
       if (!isRefreshTokenReusedError(error)) {
         throw error;
       }

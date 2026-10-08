@@ -192,7 +192,7 @@ function normalizeEmailIdentity(email: string | undefined): string | undefined {
 }
 
 /** Recover local renewal history, then bind it to the exact current pair.
- * A success timestamp alone, an unexpired JWT, or a quota response is not proof.
+ * A success timestamp alone, an unexpired JWT, or a quota response is not proof of renewal success.
  * The credential must have been issued during that same successful operation.
  * Failed or incomplete recovery stays retryable; it must never become a
  * persisted negative marker that makes a later host keep showing unknown.
@@ -389,6 +389,16 @@ export function recordAuthorization(accountId: string, tokens: CodexTokens): voi
 
 /** A completed managed runtime switch authenticated the target access token. */
 export function recordRuntimeAuthenticationSuccess(accountId: string, tokens: CodexTokens): void {
+  if (!accountId.trim() || !tokens.accountId || !tokens.accessToken) {
+    return;
+  }
+  recordAuthenticationSuccess(accountId, tokens, Date.now());
+  revision += 1;
+  persistAccountState(accountId);
+}
+
+/** A successful live quota response confirms the current access token, but not refresh-token usability. */
+export function recordQuotaAuthenticationSuccess(accountId: string, tokens: CodexTokens): void {
   if (!accountId.trim() || !tokens.accountId || !tokens.accessToken) {
     return;
   }
