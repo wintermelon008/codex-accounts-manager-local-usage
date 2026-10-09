@@ -108,6 +108,7 @@ export class AccountsWorkbench {
   private readonly managerControlServer: ManagerControlServer;
   private readonly sessionHub: SessionHub | undefined;
   private readonly integrationHost: ManagerIntegrationHost;
+  private readonly accountSharingSetting: vscode.Disposable;
   private readonly accountSharing: AccountSharingService;
   /** Mailbox only needs to reread credentials for new or changed accounts. */
   private readonly managedAccountTokenCache = new Map<
@@ -213,7 +214,7 @@ export class AccountsWorkbench {
             throw new Error(`Codex account '${accountId}' was not found`);
           }
           if (isSub2ApiAccount(account)) {
-            throw new Error("Gateway virtual accounts cannot be removed through the Mailbox integration");
+            throw new Error("Gateway virtual accounts cannot be removed through the 邮箱管理集成");
           }
           await this.repo.removeAccount(accountId);
           void this.statusBar.refresh();
@@ -226,6 +227,13 @@ export class AccountsWorkbench {
         fetchWithManagerProxy: (input, init) => fetchWithConfiguredProxy(input, init)
       }
     );
+    this.accountSharingSetting = this.integrationHost.registerFeatureSetting({
+      id: "account-sharing",
+      title: "账号共享",
+      description: "关闭后隐藏共享入口并停止 Relay 同步；不会删除共享身份、好友关系或历史状态。存在活动租约时必须先归还账号。",
+      getEnabled: () => this.accountSharing.isEnabled(),
+      setEnabled: (enabled) => this.accountSharing.setEnabled(enabled)
+    });
     this.localImportInbox = isLocalImportInboxEnabled() || isExternalControlEnabled()
       ? new LocalImportInbox(this.repo, () => {
           void this.statusBar.refresh();
@@ -347,7 +355,9 @@ export class AccountsWorkbench {
     });
     await measureStep("accountSharing.init", async () => {
       await this.accountSharing.initialize();
-      this.accountSharing.start();
+      if (this.accountSharing.isEnabled()) {
+        this.accountSharing.start();
+      }
     });
     const sessionHub = this.sessionHub;
     if (sessionHub) {
@@ -515,6 +525,7 @@ export class AccountsWorkbench {
     this.refreshCoordinator.dispose();
     this.hotSwitchRuntime.dispose();
     this.accountSharing.dispose();
+    this.accountSharingSetting.dispose();
     this.localImportInbox?.dispose();
     this.managerControlServer.dispose();
     setActiveManagerIntegrationHost(undefined);

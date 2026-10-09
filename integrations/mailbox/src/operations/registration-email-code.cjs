@@ -135,7 +135,7 @@ class RegistrationEmailCodeWatcher {
     try {
       mailbox = this.findMailbox(address);
       if (!mailbox) {
-        return this.fail("未找到已导入的邮箱，请先在 Mailbox 面板导入该邮箱");
+        return this.fail("未找到已导入的邮箱，请先在邮箱管理面板导入该邮箱");
       }
       this.setState({
         mailboxId: mailbox.id,
@@ -212,7 +212,7 @@ class RegistrationEmailCodeWatcher {
       if (signal.aborted) return this.snapshot();
       const mailbox = this.findMailbox(address);
       if (!mailbox) {
-        return this.fail("未找到已导入的邮箱，请先在 Mailbox 面板导入该邮箱");
+        return this.fail("未找到已导入的邮箱，请先在邮箱管理面板导入该邮箱");
       }
       this.setState({
         mailboxId: mailbox.id,
@@ -418,7 +418,7 @@ function emailQueryFailureMessage(error, retryMessage) {
   if (error?.code === "imap_auth_failed") {
     return "Outlook IMAP OAuth 认证失败；请点击“查询邮件”重试，若仍失败请检查 IMAP 权限或重新授权。";
   }
-  return error?.retryable === false ? "邮箱来源凭据不可用，请检查 Mailbox 导入信息" : retryMessage;
+  return error?.retryable === false ? "邮箱来源凭据不可用，请检查邮箱管理导入信息" : retryMessage;
 }
 
 module.exports = {

@@ -27,6 +27,7 @@ import { clearDashboardAccountOrder, getDashboardAccountOrder, setDashboardAccou
 import { clearDashboardAccountScope, setDashboardAccountScope } from "./accountScope";
 import type { AccountSharingService } from "../../sharing";
 import { getActiveManagerIntegrationHost } from "../../integrations";
+import { readDashboardSeamlessRuntime, type HotSwitchRuntimeStatusSource } from "./seamlessRuntimeStatus";
 
 const DASHBOARD_VIEW_TYPE = "codexQuotaSummary";
 export const DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS = 1_000;
@@ -44,6 +45,7 @@ type PublishDashboardSnapshotParams = {
   scheduleLocalUsageRefresh?: (nextRefreshAt: number) => void;
   usageAnalytics?: LocalUsageAnalyticsService;
   accountSharing?: AccountSharingService;
+  hotSwitchRuntime?: HotSwitchRuntimeStatusSource;
   lastPublishedStateSignature?: string;
   force?: boolean;
   isCurrent?: () => boolean;
@@ -56,7 +58,8 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
   if (localUsage?.nextRefreshAt != null) {
     params.scheduleLocalUsageRefresh?.(localUsage.nextRefreshAt);
   }
-  const sharingArgument = params.accountSharing ? ([params.accountSharing.getDashboardView()] as const) : [];
+  const sharingArgument =
+    params.accountSharing?.isEnabled() === true ? ([params.accountSharing.getDashboardView()] as const) : [];
   const state = await buildDashboardState(
     params.repo,
     params.settingsStore,
@@ -66,6 +69,9 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
     accountTokenUsage,
     ...sharingArgument
   );
+  if (params.hotSwitchRuntime) {
+    state.seamlessRuntime = await readDashboardSeamlessRuntime(params.hotSwitchRuntime);
+  }
   if (params.isCurrent && !params.isCurrent()) {
     return undefined;
   }
@@ -97,6 +103,7 @@ class DashboardPanelController {
   private configWatcher: vscode.Disposable | undefined;
   private webviewReady = false;
   private publishTimer: NodeJS.Timeout | undefined;
+  private runtimeStatusTimer: NodeJS.Timeout | undefined;
   private lastPublishedStateSignature: string | undefined;
   private publishRevision = 0;
   private usageAnalytics: LocalUsageAnalyticsService | undefined;
@@ -105,7 +112,8 @@ class DashboardPanelController {
     private readonly context: vscode.ExtensionContext,
     private readonly repo: AccountsRepository,
     private readonly accountSharing?: AccountSharingService,
-    private readonly requestQuotaCountdownAfterManualReset?: (accountId: string) => void
+    private readonly requestQuotaCountdownAfterManualReset?: (accountId: string) => void,
+    private readonly hotSwitchRuntime?: HotSwitchRuntimeStatusSource
   ) {
     this.announcements = new AnnouncementService(context.globalStorageUri.fsPath, context.extensionUri.fsPath);
     this.oauth = new DashboardOAuthCoordinator(repo, () => {
@@ -131,6 +139,10 @@ class DashboardPanelController {
         if (this.publishTimer) {
           clearTimeout(this.publishTimer);
           this.publishTimer = undefined;
+        }
+        if (this.runtimeStatusTimer) {
+          clearInterval(this.runtimeStatusTimer);
+          this.runtimeStatusTimer = undefined;
         }
         this.oauth.dispose();
         this.configWatcher?.dispose();
@@ -186,6 +198,7 @@ class DashboardPanelController {
     if (this.webviewReady) {
       this.schedulePublishState();
     }
+    this.ensureRuntimeStatusPolling();
   }
 
   async refresh(): Promise<void> {
@@ -247,6 +260,7 @@ class DashboardPanelController {
       schedulePublishState: () => this.schedulePublishState(),
       usageAnalytics: this.getUsageAnalytics(),
       accountSharing: this.accountSharing,
+      hotSwitchRuntime: this.hotSwitchRuntime,
       lastPublishedStateSignature: this.lastPublishedStateSignature,
       force,
       isCurrent: () => revision === this.publishRevision
@@ -327,7 +341,7 @@ class DashboardPanelController {
 
     const integrationHost = getActiveManagerIntegrationHost();
     const refreshTasks: Promise<unknown>[] = [this.announcements.forceRefresh(this.getAnnouncementOptions())];
-    if (this.accountSharing) {
+    if (this.accountSharing?.isEnabled()) {
       refreshTasks.push(this.accountSharing.poll());
     }
     if (integrationHost) {
@@ -350,6 +364,34 @@ class DashboardPanelController {
     const usageAnalytics = this.getUsageAnalytics();
     await usageAnalytics.refresh(() => this.schedulePublishState());
     await this.publishState(true);
+  }
+
+  private async publishRuntimeStatus(): Promise<void> {
+    if (!this.panel || !this.webviewReady || !this.hotSwitchRuntime) {
+      return;
+    }
+    const runtime = await readDashboardSeamlessRuntime(this.hotSwitchRuntime);
+    await this.panel.webview.postMessage({
+      type: "dashboard:seamless-runtime",
+      runtime
+    } satisfies DashboardHostMessage);
+  }
+
+  private ensureRuntimeStatusPolling(): void {
+    if (!this.hotSwitchRuntime || this.runtimeStatusTimer) {
+      return;
+    }
+    this.runtimeStatusTimer = setInterval(() => {
+      if (this.panel && this.webviewReady) {
+        void this.publishRuntimeStatus().catch((error: unknown) => {
+          console.warn(
+            "[codexAccounts] Dashboard runtime status refresh failed:",
+            error instanceof Error ? error.message : String(error)
+          );
+        });
+      }
+    }, 5_000);
+    this.runtimeStatusTimer.unref?.();
   }
 
   private async pickCodexAppPath(): Promise<void> {
@@ -384,13 +426,15 @@ export function openQuotaSummaryPanel(
   context: vscode.ExtensionContext,
   repo: AccountsRepository,
   accountSharing?: AccountSharingService,
-  requestQuotaCountdownAfterManualReset?: (accountId: string) => void
+  requestQuotaCountdownAfterManualReset?: (accountId: string) => void,
+  hotSwitchRuntime?: HotSwitchRuntimeStatusSource
 ): void {
   dashboardPanelController ??= new DashboardPanelController(
     context,
     repo,
     accountSharing,
-    requestQuotaCountdownAfterManualReset
+    requestQuotaCountdownAfterManualReset,
+    hotSwitchRuntime
   );
   dashboardPanelController.open();
 }

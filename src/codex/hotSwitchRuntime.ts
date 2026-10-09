@@ -53,7 +53,8 @@ const SESSION_QUEUE_FILE = "codex-session-queue.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const RUNTIME_OWNER_FILE = "runtime-owner.lease";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-const RUNTIME_PROTOCOL_VERSION = 16;
+export const HOT_SWITCH_RUNTIME_PROTOCOL_VERSION = 16;
+const RUNTIME_PROTOCOL_VERSION = HOT_SWITCH_RUNTIME_PROTOCOL_VERSION;
 const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
 const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 const USAGE_ATTRIBUTION_RETRY_DELAY_MS = 5_000;
@@ -120,6 +121,11 @@ type RetainedUnmanagedRollbackSnapshot = {
 
 export class CodexHotSwitchRuntime implements vscode.Disposable {
   private bridge: CodexHotSwitchBridge | undefined;
+  private setupResult: HotSwitchSetupResult = {
+    enabled: false,
+    configured: false,
+    requiresReload: false
+  };
   private readonly unmanagedRollbackSnapshots = new Map<string, RetainedUnmanagedRollbackSnapshot>();
   private usageAttributionRetryTimer: NodeJS.Timeout | undefined;
   private usageAttributionSyncInFlight: Promise<void> | undefined;
@@ -145,17 +151,21 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
 
   async initialize(): Promise<HotSwitchSetupResult> {
     if (!isHotSwitchEnabled()) {
-      return {
+      return this.rememberSetupResult({
         enabled: false,
         configured: false,
         requiresReload: false
-      };
+      });
     }
     return this.configureRuntime();
   }
 
   isEnabled(): boolean {
     return isHotSwitchEnabled();
+  }
+
+  getSetupStatus(): HotSwitchSetupResult {
+    return { ...this.setupResult };
   }
 
   async enable(): Promise<HotSwitchSetupResult> {
@@ -191,11 +201,11 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         throw new Error(`The Gateway relay could not activate its route (${result.activeTurns} active turn(s))`);
       }
       await this.setGatewayRuntimeState({ config: normalized, active: true });
-      return { enabled: true, configured: true, requiresReload: false };
+      return this.rememberSetupResult({ enabled: true, configured: true, requiresReload: false });
     }
     if (this.bridge && current) {
       await this.setGatewayRuntimeState({ config: normalized, active: true });
-      return { enabled: true, configured: false, requiresReload: true };
+      return this.rememberSetupResult({ enabled: true, configured: false, requiresReload: true });
     }
     await this.setGatewayRuntimeState({ config: normalized, active: true });
     return this.configureRuntime();
@@ -206,23 +216,23 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     if (this.bridge && current) {
       const result = await this.switchGatewayRoute("chatgpt", undefined, options);
       if (result.status !== "switched") {
-        return {
+        return this.rememberSetupResult({
           enabled: true,
           configured: true,
           requiresReload: false,
           error: `Gateway route switch was deferred with ${result.activeTurns} active turn(s)`
-        };
+        });
       }
       await this.setGatewayRuntimeState({ config: current.config, active: false });
-      return { enabled: true, configured: true, requiresReload: false };
+      return this.rememberSetupResult({ enabled: true, configured: true, requiresReload: false });
     }
     await this.setGatewayRuntimeState(undefined);
     if (!isHotSwitchEnabled()) {
-      return {
+      return this.rememberSetupResult({
         enabled: false,
         configured: false,
         requiresReload: false
-      };
+      });
     }
     return this.configureRuntime();
   }
@@ -854,25 +864,30 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
           }
         }
       }
-      return {
+      return this.rememberSetupResult({
         enabled: true,
         configured: !requiresReload,
         requiresReload,
         shimPath: launcherDestination
-      };
+      });
     } catch (error) {
       if (installedCliOverlay) {
         await restoreRemoteCliOverlay(installedCliOverlay.cliPath, installedCliOverlay.launcherPath).catch(
           () => undefined
         );
       }
-      return {
+      return this.rememberSetupResult({
         enabled: true,
         configured: false,
         requiresReload: false,
         error: error instanceof Error ? error.message : String(error)
-      };
+      });
     }
+  }
+
+  private rememberSetupResult(result: HotSwitchSetupResult): HotSwitchSetupResult {
+    this.setupResult = { ...result };
+    return result;
   }
 
   /**

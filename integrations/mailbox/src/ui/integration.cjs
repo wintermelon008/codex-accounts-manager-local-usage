@@ -48,7 +48,10 @@ const {
 
 const INTEGRATION_ID = "mailbox";
 const REGISTRATION_INTEGRATION_ID = "mailbox-registration";
+const MAILBOX_DISPLAY_NAME = "邮箱管理";
 const SELECTED_MAILBOX_KEY = "codexAccounts.mailbox.selected.v1";
+const MAILBOX_ENABLED_KEY = "codexAccounts.mailbox.enabled.v1";
+const REGISTRATION_ENABLED_KEY = "codexAccounts.mailbox.registration.enabled.v1";
 const REGISTRATION_DEFAULT_PHONE_SOURCE_KEY = "codexAccounts.mailbox.registration.defaultPhoneSource.v1";
 const OPERATION_LABELS = {
   query: "查询邮件",
@@ -112,6 +115,8 @@ class MailboxIntegration {
     });
     this.registration = undefined;
     this.registrationAssistantRegistration = undefined;
+    this.mailboxEnabled = context.globalState.get(MAILBOX_ENABLED_KEY, true) !== false;
+    this.registrationEnabled = context.globalState.get(REGISTRATION_ENABLED_KEY, true) !== false;
     this.managerChangeSubscription = undefined;
     this.panel = undefined;
     this.registrationPanel = undefined;
@@ -292,6 +297,13 @@ class MailboxIntegration {
         id: REGISTRATION_INTEGRATION_ID,
         getViewModel: () => this.getRegistrationViewModel(),
         runAction: (actionId) => this.runRegistrationAction(actionId),
+        setting: {
+          id: REGISTRATION_INTEGRATION_ID,
+          title: "注册助手",
+          description: "关闭后隐藏注册助手入口并停止未完成的注册会话；不会删除邮箱池或历史记录。",
+          getEnabled: () => this.registrationEnabled,
+          setEnabled: (enabled) => this.setRegistrationEnabled(enabled)
+        },
         onDidChange: this.events.event
       });
       this.registration = this.api.registerDashboardIntegration({
@@ -301,6 +313,13 @@ class MailboxIntegration {
         getDeactivatedMailboxEmails: () => this.getDeactivatedMailboxEmails(),
         removeDeactivatedMailboxes: (emails) => this.removeDeactivatedMailboxes(emails),
         runAction: (actionId) => this.runAction(actionId),
+        setting: {
+          id: INTEGRATION_ID,
+          title: MAILBOX_DISPLAY_NAME,
+          description: `关闭后隐藏${MAILBOX_DISPLAY_NAME}入口并停止邮箱后台操作；不会删除邮箱凭据、邮件记录或配置。`,
+          getEnabled: () => this.mailboxEnabled,
+          setEnabled: (enabled) => this.setMailboxEnabled(enabled)
+        },
         onDidChange: this.events.event
       });
     }
@@ -310,7 +329,69 @@ class MailboxIntegration {
     this.publish();
   }
 
+  isMailboxEnabled() {
+    return this.mailboxEnabled;
+  }
+
+  isRegistrationEnabled() {
+    return this.registrationEnabled;
+  }
+
+  async setMailboxEnabled(enabled) {
+    if (this.mailboxEnabled === enabled) {
+      return;
+    }
+    if (!enabled) {
+      if (this.automaticRenewalScanTimer) {
+        clearTimeout(this.automaticRenewalScanTimer);
+        this.automaticRenewalScanTimer = undefined;
+      }
+      await this.stopAllMailboxOperations();
+      this.panel?.dispose?.();
+      this.panel = undefined;
+    }
+    this.mailboxEnabled = enabled;
+    await this.context.globalState.update(MAILBOX_ENABLED_KEY, enabled);
+    if (enabled) {
+      this.scheduleAutomaticRenewalScan();
+    }
+    this.publish();
+  }
+
+  async setRegistrationEnabled(enabled) {
+    if (this.registrationEnabled === enabled) {
+      return;
+    }
+    if (!enabled) {
+      await this.cancelAllRegistrationSessions();
+      this.registrationPanel?.dispose?.();
+      this.registrationPanel = undefined;
+    }
+    this.registrationEnabled = enabled;
+    await this.context.globalState.update(REGISTRATION_ENABLED_KEY, enabled);
+    this.publish();
+  }
+
+  async stopAllMailboxOperations() {
+    const mailboxIds = new Set([
+      ...this.coordinator.getActiveOperations().map((operation) => operation.mailboxId),
+      ...this.codexImports.keys()
+    ]);
+    for (const mailboxId of mailboxIds) {
+      await this.stopMailbox(mailboxId);
+    }
+  }
+
   getRegistrationViewModel() {
+    if (!this.registrationEnabled) {
+      return {
+        id: REGISTRATION_INTEGRATION_ID,
+        title: "注册助手",
+        status: "inactive",
+        statusMessage: "注册助手功能已关闭",
+        actions: []
+      };
+    }
     const hasSessions = this.registrationManager.getAllSessions().length > 0;
     return {
       id: REGISTRATION_INTEGRATION_ID,
@@ -330,25 +411,34 @@ class MailboxIntegration {
   }
 
   getViewModel() {
+    if (!this.mailboxEnabled) {
+      return {
+        id: INTEGRATION_ID,
+        title: MAILBOX_DISPLAY_NAME,
+        status: "inactive",
+        statusMessage: `${MAILBOX_DISPLAY_NAME}功能已关闭`,
+        actions: []
+      };
+    }
     return {
       id: INTEGRATION_ID,
-      title: "Mailbox",
+      title: MAILBOX_DISPLAY_NAME,
       status: this.loadError ? "error" : "ready",
-      statusMessage: this.loadError ? this.loadError : "当前主编辑器组中的 Mailbox 面板",
+      statusMessage: this.loadError ? this.loadError : `当前主编辑器组中的${MAILBOX_DISPLAY_NAME}面板`,
       topButton: {
         actionId: "open",
-        label: "Mailbox",
-        tooltip: "在当前主编辑器组打开 Mailbox",
+        label: MAILBOX_DISPLAY_NAME,
+        tooltip: `在当前主编辑器组打开${MAILBOX_DISPLAY_NAME}`,
         icon: "mail"
       },
       actions: [
-        { id: "open", label: "Mailbox", enabled: !this.loadError, tone: "primary", tooltip: "在当前主编辑器组打开 Mailbox" }
+        { id: "open", label: MAILBOX_DISPLAY_NAME, enabled: !this.loadError, tone: "primary", tooltip: `在当前主编辑器组打开${MAILBOX_DISPLAY_NAME}` }
       ]
     };
   }
 
   async refresh() {
-    if (this.disposed) {
+    if (this.disposed || (!this.mailboxEnabled && !this.registrationEnabled)) {
       return;
     }
     if (this.pool.isLoaded()) {
@@ -361,7 +451,7 @@ class MailboxIntegration {
   }
 
   scheduleAutomaticRenewalScan() {
-    if (this.disposed || !this.pool.isLoaded() || this.automaticRenewalScanTimer) {
+    if (this.disposed || !this.mailboxEnabled || !this.pool.isLoaded() || this.automaticRenewalScanTimer) {
       return;
     }
     const now = Date.now();
@@ -377,7 +467,7 @@ class MailboxIntegration {
   }
 
   async runAutomaticRenewalScan(now = Date.now()) {
-    if (this.disposed || !this.pool.isLoaded()) {
+    if (this.disposed || !this.mailboxEnabled || !this.pool.isLoaded()) {
       return { operation: "automatic-renewal", results: [], stopped: false };
     }
     if (this.automaticRenewalScanPromise) {
@@ -420,7 +510,7 @@ class MailboxIntegration {
   }
 
   getDeactivatedMailboxEmails() {
-    if (!this.pool.isLoaded()) {
+    if (!this.mailboxEnabled || !this.pool.isLoaded()) {
       return [];
     }
     return this.pool
@@ -430,6 +520,9 @@ class MailboxIntegration {
   }
 
   async removeDeactivatedMailboxes(emails) {
+    if (!this.mailboxEnabled) {
+      throw new Error("邮箱管理功能已关闭，请先在 Manager 设置中重新开启");
+    }
     const requestedEmails = new Set(
       (Array.isArray(emails) ? emails : [])
         .filter((email) => typeof email === "string")
@@ -461,7 +554,7 @@ class MailboxIntegration {
           }
         }
       } catch (error) {
-        failed.push({ email: mailbox.address, message: safeError(error, "Mailbox 删除失败") });
+        failed.push({ email: mailbox.address, message: safeError(error, "邮箱管理删除失败") });
       }
     }
 
@@ -480,13 +573,19 @@ class MailboxIntegration {
   }
 
   async runAction(actionId) {
+    if (!this.mailboxEnabled) {
+      throw new Error("邮箱管理功能已关闭，请先在 Manager 设置中重新开启");
+    }
     if (actionId !== "open") {
-      throw new Error("Unsupported Mailbox action.");
+      throw new Error("不支持的邮箱管理操作。");
     }
     await this.openPanel();
   }
 
   async runRegistrationAction(actionId) {
+    if (!this.registrationEnabled) {
+      throw new Error("注册助手功能已关闭，请先在 Manager 设置中重新开启");
+    }
     if (actionId !== "open") {
       throw new Error("Unsupported registration assistant action.");
     }
@@ -494,7 +593,7 @@ class MailboxIntegration {
   }
 
   async openPanel() {
-    if (this.disposed) {
+    if (this.disposed || !this.mailboxEnabled) {
       return;
     }
     if (this.panel) {
@@ -505,7 +604,7 @@ class MailboxIntegration {
 
     this.panel = this.vscode.window.createWebviewPanel(
       MAILBOX_PANEL_VIEW_TYPE,
-      "Mailbox",
+      MAILBOX_DISPLAY_NAME,
       { viewColumn: this.vscode.ViewColumn.Active, preserveFocus: false },
       { enableScripts: true, retainContextWhenHidden: true }
     );
@@ -519,7 +618,7 @@ class MailboxIntegration {
   }
 
   async openRegistrationPanel() {
-    if (this.disposed) {
+    if (this.disposed || !this.registrationEnabled) {
       return;
     }
     const exchangeRateRefresh = this.ensureRegistrationExchangeRate();
@@ -760,7 +859,7 @@ class MailboxIntegration {
           await this.cleanupAllRegistrationSessions();
           return;
         default:
-          throw new Error("Unsupported Mailbox panel action.");
+          throw new Error("不支持的邮箱管理面板操作。");
       }
     } catch (error) {
       if (error?.message === "2FAuth 请求已取消") {
@@ -771,7 +870,7 @@ class MailboxIntegration {
         level: "error",
         action: typeof message.action === "string" ? message.action : undefined,
         mailboxId: typeof message.mailboxId === "string" ? message.mailboxId : undefined,
-        message: safeError(error, "Mailbox 操作失败")
+        message: safeError(error, "邮箱管理操作失败")
       });
       await this.publishPanelState();
     }
@@ -1951,7 +2050,7 @@ class MailboxIntegration {
       this.postPanelMessage({ type: "operation-complete", action: kind, ...notificationTarget });
       return result;
     } catch (error) {
-      this.postPanelMessage({ type: "toast", level: "error", action: kind, ...notificationTarget, message: safeError(error, "Mailbox 操作失败") });
+      this.postPanelMessage({ type: "toast", level: "error", action: kind, ...notificationTarget, message: safeError(error, "邮箱管理操作失败") });
       throw error;
     } finally {
       await this.publishPanelState();
@@ -2403,6 +2502,34 @@ class MailboxIntegration {
       await this.persistRegistrationSessions().catch(() => undefined);
       this.publish();
       await this.publishPanelState();
+    }
+  }
+
+  async cancelAllRegistrationSessions() {
+    const terminalStates = [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED];
+    const sessions = this.registrationManager.getAllSessions();
+    for (const session of sessions) {
+      this.stopRegistrationEmailWatcher(session.id);
+      try {
+        await this.cancelRegistrationCodexImport(session.id, { silent: true });
+        const state = this.registrationManager.getSessionState(session.id);
+        if (!terminalStates.includes(state?.state)) {
+          await this.registrationManager.cancelSession(session.id);
+        } else if (state?.phoneOrder?.running) {
+          await this.registrationManager.cancelPhoneNumber(session.id);
+        }
+      } catch (error) {
+        this.registrationDiagnostics.record({
+          level: "error",
+          sessionId: session.id,
+          msg: `关闭注册助手时取消注册会话失败：${safeError(error, "未知错误")}`
+        });
+      } finally {
+        await this.releaseRegistrationPhoneKey(session.id).catch(() => undefined);
+      }
+    }
+    if (sessions.length > 0) {
+      await this.persistRegistrationSessions().catch(() => undefined);
     }
   }
 

@@ -45,6 +45,8 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain(".local-usage-cards");
     expect(stylesheet).toContain(".local-usage-layout");
     expect(stylesheet).toContain(".local-usage-bar-row");
+    expect(stylesheet).toContain(".local-usage-chart-track");
+    expect(stylesheet).toContain("align-self: stretch");
     expect(stylesheet).toContain(".local-usage-range-btn");
     expect(stylesheet).toContain("grid-template-columns: repeat(5, minmax(0, 1fr))");
 
@@ -52,7 +54,11 @@ describe("local usage dashboard placement and responsive guards", () => {
       stylesheet.indexOf(".local-usage-section"),
       stylesheet.indexOf("@keyframes button-spin")
     );
-    expect(localUsageStyles).not.toContain("position:");
+    expect(localUsageStyles).toContain(".local-usage-chart-column::after");
+    expect(localUsageStyles).toContain("position: relative");
+    expect(localUsageStyles).toContain("position: absolute");
+    expect(localUsageStyles).toContain("width: min(31px, 65%)");
+    expect(localUsageStyles).toContain("transition-delay: 0s");
     expect(localUsageStyles).not.toMatch(/\.(?:overview|toolbar|accounts|modal)-/);
     expect(localUsageStyles).toContain("font-size: 16px");
     expect(localUsageStyles).toContain("font-size: 14px");
@@ -115,12 +121,13 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(main).not.toContain("账号排序");
   });
 
-  it("removes upstream auto-switch settings and places the Sub2API card setting under switching", () => {
+  it("places Manager runtime and feature selection under operations settings", () => {
     const settings = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/settingsOverlay.tsx"), "utf8");
     const baseBoundary = settings.indexOf('activeSection === "base"');
+    const operationsBoundary = settings.indexOf('activeSection === "operations"');
     const switchingBoundary = settings.indexOf('activeSection === "switching"');
-    const baseIntegrationSettings = settings.indexOf("baseIntegrationSettings.map");
-    const switchingIntegrationSettings = settings.indexOf("accountSwitchingIntegrationSettings.map");
+    const integrationSettings = settings.indexOf("props.integrationSettings.map");
+    const runtimeStatus = settings.indexOf("<SeamlessRuntimeStatus");
     const seamlessBoundary = settings.indexOf('? "无感切号（实验性）"', switchingBoundary);
     const quotaBandWait = settings.indexOf('? "等待时间"');
     const lowQuotaSwitch = settings.indexOf('? "低额度切号"');
@@ -128,11 +135,15 @@ describe("local usage dashboard placement and responsive guards", () => {
     const policy = settings.indexOf('key: "hot-switch-defer"');
     const waitBlock = settings.lastIndexOf('<div class="settings-block">', quotaBandWait);
 
-    expect(baseIntegrationSettings).toBeGreaterThan(baseBoundary);
-    expect(baseIntegrationSettings).toBeLessThan(switchingBoundary);
-    expect(switchingIntegrationSettings).toBeGreaterThan(switchingBoundary);
-    expect(switchingIntegrationSettings).toBeLessThan(seamlessBoundary);
-    expect(settings).toContain('SUB2API_CARD_VISIBILITY_SETTING_ID = "sub2api-gateway-card-visible"');
+    expect(operationsBoundary).toBeGreaterThan(baseBoundary);
+    expect(operationsBoundary).toBeLessThan(switchingBoundary);
+    expect(integrationSettings).toBeGreaterThan(operationsBoundary);
+    expect(integrationSettings).toBeLessThan(switchingBoundary);
+    expect(runtimeStatus).toBeGreaterThan(operationsBoundary);
+    expect(runtimeStatus).toBeLessThan(switchingBoundary);
+    expect(settings).not.toContain("IntegrationCards");
+    expect(settings).not.toContain("已注册集成");
+    expect(settings).not.toContain("Registered integrations");
     expect(settings).not.toContain("props.copy.autoSwitchTitle");
     expect(settings).not.toContain('patchAndSend("autoSwitchEnabled"');
     expect(settings).not.toContain("autoSwitchHourlyThreshold");

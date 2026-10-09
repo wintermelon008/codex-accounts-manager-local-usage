@@ -1114,7 +1114,7 @@ async function handleBatchRemove(
           failed: removedMailboxEmails.length,
           failures: [{ message }]
         };
-        console.warn(`[codexAccounts] linked Mailbox cleanup failed: ${message}`);
+        console.warn(`[codexAccounts] linked 邮箱管理 cleanup failed: ${message}`);
       }
     }
     mailboxCleanup ??= {
@@ -1123,10 +1123,10 @@ async function handleBatchRemove(
       failed: removedMailboxEmails.length,
       failures: [{
         message: language === "zh"
-          ? "Mailbox 未提供封禁邮箱清理能力，请更新 Mailbox 扩展"
+          ? "邮箱管理未提供封禁邮箱清理能力，请更新邮箱管理扩展"
           : language === "zh-hant"
-            ? "Mailbox 未提供封禁郵箱清理能力，請更新 Mailbox 擴充功能"
-            : "The installed Mailbox extension does not provide blocked-mailbox cleanup"
+            ? "郵箱管理未提供封禁郵箱清理能力，請更新郵箱管理擴充功能"
+            : "The installed mailbox manager extension does not provide blocked-mailbox cleanup"
       }]
     };
   }
@@ -1172,20 +1172,20 @@ function describeMailboxCleanup(
   if (cleanup.failed > 0) {
     const detail = cleanup.failures[0]?.message;
     if (language === "zh") {
-      return `Mailbox 邮箱清理失败 ${cleanup.failed} 个${detail ? `：${detail}` : "。"}`;
+      return `邮箱管理清理失败 ${cleanup.failed} 个${detail ? `：${detail}` : "。"}`;
     }
     if (language === "zh-hant") {
-      return `Mailbox 郵箱清理失敗 ${cleanup.failed} 個${detail ? `：${detail}` : "。"}`;
+      return `郵箱管理清理失敗 ${cleanup.failed} 個${detail ? `：${detail}` : "。"}`;
     }
-    return `Mailbox cleanup failed for ${cleanup.failed} mailbox(es)${detail ? `: ${detail}` : "."}`;
+    return `Mailbox manager cleanup failed for ${cleanup.failed} mailbox(es)${detail ? `: ${detail}` : "."}`;
   }
   if (language === "zh") {
-    return `已同步清理 Mailbox ${cleanup.removed} 个邮箱。`;
+    return `已同步清理邮箱管理中的 ${cleanup.removed} 个邮箱。`;
   }
   if (language === "zh-hant") {
-    return `已同步清理 Mailbox ${cleanup.removed} 個郵箱。`;
+    return `已同步清理郵箱管理中的 ${cleanup.removed} 個郵箱。`;
   }
-  return `Mailbox cleanup completed for ${cleanup.removed} mailbox(es).`;
+  return `Mailbox manager cleanup completed for ${cleanup.removed} mailbox(es).`;
 }
 
 async function handleReloadPrompt(account: CodexAccountRecord | undefined) {

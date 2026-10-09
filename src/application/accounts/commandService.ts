@@ -453,7 +453,8 @@ export class AccountsCommandService {
       this.context,
       this.repo,
       this.accountSharing,
-      this.requestQuotaCountdownAfterManualReset
+      this.requestQuotaCountdownAfterManualReset,
+      this.hotSwitchRuntime
     );
   }
 

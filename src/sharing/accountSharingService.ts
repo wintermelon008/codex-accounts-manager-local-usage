@@ -39,6 +39,7 @@ import {
 const SHARING_STATE_KEY = "codexAccounts.accountSharing.v1";
 const SHARING_KEYS_SECRET = "codexAccounts.accountSharing.keys.v1";
 const SHARING_RELAY_TOKEN_SECRET = "codexAccounts.accountSharing.relayToken.v1";
+const SHARING_ENABLED_KEY = "codexAccounts.accountSharing.enabled.v1";
 const SHARING_LOCAL_STATE_VERSION = 1;
 const SHARING_POLL_INTERVAL_MS = 10_000;
 const SHARING_HANDSHAKE_TIMEOUT_MS = 60_000;
@@ -78,6 +79,7 @@ export class AccountSharingService implements vscode.Disposable {
   private state: SharingState | undefined;
   private relayToken: string | undefined;
   private relayRegistrationValidatedAt: number | undefined;
+  private enabled = true;
   private pollTimer: NodeJS.Timeout | undefined;
   private pollInFlight: Promise<void> | undefined;
   private accountChangeSubscription: vscode.Disposable | undefined;
@@ -101,6 +103,7 @@ export class AccountSharingService implements vscode.Disposable {
       return;
     }
     const legacyState = this.context.globalState.get<Partial<SharingState>>(SHARING_STATE_KEY);
+    this.enabled = this.context.globalState.get<boolean>(SHARING_ENABLED_KEY, true) !== false;
     const localState = await this.loadLocalState(legacyState?.profile?.displayName);
     this.keys = localState.keys;
     const userId = deriveSharingUserId(this.keys.identityPublicKey);
@@ -113,6 +116,13 @@ export class AccountSharingService implements vscode.Disposable {
       identityPublicKey: this.keys.identityPublicKey,
       encryptionPublicKey: this.keys.encryptionPublicKey
     });
+    if (!this.enabled && this.state.leases.some((lease) => isActiveSharingLease(lease))) {
+      // Never leave an active lease without the poll/return machinery needed
+      // to complete it. Older builds had no feature toggle, so restore the
+      // safe enabled state when a persisted lease is present.
+      this.enabled = true;
+      void this.context.globalState.update(SHARING_ENABLED_KEY, true);
+    }
     this.relayToken = localState.relayToken?.trim() || undefined;
     this.initialized = true;
     this.accountChangeSubscription = this.repo.onDidChangeAccounts((accountIds) => {
@@ -129,7 +139,7 @@ export class AccountSharingService implements vscode.Disposable {
   }
 
   start(): void {
-    if (this.disposed || this.pollTimer) {
+    if (this.disposed || !this.enabled || this.pollTimer) {
       return;
     }
     void this.poll();
@@ -143,12 +153,16 @@ export class AccountSharingService implements vscode.Disposable {
     }, SHARING_POLL_INTERVAL_MS);
   }
 
-  dispose(): void {
-    this.disposed = true;
+  stop(): void {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.stop();
     this.accountChangeSubscription?.dispose();
     this.accountChangeSubscription = undefined;
     for (const timer of this.returnConfirmationTimers.values()) {
@@ -156,6 +170,28 @@ export class AccountSharingService implements vscode.Disposable {
     }
     this.returnConfirmationTimers.clear();
     this.returnConfirmationAttempts.clear();
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.assertInitialized();
+    if (this.enabled === enabled) {
+      return;
+    }
+    if (!enabled && this.state!.leases.some((lease) => isActiveSharingLease(lease))) {
+      throw new Error("当前存在活动共享租约，请先归还账号后再关闭账号共享");
+    }
+    this.enabled = enabled;
+    await this.context.globalState.update(SHARING_ENABLED_KEY, enabled);
+    if (enabled) {
+      this.start();
+    } else {
+      this.stop();
+    }
+    this.onChanged();
   }
 
   getProfile(): SharingPublicProfile {
@@ -186,6 +222,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   getDashboardView(): DashboardSharingViewModel {
     this.assertInitialized();
+    this.assertEnabled();
     return {
       userId: this.state!.profile.userId,
       displayName: this.state!.profile.displayName,
@@ -204,7 +241,7 @@ export class AccountSharingService implements vscode.Disposable {
   }
 
   async poll(): Promise<void> {
-    if (this.disposed || !this.initialized || this.pollInFlight) {
+    if (this.disposed || !this.initialized || !this.enabled || this.pollInFlight) {
       return;
     }
     this.pollInFlight = this.pollInternal()
@@ -233,6 +270,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async configureRelay(): Promise<void> {
     const current = this.getRelayUrl();
+    this.assertEnabled();
     const entered = await vscode.window.showInputBox({
       prompt: "输入共享 Relay URL；两台 Manager 必须使用同一个 Relay",
       value: current,
@@ -246,6 +284,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async setRelayUrl(value: string): Promise<void> {
     const normalized = normalizeRelayUrl(value);
+    this.assertEnabled();
     if (!normalized) {
       throw new Error("共享 Relay URL 无效");
     }
@@ -261,6 +300,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async setPeerNote(userId: string, note: string): Promise<void> {
     this.assertInitialized();
+    this.assertEnabled();
     const peer = this.state!.peers.find((candidate) => candidate.userId === userId);
     if (!peer) {
       throw new Error("共享好友不存在");
@@ -273,6 +313,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async removePeer(userId: string): Promise<boolean> {
     this.assertInitialized();
+    this.assertEnabled();
     const peer = this.state!.peers.find((candidate) => candidate.userId === userId);
     if (!peer) {
       return false;
@@ -307,6 +348,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async addPeerById(userId: string): Promise<void> {
     this.assertInitialized();
+    this.assertEnabled();
     const normalized = userId.trim();
     const profile = await this.lookupUser(normalized);
     if (profile.userId === this.getProfile().userId) {
@@ -330,6 +372,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async acceptRequest(requestId: string, accepted: boolean): Promise<void> {
     this.assertInitialized();
+    this.assertEnabled();
     const request = this.state!.pendingRequests.find((candidate) => candidate.id === requestId);
     if (!request) {
       throw new Error("共享请求不存在或已处理");
@@ -347,6 +390,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async resetIdentity(): Promise<void> {
     this.assertInitialized();
+    this.assertEnabled();
     const activeLeases = this.state!.leases.filter(
       (lease) => lease.state !== "returned" && lease.state !== "failed" && lease.state !== "expired"
     );
@@ -382,6 +426,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async shareAccountsWithPrompt(accountIds: readonly string[], language: DashboardLanguage): Promise<void> {
     this.assertInitialized();
+    this.assertEnabled();
     const peers = this.getTrustedPeers();
     if (peers.length === 0) {
       void vscode.window.showWarningMessage(
@@ -425,6 +470,7 @@ export class AccountSharingService implements vscode.Disposable {
     expiresAt: number
   ): Promise<void> {
     this.assertInitialized();
+    this.assertEnabled();
     const peer = this.getTrustedPeers().find((candidate) => candidate.userId === peerUserId.trim());
     if (!peer) {
       throw new Error("共享对象尚未接受好友请求");
@@ -437,6 +483,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async shareAccounts(accountIds: readonly string[], peer: SharingPeer, expiresAt: number): Promise<void> {
     this.assertInitialized();
+    this.assertEnabled();
     const uniqueIds = [...new Set(accountIds)].filter(Boolean);
     if (uniqueIds.length === 0 || uniqueIds.length > MAX_SHARED_ACCOUNTS) {
       throw new Error(`一次最多共享 ${MAX_SHARED_ACCOUNTS} 个账号`);
@@ -532,6 +579,7 @@ export class AccountSharingService implements vscode.Disposable {
     requestedAccountIds?: readonly string[]
   ): Promise<boolean> {
     this.assertInitialized();
+    this.assertEnabled();
     const lease = this.state!.leases.find(
       (candidate) => candidate.leaseId === leaseId && candidate.direction === "incoming"
     );
@@ -613,6 +661,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async returnAccount(accountId: string): Promise<boolean> {
     this.assertInitialized();
+    this.assertEnabled();
     const lease = this.state!.leases.find(
       (candidate) =>
         candidate.direction === "incoming" &&
@@ -628,6 +677,7 @@ export class AccountSharingService implements vscode.Disposable {
 
   async openManagement(language: DashboardLanguage): Promise<void> {
     this.assertInitialized();
+    this.assertEnabled();
     let close = false;
     while (!close) {
       const profile = this.getProfile();
@@ -1635,6 +1685,16 @@ export class AccountSharingService implements vscode.Disposable {
       throw new Error("Account sharing service is not initialized");
     }
   }
+
+  private assertEnabled(): void {
+    if (!this.enabled) {
+      throw new Error("账号共享功能已关闭，请先在 Manager 设置中重新开启");
+    }
+  }
+}
+
+function isActiveSharingLease(lease: SharingLease): boolean {
+  return !["returned", "failed", "expired"].includes(lease.state);
 }
 
 function normalizeState(

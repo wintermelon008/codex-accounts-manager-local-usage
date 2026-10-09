@@ -4,6 +4,7 @@ import type {
   DashboardSettingKey,
   DashboardSettingValue,
   DashboardSettings,
+  DashboardSeamlessRuntimeViewModel,
   DashboardState
 } from "../../src/domain/dashboard/types";
 import { useState } from "preact/hooks";
@@ -25,9 +26,7 @@ const AUTO_REFRESH_SCALE_VALUES = [1, 15, 30, 45, 60];
 const HOT_SWITCH_GRACE_VALUES = [10, 30, 60, 90, 120, 180, 300];
 const WARNING_VALUES = Array.from({ length: 18 }, (_, index) => 5 + index * 5);
 const WARNING_SCALE_VALUES = [5, 20, 35, 50, 65, 80, 90];
-const SUB2API_CARD_VISIBILITY_SETTING_ID = "sub2api-gateway-card-visible";
-
-type SettingsSectionId = "base" | "switching" | "quota" | "advanced";
+type SettingsSectionId = "base" | "operations" | "switching" | "quota" | "advanced";
 
 function resolveSettingsSectionLabels(lang: DashboardState["lang"]): Array<{
   id: SettingsSectionId;
@@ -37,6 +36,7 @@ function resolveSettingsSectionLabels(lang: DashboardState["lang"]): Array<{
   if (lang === "zh") {
     return [
       { id: "base", title: "基础设置", sub: "外观、用量与连接" },
+      { id: "operations", title: "运维与集成", sub: "Manager 状态、功能选择与集成控制" },
       { id: "switching", title: "账号切换", sub: "无感切号与账号选项" },
       { id: "quota", title: "配额自动化", sub: "刷新、倒计时、提醒与颜色" },
       { id: "advanced", title: "高级与诊断", sub: "低频配置与调试" }
@@ -45,6 +45,7 @@ function resolveSettingsSectionLabels(lang: DashboardState["lang"]): Array<{
   if (lang === "zh-hant") {
     return [
       { id: "base", title: "基礎設定", sub: "外觀、用量與連線" },
+      { id: "operations", title: "維運與整合", sub: "Manager 狀態、功能選擇與整合控制" },
       { id: "switching", title: "帳號切換", sub: "無感切換與帳號選項" },
       { id: "quota", title: "配額自動化", sub: "重新整理、倒數、警示與顏色" },
       { id: "advanced", title: "進階與診斷", sub: "低頻設定與除錯" }
@@ -52,6 +53,11 @@ function resolveSettingsSectionLabels(lang: DashboardState["lang"]): Array<{
   }
   return [
     { id: "base", title: "Basics", sub: "Appearance, usage, and connection" },
+    {
+      id: "operations",
+      title: "Operations & integrations",
+      sub: "Manager status, feature selection, and integration controls"
+    },
     { id: "switching", title: "Account switching", sub: "Seamless switching and account options" },
     { id: "quota", title: "Quota automation", sub: "Refresh, countdown, alerts, and colors" },
     { id: "advanced", title: "Advanced and diagnostics", sub: "Low-frequency settings and debug" }
@@ -149,6 +155,28 @@ function resolveQuotaCountdownAutoStartCopy(lang: DashboardState["lang"]): {
   };
 }
 
+function resolveOperationsCopy(lang: DashboardState["lang"]): {
+  featuresTitle: string;
+  featuresSub: string;
+} {
+  if (lang === "zh") {
+    return {
+      featuresTitle: "功能选择",
+      featuresSub: "集中启用或停用由 Manager 集成提供的功能入口。"
+    };
+  }
+  if (lang === "zh-hant") {
+    return {
+      featuresTitle: "功能選擇",
+      featuresSub: "集中啟用或停用由 Manager 整合提供的功能入口。"
+    };
+  }
+  return {
+    featuresTitle: "Feature selection",
+    featuresSub: "Enable or disable feature entry points provided by Manager integrations."
+  };
+}
+
 export function SettingsOverlay(props: {
   open: boolean;
   copy: DashboardCopy;
@@ -156,6 +184,7 @@ export function SettingsOverlay(props: {
   settings: DashboardSettings;
   tokenAutomation: DashboardState["tokenAutomation"];
   integrationSettings: readonly DashboardIntegrationSettingViewModel[];
+  seamlessRuntime?: DashboardSeamlessRuntimeViewModel;
   onClose: () => void;
   onPatchSettings: (patch: Partial<DashboardSettings>) => void;
   onSendSetting: (key: DashboardSettingKey, value: DashboardSettingValue) => void;
@@ -173,12 +202,7 @@ export function SettingsOverlay(props: {
     props.onSendSetting(key, value);
   };
   const quotaCountdownAutoStartCopy = resolveQuotaCountdownAutoStartCopy(props.lang);
-  const baseIntegrationSettings = props.integrationSettings.filter(
-    (setting) => setting.id !== SUB2API_CARD_VISIBILITY_SETTING_ID
-  );
-  const accountSwitchingIntegrationSettings = props.integrationSettings.filter(
-    (setting) => setting.id === SUB2API_CARD_VISIBILITY_SETTING_ID
-  );
+  const operationsCopy = resolveOperationsCopy(props.lang);
 
   const toggleUsageRange = (range: (typeof LOCAL_USAGE_RANGE_OPTIONS)[number]): void => {
     const enabled = new Set(props.settings.localUsageEnabledRanges);
@@ -275,15 +299,6 @@ export function SettingsOverlay(props: {
                     settings={props.settings}
                     onChange={(value) => patchAndSend("proxyAddress", value)}
                   />
-                  {baseIntegrationSettings.map((setting) => (
-                    <SettingsToggleBlock
-                      key={setting.id}
-                      title={setting.title}
-                      sub={setting.description ?? ""}
-                      enabled={setting.enabled}
-                      onToggle={(enabled) => props.onIntegrationSettingToggle(setting.id, enabled)}
-                    />
-                  ))}
                   <SettingsSegmentBlock
                     title={props.copy.localUsageSettingsTitle}
                     sub={props.copy.localUsageSettingsSub}
@@ -343,9 +358,18 @@ export function SettingsOverlay(props: {
                   </SettingsToggleBlock>
                 </section>
               ) : null}
-              {activeSection === "switching" ? (
-                <section id="settings-section-switching" class="settings-section-panel" role="tabpanel">
-                  {accountSwitchingIntegrationSettings.map((setting) => (
+              {activeSection === "operations" ? (
+                <section id="settings-section-operations" class="settings-section-panel" role="tabpanel">
+                  <SeamlessRuntimeStatus
+                    runtime={props.seamlessRuntime}
+                    featureEnabled={props.settings.seamlessSwitchEnabled}
+                    lang={props.lang}
+                  />
+                  <div class="settings-subsection-heading">
+                    <div class="settings-block-title">{operationsCopy.featuresTitle}</div>
+                    <div class="settings-block-sub">{operationsCopy.featuresSub}</div>
+                  </div>
+                  {props.integrationSettings.map((setting) => (
                     <SettingsToggleBlock
                       key={setting.id}
                       title={setting.title}
@@ -354,6 +378,10 @@ export function SettingsOverlay(props: {
                       onToggle={(enabled) => props.onIntegrationSettingToggle(setting.id, enabled)}
                     />
                   ))}
+                </section>
+              ) : null}
+              {activeSection === "switching" ? (
+                <section id="settings-section-switching" class="settings-section-panel" role="tabpanel">
                   <SettingsToggleBlock
                     title={
                       props.lang === "zh"
@@ -703,4 +731,200 @@ export function SettingsOverlay(props: {
       </div>
     </div>
   );
+}
+
+function SeamlessRuntimeStatus(props: {
+  runtime?: DashboardSeamlessRuntimeViewModel;
+  featureEnabled: boolean;
+  lang: DashboardState["lang"];
+}) {
+  const runtime = props.runtime;
+  const state = runtime?.state ?? (props.featureEnabled ? "starting" : "disabled");
+  const labels = resolveSeamlessRuntimeLabels(props.lang);
+  const stateLabel = resolveSeamlessRuntimeStateLabel(state, props.lang, props.featureEnabled);
+  const message = resolveSeamlessRuntimeMessage(state, props.lang, props.featureEnabled, runtime?.failureReason);
+  const protocol = runtime
+    ? `${runtime.runtimeProtocolVersion ?? "—"} / ${runtime.expectedRuntimeProtocolVersion ?? "—"}`
+    : "—";
+  const provider = runtime?.providerKind ?? "—";
+  const attribution = runtime?.attributionActive
+    ? labels.attributionActive
+    : state === "degraded"
+      ? labels.attributionFailed
+      : labels.attributionInactive;
+  return (
+    <div class={`seamless-runtime-status seamless-runtime-status-${state}`}>
+      <div class="seamless-runtime-status-head">
+        <div>
+          <div class="settings-block-title">{labels.title}</div>
+          <div class="settings-block-sub">{message}</div>
+        </div>
+        <strong>{stateLabel}</strong>
+      </div>
+      <div class="seamless-runtime-status-details">
+        <div>
+          <span>{labels.protocol}</span>
+          <strong>{protocol}</strong>
+        </div>
+        <div>
+          <span>{labels.provider}</span>
+          <strong>{provider}</strong>
+        </div>
+        <div>
+          <span>{labels.activeTurns}</span>
+          <strong>{runtime?.activeTurns ?? 0}</strong>
+        </div>
+        <div>
+          <span>{labels.attribution}</span>
+          <strong>{attribution}</strong>
+        </div>
+        <div>
+          <span>{labels.checkedAt}</span>
+          <strong>{formatTimestamp(runtime?.checkedAt, labels.notChecked)}</strong>
+        </div>
+      </div>
+      {runtime?.attributionFailureReason ? (
+        <div class="seamless-runtime-status-reason" title={runtime.attributionFailureReason}>
+          {runtime.attributionFailureReason}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function resolveSeamlessRuntimeLabels(lang: DashboardState["lang"]) {
+  if (lang === "zh") {
+    return {
+      title: "无感 Runtime 状态",
+      protocol: "协议",
+      provider: "路由",
+      activeTurns: "活动会话",
+      attribution: "用量归因",
+      checkedAt: "最近检查",
+      notChecked: "尚未检查",
+      attributionActive: "已启用",
+      attributionFailed: "失败",
+      attributionInactive: "未启用"
+    };
+  }
+  if (lang === "zh-hant") {
+    return {
+      title: "無感 Runtime 狀態",
+      protocol: "協議",
+      provider: "路由",
+      activeTurns: "活動對話",
+      attribution: "用量歸因",
+      checkedAt: "最近檢查",
+      notChecked: "尚未檢查",
+      attributionActive: "已啟用",
+      attributionFailed: "失敗",
+      attributionInactive: "未啟用"
+    };
+  }
+  return {
+    title: "Seamless runtime status",
+    protocol: "Protocol",
+    provider: "Route",
+    activeTurns: "Active turns",
+    attribution: "Usage attribution",
+    checkedAt: "Last check",
+    notChecked: "Not checked",
+    attributionActive: "Active",
+    attributionFailed: "Failed",
+    attributionInactive: "Inactive"
+  };
+}
+
+function resolveSeamlessRuntimeStateLabel(
+  state: NonNullable<DashboardSeamlessRuntimeViewModel>["state"],
+  lang: DashboardState["lang"],
+  featureEnabled: boolean
+): string {
+  const labels =
+    lang === "zh"
+      ? {
+          disabled: "未启用",
+          ready: "已就绪",
+          needs_reload: "需要 reload",
+          starting: "启动中",
+          degraded: "部分可用",
+          unavailable: "不可用"
+        }
+      : lang === "zh-hant"
+        ? {
+            disabled: "未啟用",
+            ready: "已就緒",
+            needs_reload: "需要 reload",
+            starting: "啟動中",
+            degraded: "部分可用",
+            unavailable: "不可用"
+          }
+        : {
+            disabled: "Disabled",
+            ready: "Ready",
+            needs_reload: "Reload required",
+            starting: "Starting",
+            degraded: "Degraded",
+            unavailable: "Unavailable"
+          };
+  if (state === "ready" && !featureEnabled) {
+    return lang === "zh" ? "已就绪 · 功能关闭" : lang === "zh-hant" ? "已就緒 · 功能關閉" : "Ready · feature off";
+  }
+  return labels[state];
+}
+
+function resolveSeamlessRuntimeMessage(
+  state: NonNullable<DashboardSeamlessRuntimeViewModel>["state"],
+  lang: DashboardState["lang"],
+  featureEnabled: boolean,
+  failureReason?: string
+): string {
+  if (state === "ready" && !featureEnabled) {
+    return lang === "zh"
+      ? "Runtime 正常，但无感切号开关当前关闭。"
+      : lang === "zh-hant"
+        ? "Runtime 正常，但無感切換開關目前關閉。"
+        : "The runtime is healthy, but seamless switching is currently disabled.";
+  }
+  switch (state) {
+    case "disabled":
+      return lang === "zh"
+        ? "当前未启用 Runtime；无感切号会安全跳过。"
+        : lang === "zh-hant"
+          ? "目前未啟用 Runtime；無感切換會安全略過。"
+          : "The runtime is not enabled; seamless switching will fail closed.";
+    case "needs_reload":
+      return lang === "zh"
+        ? "Runtime 已安装或配置已变化，请 reload 一次后再切号。"
+        : lang === "zh-hant"
+          ? "Runtime 已安裝或設定已變更，請 reload 一次後再切換。"
+          : "The runtime was installed or changed; reload once before switching.";
+    case "starting":
+      return lang === "zh"
+        ? "正在等待 Codex app-server 响应，切号会暂时安全跳过。"
+        : lang === "zh-hant"
+          ? "正在等待 Codex app-server 回應，切換會暫時安全略過。"
+          : "Waiting for the Codex app-server; switching will fail closed for now.";
+    case "degraded":
+      return lang === "zh"
+        ? "Runtime 可以切号，但本机用量归因尚未激活。"
+        : lang === "zh-hant"
+          ? "Runtime 可以切換，但本機用量歸因尚未啟用。"
+          : "The runtime can switch accounts, but local usage attribution is inactive.";
+    case "unavailable":
+      return (
+        failureReason ??
+        (lang === "zh"
+          ? "Runtime 当前不可用。"
+          : lang === "zh-hant"
+            ? "Runtime 目前不可用。"
+            : "The runtime is currently unavailable.")
+      );
+    case "ready":
+      return lang === "zh"
+        ? "Runtime 已连接，可执行无感切号。"
+        : lang === "zh-hant"
+          ? "Runtime 已連線，可以執行無感切換。"
+          : "The runtime is connected and ready for seamless switching.";
+  }
 }

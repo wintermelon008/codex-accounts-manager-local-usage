@@ -61,7 +61,6 @@ import {
 } from "./panels";
 import { SavedAccountCard } from "./savedAccountCard";
 import { LocalUsageSection } from "./localUsageSection";
-import { IntegrationCards } from "./integrationCards";
 import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
 
@@ -332,6 +331,7 @@ function App() {
   const blockedAccountIds = getBlockedAccountIds(snapshot.accounts);
   const blockedAccountCount = blockedAccountIds.length;
   const mailboxIntegrationActive = isMailboxIntegrationActive(snapshot.integrations);
+  const sharingEnabled = snapshot.sharing !== undefined;
   const hiddenAccountsToggleLabel = resolveHiddenAccountsToggleLabel(
     snapshot.lang,
     showHiddenAccounts,
@@ -458,8 +458,8 @@ function App() {
   const topButtonIntegrations = (snapshot.integrations ?? []).flatMap((integration) => {
     const topButton =
       integration.topButton ??
-      (integration.id === "mailbox"
-        ? { actionId: "open", label: "Mailbox", tooltip: "在当前主编辑器组打开 Mailbox", icon: "mail" as const }
+      (integration.status !== "inactive" && integration.id === "mailbox"
+        ? { actionId: "open", label: "邮箱管理", tooltip: "在当前主编辑器组打开邮箱管理", icon: "mail" as const }
         : undefined);
     const action = topButton ? integration.actions.find((candidate) => candidate.id === topButton.actionId) : undefined;
     return action && topButton ? [{ integration, topButton, action }] : [];
@@ -555,27 +555,29 @@ function App() {
                 disabled={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
                 onClick={modals.openAddAccountModal}
               />
-              <button
-                id="accountSharingButton"
-                class="settings-btn action-btn icon-only"
-                type="button"
-                title={resolveAccountSharingLabel(snapshot.lang)}
-                aria-label={resolveAccountSharingLabel(snapshot.lang)}
-                disabled={hasGlobalPendingAction}
-                onClick={() => {
-                  setSharingAccountIds([]);
-                  setSharingOpen(true);
-                }}
-              >
-                <span class="button-face">
-                  <span class="button-icon">
-                    <SharingIcon />
+              {sharingEnabled ? (
+                <button
+                  id="accountSharingButton"
+                  class="settings-btn action-btn icon-only"
+                  type="button"
+                  title={resolveAccountSharingLabel(snapshot.lang)}
+                  aria-label={resolveAccountSharingLabel(snapshot.lang)}
+                  disabled={hasGlobalPendingAction}
+                  onClick={() => {
+                    setSharingAccountIds([]);
+                    setSharingOpen(true);
+                  }}
+                >
+                  <span class="button-face">
+                    <span class="button-icon">
+                      <SharingIcon />
+                    </span>
                   </span>
-                </span>
-                <span class="button-tip" aria-hidden="true">
-                  {resolveAccountSharingLabel(snapshot.lang)}
-                </span>
-              </button>
+                  <span class="button-tip" aria-hidden="true">
+                    {resolveAccountSharingLabel(snapshot.lang)}
+                  </span>
+                </button>
+              ) : null}
               {topButtonIntegrations.length > 0 ? (
                 <>
                   <div class="hero-integration-actions">
@@ -719,6 +721,7 @@ function App() {
               isAccountBusy={isAccountBusy}
               isActionPending={isActionPending}
               onAction={sendAction}
+              sharingEnabled={sharingEnabled}
               onRequestShare={(accountId) => openSharingForAccounts([accountId])}
               copyFeedbackKey={modals.copyFeedbackKey}
             />
@@ -1080,6 +1083,7 @@ function App() {
                 removePending={batchRemovePending}
                 sharePending={sharePending}
                 shareAccountsPending={shareAccountsPending}
+                sharingEnabled={sharingEnabled}
                 hidePending={hideAccountsPending}
                 unhidePending={unhideAccountsPending}
                 groupPending={setAccountGroupPending}
@@ -1120,6 +1124,7 @@ function App() {
                   copyImportJsonSucceeded={modals.copyFeedbackKey === `account-import-json:${account.id}`}
                   shareAccountsPending={isActionPending("shareAccounts", account.id)}
                   returnSharedAccountPending={isActionPending("returnSharedAccount", account.id)}
+                  sharingEnabled={sharingEnabled}
                   accountNameCopyPending={isActionPending("copyText", account.id)}
                   accountNameCopySucceeded={modals.copyFeedbackKey === `account-name:${account.id}`}
                   quotaCountdownStartPending={isActionPending("startQuotaCountdown", account.id)}
@@ -1231,16 +1236,6 @@ function App() {
             ) : null}
           </section>
         ) : null}
-        <IntegrationCards
-          integrations={(snapshot.integrations ?? []).filter(
-            (integration) => !topButtonIntegrations.some((item) => item.integration.id === integration.id)
-          )}
-          busy={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
-          actionPending={integrationActionPending}
-          onAction={(integrationId, integrationActionId) =>
-            sendAction("integrationAction", undefined, { integrationId, integrationActionId })
-          }
-        />
         <LocalUsageSection
           usage={snapshot.localUsage}
           copy={snapshot.copy}
@@ -1257,6 +1252,7 @@ function App() {
         settings={snapshot.settings}
         tokenAutomation={snapshot.tokenAutomation}
         integrationSettings={snapshot.integrationSettings ?? []}
+        seamlessRuntime={state.seamlessRuntime ?? snapshot.seamlessRuntime}
         onClose={() => dispatch({ type: "close-settings" })}
         onPatchSettings={patchSettings}
         onSendSetting={sendSetting}
@@ -1765,12 +1761,12 @@ function resolveUnlockCodexSessionLocksLabel(lang: string): string {
 
 function resolveRestartServicesLabel(lang: string): string {
   if (lang === "zh") {
-    return "重启 Manager、Mailbox 与 Codex 服务";
+    return "重启 Manager、邮箱管理与 Codex 服务";
   }
   if (lang === "zh-hant") {
-    return "重啟 Manager、Mailbox 與 Codex 服務";
+    return "重啟 Manager、郵箱管理與 Codex 服務";
   }
-  return "Restart Manager, Mailbox, and Codex services";
+  return "Restart Manager, mailbox manager, and Codex services";
 }
 
 function resolveAccountSortSelectLabel(lang: string): string {

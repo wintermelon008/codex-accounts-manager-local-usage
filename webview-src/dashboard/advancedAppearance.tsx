@@ -331,6 +331,7 @@ function AdvancedAccountFocus(props: {
   isAccountBusy: (accountId: string) => boolean;
   isActionPending: (action: DashboardActionName, accountId?: string) => boolean;
   onAction: SendAction;
+  sharingEnabled?: boolean;
   onRequestShare?: (accountId: string) => void;
   copyFeedbackKey?: string | null;
 }) {
@@ -580,7 +581,7 @@ function AdvancedAccountFocus(props: {
             onClick={() => props.onAction("consumeResetCredit", account.id)}
           />
         ) : null}
-        {!virtual && incomingSharedAccount ? (
+        {props.sharingEnabled !== false && !virtual && incomingSharedAccount ? (
           <ActionButton
             class="advanced-account-action"
             label={shareLabel}
@@ -590,7 +591,7 @@ function AdvancedAccountFocus(props: {
           >
             {shareLabel}
           </ActionButton>
-        ) : !virtual && !outgoingSharedAccount ? (
+        ) : props.sharingEnabled !== false && !virtual && !outgoingSharedAccount ? (
           <ActionButton
             class="advanced-account-action"
             label={shareLabel}
@@ -641,6 +642,7 @@ export function AdvancedAppearanceSummary(props: {
   isAccountBusy: (accountId: string) => boolean;
   isActionPending: (action: DashboardActionName, accountId?: string) => boolean;
   onAction: SendAction;
+  sharingEnabled?: boolean;
   onRequestShare?: (accountId: string) => void;
   copyFeedbackKey?: string | null;
 }) {
@@ -722,6 +724,7 @@ export function AdvancedAppearanceSummary(props: {
                 isAccountBusy={props.isAccountBusy}
                 isActionPending={props.isActionPending}
                 onAction={props.onAction}
+                sharingEnabled={props.sharingEnabled}
                 onRequestShare={props.onRequestShare}
                 copyFeedbackKey={props.copyFeedbackKey}
               />

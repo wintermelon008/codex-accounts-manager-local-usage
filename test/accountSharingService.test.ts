@@ -183,6 +183,44 @@ describe("AccountSharingService local identity state", () => {
   });
 });
 
+describe("AccountSharingService feature toggle compatibility", () => {
+  it("keeps active leases enabled and preserves local state when toggled off", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codex-sharing-toggle-"));
+    directories.push(directory);
+    const globalState = {
+      get: vi.fn(() => undefined),
+      update: vi.fn(async () => undefined)
+    };
+    const repo = {
+      listAccounts: vi.fn(async () => []),
+      onDidChangeAccounts: vi.fn(() => ({ dispose: vi.fn() }))
+    };
+    const service = new AccountSharingService(
+      {
+        globalStorageUri: { fsPath: directory },
+        globalState,
+        secrets: { delete: vi.fn(async () => undefined) }
+      } as never,
+      repo as never,
+      vi.fn()
+    );
+    await service.initialize();
+
+    const internals = service as unknown as { state: { leases: SharingLease[] } };
+    internals.state.leases = [{ state: "shared" } as SharingLease];
+    await expect(service.setEnabled(false)).rejects.toThrow("活动共享租约");
+    expect(service.isEnabled()).toBe(true);
+
+    internals.state.leases = [];
+    await service.setEnabled(false);
+    expect(service.isEnabled()).toBe(false);
+    expect(globalState.update).toHaveBeenCalledWith("codexAccounts.accountSharing.enabled.v1", false);
+    await service.setEnabled(true);
+    expect(service.isEnabled()).toBe(true);
+    service.dispose();
+  });
+});
+
 describe("AccountSharingService return confirmation", () => {
   it("polls the owner acknowledgement after one return action", async () => {
     vi.useFakeTimers();

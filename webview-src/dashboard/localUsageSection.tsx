@@ -9,6 +9,7 @@ import type {
 import {
   deriveLocalUsageRange,
   estimateStandardApiCost,
+  formatLocalUsageAxisLabel,
   type LocalUsagePriceEstimate
 } from "./localUsageInsights";
 import { ActionButton } from "./primitives";
@@ -91,11 +92,13 @@ export function LocalUsageSection(props: {
           </div>
 
           <div class="local-usage-layout">
-            <UsageBars
+            <UsageChart
               title={copy.localUsageDaily}
               rows={range.bars.map((row) => ({
                 key: row.key,
                 label: row.label,
+                startAt: row.startAt,
+                endAt: row.endAt,
                 value: row.total.totalTokens,
                 price: row.price
               }))}
@@ -111,6 +114,8 @@ export function LocalUsageSection(props: {
               }
               showPrice={showPrice}
               animationKey={range.range}
+              range={range.range}
+              timeZone={usage.timeZone}
             />
             <UsageBars
               title={copy.localUsageByModel}
@@ -136,6 +141,63 @@ export function LocalUsageSection(props: {
         </>
       ) : null}
     </section>
+  );
+}
+
+function UsageChart(props: {
+  title: string;
+  control?: ComponentChildren;
+  rows: Array<{
+    key: string;
+    label: string;
+    startAt: number;
+    endAt: number;
+    value: number;
+    price?: LocalUsagePriceEstimate;
+  }>;
+  showPrice: boolean;
+  animationKey: string;
+  range: DashboardLocalUsageRange;
+  timeZone: string;
+}) {
+  const maxValue = Math.max(...props.rows.map((row) => row.value), 0);
+
+  return (
+    <div class="local-usage-panel">
+      <div class="local-usage-panel-head">
+        <div class="local-usage-panel-title">{props.title}</div>
+        {props.control}
+      </div>
+      <div
+        key={props.animationKey}
+        class="local-usage-chart is-range-transition"
+        style={{ "--local-usage-bar-count": props.rows.length }}
+        aria-label={props.title}
+      >
+        {props.rows.map((row) => {
+          const value = formatTokenAndPrice(row.value, row.price, props.showPrice);
+          const tooltip = `${row.label}: ${value}`;
+          const barHeight = maxValue > 0 && row.value > 0 ? Math.max((row.value / maxValue) * 100, 2) : 0;
+          return (
+            <div
+              class="local-usage-chart-column"
+              key={row.key}
+              data-tooltip={tooltip}
+              aria-label={tooltip}
+              role="img"
+              tabIndex={0}
+            >
+              <div class="local-usage-chart-track">
+                <div class="local-usage-chart-fill" style={{ height: `${barHeight}%` }} />
+              </div>
+              <span class="local-usage-chart-label">
+                {formatLocalUsageAxisLabel(row, props.range, props.timeZone)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

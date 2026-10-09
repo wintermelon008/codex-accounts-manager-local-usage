@@ -6,7 +6,11 @@ import type {
   DashboardLocalUsageModelViewModel,
   DashboardLocalUsageViewModel
 } from "../src/domain/dashboard/types";
-import { deriveLocalUsageRange, estimateStandardApiCost } from "../webview-src/dashboard/localUsageInsights";
+import {
+  deriveLocalUsageRange,
+  estimateStandardApiCost,
+  formatLocalUsageAxisLabel
+} from "../webview-src/dashboard/localUsageInsights";
 
 describe("deriveLocalUsageRange", () => {
   it("uses the selected trailing dates for totals, event count, and model distribution", () => {
@@ -41,6 +45,33 @@ describe("deriveLocalUsageRange", () => {
     expect(deriveLocalUsageRange(usage, "14d").bars).toHaveLength(7);
     expect(deriveLocalUsageRange(usage, "7w").bars).toHaveLength(7);
     expect(deriveLocalUsageRange(usage, "7m").bars).toHaveLength(7);
+  });
+
+  it("uses compact range-specific labels for the vertical usage chart", () => {
+    const usage = shortUsageSnapshot();
+    const day = deriveLocalUsageRange(usage, "7d").bars.at(-1);
+    const halfDay = deriveLocalUsageRange(usage, "3d").bars.at(-1);
+    const threeHours = deriveLocalUsageRange(usage, "24h").bars.at(-1);
+
+    expect(day && formatLocalUsageAxisLabel(day, "7d", usage.timeZone)).toBe("07.14");
+    expect(halfDay && formatLocalUsageAxisLabel(halfDay, "3d", usage.timeZone)).toBe("07.14(pm)");
+    expect(threeHours && formatLocalUsageAxisLabel(threeHours, "24h", usage.timeZone)).toBe("18-21");
+
+    const twoDayBar = {
+      startAt: shanghaiTimestamp("2026-09-26", 0),
+      endAt: shanghaiTimestamp("2026-09-28", 0)
+    };
+    const sevenDayBar = {
+      startAt: shanghaiTimestamp("2026-08-24", 0),
+      endAt: shanghaiTimestamp("2026-08-31", 0)
+    };
+    const monthBar = {
+      startAt: shanghaiTimestamp("2026-04-01", 0),
+      endAt: shanghaiTimestamp("2026-05-01", 0)
+    };
+    expect(formatLocalUsageAxisLabel(twoDayBar, "14d", usage.timeZone)).toBe("09.26(+1)");
+    expect(formatLocalUsageAxisLabel(sevenDayBar, "7w", usage.timeZone)).toBe("08.24(+6)");
+    expect(formatLocalUsageAxisLabel(monthBar, "7m", usage.timeZone)).toBe("04");
   });
 
 });

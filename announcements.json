@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-10-codex-accounts-0-1-19-l6-command-center-solar",
+      "id": "ann-2026-10-codex-accounts-0-1-19-l7-dashboard-operations-usage",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.19-l6",
-      "title": "Codex Accounts Manager 0.1.19-l6 — solar Command Center",
-      "summary": "Adds an opt-in solar Command Center view with focused account actions and quota countdown reset fixes.",
-      "content": "This local release adds an optional visual account workspace while preserving the standard Dashboard.\n1. Command Center: enable Advanced appearance to view the active account as a star and ordered accounts as slow orbiting planets.\n2. Focus actions: click a planet to inspect its quota, health, subscription, workspace, and card-equivalent account actions in the right panel.\n3. Layout choice: advanced mode hides the lower account cards but keeps sorting and filtering controls; disabling Advanced appearance restores the normal cards.\n4. Visual polish: improves orbit brightness, quota rings, transitions, and the compact selected-account panel.\n5. Quota countdown: manually consuming reset credits now requeues the account until a fresh countdown start is observed.",
+      "releaseVersion": "0.1.19-l7",
+      "title": "Codex Accounts Manager 0.1.19-l7 — operations and local usage",
+      "summary": "Adds runtime diagnostics, safer integration visibility, and a vertical local Codex usage chart.",
+      "content": "This local release improves Dashboard operations, optional integration safety, and local Codex usage visibility.\n1. Operations: adds a runtime status panel for protocol, route, active turns, usage attribution, and last-check state.\n2. Integration safety: hides or disables sharing and optional integration entry points when their services are unavailable or disabled.\n3. Local usage: replaces daily text rows with a vertical bar chart, compact labels for every supported range, and fast hover details for each bucket.\n4. Mailbox and Dashboard: improves Chinese labels, diagnostics, integration presentation, and regression coverage.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-10-06T00:00:00Z",
+      "createdAt": "2026-10-09T00:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.19-l6 — 太阳系 Command Center",
-          "summary": "新增可选太阳系 Command Center、选中账号操作面板，并修复重置配额后的倒计时调度。",
-          "content": "本地版本新增可选的高级账号工作区，同时保留标准 Dashboard。\n1. Command Center：开启高级外观后，以当前账号为恒星、按账号顺序展示缓慢运行的行星。\n2. 选中账号操作：点击行星即可在右侧查看配额、健康、订阅、工作区和与账号卡片等价的操作。\n3. 布局选择：高级模式隐藏下方账号卡片但保留排序和筛选工具条；关闭高级外观后恢复普通账号卡片。\n4. 视觉优化：改善行星亮度、额度光环、切换过渡和右侧账号面板。\n5. 额度倒计时：手动消耗重置次数后会重新排队，直到观察到新的倒计时启动。"
+          "title": "Codex Accounts Manager 0.1.19-l7 — 运维与本机用量",
+          "summary": "新增 Runtime 状态诊断、更安全的集成入口和竖向本机 Codex 用量图表。",
+          "content": "本地版本改进 Dashboard 运维、可选集成安全性和本机 Codex 用量展示。\n1. 运维状态：新增无感 Runtime 状态面板，展示协议、路由、活动会话、用量归因和最近检查时间。\n2. 集成安全：服务不可用或功能关闭时隐藏或停用共享与可选集成入口。\n3. 本机用量：每日文字行改为竖向柱状图，支持所有时间范围的紧凑标签，并在悬浮时快速显示时间段和用量。\n4. Mailbox 与 Dashboard：改进中文界面、诊断信息、集成展示和回归测试。"
         }
       }
     },

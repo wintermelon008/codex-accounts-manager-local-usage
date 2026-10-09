@@ -1,6 +1,6 @@
 {
   "name": "codex-accounts-mailbox",
-  "displayName": "Codex Accounts Mailbox",
+  "displayName": "Codex Accounts 邮箱管理",
   "description": "Optional provider-neutral mailbox query and manual credential renewal integration for Codex Accounts Manager.",
   "version": "0.2.9",
   "publisher": "codex-accounts",
@@ -27,11 +27,11 @@
     "commands": [
       {
         "command": "codexAccountsMailbox.open",
-        "title": "Mailbox: Open Mailbox"
+        "title": "邮箱管理：打开邮箱管理"
       },
       {
         "command": "codexAccountsMailbox.openRegistrationDiagnostics",
-        "title": "Mailbox: Open Registration Diagnostics"
+        "title": "邮箱管理：打开注册诊断"
       }
     ]
   },

@@ -1,4 +1,9 @@
-import type { DashboardActionName, DashboardSettings, DashboardState } from "../../src/domain/dashboard/types";
+import type {
+  DashboardActionName,
+  DashboardSeamlessRuntimeViewModel,
+  DashboardSettings,
+  DashboardState
+} from "../../src/domain/dashboard/types";
 
 export type PendingActionRequest = {
   requestId: string;
@@ -9,6 +14,7 @@ export type PendingActionRequest = {
 
 export type AppState = {
   snapshot?: DashboardState;
+  seamlessRuntime?: DashboardSeamlessRuntimeViewModel;
   settingsOpen: boolean;
   privacyMode: boolean;
   lastEnabledAutoRefreshMinutes: number;
@@ -19,6 +25,7 @@ export type AppState = {
 
 export type AppAction =
   | { type: "snapshot"; snapshot: DashboardState }
+  | { type: "seamless-runtime"; runtime: DashboardSeamlessRuntimeViewModel }
   | { type: "open-settings" }
   | { type: "close-settings" }
   | { type: "toggle-privacy" }
@@ -51,6 +58,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         snapshot: action.snapshot,
+        seamlessRuntime: action.snapshot.seamlessRuntime ?? state.seamlessRuntime,
         selectedAccountIds,
         lastEnabledAutoRefreshMinutes:
           action.snapshot.settings.autoRefreshMinutes > 0
@@ -58,6 +66,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
             : state.lastEnabledAutoRefreshMinutes
       };
     }
+    case "seamless-runtime":
+      return {
+        ...state,
+        seamlessRuntime: action.runtime
+      };
     case "toggle-select":
       return {
         ...state,

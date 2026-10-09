@@ -31,7 +31,7 @@ class TototoIcloudProvider {
       capabilities: { history: "latest", maxMessages: TOTOTO_ICLOUD_MAX_MESSAGES, manualRenewal: false },
       importSchema: {
         label: "邮箱----验证码查询 URL",
-        description: "每行一个 iCloud 邮箱和对应的验证码查询 URL；URL 只保存在 Mailbox 私有存储中。",
+        description: "每行一个 iCloud 邮箱和对应的验证码查询 URL；URL 只保存在邮箱管理私有存储中。",
         placeholder:
           "user@example.com----https://ima2.52dfd.top/api/v1/mailboxes/user@example.com/code?key=your_key"
       },

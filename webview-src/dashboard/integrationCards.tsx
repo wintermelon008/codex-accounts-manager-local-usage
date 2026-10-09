@@ -11,13 +11,14 @@ export function IntegrationCards(props: {
   busy: boolean;
   actionPending: boolean;
   onAction: (integrationId: string, actionId: string) => void;
+  embedded?: boolean;
 }) {
   if (props.integrations.length === 0) {
     return null;
   }
 
   return (
-    <section class="section integration-cards-section">
+    <section class={`section integration-cards-section ${props.embedded ? "integration-cards-section-embedded" : ""}`}>
       <div class="integration-cards">
         {props.integrations.map((integration) => (
           <article key={integration.id} class={`integration-card integration-status-${integration.status}`}>

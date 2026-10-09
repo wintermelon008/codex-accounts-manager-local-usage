@@ -283,6 +283,33 @@ export function deriveLocalUsageRange(
   };
 }
 
+export function formatLocalUsageAxisLabel(
+  bar: Pick<LocalUsageRangeBar, "startAt" | "endAt">,
+  range: DashboardLocalUsageRange,
+  timeZone: string
+): string {
+  const start = zonedDateTimeParts(bar.startAt, timeZone);
+  switch (range) {
+    case "24h": {
+      const end = zonedDateTimeParts(bar.endAt, timeZone);
+      const endHour = end.hour === 0 && end.date !== start.date ? 24 : end.hour;
+      return `${start.hour}-${endHour}`;
+    }
+    case "3d":
+      return `${formatMonthDay(start.date)}${start.hour < 12 ? "(am)" : "(pm)"}`;
+    case "7d":
+      return formatMonthDay(start.date);
+    case "14d":
+    case "7w": {
+      const end = zonedDateTimeParts(Math.max(bar.startAt, bar.endAt - 1), timeZone);
+      return `${formatMonthDay(start.date)}(+${calendarDayDifference(start.date, end.date)})`;
+    }
+    case "7m": {
+      return String(start.month).padStart(2, "0");
+    }
+  }
+}
+
 export function estimateStandardApiCost(
   byModel: readonly DashboardLocalUsageModelViewModel[]
 ): LocalUsagePriceEstimate {
@@ -601,6 +628,23 @@ function formatHalfDayLabel(startAt: number, endAt: number, timeZone: string): s
 function formatDateLabel(date: string, timeZone: string): string {
   return new Intl.DateTimeFormat(undefined, { timeZone, month: "2-digit", day: "2-digit" }).format(
     new Date(localDateTimeToTimestamp({ ...dateParts(date), hour: 12 }, timeZone))
+  );
+}
+
+function formatMonthDay(date: string): string {
+  const { month, day } = dateParts(date);
+  return `${String(month).padStart(2, "0")}.${String(day).padStart(2, "0")}`;
+}
+
+function calendarDayDifference(startDate: string, endDate: string): number {
+  const start = dateParts(startDate);
+  const end = dateParts(endDate);
+  return Math.max(
+    0,
+    Math.round(
+      (Date.UTC(end.year, end.month - 1, end.day) - Date.UTC(start.year, start.month - 1, start.day)) /
+        (24 * 60 * 60 * 1000)
+    )
   );
 }
 

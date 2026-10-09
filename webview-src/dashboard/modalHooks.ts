@@ -25,6 +25,9 @@ export function useDashboardModals(params: {
       case "dashboard:snapshot":
         params.dispatch({ type: "snapshot", snapshot: message.state });
         return;
+      case "dashboard:seamless-runtime":
+        params.dispatch({ type: "seamless-runtime", runtime: message.runtime });
+        return;
       case "dashboard:action-result":
         params.dispatch({ type: "resolve-action", requestId: message.requestId });
         if (message.action === "copyAccountImportJson" && message.status === "completed" && message.accountId) {

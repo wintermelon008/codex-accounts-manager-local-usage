@@ -5,6 +5,12 @@ const test = require("node:test");
 const vm = require("node:vm");
 const { createMailboxPanelHtml, createRegistrationPanelHtml } = require("../../src/ui/panel.cjs");
 
+test("mailbox panel uses 邮箱管理 as its display name", () => {
+  const html = createMailboxPanelHtml();
+  assert.match(html, /<title>邮箱管理<\/title>/u);
+  assert.match(html, /<h1>邮箱管理<\/h1>/u);
+});
+
 test("registration 2FA block creates a new entry and shows the live code expiry state", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];

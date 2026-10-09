@@ -30,7 +30,7 @@ class BoyaProvider {
       capabilities: { history: "latest", maxMessages: BOYA_MAX_MESSAGES, manualRenewal: false },
       importSchema: {
         label: "邮箱----private token",
-        description: "每行一个邮箱和对应的 private token；凭据只保存在 Mailbox 私有存储中。",
+        description: "每行一个邮箱和对应的 private token；凭据只保存在邮箱管理私有存储中。",
         placeholder: "user@example.com----private_token"
       },
       parseImport: (input) => parseBoyaImport(input),

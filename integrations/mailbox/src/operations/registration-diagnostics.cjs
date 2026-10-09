@@ -67,7 +67,7 @@ function createRegistrationDiagnostics(vscode, context, { storageRoot } = {}) {
   let output;
   try {
     output = typeof vscode?.window?.createOutputChannel === "function"
-      ? vscode.window.createOutputChannel("Mailbox 注册诊断")
+      ? vscode.window.createOutputChannel("邮箱管理注册诊断")
       : undefined;
   } catch {
     output = undefined;

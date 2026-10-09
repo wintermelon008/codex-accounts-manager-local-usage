@@ -693,6 +693,31 @@ export interface DashboardBatchResult {
   };
 }
 
+export type DashboardSeamlessRuntimeState =
+  | "disabled"
+  | "ready"
+  | "needs_reload"
+  | "starting"
+  | "degraded"
+  | "unavailable";
+
+/** Sanitized live readiness data for the local seamless-switch runtime. */
+export interface DashboardSeamlessRuntimeViewModel {
+  state: DashboardSeamlessRuntimeState;
+  checkedAt: number;
+  runtimeProtocolVersion?: number;
+  expectedRuntimeProtocolVersion?: number;
+  runtimeOwner?: "owner" | "legacy";
+  providerKind?: "chatgpt" | "gateway" | "default";
+  appServerPid?: number;
+  activeTurns: number;
+  pendingSwitch: boolean;
+  switching: boolean;
+  attributionActive: boolean;
+  attributionFailureReason?: string;
+  failureReason?: string;
+}
+
 export interface DashboardState {
   lang: DashboardLanguage;
   panelTitle: string;
@@ -707,6 +732,7 @@ export interface DashboardState {
   localUsage?: DashboardLocalUsageViewModel;
   integrations?: DashboardIntegrationViewModel[];
   integrationSettings?: DashboardIntegrationSettingViewModel[];
+  seamlessRuntime?: DashboardSeamlessRuntimeViewModel;
   sharing?: DashboardSharingViewModel;
 }
 
@@ -835,6 +861,10 @@ export type DashboardHostMessage =
   | {
       type: "dashboard:snapshot";
       state: DashboardState;
+    }
+  | {
+      type: "dashboard:seamless-runtime";
+      runtime: DashboardSeamlessRuntimeViewModel;
     }
   | {
       type: "dashboard:action-result";

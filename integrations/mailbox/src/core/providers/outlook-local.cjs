@@ -58,7 +58,7 @@ class OutlookLocalProvider {
       },
       importSchema: {
         label: "Outlook 本地 OAuth 来源",
-        description: "本机使用 client id + refresh token 向微软换取 IMAP access token，再通过 Outlook IMAP 只读查询；凭据只保存在 Mailbox 私有存储中。支持 email----client-id----refresh-token，也兼容四段旧格式（第二段会忽略）。",
+        description: "本机使用 client id + refresh token 向微软换取 IMAP access token，再通过 Outlook IMAP 只读查询；凭据只保存在邮箱管理私有存储中。支持 email----client-id----refresh-token，也兼容四段旧格式（第二段会忽略）。",
         placeholder: "email@example.com----client-id----refresh-token"
       },
       parseImport: (input) => parseOutlookLocalImport(input),

@@ -83,6 +83,7 @@ export function BatchSelectionBar(props: {
   removePending: boolean;
   sharePending: boolean;
   shareAccountsPending: boolean;
+  sharingEnabled?: boolean;
   hidePending: boolean;
   unhidePending: boolean;
   groupPending: boolean;
@@ -179,14 +180,16 @@ export function BatchSelectionBar(props: {
         >
           {props.copy.batchExportBtn}
         </ActionButton>
-        <ActionButton
-          class="toolbar-btn batch-secondary-btn"
-          icon={<SharingIcon />}
-          pending={props.shareAccountsPending}
-          onClick={props.onShareAccounts}
-        >
-          {isZh || isTraditional ? "共享账号" : "Share accounts"}
-        </ActionButton>
+        {props.sharingEnabled !== false ? (
+          <ActionButton
+            class="toolbar-btn batch-secondary-btn"
+            icon={<SharingIcon />}
+            pending={props.shareAccountsPending}
+            onClick={props.onShareAccounts}
+          >
+            {isZh || isTraditional ? "共享账号" : "Share accounts"}
+          </ActionButton>
+        ) : null}
         <div ref={moreRef} class="batch-more-actions">
           <button
             class="toolbar-btn batch-more-btn"

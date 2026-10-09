@@ -29,7 +29,7 @@ class Eight92Provider {
       capabilities: { history: "recent", maxMessages: DEFAULT_MAX_MESSAGES, manualRenewal: false },
       importSchema: {
         label: "Outlook 来源凭据",
-        description: "每行一个 Outlook 邮箱；凭据仅保存在 Mailbox 私有存储中。"
+        description: "每行一个 Outlook 邮箱；凭据仅保存在邮箱管理私有存储中。"
       },
       parseImport: (input) => parseEight92Import(input),
       query: (account, options) => this.query(account, options)

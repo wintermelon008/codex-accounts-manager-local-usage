@@ -671,7 +671,7 @@ function formatAddMethod(value: string | undefined, lang: DashboardState["lang"]
     case "local":
       return zh ? "本地导入" : "Local import";
     case "mailbox":
-      return zh ? "邮箱库导入" : "Mailbox import";
+      return zh ? "邮箱管理导入" : "Mailbox manager import";
     case "registration":
       return zh ? "注册助手" : "Registration assistant";
     case "json":

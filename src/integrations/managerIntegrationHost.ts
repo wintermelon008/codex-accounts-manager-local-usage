@@ -36,6 +36,8 @@ export type DashboardIntegrationRegistration = {
   id: string;
   getViewModel: () => DashboardIntegrationViewModel;
   runAction: (actionId: string) => void | Promise<void>;
+  /** Optional feature toggle shown in the Manager operations settings. */
+  setting?: DashboardIntegrationSettingRegistration;
   /** Optional refresh hook invoked by the core Dashboard refresh action. */
   refresh?: () => void | Promise<void>;
   /** Optional sanitized mailbox addresses that have a persisted OpenAI deactivation notice. */
@@ -85,14 +87,16 @@ export type VirtualAccountRegistration = {
   setting?: VirtualAccountSettingRegistration;
 };
 
-export type VirtualAccountSettingRegistration = {
+export type DashboardIntegrationSettingRegistration = {
   id: string;
   title: string;
   description?: string;
-  /** Whether the virtual account card is shown; this must not select a provider route. */
   getEnabled: () => boolean;
   setEnabled: (enabled: boolean) => void | Promise<void>;
 };
+
+/** Backward-compatible name for provider-owned virtual-account visibility settings. */
+export type VirtualAccountSettingRegistration = DashboardIntegrationSettingRegistration;
 
 export type VirtualAccountOperations = {
   upsert: (descriptor: CodexVirtualRouteDescriptor, displayName: string) => Promise<void>;
@@ -268,6 +272,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
   private readonly dashboardIntegrations = new Map<string, RegisteredDashboardIntegration>();
   private readonly gatewayLeases = new Map<string, GatewayRuntimeLeaseState>();
   private readonly virtualAccounts = new Map<string, RegisteredVirtualAccount>();
+  private readonly featureSettings = new Map<string, DashboardIntegrationSettingRegistration>();
   private readonly changeListeners = new Set<() => void>();
   private readonly accountDirectoryChangeListeners = new Set<(accountIds?: readonly string[]) => void>();
   private virtualSwitchInFlight: Promise<RuntimeAccountSwitchOutcome> | undefined;
@@ -583,15 +588,34 @@ export class ManagerIntegrationHost implements vscode.Disposable {
     return accountIds;
   }
 
+  registerFeatureSetting(setting: DashboardIntegrationSettingRegistration): vscode.Disposable {
+    this.throwIfDisposed();
+    const id = normalizeIntegrationId(setting.id);
+    if (this.featureSettings.has(id)) {
+      throw new Error(`Manager feature setting '${id}' is already registered`);
+    }
+    const normalized = { ...setting, id };
+    this.featureSettings.set(id, normalized);
+    this.fireDidChange();
+    return {
+      dispose: () => {
+        if (this.featureSettings.get(id) !== normalized) {
+          return;
+        }
+        this.featureSettings.delete(id);
+        this.fireDidChange();
+      }
+    };
+  }
+
   getIntegrationSettings(): DashboardIntegrationSettingViewModel[] {
     if (this.disposed) {
       return [];
     }
     const settings: DashboardIntegrationSettingViewModel[] = [];
-    for (const registration of this.virtualAccounts.values()) {
-      const setting = registration.setting;
+    const append = (setting: DashboardIntegrationSettingRegistration | undefined): void => {
       if (!setting) {
-        continue;
+        return;
       }
       try {
         settings.push({
@@ -603,6 +627,15 @@ export class ManagerIntegrationHost implements vscode.Disposable {
       } catch {
         // An unavailable optional setting is omitted from the core UI.
       }
+    };
+    for (const setting of this.featureSettings.values()) {
+      append(setting);
+    }
+    for (const registration of this.dashboardIntegrations.values()) {
+      append(registration.setting);
+    }
+    for (const registration of this.virtualAccounts.values()) {
+      append(registration.setting);
     }
     return settings;
   }
@@ -637,12 +670,18 @@ export class ManagerIntegrationHost implements vscode.Disposable {
 
   async updateIntegrationSetting(settingId: string, enabled: boolean): Promise<void> {
     this.throwIfDisposed();
-    const entry = [...this.virtualAccounts.entries()].find(([, item]) => item.setting?.id === settingId);
-    const registration = entry?.[1];
-    if (!registration?.setting) {
+    const featureSetting = this.featureSettings.get(settingId);
+    const dashboardSetting = [...this.dashboardIntegrations.values()].find(
+      (registration) => registration.setting?.id === settingId
+    )?.setting;
+    const virtualSetting = [...this.virtualAccounts.values()].find(
+      (registration) => registration.setting?.id === settingId
+    )?.setting;
+    const setting = featureSetting ?? dashboardSetting ?? virtualSetting;
+    if (!setting) {
       throw new Error("The requested Manager integration setting is unavailable");
     }
-    await registration.setting.setEnabled(enabled);
+    await setting.setEnabled(enabled);
     this.fireDidChange();
   }
 
@@ -697,6 +736,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
     }
     this.dashboardIntegrations.clear();
     this.virtualAccounts.clear();
+    this.featureSettings.clear();
     this.gatewayLeases.clear();
     this.changeListeners.clear();
     this.accountDirectoryChangeListeners.clear();

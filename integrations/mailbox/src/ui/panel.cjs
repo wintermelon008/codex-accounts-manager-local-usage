@@ -8,7 +8,7 @@ const REGISTRATION_PANEL_VIEW_TYPE = "codexAccounts.mailboxRegistration";
 
 function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
   const registrationOnly = mode === "registration";
-  const panelTitle = registrationOnly ? "注册助手" : "Mailbox";
+  const panelTitle = registrationOnly ? "注册助手" : "邮箱管理";
   const panelSubtitle = registrationOnly
     ? "从邮箱库选择或输入新邮箱；GPT 注册在外部浏览器手动完成"
     : "邮箱列表与当前选中邮箱详情";

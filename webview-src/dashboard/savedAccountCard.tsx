@@ -32,6 +32,7 @@ import {
 } from "./icons";
 import { ActionButton } from "./primitives";
 import { MetricRow, renderHealthPill } from "./accountMetricPrimitives";
+import { AccountDiagnosticPanel } from "./accountDiagnostics";
 import { estimateStandardApiCost } from "./localUsageInsights";
 
 export function SavedAccountCard(props: {
@@ -50,6 +51,7 @@ export function SavedAccountCard(props: {
   copyImportJsonSucceeded: boolean;
   shareAccountsPending: boolean;
   returnSharedAccountPending: boolean;
+  sharingEnabled?: boolean;
   accountNameCopyPending: boolean;
   accountNameCopySucceeded: boolean;
   quotaCountdownStartPending: boolean;
@@ -103,6 +105,7 @@ export function SavedAccountCard(props: {
           ? "加入無感切換池"
           : "Add to seamless-switch pool";
   const [flipped, setFlipped] = useState(false);
+  const [showDiagnostic, setShowDiagnostic] = useState(false);
   const healthFilter = getDashboardHealthFilter(account);
   const sharingFilter = getDashboardSharingFilter(account);
   const incomingSharedAccount = sharingFilter === "received";
@@ -110,7 +113,8 @@ export function SavedAccountCard(props: {
   const hasErrorHealth = healthFilter === "auth_invalid";
   const hasUsableRenewalWarning = healthFilter === "usable_no_renewal";
   const hasWarningHealth =
-    !account.dismissedHealth && ["expiring", "refresh_failed", "refresh_token_invalid", "quota"].includes(account.healthKind);
+    !account.dismissedHealth &&
+    ["expiring", "refresh_failed", "refresh_token_invalid", "quota"].includes(account.healthKind);
   const hasUnknownHealth = healthFilter === "unknown";
   const hasRecoverableRenewalWarning =
     !account.dismissedHealth &&
@@ -174,6 +178,7 @@ export function SavedAccountCard(props: {
     }
 
     event.preventDefault();
+    setShowDiagnostic(false);
     setFlipped(nextFlipped);
   };
 
@@ -185,7 +190,10 @@ export function SavedAccountCard(props: {
           role="button"
           tabIndex={0}
           aria-label={copy.detailsBtn}
-          onClick={() => setFlipped(true)}
+          onClick={() => {
+            setShowDiagnostic(false);
+            setFlipped(true);
+          }}
           onKeyDown={(event) => handleFlipKey(event, true)}
         >
           <div class="saved-head">
@@ -435,7 +443,10 @@ export function SavedAccountCard(props: {
           role="button"
           tabIndex={0}
           aria-label={copy.detailsBtn}
-          onClick={() => setFlipped(false)}
+          onClick={() => {
+            setShowDiagnostic(false);
+            setFlipped(false);
+          }}
           onKeyDown={(event) => handleFlipKey(event, false)}
         >
           <div class="saved-back-body">
@@ -443,59 +454,63 @@ export function SavedAccountCard(props: {
               <div class="saved-back-icon" aria-hidden="true"></div>
               <span class="saved-back-email">{backEmailDisplay}</span>
             </div>
-            <div class="saved-detail-list">
-              {providerCard?.details?.map((detail) => (
+            {showDiagnostic ? (
+              <AccountDiagnosticPanel account={account} settings={settings} lang={props.lang} />
+            ) : (
+              <div class="saved-detail-list">
+                {providerCard?.details?.map((detail) => (
+                  <CardDetailRow
+                    key={`${detail.label}:${detail.value}`}
+                    label={detail.label}
+                    value={detail.value}
+                    color={
+                      detail.emphasis === "positive"
+                        ? "var(--accent-green)"
+                        : detail.emphasis === "warning"
+                          ? "#f59e0b"
+                          : undefined
+                    }
+                  />
+                ))}
+                {!virtual ? (
+                  <CardDetailRow
+                    label={resolveBackLabel("subscription", props.lang)}
+                    value={account.subscriptionText}
+                    title={account.subscriptionTitle}
+                    color={account.subscriptionColor}
+                  />
+                ) : null}
+                <CardDetailRow label={resolveBackLabel("addMethod", props.lang)} value={account.addMethodLabel} />
                 <CardDetailRow
-                  key={`${detail.label}:${detail.value}`}
-                  label={detail.label}
-                  value={detail.value}
-                  color={
-                    detail.emphasis === "positive"
-                      ? "var(--accent-green)"
-                      : detail.emphasis === "warning"
-                        ? "#f59e0b"
-                        : undefined
-                  }
+                  label={resolveBackLabel(
+                    account.accountTimeSource === "registration" ? "registrationAt" : "importedAt",
+                    props.lang
+                  )}
+                  value={account.accountTimeLabel}
                 />
-              ))}
-              {!virtual ? (
+                {!virtual ? (
+                  <CardDetailRow
+                    label={resolveBackLabel("lifetimeUsage", props.lang)}
+                    value={formatLifetimeTokenUsage(account.lifetimeTokenUsage, props.lang)}
+                  />
+                ) : null}
                 <CardDetailRow
-                  label={resolveBackLabel("subscription", props.lang)}
-                  value={account.subscriptionText}
-                  title={account.subscriptionTitle}
-                  color={account.subscriptionColor}
+                  label={resolveBackLabel("maxConcurrency", props.lang)}
+                  value={formatMaxConcurrency(account.maxConcurrency, props.lang)}
                 />
-              ) : null}
-              <CardDetailRow label={resolveBackLabel("addMethod", props.lang)} value={account.addMethodLabel} />
-              <CardDetailRow
-                label={resolveBackLabel(
-                  account.accountTimeSource === "registration" ? "registrationAt" : "importedAt",
-                  props.lang
-                )}
-                value={account.accountTimeLabel}
-              />
-              {!virtual ? (
                 <CardDetailRow
-                  label={resolveBackLabel("lifetimeUsage", props.lang)}
-                  value={formatLifetimeTokenUsage(account.lifetimeTokenUsage, props.lang)}
+                  label={resolveBackLabel("averageTokenRate", props.lang)}
+                  value={formatAverageTokenRate(account.averageTokenRate, props.lang)}
                 />
-              ) : null}
-              <CardDetailRow
-                label={resolveBackLabel("maxConcurrency", props.lang)}
-                value={formatMaxConcurrency(account.maxConcurrency, props.lang)}
-              />
-              <CardDetailRow
-                label={resolveBackLabel("averageTokenRate", props.lang)}
-                value={formatAverageTokenRate(account.averageTokenRate, props.lang)}
-              />
-              <CardDetailRow
-                label={resolveBackLabel("status", props.lang)}
-                value={resolveBackStatus(account, props.lang)}
-                color={account.statusColor}
-              />
-            </div>
-            <div class="saved-back-footer" onClick={stopFlip}>
-              {!virtual && incomingSharedAccount ? (
+                <CardDetailRow
+                  label={resolveBackLabel("status", props.lang)}
+                  value={resolveBackStatus(account, props.lang)}
+                  color={account.statusColor}
+                />
+              </div>
+            )}
+            <div class="saved-back-footer" onClick={stopFlip} onKeyDown={stopFlip}>
+              {props.sharingEnabled !== false && !virtual && incomingSharedAccount ? (
                 <ActionButton
                   class="saved-back-share-action saved-back-return-action"
                   icon={<span aria-hidden="true">↩</span>}
@@ -505,7 +520,7 @@ export function SavedAccountCard(props: {
                   disabled={props.busy}
                   onClick={() => onAction("returnSharedAccount", account.id)}
                 />
-              ) : !virtual && !outgoingSharedAccount ? (
+              ) : props.sharingEnabled !== false && !virtual && !outgoingSharedAccount ? (
                 <ActionButton
                   class="saved-back-share-action"
                   icon={<span aria-hidden="true">⇄</span>}
@@ -522,7 +537,16 @@ export function SavedAccountCard(props: {
                   }}
                 />
               ) : null}
-              <div class="saved-back-hint">{resolveBackHint(props.lang)}</div>
+              <div class="saved-back-hint">
+                {showDiagnostic ? resolveDiagnosticToggleHint(props.lang) : resolveBackHint(props.lang)}
+              </div>
+              <ActionButton
+                class="saved-back-diagnostic-action"
+                icon={<span aria-hidden="true">?</span>}
+                iconOnly
+                label={resolveDiagnosticToggleLabel(props.lang, showDiagnostic)}
+                onClick={() => setShowDiagnostic((visible) => !visible)}
+              />
               <ActionButton
                 class="saved-back-copy-action"
                 icon={props.accountNameCopySucceeded ? <SuccessIcon /> : <CopyIcon />}
@@ -641,6 +665,26 @@ function resolveBackHint(lang: DashboardState["lang"]): string {
     default:
       return "Click anywhere to return to quota monitor";
   }
+}
+
+function resolveDiagnosticToggleLabel(lang: DashboardState["lang"], showing: boolean): string {
+  if (lang === "zh") {
+    return showing ? "返回账号详情" : "查看账号诊断";
+  }
+  if (lang === "zh-hant") {
+    return showing ? "返回帳號詳情" : "查看帳號診斷";
+  }
+  return showing ? "Back to account details" : "View account diagnostics";
+}
+
+function resolveDiagnosticToggleHint(lang: DashboardState["lang"]): string {
+  if (lang === "zh") {
+    return "点击 ? 返回账号详情";
+  }
+  if (lang === "zh-hant") {
+    return "點擊 ? 返回帳號詳情";
+  }
+  return "Click ? to return to account details";
 }
 
 function resolveAccountNameCopyLabel(lang: DashboardState["lang"]): string {

@@ -212,6 +212,53 @@ describe("ManagerIntegrationHost", () => {
     host.dispose();
   });
 
+  it("exposes and updates core and Dashboard feature settings through one interface", async () => {
+    const gateway = createGateway();
+    const host = new ManagerIntegrationHost(gateway.operations);
+    let sharingEnabled = true;
+    let mailboxEnabled = true;
+    host.registerFeatureSetting({
+      id: "account-sharing",
+      title: "账号共享",
+      getEnabled: () => sharingEnabled,
+      setEnabled: async (enabled) => {
+        sharingEnabled = enabled;
+      }
+    });
+    host.api.registerDashboardIntegration({
+      id: "mailbox",
+      getViewModel: () => ({
+        id: "mailbox",
+        title: "Mailbox",
+        status: mailboxEnabled ? "ready" : "inactive",
+        actions: []
+      }),
+      runAction: vi.fn(),
+      setting: {
+        id: "mailbox",
+        title: "Mailbox",
+        getEnabled: () => mailboxEnabled,
+        setEnabled: async (enabled) => {
+          mailboxEnabled = enabled;
+        }
+      }
+    });
+
+    expect(host.getIntegrationSettings()).toEqual([
+      expect.objectContaining({ id: "account-sharing", enabled: true }),
+      expect.objectContaining({ id: "mailbox", enabled: true })
+    ]);
+    await host.updateIntegrationSetting("mailbox", false);
+    await host.updateIntegrationSetting("account-sharing", false);
+    expect(mailboxEnabled).toBe(false);
+    expect(sharingEnabled).toBe(false);
+    expect(host.getIntegrationSettings()).toEqual([
+      expect.objectContaining({ id: "account-sharing", enabled: false }),
+      expect.objectContaining({ id: "mailbox", enabled: false })
+    ]);
+    host.dispose();
+  });
+
   it("refreshes registered optional integrations without requiring any integration", async () => {
     const gateway = createGateway();
     const host = new ManagerIntegrationHost(gateway.operations);

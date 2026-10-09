@@ -32,7 +32,7 @@ class CdnsProvider {
       capabilities: { history: "latest", maxMessages: CDNS_MAX_MESSAGES, manualRenewal: false },
       importSchema: {
         label: "邮箱----密码----接码令牌----public_ref",
-        description: "每行一个 CDNS 四段账号；凭据只保存在 Mailbox 私有存储中。",
+        description: "每行一个 CDNS 四段账号；凭据只保存在邮箱管理私有存储中。",
         placeholder: "email@example.com----password----receive_token----public_ref"
       },
       parseImport: (input) => parseCdnsImport(input),

@@ -49,8 +49,41 @@ test("activation loads local state, registers a generic Manager card, and does n
 
   assert.equal(fetchCalls, 0);
   assert.equal(registration.id, INTEGRATION_ID);
-  assert.equal(registration.getViewModel().title, "Mailbox");
+  assert.equal(registration.getViewModel().title, "邮箱管理");
+  assert.equal(registration.setting.title, "邮箱管理");
   assert.equal(registration.getViewModel().actions.some((action) => action.id === "open"), true);
+  integration.dispose();
+});
+
+test("Mailbox and registration assistant expose independent feature toggles without deleting state", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const registrations = [];
+  const api = {
+    registerDashboardIntegration(value) {
+      registrations.push(value);
+      return { dispose() {} };
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+
+  const mailbox = registrations.find((registration) => registration.id === INTEGRATION_ID);
+  const registrationAssistant = registrations.find((registration) => registration.id === REGISTRATION_INTEGRATION_ID);
+  assert.equal(mailbox.setting.getEnabled(), true);
+  assert.equal(registrationAssistant.setting.getEnabled(), true);
+
+  await mailbox.setting.setEnabled(false);
+  assert.equal(mailbox.getViewModel().status, "inactive");
+  await assert.rejects(mailbox.runAction("open"), /邮箱管理功能已关闭/u);
+  await mailbox.setting.setEnabled(true);
+  assert.equal(mailbox.getViewModel().status, "ready");
+
+  await registrationAssistant.setting.setEnabled(false);
+  assert.equal(registrationAssistant.getViewModel().status, "inactive");
+  await assert.rejects(registrationAssistant.runAction("open"), /注册助手功能已关闭/u);
+  await registrationAssistant.setting.setEnabled(true);
+  assert.equal(registrationAssistant.getViewModel().status, "ready");
   integration.dispose();
 });
 
