@@ -53,7 +53,7 @@ const SESSION_QUEUE_FILE = "codex-session-queue.cjs";
 const SHIM_CONFIG_FILE = "codex-app-server-shim.json";
 const RUNTIME_OWNER_FILE = "runtime-owner.lease";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
-export const HOT_SWITCH_RUNTIME_PROTOCOL_VERSION = 16;
+export const HOT_SWITCH_RUNTIME_PROTOCOL_VERSION = 18;
 const RUNTIME_PROTOCOL_VERSION = HOT_SWITCH_RUNTIME_PROTOCOL_VERSION;
 const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
 const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
@@ -760,6 +760,7 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
       const launcherDestination = path.join(runtimeDirectory, SHIM_LAUNCHER_FILE);
       const shimConfigDestination = path.join(runtimeDirectory, SHIM_CONFIG_FILE);
       const runtimeOwnerPath = path.join(getCodexHome(), RUNTIME_OWNER_FILE);
+      process.env["CODEX_ACCOUNTS_RUNTIME_OWNER_PATH"] = runtimeOwnerPath;
       const usageAttributionDirectory = path.join(runtimeDirectory, USAGE_ATTRIBUTION_DIRECTORY);
       const gatewayState = this.getGatewayRuntimeState();
       const gateway = gatewayState ? { ...gatewayState.config, active: gatewayState.active } : undefined;

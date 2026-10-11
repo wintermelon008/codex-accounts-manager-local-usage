@@ -200,7 +200,7 @@ describe("CodexHotSwitchBridge", () => {
     await waitForSocket(getHotSwitchSocketPath(process.pid));
 
     await expect(bridge.getStatus()).resolves.toMatchObject({
-      runtimeProtocolVersion: 16,
+      runtimeProtocolVersion: 18,
       ready: true,
       initializeResponseReceived: true,
       initializedNotificationReceived: true,
@@ -648,19 +648,22 @@ describe("CodexHotSwitchBridge", () => {
     await messages.next((message) => message.id === "hidden-exhaustion-recovery-complete");
   }, 15_000);
 
-  it("refuses a second Manager app-server for the same runtime owner", async () => {
+  it("attaches a second app-server client and promotes it after the owner exits", async () => {
     const root = path.resolve(__dirname, "..");
     const parentDirectory = await mkdtemp(path.join(os.tmpdir(), "codex-accounts-runtime-owner-"));
     const firstDirectory = path.join(parentDirectory, "first");
     const secondDirectory = path.join(parentDirectory, "second");
+    const thirdDirectory = path.join(parentDirectory, "third");
     const ownerPath = path.join(parentDirectory, "runtime-owner.lease");
     const fakeCliPath = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");
     let second: childProcess.ChildProcessWithoutNullStreams | undefined;
+    let third: childProcess.ChildProcessWithoutNullStreams | undefined;
 
     try {
       await mkdir(firstDirectory, { recursive: true });
       await mkdir(secondDirectory, { recursive: true });
-      for (const directory of [firstDirectory, secondDirectory]) {
+      await mkdir(thirdDirectory, { recursive: true });
+      for (const directory of [firstDirectory, secondDirectory, thirdDirectory]) {
         await copyRuntimeShim(root, path.join(directory, "codex-app-server-shim.cjs"));
         await writeFile(
           path.join(directory, "codex-app-server-shim.json"),
@@ -682,23 +685,175 @@ describe("CodexHotSwitchBridge", () => {
       shim.stdin.write(`${JSON.stringify({ id: "owner-initialize", method: "initialize", params: {} })}\n`);
       await messages.next((message) => message.id === "owner-initialize");
 
-      const stderr: string[] = [];
       second = childProcess.spawn(path.join(secondDirectory, "codex-app-server-shim.cjs"), ["app-server"], {
         cwd: root,
-        env: {
-          ...process.env,
-          CODEX_ACCOUNTS_RUNTIME_OWNER_ACQUIRE_WAIT_MS: "100"
-        },
+        env: process.env,
         stdio: ["pipe", "pipe", "pipe"]
       });
-      second.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-        second?.once("exit", (code, signal) => resolve({ code, signal }));
+      const attachedMessages = createMessageCollector(second.stdout);
+      second.stdin.write(`${JSON.stringify({ id: "attached-initialize", method: "initialize", params: {} })}\n`);
+      await expect(attachedMessages.next((message) => message.id === "attached-initialize")).resolves.toMatchObject({
+        id: "attached-initialize",
+        result: { userAgent: "fake-codex/1" }
+      });
+      expect(
+        messages.all.filter(
+          (message) => message.method === "test/received" && message.params?.method === "initialize"
+        )
+      ).toHaveLength(1);
+
+      second.stdin.write(
+        `${JSON.stringify({
+          id: "attached-thread-start",
+          method: "thread/start",
+          params: { testThreadId: "attached-thread" }
+        })}\n`
+      );
+      await expect(attachedMessages.next((message) => message.id === "attached-thread-start")).resolves.toMatchObject({
+        id: "attached-thread-start",
+        result: { thread: { id: "attached-thread" } }
       });
 
-      expect(exit.code).not.toBe(0);
-      expect(stderr.join(" ")).toContain("refusing a second app-server");
+      third = childProcess.spawn(path.join(thirdDirectory, "codex-app-server-shim.cjs"), ["app-server"], {
+        cwd: root,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const thirdMessages = createMessageCollector(third.stdout);
+      third.stdin.write(`${JSON.stringify({ id: "third-initialize", method: "initialize", params: {} })}\n`);
+      await expect(thirdMessages.next((message) => message.id === "third-initialize")).resolves.toMatchObject({
+        id: "third-initialize",
+        result: { userAgent: "fake-codex/1" }
+      });
+      third.stdin.write(
+        `${JSON.stringify({
+          id: "third-thread-start",
+          method: "thread/start",
+          params: { testThreadId: "third-thread" }
+        })}\n`
+      );
+      await expect(thirdMessages.next((message) => message.id === "third-thread-start")).resolves.toMatchObject({
+        id: "third-thread-start",
+        result: { thread: { id: "third-thread" } }
+      });
+
+      second.stdin.write(
+        `${JSON.stringify({
+          id: "attached-turn-start",
+          method: "turn/start",
+          params: { threadId: "attached-thread", input: [] }
+        })}\n`
+      );
+      third.stdin.write(
+        `${JSON.stringify({
+          id: "third-turn-start",
+          method: "turn/start",
+          params: { threadId: "third-thread", input: [] }
+        })}\n`
+      );
+      await expect(attachedMessages.next((message) => message.id === "attached-turn-start")).resolves.toMatchObject({
+        id: "attached-turn-start",
+        result: { turn: { id: expect.any(String) } }
+      });
+      await expect(thirdMessages.next((message) => message.id === "third-turn-start")).resolves.toMatchObject({
+        id: "third-turn-start",
+        result: { turn: { id: expect.any(String) } }
+      });
+      await waitFor(
+        () =>
+          attachedMessages.all.some(
+            (message) => message.method === "turn/started" && message.params?.threadId === "attached-thread"
+          ) &&
+          thirdMessages.all.some(
+            (message) => message.method === "turn/started" && message.params?.threadId === "third-thread"
+          )
+      );
+      expect(
+        attachedMessages.all.some(
+          (message) => message.method === "turn/started" && message.params?.threadId === "third-thread"
+        )
+      ).toBe(false);
+      expect(
+        thirdMessages.all.some(
+          (message) => message.method === "turn/started" && message.params?.threadId === "attached-thread"
+        )
+      ).toBe(false);
+
+      second.stdin.write(`${JSON.stringify({ id: "attached-turn-complete", method: "test/complete", params: {} })}\n`);
+      await attachedMessages.next((message) => message.id === "attached-turn-complete");
+      third.stdin.write(`${JSON.stringify({ id: "third-turn-complete", method: "test/complete", params: {} })}\n`);
+      await thirdMessages.next((message) => message.id === "third-turn-complete");
+
+      const previousOwnerPath = process.env.CODEX_ACCOUNTS_RUNTIME_OWNER_PATH;
+      process.env.CODEX_ACCOUNTS_RUNTIME_OWNER_PATH = ownerPath;
+      const ownerBridge = new CodexHotSwitchBridge(async () => ({
+        accessToken: "unused-token",
+        chatgptAccountId: "account-a",
+        chatgptPlanType: "plus"
+      }));
+      const attachedBridge = new CodexHotSwitchBridge(async () => ({
+        accessToken: "unused-token",
+        chatgptAccountId: "account-a",
+        chatgptPlanType: "plus"
+      }));
+      try {
+        await waitForSocket(getHotSwitchSocketPath(process.pid));
+        await expect(ownerBridge.getStatus()).resolves.toMatchObject({ runtimeOwner: "owner", ready: true });
+        await expect(attachedBridge.getStatus()).resolves.toMatchObject({ runtimeOwner: "owner", ready: true });
+      } finally {
+        ownerBridge.dispose();
+        attachedBridge.dispose();
+        if (previousOwnerPath === undefined) {
+          delete process.env.CODEX_ACCOUNTS_RUNTIME_OWNER_PATH;
+        } else {
+          process.env.CODEX_ACCOUNTS_RUNTIME_OWNER_PATH = previousOwnerPath;
+        }
+      }
+
+      second.stdin.write(
+        `${JSON.stringify({
+          id: "attached-approval-trigger",
+          method: "test/requestApproval",
+          params: { threadId: "attached-thread" }
+        })}\n`
+      );
+      await expect(
+        attachedMessages.next((message) => message.method === "item/commandExecution/requestApproval")
+      ).resolves.toMatchObject({
+        id: "approval-1",
+        params: { threadId: "attached-thread" }
+      });
+      second.stdin.write(`${JSON.stringify({ id: "approval-1", result: { decision: "accept" } })}\n`);
+      await expect(attachedMessages.next((message) => message.id === "attached-approval-trigger")).resolves.toMatchObject({
+        id: "attached-approval-trigger",
+        result: {}
+      });
+      expect(attachedMessages.all.some((message) => message.id === "approval-1" && !message.method)).toBe(false);
+
+      const firstExited = new Promise<void>((resolve) => shim?.once("exit", () => resolve()));
+      shim.kill("SIGTERM");
+      await firstExited;
+      await waitFor(() => Boolean(second && second.exitCode === null && second.signalCode === null));
+
+      // The surviving client must be able to continue without requiring the
+      // official extension to send a second initialize request. The promoted
+      // shim replays the last initialize internally before flushing this line.
+      second.stdin.write(
+        `${JSON.stringify({
+          id: "promoted-thread-start",
+          method: "thread/start",
+          params: { testThreadId: "promoted-thread" }
+        })}\n`
+      );
+      await expect(attachedMessages.next((message) => message.id === "promoted-thread-start")).resolves.toMatchObject({
+        id: "promoted-thread-start",
+        result: { thread: { id: "promoted-thread" } }
+      });
     } finally {
+      if (third && third.exitCode === null && third.signalCode === null) {
+        third.kill("SIGTERM");
+        await new Promise<void>((resolve) => third?.once("exit", () => resolve()));
+      }
       if (second && second.exitCode === null && second.signalCode === null) {
         second.kill("SIGTERM");
         await new Promise<void>((resolve) => second?.once("exit", () => resolve()));
@@ -711,7 +866,7 @@ describe("CodexHotSwitchBridge", () => {
       }
       await rm(parentDirectory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("drains active turns before forwarding the shutdown signal to the app-server", async () => {
     const root = path.resolve(__dirname, "..");

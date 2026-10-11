@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -780,11 +781,36 @@ function readBoundedString(value: unknown, maxLength: number): string | undefine
 }
 
 export function getHotSwitchSocketPath(extensionHostPid: number): string {
+  const ownerControlSocketPath = readRuntimeOwnerControlSocketPath();
+  if (ownerControlSocketPath) {
+    return ownerControlSocketPath;
+  }
   if (process.platform === "win32") {
     return `\\\\.\\pipe\\codex-accounts-manager-${extensionHostPid}`;
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : "user";
   return path.join(os.tmpdir(), `codex-accounts-manager-${uid}`, `${extensionHostPid}.sock`);
+}
+
+function readRuntimeOwnerControlSocketPath(): string | undefined {
+  const configuredOwnerPath = process.env["CODEX_ACCOUNTS_RUNTIME_OWNER_PATH"]?.trim();
+  // Only a runtime that explicitly opted into the resident owner may use the
+  // owner control socket. Falling back to the default CODEX_HOME here would
+  // make tests, tools, and an unrelated extension host accidentally connect
+  // to another live Codex runtime on the same device.
+  if (!configuredOwnerPath) {
+    return undefined;
+  }
+  try {
+    const value: unknown = JSON.parse(readFileSync(path.join(configuredOwnerPath, "owner.json"), "utf8"));
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    const socketPath = (value as { controlSocketPath?: unknown }).controlSocketPath;
+    return typeof socketPath === "string" && socketPath.length > 0 ? socketPath : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseRpcMessage(line: string): RpcMessage | undefined {

@@ -577,6 +577,14 @@ function handleLine(line) {
       });
       respond(message.id, {});
       break;
+    case "test/requestApproval":
+      emit({
+        id: "approval-1",
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: message.params.threadId, itemId: "item-1", reason: "test" }
+      });
+      respond(message.id, {});
+      break;
     case "account/login/start":
       {
         const nextAccountId = message.params.chatgptAccountId;

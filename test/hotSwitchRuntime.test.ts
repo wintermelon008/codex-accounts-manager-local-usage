@@ -208,7 +208,7 @@ describe("Codex hot-switch runtime setup", () => {
     } as CodexAccountRecord;
     const bridge = {
       getStatus: vi.fn().mockResolvedValue({
-        runtimeProtocolVersion: 16,
+        runtimeProtocolVersion: 18,
         availabilityRuntimeId: "runtime-a",
         ready: true,
         initializeResponseReceived: true,
@@ -899,7 +899,7 @@ describe("Codex hot-switch runtime setup", () => {
         .spyOn(CodexHotSwitchBridge.prototype, "getStatus")
         .mockRejectedValueOnce(new Error("Codex hot-switch runtime is not available"))
         .mockResolvedValueOnce({
-          runtimeProtocolVersion: 16,
+          runtimeProtocolVersion: 18,
           ready: false,
           httpTransportForced: true,
           gatewayConfigured: false,

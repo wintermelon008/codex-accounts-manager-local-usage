@@ -14,6 +14,7 @@ const { spawn } = require("node:child_process");
 const { SessionQueueCoordinator } = require("./codex-session-queue.cjs");
 
 const INTERNAL_ID_PREFIX = "__codex_accounts_manager__";
+const CLIENT_ID_PREFIX = "__codex_accounts_client__";
 const INTERNAL_REQUEST_TIMEOUT_MS = 30_000;
 const REFRESH_REQUEST_TIMEOUT_MS = 30_000;
 const ACCOUNT_IDENTITY_SETTLE_TIMEOUT_MS = 5_000;
@@ -56,7 +57,10 @@ const MAX_USAGE_ATTRIBUTION_THREADS = 2_048;
 const MAX_USAGE_ATTRIBUTION_BATCH_SIZE = 32;
 const USAGE_ATTRIBUTION_FLUSH_DELAY_MS = 2_000;
 const MAX_RUNTIME_THREAD_METADATA = 4_096;
-const RUNTIME_PROTOCOL_VERSION = 16;
+const MAX_ATTACHED_CLIENTS = 32;
+const MAX_ATTACHED_REQUESTS = 4_096;
+const MAX_ATTACHED_CLIENT_THREADS = 4_096;
+const RUNTIME_PROTOCOL_VERSION = 18;
 const availabilityRuntimeId = randomUUID();
 let availabilitySequence = 0;
 let runtimeCredential;
@@ -144,9 +148,13 @@ let activeSwitchRequest;
 let internalSequence = 0;
 let controlSequence = 0;
 let latestControlSocket;
+let ownerControlSocket;
 let controlServer;
+let clientServer;
 let socketPath;
+let clientSocketPath;
 let controlSocketIdentity;
+let clientSocketIdentity;
 const deferredOfficialLines = [];
 const pendingInternalRequests = new Map();
 const pendingChildModelListRequests = new Map();
@@ -169,7 +177,25 @@ const capacityRecoverySwitchGenerations = new Map();
 const recentUsageLimitedThreads = new Map();
 const recentAuthTokenRevokedThreads = new Map();
 const initializeRequests = new Set();
+let initializeForwarded = false;
+let initializeHandshakeResponse;
+let childInitializedNotificationSent = false;
+const pendingPrimaryInitializeIds = [];
+const pendingAttachedInitializeRequests = [];
 const controlSockets = new Set();
+const clientSockets = new Set();
+const clientSocketThreads = new Map();
+const clientThreadOwners = new Map();
+const attachedRequestRoutes = new Map();
+const attachedServerRequestRoutes = new Map();
+let attachedRequestSequence = 0;
+let externalInputStarted = false;
+let attachedClientSocket;
+let clientReconnectPromise;
+let lastClientInitializeLine;
+const clientInputQueue = [];
+const clientPendingRequestIds = new Map();
+const clientServerRequestIds = new Set();
 const pendingThreadCreationRequests = new Map();
 const pendingThreadReadRequests = new Map();
 const runtimeThreadMetadata = new Map();
@@ -203,66 +229,357 @@ process.on("exit", () => {
   clearAllAuthTokenRevokedThreads();
   flushUsageAttributionRecords();
   closeGatewayAdapter();
+  closeClientServer();
   releaseRuntimeOwner();
 });
 
 async function startRuntime() {
   try {
-    if (process.argv.includes("app-server") && !(await acquireRuntimeOwner())) {
-      failStartup("another Manager runtime already owns this Codex home; refusing a second app-server");
-      return;
-    }
-    runtimeOwnerMode = runtimeOwnerPath && process.argv.includes("app-server") ? "owner" : "legacy";
-    if (runtimeOwnerMode === "owner") {
-      startRuntimeOwnerRenewal();
-    }
-    if (gatewayConfig && process.argv.includes("app-server")) {
-      gatewayAdapter = await startGatewayAdapter(gatewayConfig);
-    }
-    const childEnv = { ...process.env };
-    if (gatewayAdapter) {
-      if (!gatewayConfig.autoFallbackToChatGpt) {
-        childEnv[GATEWAY_ADAPTER_ENV_KEY] = gatewayAdapter.token;
+    const appServerRequested = process.argv.includes("app-server");
+    if (appServerRequested && runtimeOwnerPath) {
+      const existingOwner = await readRuntimeOwnerMetadata();
+      if (canAttachToRuntimeOwner(existingOwner) && (await attachToRuntimeOwner(existingOwner))) {
+        runtimeOwnerMode = "client";
+        startExternalInput();
+        return;
       }
-      configureGatewayLoopbackProxyBypass(childEnv);
-      safeLog("Gateway loopback proxy bypass configured");
+      if (!(await acquireRuntimeOwner())) {
+        const currentOwner = await readRuntimeOwnerMetadata();
+        if (canAttachToRuntimeOwner(currentOwner) && (await attachToRuntimeOwner(currentOwner))) {
+          runtimeOwnerMode = "client";
+          startExternalInput();
+          return;
+        }
+        failStartup("another Manager runtime already owns this Codex home; unable to attach to its app-server");
+        return;
+      }
+      runtimeOwnerMode = "owner";
+      startRuntimeOwnerRenewal();
+    } else {
+      runtimeOwnerMode = runtimeOwnerPath && appServerRequested ? "owner" : "legacy";
     }
-    // Pin the startup credential so a later auth-file change cannot make an
-    // already-running child report evidence for a different credential.
-    if (!process.env.CODEX_ACCOUNTS_REAL_CLI) runtimeCredential = readStartupCredential();
-    child = spawn(realCliPath, buildRealCliArgs(process.argv.slice(2)), {
-      env: childEnv,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-
-    child.on("error", (error) => {
-      safeLog(`failed to start the real Codex CLI: ${safeErrorMessage(error)}`);
-      handleChildExit(undefined, undefined, error);
-    });
-
-    child.stderr.pipe(process.stderr);
-
-    consumeLines(process.stdin, handleOfficialLine, () => {
-      requestShutdown("SIGTERM");
-    });
-    consumeLines(child.stdout, handleCodexLine, () => {
-      process.stdout.end();
-    });
-
-    if (process.argv.includes("app-server")) {
-      startControlServer();
-    }
-
-    child.on("exit", (code, signal) => {
-      handleChildExit(code, signal);
-    });
-
-    beginShutdownIfRequested();
+    await startOwnedRuntime();
   } catch (error) {
     releaseRuntimeOwner();
     closeGatewayAdapter();
+    closeClientServer();
     failStartup(`Unable to start the Codex runtime: ${safeErrorMessage(error)}`);
   }
+}
+
+async function startOwnedRuntime() {
+  const appServerRequested = process.argv.includes("app-server");
+  if (gatewayConfig && process.argv.includes("app-server")) {
+    gatewayAdapter = await startGatewayAdapter(gatewayConfig);
+  }
+  const childEnv = { ...process.env };
+  if (gatewayAdapter) {
+    if (!gatewayConfig.autoFallbackToChatGpt) {
+      childEnv[GATEWAY_ADAPTER_ENV_KEY] = gatewayAdapter.token;
+    }
+    configureGatewayLoopbackProxyBypass(childEnv);
+    safeLog("Gateway loopback proxy bypass configured");
+  }
+  // Pin the startup credential so a later auth-file change cannot make an
+  // already-running child report evidence for a different credential.
+  if (!process.env.CODEX_ACCOUNTS_REAL_CLI) runtimeCredential = readStartupCredential();
+  child = spawn(realCliPath, buildRealCliArgs(process.argv.slice(2)), {
+    env: childEnv,
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+
+  child.on("error", (error) => {
+    safeLog(`failed to start the real Codex CLI: ${safeErrorMessage(error)}`);
+    handleChildExit(undefined, undefined, error);
+  });
+
+  child.stderr.pipe(process.stderr);
+
+  startExternalInput();
+  consumeLines(child.stdout, handleCodexLine, () => {
+    process.stdout.end();
+  });
+
+  if (appServerRequested) {
+    startControlServer();
+    startClientServer();
+  }
+
+  child.on("exit", (code, signal) => {
+    handleChildExit(code, signal);
+  });
+
+  beginShutdownIfRequested();
+}
+
+function buildRuntimeOwnerRecord(token) {
+  return {
+    version: 2,
+    pid: process.pid,
+    token,
+    expiresAt: Date.now() + RUNTIME_OWNER_LEASE_MS,
+    controlSocketPath: getControlSocketPath(process.ppid),
+    clientSocketPath: getRuntimeClientSocketPath()
+  };
+}
+
+function getRuntimeClientSocketPath() {
+  if (!runtimeOwnerPath) {
+    return undefined;
+  }
+  return path.join(runtimeOwnerPath, "app-server-client.sock");
+}
+
+async function readRuntimeOwnerMetadata() {
+  if (!runtimeOwnerPath) {
+    return undefined;
+  }
+  try {
+    const owner = JSON.parse(await fs.promises.readFile(path.join(runtimeOwnerPath, "owner.json"), "utf8"));
+    if (
+      !Number.isSafeInteger(owner?.pid) ||
+      owner.pid <= 0 ||
+      typeof owner.token !== "string" ||
+      owner.token.length === 0 ||
+      typeof owner.expiresAt !== "number" ||
+      !Number.isFinite(owner.expiresAt) ||
+      typeof owner.clientSocketPath !== "string" ||
+      owner.clientSocketPath.length === 0 ||
+      typeof owner.controlSocketPath !== "string" ||
+      owner.controlSocketPath.length === 0
+    ) {
+      return undefined;
+    }
+    return owner;
+  } catch {
+    return undefined;
+  }
+}
+
+function canAttachToRuntimeOwner(owner) {
+  return Boolean(
+    owner &&
+      owner.pid !== process.pid &&
+      owner.expiresAt > Date.now() &&
+      isProcessAlive(owner.pid) &&
+      owner.clientSocketPath
+  );
+}
+
+function startExternalInput() {
+  if (externalInputStarted) {
+    return;
+  }
+  externalInputStarted = true;
+  consumeLines(process.stdin, handleExternalLine, () => {
+    requestShutdown("SIGTERM");
+  });
+}
+
+function handleExternalLine(line) {
+  if (runtimeOwnerMode === "client") {
+    handleAttachedClientInput(line);
+    return;
+  }
+  if (runtimeOwnerMode === "client-reconnecting") {
+    if (clientInputQueue.length < MAX_ATTACHED_REQUESTS) {
+      clientInputQueue.push(line);
+    } else {
+      safeLog("attached client input queue is full while reconnecting");
+    }
+    return;
+  }
+  if (runtimeOwnerMode === "owner-recovering") {
+    if (clientInputQueue.length < MAX_ATTACHED_REQUESTS) {
+      clientInputQueue.push(line);
+    } else {
+      safeLog("attached client input queue is full while promoting to owner");
+    }
+    return;
+  }
+  handleOfficialLine(line);
+}
+
+function handleAttachedClientInput(line) {
+  const socket = attachedClientSocket;
+  if (!socket || socket.destroyed) {
+    if (clientInputQueue.length < MAX_ATTACHED_REQUESTS) {
+      clientInputQueue.push(line);
+    }
+    return;
+  }
+
+  const message = parseJson(line);
+  if (message && !message.method && Object.prototype.hasOwnProperty.call(message, "id")) {
+    const key = requestIdKey(message.id);
+    if (clientServerRequestIds.delete(key)) {
+      writeAttachedClientLine(line);
+      return;
+    }
+  }
+  if (message && message.method && Object.prototype.hasOwnProperty.call(message, "id")) {
+    if (message.method === "initialize") {
+      lastClientInitializeLine = line;
+    }
+    clientPendingRequestIds.set(requestIdKey(message.id), message.id);
+  }
+  writeAttachedClientLine(line);
+}
+
+function writeAttachedClientLine(line) {
+  if (attachedClientSocket && !attachedClientSocket.destroyed) {
+    attachedClientSocket.write(`${line}\n`);
+  } else if (clientInputQueue.length < MAX_ATTACHED_REQUESTS) {
+    clientInputQueue.push(line);
+  }
+}
+
+function flushClientInputQueue() {
+  if (runtimeOwnerMode === "client") {
+    while (clientInputQueue.length > 0 && attachedClientSocket && !attachedClientSocket.destroyed) {
+      const line = clientInputQueue.shift();
+      if (line !== undefined) {
+        handleAttachedClientInput(line);
+      }
+    }
+    return;
+  }
+  if (runtimeOwnerMode === "owner") {
+    while (clientInputQueue.length > 0) {
+      const line = clientInputQueue.shift();
+      if (line !== undefined) {
+        handleOfficialLine(line);
+      }
+    }
+  }
+}
+
+async function attachToRuntimeOwner(owner) {
+  if (!owner?.clientSocketPath) {
+    return false;
+  }
+  return await new Promise((resolve) => {
+    let settled = false;
+    const socket = net.createConnection(owner.clientSocketPath);
+    socket.setEncoding("utf8");
+    const fail = () => {
+      if (!settled) {
+        settled = true;
+        socket.destroy();
+        resolve(false);
+      }
+    };
+    socket.once("error", fail);
+    socket.once("connect", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.off("error", fail);
+      attachedClientSocket = socket;
+      consumeLines(socket, handleAttachedOwnerLine, () => {
+        handleAttachedOwnerDisconnect(socket);
+      });
+      socket.on("error", () => {
+        handleAttachedOwnerDisconnect(socket);
+      });
+      resolve(true);
+    });
+  });
+}
+
+function handleAttachedOwnerLine(line) {
+  const message = parseJson(line);
+  if (message && Object.prototype.hasOwnProperty.call(message, "id")) {
+    const key = requestIdKey(message.id);
+    if (message.method) {
+      clientServerRequestIds.add(key);
+    } else {
+      clientPendingRequestIds.delete(key);
+    }
+  }
+  process.stdout.write(`${line}\n`);
+}
+
+function handleAttachedOwnerDisconnect(socket) {
+  if (attachedClientSocket !== socket) {
+    return;
+  }
+  attachedClientSocket = undefined;
+  for (const [key, id] of clientPendingRequestIds) {
+    process.stdout.write(
+      `${JSON.stringify({
+        id,
+        error: { code: -32001, message: "Manager runtime owner disconnected; request outcome is uncertain" }
+      })}\n`
+    );
+    clientPendingRequestIds.delete(key);
+  }
+  clientServerRequestIds.clear();
+  if (!shutdownRequested) {
+    void reconnectAsOwnerOrClient();
+  }
+}
+
+async function reconnectAsOwnerOrClient() {
+  if (clientReconnectPromise) {
+    return clientReconnectPromise;
+  }
+  clientReconnectPromise = (async () => {
+    runtimeOwnerMode = "client-reconnecting";
+    for (;;) {
+      if (shutdownRequested) {
+        return;
+      }
+      const owner = await readRuntimeOwnerMetadata();
+      if (canAttachToRuntimeOwner(owner) && (await attachToRuntimeOwner(owner))) {
+        runtimeOwnerMode = "client";
+        flushClientInputQueue();
+        return;
+      }
+      if (await acquireRuntimeOwner(500)) {
+        runtimeOwnerMode = "owner-recovering";
+        startRuntimeOwnerRenewal();
+        await startOwnedRuntime();
+        await initializePromotedClient();
+        runtimeOwnerMode = "owner";
+        flushClientInputQueue();
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, RUNTIME_OWNER_RETRY_INTERVAL_MS));
+    }
+  })().catch((error) => {
+    failStartup(`Unable to reconnect to the Manager runtime: ${safeErrorMessage(error)}`);
+  });
+  try {
+    await clientReconnectPromise;
+  } finally {
+    clientReconnectPromise = undefined;
+  }
+}
+
+async function initializePromotedClient() {
+  if (clientInputQueue.some((line) => parseJson(line)?.method === "initialize")) {
+    return;
+  }
+  if (!lastClientInitializeLine) {
+    return;
+  }
+  const initialize = parseJson(lastClientInitializeLine);
+  if (!initialize || initialize.method !== "initialize") {
+    return;
+  }
+  const result = await sendInternalRequest("initialize", initialize.params || {});
+  initializeForwarded = true;
+  initializeHandshakeResponse = { result };
+  initializeResponseReceived = true;
+  initializedNotificationReceived = true;
+  childInitializedNotificationSent = true;
+  writeChildMessage({ method: "initialized", params: {} });
+  childReady = true;
+  // The synthetic request is consumed internally, so it must not make the
+  // attached client's next initialize response look duplicated.
+  safeLog(`promoted attached client initialized (${result ? "ok" : "empty"})`);
 }
 
 function handleChildExit(code, signal, startupError) {
@@ -280,6 +597,7 @@ function handleChildExit(code, signal, startupError) {
       : new Error("Codex app-server exited")
   );
   closeControlServer();
+  closeClientServer();
   closeGatewayAdapter();
   if (shutdownRequested || startupError) {
     process.stdin.pause();
@@ -296,13 +614,13 @@ function handleChildExit(code, signal, startupError) {
   }
 }
 
-async function acquireRuntimeOwner() {
+async function acquireRuntimeOwner(waitMs = RUNTIME_OWNER_ACQUIRE_WAIT_MS) {
   if (!runtimeOwnerPath) {
     return true;
   }
 
   await fs.promises.mkdir(path.dirname(runtimeOwnerPath), { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + RUNTIME_OWNER_ACQUIRE_WAIT_MS;
+  const deadline = Date.now() + waitMs;
   for (;;) {
     let createdDirectory = false;
     try {
@@ -311,7 +629,7 @@ async function acquireRuntimeOwner() {
       const token = randomUUID();
       await fs.promises.writeFile(
         path.join(runtimeOwnerPath, "owner.json"),
-        JSON.stringify({ version: 1, pid: process.pid, token, expiresAt: Date.now() + RUNTIME_OWNER_LEASE_MS }),
+        JSON.stringify(buildRuntimeOwnerRecord(token)),
         { encoding: "utf8", flag: "wx", mode: 0o600 }
       );
       runtimeOwnerToken = token;
@@ -399,7 +717,7 @@ async function renewRuntimeOwner() {
       }
       await handle.truncate(0);
       await handle.write(
-        JSON.stringify({ version: 1, pid: process.pid, token: runtimeOwnerToken, expiresAt: Date.now() + RUNTIME_OWNER_LEASE_MS }),
+        JSON.stringify(buildRuntimeOwnerRecord(runtimeOwnerToken)),
         0,
         "utf8"
       );
@@ -449,6 +767,16 @@ function requestShutdown(signal) {
   }
   shutdownRequested = true;
   shutdownSignal ||= signal;
+  if (!child) {
+    closeClientServer();
+    process.stdin.pause();
+    if (typeof process.stdin.unref === "function") {
+      process.stdin.unref();
+    }
+    process.exitCode = 0;
+    setImmediate(() => process.exit(0));
+    return;
+  }
   beginShutdownIfRequested();
 }
 
@@ -537,6 +865,31 @@ async function interruptTurnBeforeShutdown(turnId, threadId, timeoutMs) {
   }
 }
 
+function handlePrimaryInitializeRequest(message, line) {
+  if (initializeHandshakeResponse) {
+    writeOfficialLine(JSON.stringify({ id: message.id, ...initializeHandshakeResponse }));
+    return true;
+  }
+  if (initializeForwarded) {
+    if (pendingPrimaryInitializeIds.length < MAX_ATTACHED_REQUESTS) {
+      pendingPrimaryInitializeIds.push(message.id);
+    } else {
+      writeOfficialLine(
+        JSON.stringify({
+          id: message.id,
+          error: { code: -32000, message: "Too many initialize requests are waiting for the Codex runtime" }
+        })
+      );
+    }
+    return true;
+  }
+
+  initializeForwarded = true;
+  initializeRequests.add(requestIdKey(message.id));
+  writeChildLine(line);
+  return true;
+}
+
 function handleOfficialLine(line) {
   let message = parseJson(line);
   if (!message) {
@@ -546,6 +899,11 @@ function handleOfficialLine(line) {
 
   if (shutdownRequested && isShutdownBlockedMethod(message.method)) {
     rejectShutdownRequest(message);
+    return;
+  }
+
+  if (message.method === "initialize" && Object.prototype.hasOwnProperty.call(message, "id")) {
+    handlePrimaryInitializeRequest(message, line);
     return;
   }
 
@@ -623,6 +981,10 @@ function handleOfficialLine(line) {
   }
 
   if (message.method === "initialized") {
+    if (childInitializedNotificationSent) {
+      return;
+    }
+    childInitializedNotificationSent = true;
     initializedNotificationReceived = true;
     updateChildReady();
   }
@@ -815,9 +1177,13 @@ function handleCodexLine(line) {
       return;
     }
 
-    if (initializeRequests.delete(key) && !message.error) {
-      initializeResponseReceived = true;
-      updateChildReady();
+    if (initializeRequests.delete(key)) {
+      initializeHandshakeResponse = message.error ? { error: message.error } : { result: message.result };
+      if (!message.error) {
+        initializeResponseReceived = true;
+        updateChildReady();
+      }
+      flushInitializeHandshakeWaiters();
     }
 
     if (submittedTurnStarts.has(key)) {
@@ -989,6 +1355,9 @@ function startControlServer() {
 
   controlServer = net.createServer((socket) => {
     controlSockets.add(socket);
+    if (!ownerControlSocket || ownerControlSocket.destroyed) {
+      ownerControlSocket = socket;
+    }
     latestControlSocket = socket;
     socket.setEncoding("utf8");
     consumeLines(socket, (line) => handleControlLine(socket, line));
@@ -1007,6 +1376,9 @@ function startControlServer() {
       }
       if (latestControlSocket === socket) {
         latestControlSocket = [...controlSockets].at(-1);
+      }
+      if (ownerControlSocket === socket) {
+        ownerControlSocket = [...controlSockets][0];
       }
     });
     socket.on("error", () => {
@@ -1027,6 +1399,241 @@ function startControlServer() {
       controlSocketIdentity = readSocketIdentity(socketPath);
     }
   });
+}
+
+function startClientServer() {
+  clientSocketPath = getRuntimeClientSocketPath();
+  if (!clientSocketPath) {
+    return;
+  }
+  if (process.platform !== "win32") {
+    try {
+      fs.unlinkSync(clientSocketPath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  clientServer = net.createServer((socket) => {
+    if (clientSockets.size >= MAX_ATTACHED_CLIENTS) {
+      socket.destroy();
+      return;
+    }
+    clientSockets.add(socket);
+    clientSocketThreads.set(socket, new Set());
+    socket.setEncoding("utf8");
+    consumeLines(socket, (line) => handleAttachedClientLine(socket, line), () => closeAttachedClient(socket));
+    socket.on("close", () => closeAttachedClient(socket));
+    socket.on("error", () => {
+      // The close handler removes the client and its pending request routes.
+    });
+  });
+  clientServer.on("error", (error) => {
+    safeLog(`app-server client socket failed: ${safeErrorMessage(error)}`);
+  });
+  clientServer.listen(clientSocketPath, () => {
+    if (process.platform !== "win32") {
+      try {
+        fs.chmodSync(clientSocketPath, 0o600);
+      } catch {
+        // Best effort on filesystems that do not expose POSIX modes.
+      }
+      clientSocketIdentity = readSocketIdentity(clientSocketPath);
+    }
+  });
+}
+
+function handleAttachedInitializeRequest(socket, message) {
+  if (initializeHandshakeResponse) {
+    sendAttachedInitializeResponse(socket, message.id);
+    return;
+  }
+  if (pendingAttachedInitializeRequests.length >= MAX_ATTACHED_REQUESTS) {
+    sendAttachedClientError(socket, message.id, "Too many initialize requests are waiting for the Codex runtime");
+    return;
+  }
+  if (initializeForwarded) {
+    pendingAttachedInitializeRequests.push({ socket, originalId: message.id });
+    return;
+  }
+  if (attachedRequestRoutes.size >= MAX_ATTACHED_REQUESTS) {
+    sendAttachedClientError(socket, message.id, "Too many attached app-server requests are in flight");
+    return;
+  }
+
+  initializeForwarded = true;
+  const internalId = `${CLIENT_ID_PREFIX}:${process.pid}:${++attachedRequestSequence}`;
+  initializeRequests.add(requestIdKey(internalId));
+  attachedRequestRoutes.set(requestIdKey(internalId), {
+    socket,
+    originalId: message.id,
+    method: message.method,
+    params: message.params
+  });
+  if (!writeChildLine(JSON.stringify({ ...message, id: internalId }))) {
+    attachedRequestRoutes.delete(requestIdKey(internalId));
+    initializeRequests.delete(requestIdKey(internalId));
+    sendAttachedClientError(socket, message.id, "Codex app-server stdin is closed");
+  }
+}
+
+function sendAttachedInitializeResponse(socket, id) {
+  if (!socket || socket.destroyed || !initializeHandshakeResponse) {
+    return;
+  }
+  socket.write(`${JSON.stringify({ id, ...initializeHandshakeResponse })}\n`);
+}
+
+function flushInitializeHandshakeWaiters() {
+  if (!initializeHandshakeResponse) {
+    return;
+  }
+  while (pendingPrimaryInitializeIds.length > 0) {
+    const id = pendingPrimaryInitializeIds.shift();
+    if (id !== undefined) {
+      process.stdout.write(`${JSON.stringify({ id, ...initializeHandshakeResponse })}\n`);
+    }
+  }
+  while (pendingAttachedInitializeRequests.length > 0) {
+    const request = pendingAttachedInitializeRequests.shift();
+    if (request) {
+      sendAttachedInitializeResponse(request.socket, request.originalId);
+    }
+  }
+}
+
+function handleAttachedClientLine(socket, line) {
+  const message = parseJson(line);
+  if (!message) {
+    sendAttachedClientError(socket, null, "Malformed app-server client message");
+    return;
+  }
+
+  if (!message.method && Object.prototype.hasOwnProperty.call(message, "id")) {
+    const key = requestIdKey(message.id);
+    const serverRequestSocket = attachedServerRequestRoutes.get(key);
+    if (serverRequestSocket?.socket === socket) {
+      if (serverRequestSocket.responded) {
+        sendAttachedClientError(socket, message.id, "Duplicate app-server server-request response");
+        return;
+      }
+      serverRequestSocket.responded = true;
+      writeChildLine(line);
+      return;
+    }
+    sendAttachedClientError(socket, message.id, "Unexpected app-server response");
+    return;
+  }
+
+  if (!message.method) {
+    sendAttachedClientError(socket, null, "Malformed app-server client message");
+    return;
+  }
+
+  if (message.method === "initialize" && Object.prototype.hasOwnProperty.call(message, "id")) {
+    handleAttachedInitializeRequest(socket, message);
+    return;
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(message, "id")) {
+    handleOfficialLine(line);
+    return;
+  }
+
+  if (attachedRequestRoutes.size >= MAX_ATTACHED_REQUESTS) {
+    sendAttachedClientError(socket, message.id, "Too many attached app-server requests are in flight");
+    return;
+  }
+
+  const internalId = `${CLIENT_ID_PREFIX}:${process.pid}:${++attachedRequestSequence}`;
+  attachedRequestRoutes.set(requestIdKey(internalId), {
+    socket,
+    originalId: message.id,
+    method: message.method,
+    params: message.params
+  });
+  registerClientThreadForRequest(socket, message);
+  handleOfficialLine(JSON.stringify({ ...message, id: internalId }));
+}
+
+function registerClientThreadForRequest(socket, message) {
+  const threadId = readThreadId(message.params);
+  if (threadId) {
+    registerClientThread(socket, threadId);
+  }
+}
+
+function registerClientThread(socket, threadId) {
+  if (typeof threadId !== "string" || threadId.length === 0 || threadId.length > 256) {
+    return;
+  }
+  const threads = clientSocketThreads.get(socket);
+  if (!threads || threads.size >= MAX_ATTACHED_CLIENT_THREADS) {
+    return;
+  }
+  threads.add(threadId);
+  const currentOwner = clientThreadOwners.get(threadId);
+  if (!currentOwner || currentOwner.destroyed) {
+    clientThreadOwners.set(threadId, socket);
+  }
+}
+
+function registerClientThreadFromResponse(route, message) {
+  if (message.error || !route?.socket || route.socket.destroyed) {
+    return;
+  }
+  const params = route.params && typeof route.params === "object" ? route.params : {};
+  let threadId = readThreadId(params);
+  if (!threadId && (route.method === "thread/start" || route.method === "thread/fork")) {
+    threadId = readThreadId(message.result?.thread);
+  }
+  if (threadId) {
+    registerClientThread(route.socket, threadId);
+  }
+}
+
+function closeAttachedClient(socket) {
+  if (!clientSockets.delete(socket)) {
+    return;
+  }
+  const threads = clientSocketThreads.get(socket);
+  clientSocketThreads.delete(socket);
+  if (threads) {
+    for (const threadId of threads) {
+      if (clientThreadOwners.get(threadId) === socket) {
+        clientThreadOwners.delete(threadId);
+      }
+    }
+  }
+  for (const [key, route] of attachedRequestRoutes) {
+    if (route.socket === socket) {
+      attachedRequestRoutes.delete(key);
+    }
+  }
+  for (let index = pendingAttachedInitializeRequests.length - 1; index >= 0; index -= 1) {
+    if (pendingAttachedInitializeRequests[index]?.socket === socket) {
+      pendingAttachedInitializeRequests.splice(index, 1);
+    }
+  }
+  for (const [key, route] of attachedServerRequestRoutes) {
+    if (route.socket === socket) {
+      attachedServerRequestRoutes.delete(key);
+    }
+  }
+}
+
+function sendAttachedClientError(socket, id, message) {
+  if (!socket || socket.destroyed) {
+    return;
+  }
+  socket.write(
+    `${JSON.stringify({
+      id,
+      error: { code: -32000, message }
+    })}\n`
+  );
 }
 
 function updateChildReady() {
@@ -2103,7 +2710,7 @@ function cancelLoginCompletion(cause) {
 }
 
 function sendControlRequest(method, params) {
-  const socket = latestControlSocket;
+  const socket = getControlCallbackSocket();
   if (!socket || socket.destroyed) {
     return Promise.reject(new Error("The account manager is not connected"));
   }
@@ -2117,6 +2724,17 @@ function sendControlRequest(method, params) {
     pendingControlRequests.set(requestIdKey(id), { resolve, reject, timer });
     writeSocketMessage(socket, { id, method, params });
   });
+}
+
+function getControlCallbackSocket() {
+  const transactionSocket = activeSwitchRequest?.socket || pendingSwitch?.socket;
+  if (transactionSocket && !transactionSocket.destroyed) {
+    return transactionSocket;
+  }
+  if (ownerControlSocket && !ownerControlSocket.destroyed) {
+    return ownerControlSocket;
+  }
+  return latestControlSocket && !latestControlSocket.destroyed ? latestControlSocket : undefined;
 }
 
 function isSwitchBarrierActive() {
@@ -2346,7 +2964,68 @@ function writeChildLine(line) {
 }
 
 function writeOfficialLine(line) {
+  const message = parseJson(line);
+  if (message && Object.prototype.hasOwnProperty.call(message, "id") && !message.method) {
+    const routeKey = requestIdKey(message.id);
+    const route = attachedRequestRoutes.get(routeKey);
+    if (route) {
+      attachedRequestRoutes.delete(routeKey);
+      registerClientThreadFromResponse(route, message);
+      if (!route.socket.destroyed) {
+        route.socket.write(`${JSON.stringify({ ...message, id: route.originalId })}\n`);
+      }
+      return;
+    }
+    if (attachedServerRequestRoutes.has(routeKey)) {
+      // The child is acknowledging a server request after the attached client
+      // already supplied the JSON-RPC response. It must not leak that internal
+      // acknowledgement to the primary official client.
+      attachedServerRequestRoutes.delete(routeKey);
+      return;
+    }
+  }
+
+  if (message?.method && Object.prototype.hasOwnProperty.call(message, "id")) {
+    const target = selectClientForServerRequest(message);
+    if (target && attachedServerRequestRoutes.size < MAX_ATTACHED_REQUESTS) {
+      attachedServerRequestRoutes.set(requestIdKey(message.id), { socket: target, responded: false });
+      target.write(`${line}\n`);
+      return;
+    }
+  }
+
   process.stdout.write(`${line}\n`);
+  if (message?.method && !Object.prototype.hasOwnProperty.call(message, "id")) {
+    broadcastAttachedNotification(message);
+  }
+}
+
+function selectClientForServerRequest(message) {
+  const threadId = readThreadId(message.params);
+  if (threadId) {
+    const owner = clientThreadOwners.get(threadId);
+    if (owner && !owner.destroyed && clientSockets.has(owner)) {
+      return owner;
+    }
+    for (const [socket, threads] of clientSocketThreads) {
+      if (!socket.destroyed && threads.has(threadId)) {
+        return socket;
+      }
+    }
+  }
+  return undefined;
+}
+
+function broadcastAttachedNotification(message) {
+  const threadId = readThreadId(message.params);
+  for (const [socket, threads] of clientSocketThreads) {
+    if (socket.destroyed) {
+      continue;
+    }
+    if (!threadId || threads.has(threadId) || message.method === "thread/started") {
+      socket.write(`${JSON.stringify(message)}\n`);
+    }
+  }
 }
 
 function consumeLines(stream, onLine, onEnd) {
@@ -2392,6 +3071,38 @@ function closeControlServer() {
     }
   }
   controlSocketIdentity = undefined;
+  ownerControlSocket = undefined;
+  latestControlSocket = undefined;
+}
+
+function closeClientServer() {
+  if (attachedClientSocket) {
+    attachedClientSocket.destroy();
+    attachedClientSocket = undefined;
+  }
+  for (const socket of clientSockets) {
+    socket.destroy();
+  }
+  clientSockets.clear();
+  clientSocketThreads.clear();
+  clientThreadOwners.clear();
+  attachedRequestRoutes.clear();
+  attachedServerRequestRoutes.clear();
+  if (clientServer) {
+    clientServer.close();
+    clientServer = undefined;
+  }
+  if (clientSocketPath && process.platform !== "win32") {
+    const currentIdentity = readSocketIdentity(clientSocketPath);
+    if (sameSocketIdentity(clientSocketIdentity, currentIdentity)) {
+      try {
+        fs.unlinkSync(clientSocketPath);
+      } catch {
+        // The socket may already have been removed by the host.
+      }
+    }
+  }
+  clientSocketIdentity = undefined;
 }
 
 function readSocketIdentity(filePath) {
@@ -3151,7 +3862,7 @@ function rememberRuntimeThreadTokenTotals(threadId) {
 }
 
 function reportRuntimeAccountSessionActivity(activity) {
-  const socket = latestControlSocket;
+  const socket = getControlCallbackSocket();
   if (!socket || socket.destroyed) {
     return;
   }
