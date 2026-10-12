@@ -275,6 +275,70 @@ export function RestartServicesModal(props: {
   );
 }
 
+export function RepairRuntimeModal(props: {
+  open: boolean;
+  lang: DashboardState["lang"];
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const text = getRepairRuntimeText(props.lang);
+  return (
+    <ModalShell
+      open={props.open}
+      title={text.title}
+      closeLabel={text.close}
+      className="dashboard-modal-compact dashboard-confirm-modal"
+      onClose={props.onClose}
+    >
+      <div class="modal-stack">
+        <div class="modal-note">{text.body}</div>
+        <div class="modal-actions">
+          <button class="modal-secondary-btn" type="button" onClick={props.onClose}>
+            {text.cancel}
+          </button>
+          <button class="modal-primary-btn" type="button" onClick={props.onConfirm}>
+            {text.confirm}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+function getRepairRuntimeText(lang: DashboardState["lang"]): {
+  title: string;
+  body: string;
+  cancel: string;
+  confirm: string;
+  close: string;
+} {
+  if (lang === "zh-hant") {
+    return {
+      title: "修復執行時",
+      body: "清理失效 Codex 會話鎖、回收孤兒執行時，必要時重新載入 VS Code 視窗。正在執行的 Codex 操作可能會中斷。",
+      cancel: "取消",
+      confirm: "確認修復",
+      close: "關閉"
+    };
+  }
+  if (lang === "zh") {
+    return {
+      title: "修复运行时",
+      body: "清理失效 Codex 会话锁、回收孤儿 Runtime，必要时重新加载 VS Code 窗口。正在执行的 Codex 操作可能会中断。",
+      cancel: "取消",
+      confirm: "确认修复",
+      close: "关闭"
+    };
+  }
+  return {
+    title: "Repair runtime",
+    body: "Clear stale Codex session locks, reclaim orphaned runtime state, and reload the VS Code window only when needed. Running Codex operations may be interrupted.",
+    cancel: "Cancel",
+    confirm: "Repair",
+    close: "Close"
+  };
+}
+
 function getRestartServicesText(lang: DashboardState["lang"]): {
   title: string;
   body: string;

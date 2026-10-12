@@ -31,6 +31,8 @@ export const BLOCKING_GLOBAL_ACTIONS = new Set<DashboardActionName>([
   "downloadJsonFile",
   "integrationAction",
   "integrationSetting",
+  "testProxy",
+  "repairRuntime",
   "restartServices",
   "resetSeamlessSwitchRuntime"
 ]);
@@ -43,6 +45,10 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
       return 30_000;
     case "restartServices":
       return 30_000;
+    case "repairRuntime":
+      return 60_000;
+    case "testProxy":
+      return 60_000;
     case "refreshLocalUsage":
       return 120_000;
     case "unlockCodexSessionLocks":

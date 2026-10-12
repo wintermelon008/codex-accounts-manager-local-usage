@@ -19,7 +19,7 @@ import {
 import { getConfiguredProxySettings } from "../../infrastructure/config/proxyEnvironment";
 import { AccountsRepository, getPrivateStatePaths } from "../../storage";
 import { AccountsStatusBarProvider } from "../../ui";
-import { fetchWithConfiguredProxy, registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
+import { fetchWithConfiguredProxy, getLanguage, registerDebugOutput, runWithConcurrencyLimit, t } from "../../utils";
 import {
   CodexHotSwitchRuntime,
   HotSwitchAuthTokenRevokedEvent,
@@ -51,6 +51,14 @@ import {
 } from "../../application/accounts/importIntoBalancePool";
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState, resetSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
+import {
+  clearPendingRestartRecovery,
+  formatRestartRecoveryReport,
+  markRestartRecoveryRequested,
+  readPendingRestartRecovery,
+  runRestartRecoveryCheck,
+  saveRestartRecoveryReport
+} from "./restartRecovery";
 import { enqueueLocalImportJob, LocalImportInbox, readLocalImportStatus } from "./localImportInbox";
 import { LocalUsageAnalyticsService } from "../../services/localUsageAnalytics";
 import { selectFreshGatewayFallbackCandidate } from "../../application/accounts/gatewayFallbackSelection";
@@ -509,6 +517,7 @@ export class AccountsWorkbench {
       `[codexAccounts] activation completed in ${Date.now() - activationStartedAt}ms`,
       activationSteps.map((step) => `${step.name}=${step.durationMs}ms`).join(", ")
     );
+    void this.verifyPendingRestartRecovery();
   }
 
   dispose(): void {
@@ -1088,6 +1097,76 @@ export class AccountsWorkbench {
 
     if (summary.status === "corrupted_unrecoverable") {
       void vscode.window.showWarningMessage(translate("message.indexRecoveryFailed"));
+    }
+  }
+
+  private async verifyPendingRestartRecovery(): Promise<void> {
+    let marker: Awaited<ReturnType<typeof readPendingRestartRecovery>>;
+    try {
+      marker = await readPendingRestartRecovery(this.context);
+    } catch (error) {
+      console.warn(`[codexAccounts] restart recovery marker could not be read: ${getErrorMessage(error)}`);
+      return;
+    }
+    if (!marker) {
+      return;
+    }
+
+    let report: Awaited<ReturnType<typeof runRestartRecoveryCheck>>;
+    try {
+      report = await runRestartRecoveryCheck(marker.requestedAt, {
+        readIndexHealth: () => this.repo.getIndexHealthSummary(),
+        managerControlEnabled: isExternalControlEnabled(),
+        managerControlReady: () => this.managerControlServer.isRunning(),
+        runtimeEnabled: this.hotSwitchRuntime.isEnabled(),
+        readRuntimeStatus: async () => {
+          const status = await this.hotSwitchRuntime.getStatus();
+          return { ready: status.ready };
+        }
+      });
+      await saveRestartRecoveryReport(this.context, report);
+    } catch (error) {
+      console.warn(`[codexAccounts] restart recovery check failed: ${getErrorMessage(error)}`);
+      return;
+    }
+
+    const language = getLanguage();
+    const message = formatRestartRecoveryReport(report, language);
+    if (report.status === "passed") {
+      void vscode.window.showInformationMessage(message);
+      return;
+    }
+
+    const retry = language === "zh" || language === "zh-hant" ? "再次重载" : "Reload again";
+    const openDashboard = language === "zh" || language === "zh-hant" ? "打开 Dashboard" : "Open Dashboard";
+    const choice = await vscode.window.showWarningMessage(message, retry, openDashboard);
+    if (choice === retry) {
+      try {
+        await markRestartRecoveryRequested(this.context);
+        void (async () => {
+          try {
+            await vscode.commands.executeCommand("workbench.action.reloadWindow");
+          } catch (reloadError: unknown) {
+            void clearPendingRestartRecovery(this.context).catch((clearError: unknown) => {
+              console.warn(
+                `[codexAccounts] failed to clear retry restart recovery marker: ${
+                  clearError instanceof Error ? clearError.message : String(clearError)
+                }`
+              );
+            });
+            console.error(
+              `[codexAccounts] retry restart command failed: ${
+                reloadError instanceof Error ? reloadError.message : String(reloadError)
+              }`
+            );
+            void vscode.window.showErrorMessage("无法自动重载，请手动执行 Developer: Reload Window。");
+          }
+        })();
+      } catch (error) {
+        void vscode.window.showErrorMessage(`无法记录重载恢复状态：${getErrorMessage(error)}`);
+      }
+    } else if (choice === openDashboard) {
+      void vscode.commands.executeCommand("codexAccounts.showQuotaSummary");
     }
   }
 }

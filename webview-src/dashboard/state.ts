@@ -1,5 +1,6 @@
 import type {
   DashboardActionName,
+  DashboardActionPayload,
   DashboardSeamlessRuntimeViewModel,
   DashboardSettings,
   DashboardState
@@ -9,7 +10,15 @@ export type PendingActionRequest = {
   requestId: string;
   action: DashboardActionName;
   accountId?: string;
+  payload?: DashboardActionPayload;
   requestedAt: number;
+};
+
+export type FailedDashboardAction = {
+  action: DashboardActionName;
+  accountId?: string;
+  payload?: DashboardActionPayload;
+  error?: string;
 };
 
 export type AppState = {
@@ -21,6 +30,7 @@ export type AppState = {
   now: number;
   selectedAccountIds: string[];
   pendingActions: PendingActionRequest[];
+  failedAction?: FailedDashboardAction;
 };
 
 export type AppAction =
@@ -36,6 +46,8 @@ export type AppAction =
   | { type: "deselect-accounts"; accountIds: string[] }
   | { type: "reconcile-selection-scope"; visibleAccountIds: string[] }
   | { type: "request-action"; request: PendingActionRequest }
+  | { type: "action-failed"; retry: FailedDashboardAction }
+  | { type: "clear-failed-action" }
   | { type: "resolve-action"; requestId: string };
 
 export function createInitialState(): AppState {
@@ -143,8 +155,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
       return {
         ...state,
-        pendingActions: [...state.pendingActions, action.request]
+        pendingActions: [...state.pendingActions, action.request],
+        failedAction: undefined
       };
+    case "action-failed":
+      return {
+        ...state,
+        failedAction: action.retry
+      };
+    case "clear-failed-action":
+      return state.failedAction ? { ...state, failedAction: undefined } : state;
     case "resolve-action":
       return {
         ...state,
@@ -152,5 +172,23 @@ export function reducer(state: AppState, action: AppAction): AppState {
       };
     default:
       return state;
+  }
+}
+
+export function isRetryableDashboardAction(action: DashboardActionName): boolean {
+  switch (action) {
+    case "refreshAll":
+    case "batchRefresh":
+    case "batchResyncProfile":
+    case "refreshView":
+    case "refreshLocalUsage":
+    case "refresh":
+    case "resyncProfile":
+    case "details":
+    case "getResetCredits":
+    case "testProxy":
+      return true;
+    default:
+      return false;
   }
 }

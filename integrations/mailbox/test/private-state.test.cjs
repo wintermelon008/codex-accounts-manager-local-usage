@@ -43,10 +43,10 @@ test("Mailbox does not use the replaceable installed Manager extension", () => {
   assert.equal(
     resolvePrivateStateRoot({
       storageUri: { fsPath: "/installed/data/User/globalStorage/codex-accounts.codex-accounts-mailbox" },
-      managerExtensionRoot: "/installed/extensions/wannanbigpig.codex-accounts-manager-0.1.19-dev",
+        managerExtensionRoot: "/installed/extensions/wintermelon.codex-account-manager-0.1.19-dev",
       env: {}
     }),
-    "/installed/data/User/globalStorage/wannanbigpig.codex-accounts-manager"
+    "/installed/data/User/globalStorage/wintermelon.codex-account-manager"
   );
 });
 

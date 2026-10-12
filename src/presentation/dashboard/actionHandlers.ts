@@ -20,14 +20,20 @@ import { runWithConcurrencyLimit } from "../../utils/concurrency";
 import { getCommandCopy, t } from "../../utils";
 import { clearAutoSwitchLock, setAutoSwitchLock } from "../workbench/autoSwitchState";
 import { resetSeamlessSwitchRuntimeState } from "../workbench/seamlessSwitchState";
+import { clearPendingRestartRecovery, markRestartRecoveryRequested } from "../workbench/restartRecovery";
 import { promptForTags } from "../tagEditor";
 import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from "./actionUtils";
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { getActiveManagerIntegrationHost, type DeactivatedMailboxCleanupResult } from "../../integrations";
 import { startQuotaCountdownForAccount } from "../../application/accounts/quotaCountdown";
 import { buildCodexImportFile } from "../../codex/authFile";
+import type { HotSwitchRuntimeRepairResult } from "../../codex";
 import { clearStaleCodexSessionLocks } from "../../sessions";
 import type { AccountSharingService } from "../../sharing";
+import { getDashboardProxyAddress, getDashboardProxyAddresses } from "../../infrastructure/config/extensionSettings";
+import { initializeCodexProxyEnvironment } from "../../infrastructure/config/proxyEnvironment";
+import { testProxyCandidates, type ProxyProbeSummary } from "../../infrastructure/config/proxyHealth";
+import { handleDashboardSettingUpdate } from "./settings";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -236,22 +242,53 @@ async function runDashboardAction(
         await ctx.publishState(true);
       }
       return undefined;
+    case "testProxy": {
+      const selectedAddress = getDashboardProxyAddress();
+      const summary = await testProxyCandidates(getDashboardProxyAddresses(), selectedAddress);
+      if (summary.fallbackAddress !== undefined) {
+        const updated = await handleDashboardSettingUpdate("proxyAddress", summary.fallbackAddress);
+        if (!updated) {
+          throw new Error("无法保存可用代理地址");
+        }
+        await initializeCodexProxyEnvironment(summary.fallbackAddress || undefined);
+        ctx.schedulePublishState();
+      }
+      showProxyTestResult(ctx.resolveLanguage(), summary);
+      return undefined;
+    }
     case "restartServices":
       // This action must not depend on the hot-switch socket: reloading the
       // VS Code window is the recovery path when that socket is missing or
       // the Codex extension host is wedged. Do not await the reload command;
       // the extension host is expected to be torn down immediately after the
       // command is accepted.
-      void Promise.resolve(vscode.commands.executeCommand("workbench.action.reloadWindow")).catch((error: unknown) => {
-        console.error(
-          `[codexAccounts] service restart command failed: ${error instanceof Error ? error.message : String(error)}`
-        );
-        void vscode.window.showErrorMessage("无法自动重启服务，请手动执行 Developer: Reload Window。");
-      });
+      await markRestartRecoveryRequested(ctx.context);
+      scheduleRestartReload(
+        ctx.context,
+        "无法自动重启服务，请手动执行 Developer: Reload Window。",
+        "service restart command failed"
+      );
       return undefined;
     case "refreshLocalUsage":
       await ctx.refreshLocalUsage?.();
       return undefined;
+    case "repairRuntime": {
+      const lockCleanup = await clearStaleCodexSessionLocks();
+      const repairResult = await vscode.commands.executeCommand<HotSwitchRuntimeRepairResult>(
+        "codexAccounts.resetSeamlessSwitchRuntime"
+      );
+      await ctx.publishState(true);
+      showRuntimeRepairResult(ctx.resolveLanguage(), lockCleanup, repairResult);
+      if (repairResult?.requiresReload) {
+        await markRestartRecoveryRequested(ctx.context);
+        scheduleRestartReload(
+          ctx.context,
+          "运行时已修复，但无法自动重载窗口，请手动执行 Developer: Reload Window。",
+          "runtime repair reload failed"
+        );
+      }
+      return undefined;
+    }
     case "unlockCodexSessionLocks": {
       const result = await clearStaleCodexSessionLocks();
       showSessionLockCleanupResult(
@@ -420,6 +457,116 @@ function showSessionLockCleanupResult(
         ? `${removedCount + terminatedCount} Codex session(s) unlocked (${terminatedCount} lock(s) cleared after terminating other-window runtimes).`
         : "No stale Codex session locks were found."
   );
+}
+
+function showRuntimeRepairResult(
+  language: DashboardLanguage,
+  cleanup: Awaited<ReturnType<typeof clearStaleCodexSessionLocks>>,
+  repairResult: HotSwitchRuntimeRepairResult | undefined
+): void {
+  const clearedCount = cleanup.removedSessionIds.length + cleanup.terminatedSessionIds.length;
+  const isChinese = language === "zh" || language === "zh-hant";
+  const lockText = isChinese
+    ? clearedCount > 0
+      ? `清理 ${clearedCount} 个失效会话锁`
+      : "未发现失效会话锁"
+    : clearedCount > 0
+      ? `${clearedCount} stale session lock(s) cleared`
+      : "No stale session locks found";
+  const runtimeText = isChinese
+    ? repairResult?.recoveredOwnerPid !== undefined
+      ? "已回收孤儿 Runtime"
+      : repairResult?.providerRouteReconciled
+        ? "已同步 Runtime 路由"
+        : "已检查 Runtime 状态"
+    : repairResult?.recoveredOwnerPid !== undefined
+      ? "orphaned Runtime reclaimed"
+      : repairResult?.providerRouteReconciled
+        ? "Runtime route reconciled"
+        : "Runtime state checked";
+  const activeText =
+    cleanup.activeSessionIds.length > 0
+      ? isChinese
+        ? `仍有 ${cleanup.activeSessionIds.length} 个会话锁未能清理`
+        : `${cleanup.activeSessionIds.length} session lock(s) could not be cleared`
+      : isChinese
+        ? "没有残留活动会话锁"
+        : "no active session locks remain";
+  const reloadText = repairResult?.requiresReload
+    ? isChinese
+      ? "，正在重载窗口完成修复"
+      : ", reloading the window to finish repair"
+    : "";
+  const message = isChinese
+    ? `运行时修复完成：${lockText}；${runtimeText}；${activeText}${reloadText}。`
+    : `Runtime repair completed: ${lockText}; ${runtimeText}; ${activeText}${reloadText}.`;
+
+  if (cleanup.activeSessionIds.length > 0) {
+    void vscode.window.showWarningMessage(message);
+  } else {
+    void vscode.window.showInformationMessage(message);
+  }
+}
+
+function showProxyTestResult(language: DashboardLanguage, summary: ProxyProbeSummary): void {
+  const isChinese = language === "zh" || language === "zh-hant";
+  const selectedLabel = formatProxyLabel(summary.selectedAddress, language);
+  const selectedLatency = summary.selectedResult.latencyMs;
+
+  if (summary.selectedResult.ok) {
+    const message = isChinese
+      ? `${selectedLabel}可用，延迟 ${selectedLatency ?? "-"} ms。`
+      : `${selectedLabel} is healthy (${selectedLatency ?? "-"} ms).`;
+    void vscode.window.showInformationMessage(message);
+    return;
+  }
+
+  if (summary.fallbackAddress !== undefined) {
+    const fallbackResult = summary.results.find((result) => result.address === summary.fallbackAddress);
+    const fallbackLabel = formatProxyLabel(summary.fallbackAddress, language);
+    const message = isChinese
+      ? `${selectedLabel}不可用，已自动切换到${fallbackLabel}（延迟 ${fallbackResult?.latencyMs ?? "-"} ms）。`
+      : `${selectedLabel} is unavailable; switched to ${fallbackLabel} (${fallbackResult?.latencyMs ?? "-"} ms).`;
+    void vscode.window.showWarningMessage(message);
+    return;
+  }
+
+  const message = isChinese
+    ? "当前代理和已配置的备用代理均不可用。"
+    : "The selected proxy and all configured fallback proxies are unavailable.";
+  void vscode.window.showWarningMessage(message);
+}
+
+function formatProxyLabel(address: string, language: DashboardLanguage): string {
+  if (address) {
+    let displayAddress = address;
+    try {
+      displayAddress = new URL(address).host;
+    } catch {
+      // The settings store normally validates proxy URLs; keep a safe fallback
+      // for a malformed value returned by an older configuration.
+    }
+    return language === "zh" || language === "zh-hant" ? `代理 ${displayAddress}` : `proxy ${displayAddress}`;
+  }
+  return language === "zh" || language === "zh-hant" ? "默认代理" : "the default proxy";
+}
+
+function scheduleRestartReload(context: vscode.ExtensionContext, errorMessage: string, logLabel: string): void {
+  void (async () => {
+    try {
+      await vscode.commands.executeCommand("workbench.action.reloadWindow");
+    } catch (error: unknown) {
+      void clearPendingRestartRecovery(context).catch((clearError: unknown) => {
+        console.warn(
+          `[codexAccounts] failed to clear restart recovery marker: ${
+            clearError instanceof Error ? clearError.message : String(clearError)
+          }`
+        );
+      });
+      console.error(`[codexAccounts] ${logLabel}: ${error instanceof Error ? error.message : String(error)}`);
+      void vscode.window.showErrorMessage(errorMessage);
+    }
+  })();
 }
 
 function resolveQuotaCountdownResultMessage(

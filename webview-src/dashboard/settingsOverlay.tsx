@@ -193,6 +193,8 @@ export function SettingsOverlay(props: {
   onThresholdPreview: (key: "yellow" | "green", value: number) => void;
   onThresholdCommit: (key: "yellow" | "green", value: number) => void;
   onOpenSettingsJson: () => void;
+  proxyTestPending: boolean;
+  onTestProxy: () => void;
   onIntegrationSettingToggle: (settingId: string, enabled: boolean) => void;
   onResetSeamlessSwitchRuntime: () => void;
 }) {
@@ -296,8 +298,11 @@ export function SettingsOverlay(props: {
                   />
                   <SettingsProxyBlock
                     copy={props.copy}
+                    lang={props.lang}
                     settings={props.settings}
+                    testPending={props.proxyTestPending}
                     onChange={(value) => patchAndSend("proxyAddress", value)}
+                    onTest={props.onTestProxy}
                   />
                   <SettingsSegmentBlock
                     title={props.copy.localUsageSettingsTitle}

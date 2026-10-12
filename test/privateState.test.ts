@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   ensurePrivateStateScaffold,
   getPrivateStatePaths,
+  migrateLegacyGlobalStorage,
   resolvePrivateStateRoot
 } from "../src/storage/privateState";
 
@@ -46,12 +47,66 @@ describe("private state paths", () => {
     expect(
       resolvePrivateStateRoot(
         {
-          extensionUri: { fsPath: "/installed/extensions/wannanbigpig.codex-accounts-manager-0.1.19-dev" },
-          globalStorageUri: { fsPath: "/installed/data/User/globalStorage/wannanbigpig.codex-accounts-manager" }
+          extensionUri: { fsPath: "/installed/extensions/wintermelon.codex-account-manager-0.1.19-dev" },
+          globalStorageUri: { fsPath: "/installed/data/User/globalStorage/wintermelon.codex-account-manager" }
         },
         {}
       )
-    ).toBe("/installed/data/User/globalStorage/wannanbigpig.codex-accounts-manager");
+    ).toBe("/installed/data/User/globalStorage/wintermelon.codex-account-manager");
+  });
+
+  it("moves legacy global storage into the fork-specific extension ID", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-manager-id-migration-"));
+    const globalStorage = path.join(root, "globalStorage");
+    const legacyRoot = path.join(globalStorage, "wannanbigpig.codex-accounts-manager");
+    const currentRoot = path.join(globalStorage, "wintermelon.codex-account-manager");
+    try {
+      await mkdir(legacyRoot, { recursive: true });
+      await writeFile(path.join(legacyRoot, "accounts-index.json"), "legacy-state\n");
+
+      await migrateLegacyGlobalStorage(
+        {
+          extensionUri: { fsPath: "/installed/extensions/wintermelon.codex-account-manager-0.1.19-dev" },
+          globalStorageUri: { fsPath: currentRoot }
+        },
+        {}
+      );
+
+      await expect(readFile(path.join(currentRoot, "accounts-index.json"), "utf8")).resolves.toBe("legacy-state\n");
+      await expect(readFile(path.join(legacyRoot, "accounts-index.json"), "utf8")).rejects.toMatchObject({
+        code: "ENOENT"
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not overwrite a non-empty new global storage directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-manager-id-migration-conflict-"));
+    const globalStorage = path.join(root, "globalStorage");
+    const legacyRoot = path.join(globalStorage, "wannanbigpig.codex-accounts-manager");
+    const currentRoot = path.join(globalStorage, "wintermelon.codex-account-manager");
+    try {
+      await mkdir(legacyRoot, { recursive: true });
+      await mkdir(currentRoot, { recursive: true });
+      await writeFile(path.join(legacyRoot, "legacy.txt"), "legacy\n");
+      await writeFile(path.join(currentRoot, "current.txt"), "current\n");
+
+      await expect(
+        migrateLegacyGlobalStorage(
+          {
+            extensionUri: { fsPath: "/installed/extensions/wintermelon.codex-account-manager-0.1.19-dev" },
+            globalStorageUri: { fsPath: currentRoot }
+          },
+          {}
+        )
+      ).rejects.toThrow("new directory is not empty");
+
+      await expect(readFile(path.join(legacyRoot, "legacy.txt"), "utf8")).resolves.toBe("legacy\n");
+      await expect(readFile(path.join(currentRoot, "current.txt"), "utf8")).resolves.toBe("current\n");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps storage-only test and legacy contexts compatible", () => {

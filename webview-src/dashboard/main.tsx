@@ -11,6 +11,7 @@ import {
   type DashboardSettingKey
 } from "../../src/domain/dashboard/types";
 import { AnnouncementCenter } from "./announcementCenter";
+import { ActionRetryBanner } from "./actionRetryBanner";
 import { AdvancedAppearanceSummary } from "./advancedAppearance";
 import { ActionButton, BatchSelectionBar, RecoveryPanel } from "./components";
 import { postMessageToHost } from "./host";
@@ -54,6 +55,7 @@ import {
 import {
   AddAccountModal,
   ConfirmCancelOauthModal,
+  RepairRuntimeModal,
   RestartServicesModal,
   SettingsOverlay,
   ShareTokenModal,
@@ -90,6 +92,7 @@ function App() {
   const lastDashboardAccountScopeRef = useRef("");
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
   const [restartServicesOpen, setRestartServicesOpen] = useState(false);
+  const [repairRuntimeOpen, setRepairRuntimeOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
   const [sharingAccountIds, setSharingAccountIds] = useState<string[]>([]);
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
@@ -146,6 +149,7 @@ function App() {
   const modals = useDashboardModals({
     dispatch,
     sendAction,
+    pendingActions: state.pendingActions,
     importJsonFileReadError: snapshot?.copy.importJsonFileReadError ?? "Failed to read JSON file."
   });
   useDashboardHostSync({
@@ -454,6 +458,7 @@ function App() {
   const setAccountGroupPending = isActionPending("setAccountGroup");
   const localUsageRefreshPending = isActionPending("refreshLocalUsage");
   const unlockCodexSessionLocksPending = isActionPending("unlockCodexSessionLocks");
+  const repairRuntimePending = isActionPending("repairRuntime");
   const integrationActionPending = isActionPending("integrationAction");
   const topButtonIntegrations = (snapshot.integrations ?? []).flatMap((integration) => {
     const topButton =
@@ -519,6 +524,16 @@ function App() {
           snapshot.settings.advancedAppearanceEnabled ? "advanced-appearance" : ""
         }`}
       >
+        {state.failedAction ? (
+          <ActionRetryBanner
+            failedAction={state.failedAction}
+            lang={snapshot.lang}
+            onRetry={() =>
+              sendAction(state.failedAction!.action, state.failedAction!.accountId, state.failedAction!.payload)
+            }
+            onDismiss={() => dispatch({ type: "clear-failed-action" })}
+          />
+        ) : null}
         {snapshot.indexHealth.status !== "healthy" ? (
           <section class="section">
             <RecoveryPanel
@@ -669,11 +684,28 @@ function App() {
                 {heroMoreOpen ? (
                   <div class="hero-more-menu" role="menu" aria-label={resolveHeroMoreLabel(snapshot.lang)}>
                     <button
+                      id="repairRuntimeButton"
+                      type="button"
+                      role="menuitem"
+                      class="hero-menu-item"
+                      disabled={hasGlobalPendingAction || repairRuntimePending}
+                      aria-busy={repairRuntimePending}
+                      onClick={() => {
+                        setHeroMoreOpen(false);
+                        setRepairRuntimeOpen(true);
+                      }}
+                    >
+                      <span class="hero-menu-icon">
+                        {repairRuntimePending ? <span class="button-spinner" /> : <SettingsIcon />}
+                      </span>
+                      <span>{resolveRepairRuntimeLabel(snapshot.lang)}</span>
+                    </button>
+                    <button
                       id="restartServicesButton"
                       type="button"
                       role="menuitem"
                       class="hero-menu-item"
-                      disabled={isActionPending("restartServices")}
+                      disabled={hasGlobalPendingAction || isActionPending("restartServices")}
                       aria-busy={isActionPending("restartServices")}
                       onClick={() => {
                         setHeroMoreOpen(false);
@@ -1261,6 +1293,8 @@ function App() {
         onThresholdPreview={handleThresholdPreview}
         onThresholdCommit={handleThresholdCommit}
         onOpenSettingsJson={() => postMessageToHost({ type: "dashboard:openSettingsJson" })}
+        proxyTestPending={isActionPending("testProxy")}
+        onTestProxy={() => sendAction("testProxy")}
         onIntegrationSettingToggle={(settingId, enabled) =>
           sendAction("integrationSetting", undefined, { integrationSettingId: settingId, enabled })
         }
@@ -1320,6 +1354,16 @@ function App() {
         onConfirm={() => {
           setRestartServicesOpen(false);
           sendAction("restartServices");
+        }}
+      />
+
+      <RepairRuntimeModal
+        open={repairRuntimeOpen}
+        lang={snapshot.lang}
+        onClose={() => setRepairRuntimeOpen(false)}
+        onConfirm={() => {
+          setRepairRuntimeOpen(false);
+          sendAction("repairRuntime");
         }}
       />
 
@@ -1757,6 +1801,16 @@ function resolveUnlockCodexSessionLocksLabel(lang: string): string {
     return "強制解除 Codex 會話鎖（終止其他視窗執行時）";
   }
   return "Force-unlock Codex sessions (terminate other-window runtimes)";
+}
+
+function resolveRepairRuntimeLabel(lang: string): string {
+  if (lang === "zh") {
+    return "一键修复运行时";
+  }
+  if (lang === "zh-hant") {
+    return "一鍵修復執行時";
+  }
+  return "Repair runtime";
 }
 
 function resolveRestartServicesLabel(lang: string): string {

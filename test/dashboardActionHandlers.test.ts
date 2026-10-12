@@ -94,10 +94,21 @@ describe("executeDashboardActionMessage", () => {
     const executeCommand = vi.mocked(vscode.commands.executeCommand);
     executeCommand.mockClear();
     executeCommand.mockResolvedValueOnce(undefined);
+    const state = new Map<string, unknown>();
+    const globalState = {
+      get: vi.fn((key: string) => state.get(key)),
+      update: vi.fn(async (key: string, value: unknown) => {
+        if (value === undefined) {
+          state.delete(key);
+        } else {
+          state.set(key, value);
+        }
+      })
+    };
 
     const result = await executeDashboardActionMessage(
       {
-        context: {} as DashboardActionContext["context"],
+        context: { globalState } as unknown as DashboardActionContext["context"],
         repo: {} as DashboardActionContext["repo"],
         resolveLanguage: () => "en",
         schedulePublishState: vi.fn(),
@@ -114,7 +125,47 @@ describe("executeDashboardActionMessage", () => {
     );
 
     expect(executeCommand).toHaveBeenCalledWith("workbench.action.reloadWindow");
+    expect(state.get("codexAccounts.restartRecovery.pending.v1")).toMatchObject({ version: 1 });
     expect(result.status).toBe("completed");
+  });
+
+  it("removes the recovery marker when the reload command is rejected", async () => {
+    const executeCommand = vi.mocked(vscode.commands.executeCommand);
+    executeCommand.mockClear();
+    executeCommand.mockRejectedValueOnce(new Error("reload unavailable"));
+    const state = new Map<string, unknown>();
+    const globalState = {
+      get: vi.fn((key: string) => state.get(key)),
+      update: vi.fn(async (key: string, value: unknown) => {
+        if (value === undefined) {
+          state.delete(key);
+        } else {
+          state.set(key, value);
+        }
+      })
+    };
+
+    const result = await executeDashboardActionMessage(
+      {
+        context: { globalState } as unknown as DashboardActionContext["context"],
+        repo: {} as DashboardActionContext["repo"],
+        resolveLanguage: () => "en",
+        schedulePublishState: vi.fn(),
+        publishState: vi.fn(),
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.19", locale: "en" })
+      },
+      {
+        type: "dashboard:action",
+        action: "restartServices",
+        requestId: "req-restart-services-failed"
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(result.status).toBe("completed");
+    expect(state.has("codexAccounts.restartRecovery.pending.v1")).toBe(false);
   });
 
   it("forces a fresh account index read when sharing status is refreshed", async () => {
@@ -206,6 +257,66 @@ describe("executeDashboardActionMessage", () => {
     expect(showWarningMessage).toHaveBeenCalledWith(
       expect.stringContaining("强制解锁 1 个由其他窗口运行时持有的会话锁")
     );
+    expect(result.status).toBe("completed");
+  });
+
+  it("repairs runtime after clearing session locks and schedules a verified reload when required", async () => {
+    clearStaleCodexSessionLocksMock.mockClear();
+    clearStaleCodexSessionLocksMock.mockResolvedValueOnce({
+      removedSessionIds: ["stale-session"],
+      terminatedSessionIds: [],
+      activeSessionIds: []
+    });
+    const executeCommand = vi.mocked(vscode.commands.executeCommand);
+    executeCommand.mockClear();
+    executeCommand
+      .mockResolvedValueOnce({
+        providerRoute: "unknown",
+        providerRouteReconciled: false,
+        recoveredOwnerPid: 1234,
+        requiresReload: true
+      })
+      .mockResolvedValueOnce(undefined);
+    const publishState = vi.fn().mockResolvedValue(undefined);
+    const state = new Map<string, unknown>();
+    const globalState = {
+      get: vi.fn((key: string) => state.get(key)),
+      update: vi.fn(async (key: string, value: unknown) => {
+        if (value === undefined) {
+          state.delete(key);
+        } else {
+          state.set(key, value);
+        }
+      })
+    };
+    const showInformationMessage = vi.mocked(vscode.window.showInformationMessage);
+    showInformationMessage.mockClear();
+
+    const result = await executeDashboardActionMessage(
+      {
+        context: { globalState } as unknown as DashboardActionContext["context"],
+        repo: {} as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState: vi.fn(),
+        publishState,
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.19", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "repairRuntime",
+        requestId: "req-repair-runtime"
+      }
+    );
+    await Promise.resolve();
+
+    expect(clearStaleCodexSessionLocksMock).toHaveBeenCalledOnce();
+    expect(executeCommand).toHaveBeenNthCalledWith(1, "codexAccounts.resetSeamlessSwitchRuntime");
+    expect(executeCommand).toHaveBeenNthCalledWith(2, "workbench.action.reloadWindow");
+    expect(publishState).toHaveBeenCalledWith(true);
+    expect(showInformationMessage).toHaveBeenCalledWith(expect.stringContaining("已回收孤儿 Runtime"));
+    expect(state.get("codexAccounts.restartRecovery.pending.v1")).toMatchObject({ version: 1 });
     expect(result.status).toBe("completed");
   });
 

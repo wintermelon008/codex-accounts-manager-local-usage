@@ -15,6 +15,7 @@ import {
 } from "./helpers";
 import type { SendAction } from "./hookTypes";
 import {
+  CodeIcon,
   CopyIcon,
   renderDetailsIcon,
   renderQuotaCountdownStartIcon,
@@ -24,6 +25,7 @@ import {
   renderRemoveIcon,
   renderResetCreditsIcon,
   renderSwitchIcon,
+  SharingIcon,
   SuccessIcon
 } from "./icons";
 import { ActionButton } from "./primitives";
@@ -421,9 +423,15 @@ function AdvancedAccountFocus(props: {
       </div>
       <strong class="advanced-account-focus-email">{emailDisplay}</strong>
       <div class="advanced-account-focus-meta">
-        <span>{account.planTypeLabel}</span>
-        {account.accountGroup ? <span>Group {account.accountGroup}</span> : null}
-        {account.isHidden ? <span>{props.lang === "zh" ? "已隐藏" : "Hidden"}</span> : null}
+        <span class="pill plan">{account.planTypeLabel}</span>
+        {account.accountGroup ? (
+          <span class={`pill account-group group-${account.accountGroup.toLowerCase()}`}>
+            Group {account.accountGroup}
+          </span>
+        ) : null}
+        {account.isHidden ? (
+          <span class="pill hidden">{props.lang === "zh" ? "已隐藏" : "Hidden"}</span>
+        ) : null}
       </div>
       <div class="advanced-account-focus-metrics">
         {quotaMetrics.map((metric) => (
@@ -452,13 +460,12 @@ function AdvancedAccountFocus(props: {
           <ActionButton
             class="advanced-account-action advanced-account-action-wide"
             icon={renderSwitchIcon()}
+            iconOnly
             label={poolLabel}
             disabled={busy || account.isHidden}
             pending={props.isActionPending("toggleBalancePool", account.id)}
             onClick={() => props.onAction("toggleBalancePool", account.id)}
-          >
-            {poolLabel}
-          </ActionButton>
+          />
         ) : null}
         {!virtual && account.isActive && !account.isCurrentWindowAccount ? (
           <ActionButton
@@ -485,13 +492,12 @@ function AdvancedAccountFocus(props: {
         <ActionButton
           class="advanced-account-action advanced-account-action-primary"
           icon={renderSwitchIcon()}
+          iconOnly
           label={props.copy.switchBtn}
           disabled={busy || account.isHidden}
           pending={props.isActionPending("switch", account.id)}
           onClick={() => props.onAction("switch", account.id)}
-        >
-          {props.copy.switchBtn}
-        </ActionButton>
+        />
         {profileSelectionActions.length > 1 ? (
           <select
             class="advanced-account-profile-select"
@@ -547,7 +553,7 @@ function AdvancedAccountFocus(props: {
         {!virtual ? (
           <ActionButton
             class="advanced-account-action"
-            icon={props.copyFeedbackKey === `account-import-json:${account.id}` ? <SuccessIcon /> : <CopyIcon />}
+            icon={props.copyFeedbackKey === `account-import-json:${account.id}` ? <SuccessIcon /> : <CodeIcon />}
             iconOnly
             label={
               props.copyFeedbackKey === `account-import-json:${account.id}`
@@ -584,16 +590,18 @@ function AdvancedAccountFocus(props: {
         {props.sharingEnabled !== false && !virtual && incomingSharedAccount ? (
           <ActionButton
             class="advanced-account-action"
+            icon={<SharingIcon />}
+            iconOnly
             label={shareLabel}
             disabled={busy}
             pending={props.isActionPending("returnSharedAccount", account.id)}
             onClick={() => props.onAction("returnSharedAccount", account.id)}
-          >
-            {shareLabel}
-          </ActionButton>
+          />
         ) : props.sharingEnabled !== false && !virtual && !outgoingSharedAccount ? (
           <ActionButton
             class="advanced-account-action"
+            icon={<SharingIcon />}
+            iconOnly
             label={shareLabel}
             disabled={busy}
             pending={props.isActionPending("shareAccounts", account.id)}
@@ -604,9 +612,7 @@ function AdvancedAccountFocus(props: {
                 props.onAction("shareAccounts", account.id);
               }
             }}
-          >
-            {shareLabel}
-          </ActionButton>
+          />
         ) : null}
         <ActionButton
           class="advanced-account-action"

@@ -50,26 +50,35 @@ export function SettingsLanguageBlock(props: {
 
 export function SettingsProxyBlock(props: {
   copy: DashboardCopy;
+  lang: DashboardLanguage;
   settings: DashboardSettings;
+  testPending: boolean;
   onChange: (value: string) => void;
+  onTest: () => void;
 }) {
+  const isChinese = props.lang === "zh" || props.lang === "zh-hant";
   return (
     <div class="settings-block">
       <div class="settings-block-head">
         <div class="settings-block-title">{props.copy.proxyTitle}</div>
         <div class="settings-block-sub">{props.copy.proxySub}</div>
       </div>
-      <select
-        class="settings-select"
-        value={props.settings.proxyAddress}
-        onChange={(event) => props.onChange(event.currentTarget.value)}
-      >
-        {props.settings.proxyAddresses.map((address) => (
-          <option key={address || "proxy-default"} value={address}>
-            {address || props.copy.proxyDefault}
-          </option>
-        ))}
-      </select>
+      <div class="settings-proxy-row">
+        <select
+          class="settings-select"
+          value={props.settings.proxyAddress}
+          onChange={(event) => props.onChange(event.currentTarget.value)}
+        >
+          {props.settings.proxyAddresses.map((address) => (
+            <option key={address || "proxy-default"} value={address}>
+              {address || props.copy.proxyDefault}
+            </option>
+          ))}
+        </select>
+        <button class="settings-proxy-test-btn" type="button" disabled={props.testPending} onClick={props.onTest}>
+          {props.testPending ? (isChinese ? "测速中…" : "Testing…") : isChinese ? "测速 / 回退" : "Test / fallback"}
+        </button>
+      </div>
       <div class="settings-note">{props.copy.proxyNote}</div>
     </div>
   );

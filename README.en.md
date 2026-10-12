@@ -4,9 +4,9 @@
 
 A VS Code extension for managing multiple Codex accounts: add or import accounts, inspect quota, switch the active `auth.json`, and optionally use local usage analytics, experimental seamless switching, and local integrations.
 
-> This is a local fork based on upstream `v0.1.19`. This guide describes the `0.1.19-dev` development build and the `0.1.19-l7` local release build. The upstream Marketplace extension does not promise the local capabilities listed below.
+> This is the independent local build from this repository. This guide describes the `0.1.19-dev` development build and the `0.1.19-l7` local release build.
 
-The local build includes upstream `v0.1.17`–`v0.1.19` proxy, quota parsing, authenticated retry, ChatGPT desktop, and subscription-consistency fixes, while preserving the local Dashboard, Mailbox, Gateway, and usage features.
+This build includes proxy, quota parsing, authenticated retry, ChatGPT desktop, and subscription-consistency fixes, together with the Dashboard, Mailbox, Gateway, and local usage features.
 
 ## Start in three minutes
 
@@ -46,7 +46,7 @@ An empty string leaves the process or `CODEX_HOME/.env` proxy unchanged, which k
 
 ## Experimental seamless switching
 
-This is separate from upstream Auto Switch. It updates authentication at a safe boundary inside the same Codex app-server; successful switches do not require a reload and existing threads/history remain available.
+This is separate from the regular Auto Switch behavior. It updates authentication at a safe boundary inside the same Codex app-server; successful switches do not require a reload and existing threads/history remain available.
 
 1. Import and refresh at least two accounts you are authorized to use.
 2. Run `Codex Accounts: Install Experimental Seamless Runtime`, then reload once.
@@ -68,13 +68,13 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 ### Use the local build
 
-Obtain `codex-accounts-manager-<version>.vsix` from this repository (`0.1.19-dev` for development or `0.1.19-l7` for the current local release), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
+Obtain `codex-account-manager-<version>.vsix` from this repository (`0.1.19-dev` for development or `0.1.19-l7` for the current local release), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
 
 ```bash
-code --install-extension codex-accounts-manager-<version>.vsix --force
+code --install-extension codex-account-manager-<version>.vsix --force
 ```
 
-Local capabilities ship with that VSIX. If you deliberately install a Marketplace update, reinstall a local build afterward.
+Local capabilities ship with that VSIX. The extension ID is `wintermelon.codex-account-manager`, so it installs independently from other extensions with a similar name. If another build is installed later, reinstall the local build to restore this project version.
 
 ### Build from source
 
@@ -98,10 +98,6 @@ npm --prefix integrations/manager-gateway run package
 
 Optional packages are not bundled in the core VSIX. Build and configure `integrations/feishu-assistant`, `integrations/sub2api-gateway`, `integrations/mailbox`, or `integrations/manager-gateway` from their own READMEs; none copies existing services, credentials, accounts, or machine paths automatically.
 
-### Use the upstream Marketplace build
-
-If you only need upstream core account management, search the Extensions view for **Codex Accounts Manager** from publisher `wannanbigpig`. It is released independently from this fork; do not assume it includes local usage analytics, the Feishu inbox, the Sub2API Gateway, or local seamless-switch enhancements.
-
 ## Documentation index
 
 - [Seamless switching, quota bands, and thresholds](docs/HOT_SWITCH.md)
@@ -116,6 +112,5 @@ Frequently used commands: `Add Account via OAuth`, `Import Current auth.json`, `
 
 ## Feedback and license
 
-- This fork: <https://github.com/wintermelon008/codex-accounts-manager-local-usage>
-- Upstream project: <https://github.com/wannanbigpig/codex-tools>
+- This project: <https://github.com/wintermelon008/codex-accounts-manager-local-usage>
 - License: [MIT](LICENSE)

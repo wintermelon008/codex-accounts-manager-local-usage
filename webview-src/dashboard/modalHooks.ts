@@ -3,10 +3,12 @@ import type { AppDispatch, SendAction } from "./hookTypes";
 import { useCopyFeedback } from "./copyFeedbackHook";
 import { useAccountSessionModal } from "./accountSessionModalHook";
 import { useShareModal } from "./shareModalHook";
+import { isRetryableDashboardAction, type PendingActionRequest } from "./state";
 
 export function useDashboardModals(params: {
   dispatch: AppDispatch;
   sendAction: SendAction;
+  pendingActions: readonly PendingActionRequest[];
   importJsonFileReadError: string;
 }) {
   const feedback = useCopyFeedback();
@@ -29,6 +31,20 @@ export function useDashboardModals(params: {
         params.dispatch({ type: "seamless-runtime", runtime: message.runtime });
         return;
       case "dashboard:action-result":
+        {
+          const pendingAction = params.pendingActions.find((request) => request.requestId === message.requestId);
+          if (message.status === "failed" && pendingAction && isRetryableDashboardAction(message.action)) {
+            params.dispatch({
+              type: "action-failed",
+              retry: {
+                action: pendingAction.action,
+                accountId: pendingAction.accountId,
+                payload: pendingAction.payload,
+                error: message.error
+              }
+            });
+          }
+        }
         params.dispatch({ type: "resolve-action", requestId: message.requestId });
         if (message.action === "copyAccountImportJson" && message.status === "completed" && message.accountId) {
           feedback.showCopyFeedback(`account-import-json:${message.accountId}`);

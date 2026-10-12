@@ -3,10 +3,11 @@ import type { DashboardState } from "../../src/domain/dashboard/types";
 import { GitHubIcon } from "./icons";
 import { ModalShell } from "./primitives";
 
-const PROJECT_AUTHOR_URL = "https://github.com/wannanbigpig";
-const PROJECT_GITHUB_URL = "https://github.com/wannanbigpig/codex-tools";
-const PROJECT_ISSUES_URL = "https://github.com/wannanbigpig/codex-tools/issues";
-const PROJECT_LICENSE_URL = "https://github.com/wannanbigpig/codex-tools/blob/main/LICENSE";
+const PROJECT_AUTHOR_URL = "https://github.com/wintermelon008";
+const PROJECT_GITHUB_URL = "https://github.com/wintermelon008/codex-accounts-manager-local-usage";
+const PROJECT_ISSUES_URL = "https://github.com/wintermelon008/codex-accounts-manager-local-usage/issues";
+const PROJECT_LICENSE_URL =
+  "https://github.com/wintermelon008/codex-accounts-manager-local-usage/blob/local-usage-dashboard/LICENSE";
 
 type AboutLocaleText = {
   title: string;
@@ -41,7 +42,7 @@ const ABOUT_TEXT: Record<"en" | "zh" | "zh-hant", AboutLocaleText> = {
     subdesc:
       "Codex Accounts Manager focuses on saved accounts you already own, helping you organize tokens, inspect quotas, switch accounts, and keep account state easier to understand.",
     author: "Author",
-    authorDesc: "wannanbigpig",
+    authorDesc: "wintermelon008",
     github: "Repository",
     githubDesc: "View source code",
     feedback: "Feedback",
@@ -73,7 +74,7 @@ const ABOUT_TEXT: Record<"en" | "zh" | "zh-hant", AboutLocaleText> = {
     subdesc:
       "Codex Accounts Manager 面向你已合法拥有的账号，提供本地导入、账号切换、配额查看、标签整理、导出与状态提示等能力。",
     author: "主作者",
-    authorDesc: "wannanbigpig",
+    authorDesc: "wintermelon008",
     github: "开源仓库",
     githubDesc: "查看源代码",
     feedback: "意见反馈",
@@ -105,7 +106,7 @@ const ABOUT_TEXT: Record<"en" | "zh" | "zh-hant", AboutLocaleText> = {
     subdesc:
       "Codex Accounts Manager 面向你已合法擁有的帳號，提供本機匯入、帳號切換、配額查看、標籤整理、匯出與狀態提示等能力。",
     author: "主作者",
-    authorDesc: "wannanbigpig",
+    authorDesc: "wintermelon008",
     github: "開源倉庫",
     githubDesc: "查看原始碼",
     feedback: "意見回饋",

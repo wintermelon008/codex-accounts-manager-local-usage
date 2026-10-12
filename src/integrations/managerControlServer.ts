@@ -235,6 +235,10 @@ export class ManagerControlServer {
     return { host: CONTROL_HOST, port: actualPort };
   }
 
+  isRunning(): boolean {
+    return this.server?.listening === true;
+  }
+
   dispose(): void {
     const server = this.server;
     this.server = undefined;

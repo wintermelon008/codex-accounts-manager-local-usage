@@ -9,7 +9,7 @@ test("Manager API resolver uses only the optional Dashboard integration surface"
   const vscode = {
     extensions: {
       getExtension(id) {
-        assert.equal(id, "wannanbigpig.codex-accounts-manager");
+        assert.equal(id, "wintermelon.codex-account-manager");
         return { activate: async () => ({ apiVersion: 1, registerDashboardIntegration }) };
       }
     }

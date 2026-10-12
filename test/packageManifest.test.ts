@@ -3,6 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 
 describe("extension manifest configuration", () => {
+  it("uses the fork-specific extension ID", () => {
+    const manifestPath = path.resolve(__dirname, "../package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      name?: string;
+      publisher?: string;
+    };
+
+    expect(manifest).toMatchObject({
+      name: "codex-account-manager",
+      publisher: "wintermelon"
+    });
+  });
+
   it("declares the opt-in advanced appearance setting", () => {
     const manifestPath = path.resolve(__dirname, "../package.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {

@@ -4,9 +4,9 @@
 
 面向 VS Code 的多 Codex 账号管理扩展：导入或 OAuth 添加账号、查看配额、切换当前 `auth.json`，并提供本机用量、实验性无感切号和可选的本地集成。
 
-> 这是基于上游 `v0.1.19` 的本地 fork。本文说明的是 `0.1.19-dev` 开发构建与 `0.1.19-l7` 本地发布构建；VS Code Marketplace 上的上游扩展不承诺包含下列本地功能。
+> 这是本仓库的独立本地版本。本文说明的是 `0.1.19-dev` 开发构建与 `0.1.19-l7` 本地发布构建。
 
-本地版本已同步上游 `v0.1.17`–`v0.1.19` 的代理环境、状态栏配额控制、Business/Free 配额解析、认证请求重试、ChatGPT 桌面应用联动、订阅一致性修复，并保留本地 Dashboard、Mailbox、Gateway 和用量功能。
+本版本包含代理环境、状态栏配额控制、Business/Free 配额解析、认证请求重试、ChatGPT 桌面应用联动、订阅一致性修复，并保留 Dashboard、Mailbox、Gateway 和本机用量功能。
 
 ## 三分钟开始
 
@@ -46,7 +46,7 @@
 
 ## 无感切号（实验性）
 
-它与上游“自动切号”分开：无感模式在同一个 Codex app-server 的安全边界上更新认证，成功后不需要 reload，现有 thread/history 保持可见。
+它与常规“自动切号”分开：无感模式在同一个 Codex app-server 的安全边界上更新认证，成功后不需要 reload，现有 thread/history 保持可见。
 
 1. 导入并刷新至少两个有权限使用的账号。
 2. 运行 `Codex Accounts: Install Experimental Seamless Runtime`，然后 reload 一次。
@@ -68,13 +68,13 @@
 
 ### 使用本地版本
 
-从本仓库获得 `codex-accounts-manager-<version>.vsix`（开发版使用 `0.1.19-dev`，本地发布版使用 `0.1.19-l7`），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
+从本仓库获得 `codex-account-manager-<version>.vsix`（开发版使用 `0.1.19-dev`，本地发布版使用 `0.1.19-l7`），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
 
 ```bash
-code --install-extension codex-accounts-manager-<version>.vsix --force
+code --install-extension codex-account-manager-<version>.vsix --force
 ```
 
-本地能力随这份 VSIX 一起提供；如果刻意安装 Marketplace 更新，需要重新安装本地构建。
+本地能力随这份 VSIX 一起提供；扩展 ID 是 `wintermelon.codex-account-manager`，与其他同名扩展独立安装。如果安装了其他来源的版本，重新安装本地构建即可恢复本项目版本。
 
 ### 从源码构建
 
@@ -98,10 +98,6 @@ npm --prefix integrations/manager-gateway run package
 
 可选包不包含在核心 VSIX 中。分别进入 `integrations/feishu-assistant`、`integrations/sub2api-gateway`、`integrations/mailbox` 或 `integrations/manager-gateway` 按各自 README 构建和配置；它们不会自动复制旧服务、凭据、账号或设备路径。
 
-### 使用上游 Marketplace 版本
-
-如只需要上游核心账号管理功能，可在扩展市场搜索发布者 `wannanbigpig` 的 **Codex Accounts Manager**。它与本 fork 独立发布；不要假设其包含本机用量、飞书收件箱、Sub2API Gateway 或本地无感切号增强。
-
 ## 文档索引
 
 - [账号可用性与续期状态机、界面映射](docs/account-state-machine.md)
@@ -117,6 +113,5 @@ npm --prefix integrations/manager-gateway run package
 
 ## 反馈与许可
 
-- 本 fork：<https://github.com/wintermelon008/codex-accounts-manager-local-usage>
-- 上游项目：<https://github.com/wannanbigpig/codex-tools>
+- 本项目：<https://github.com/wintermelon008/codex-accounts-manager-local-usage>
 - 许可证：[MIT](LICENSE)

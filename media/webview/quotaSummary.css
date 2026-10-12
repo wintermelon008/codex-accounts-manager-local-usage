@@ -4170,6 +4170,40 @@ html[data-theme="auto"] body.vscode-light .overlay {
     box-shadow 160ms ease,
     background 160ms ease;
 }
+.settings-proxy-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-proxy-row .settings-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.settings-proxy-test-btn {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.settings-proxy-test-btn:hover:not(:disabled),
+.settings-proxy-test-btn:focus-visible:not(:disabled) {
+  border-color: var(--border-accent);
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+  color: var(--text-primary);
+  outline: none;
+}
+.settings-proxy-test-btn:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 .settings-select:hover {
   background: var(--bg-elevated);
 }
@@ -6491,13 +6525,17 @@ html[data-theme="auto"] body.vscode-light {
   display: grid;
   gap: 10px;
   min-width: 0;
+  align-self: stretch;
 }
 .advanced-solar-focus-panel {
   min-width: 0;
   min-height: 250px;
+  height: calc(90% + 74px);
+  align-self: center;
 }
 .advanced-solar-focus-content {
   min-width: 0;
+  height: 100%;
   animation: advanced-account-focus-in 260ms cubic-bezier(0.22, 0.8, 0.26, 1) both;
 }
 .advanced-account-focus {
@@ -6506,6 +6544,7 @@ html[data-theme="auto"] body.vscode-light {
   gap: 9px;
   min-width: 0;
   padding: 14px;
+  height: 100%;
   border: 1px solid color-mix(in srgb, var(--advanced-cyan) 28%, var(--border-default));
   border-radius: 18px;
   background:
@@ -6563,11 +6602,15 @@ html[data-theme="auto"] body.vscode-light {
 .advanced-account-focus-meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 5px;
   color: var(--text-muted);
   font-size: 9px;
 }
 .advanced-account-focus-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
   padding: 3px 6px;
   border: 1px solid color-mix(in srgb, var(--advanced-violet) 24%, var(--border-muted));
   border-radius: 999px;
@@ -6741,6 +6784,14 @@ html[data-theme="auto"] body.vscode-light {
 @media (max-width: 760px) {
   .advanced-command-center-body.advanced-solar-layout {
     grid-template-columns: 1fr;
+  }
+  .advanced-solar-telemetry {
+    align-self: auto;
+  }
+  .advanced-solar-focus-panel,
+  .advanced-solar-focus-content,
+  .advanced-account-focus {
+    height: auto;
   }
   .advanced-solar-system {
     width: min(100%, 520px);

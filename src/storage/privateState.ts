@@ -1,10 +1,12 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 export const PRIVATE_STATE_DIRECTORY_NAME = "private";
 export const PRIVATE_STATE_DIRECTORY_ENV = "CODEX_ACCOUNTS_PRIVATE_DIR";
+export const MANAGER_EXTENSION_ID = "wintermelon.codex-account-manager";
+export const LEGACY_MANAGER_EXTENSION_ID = "wannanbigpig.codex-accounts-manager";
 
 export const PRIVATE_STATE_FILE_NAMES = {
   accountsIndex: "accounts-index.json",
@@ -146,6 +148,62 @@ export function getPrivateStatePaths(
     sessionRegistry: path.join(root, "session-registry.json"),
     hotSwitchRuntime: path.join(root, "hot-switch-runtime")
   };
+}
+
+/**
+ * Move state created by the old publisher/name into the fork-specific
+ * globalStorage directory before any repository or runtime file is opened.
+ * The old extension ID is intentionally not used as the active integration
+ * target; it is only a one-time migration source.
+ */
+export async function migrateLegacyGlobalStorage(
+  context?: PrivateStateContext,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<void> {
+  if (env[PRIVATE_STATE_DIRECTORY_ENV]?.trim()) {
+    return;
+  }
+
+  const currentRoot = context?.globalStorageUri?.fsPath?.trim();
+  if (!currentRoot || !path.isAbsolute(currentRoot)) {
+    return;
+  }
+
+  const extensionRoot = context?.extensionUri?.fsPath?.trim();
+  if (extensionRoot && path.isAbsolute(extensionRoot) && isManagerSourceCheckout(extensionRoot)) {
+    return;
+  }
+
+  const globalStorageRoot = path.dirname(currentRoot);
+  if (path.basename(globalStorageRoot) !== "globalStorage") {
+    return;
+  }
+
+  const legacyRoot = path.join(globalStorageRoot, LEGACY_MANAGER_EXTENSION_ID);
+  if (path.resolve(legacyRoot) === path.resolve(currentRoot) || !existsSync(legacyRoot)) {
+    return;
+  }
+
+  let currentEntries: string[] | undefined;
+  try {
+    currentEntries = await readdir(currentRoot);
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      throw error;
+    }
+  }
+
+  if (currentEntries && currentEntries.length > 0) {
+    throw new Error(
+      `Cannot migrate legacy Manager storage because the new directory is not empty: ${currentRoot}`
+    );
+  }
+  if (currentEntries) {
+    await rm(currentRoot, { recursive: false });
+  }
+
+  await rename(legacyRoot, currentRoot);
+  await chmod(currentRoot, 0o700).catch(() => undefined);
 }
 
 /** Create only non-sensitive host policy/state files; never overwrite them. */

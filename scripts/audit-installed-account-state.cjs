@@ -20,7 +20,7 @@ const seconds = Number(option("--observe-seconds") ?? 0);
 if (!Number.isFinite(seconds) || seconds < 0 || seconds > 3600) throw new Error("Observation must be between 0 and 3600 seconds");
 const expectedCounts = option("--expected-counts") ? JSON.parse(option("--expected-counts")) : undefined;
 const storage = path.join(os.homedir(), "Library/Application Support/Code/User/globalStorage");
-const accountRoot = path.join(storage, "wannanbigpig.codex-accounts-manager");
+const accountRoot = path.join(storage, "wintermelon.codex-account-manager");
 const mirrorRoot = path.join(os.homedir(), ".ai_deck/accounts/codex/accounts");
 const state = require(path.join(installed, "out/application/accounts/accountState.js"));
 const { resolveAccountHealth } = require(path.join(installed, "out/application/accounts/health.js"));
@@ -28,7 +28,7 @@ const codeHash = crypto.createHash("sha256").update(fs.readFileSync(path.join(in
 
 function snapshot() {
   const raw = execFileSync("sqlite3", ["-readonly", path.join(storage, "state.vscdb"),
-    "select value from ItemTable where key='wannanbigpig.codex-accounts-manager';"], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+    "select value from ItemTable where key='wintermelon.codex-account-manager';"], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
   const localState = raw.trim() ? JSON.parse(raw) : {};
   const persistedEvidenceAccounts = Object.keys(localState).filter(key => key.startsWith("accountHealthEvidence.v1.")).length;
   state.initAccountStatePersistence({

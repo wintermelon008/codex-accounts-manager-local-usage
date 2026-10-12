@@ -9,7 +9,8 @@ import type {
 } from "../core/types";
 import { fetchWithTimeout } from "../utils/network";
 
-const DEFAULT_ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/announcements.json";
+const DEFAULT_ANNOUNCEMENT_URL =
+  "https://raw.githubusercontent.com/wintermelon008/codex-accounts-manager-local-usage/local-usage-dashboard/announcements.json";
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const CACHE_FILE = "announcement_cache.json";
 const READ_IDS_FILE = "announcement_read_ids.json";

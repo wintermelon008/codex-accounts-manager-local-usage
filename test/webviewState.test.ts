@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DashboardAccountViewModel } from "../src/domain/dashboard/types";
 import { resolveOverviewAccount } from "../webview-src/dashboard/helpers";
 import { reduceOAuthActionResult, reduceSharedImportActionResult } from "../webview-src/dashboard/sessionModalState";
+import { createInitialState, isRetryableDashboardAction, reducer } from "../webview-src/dashboard/state";
 
 describe("reduceOAuthActionResult", () => {
   it("stores prepared oauth sessions and resets on completion", () => {
@@ -41,6 +42,54 @@ describe("reduceOAuthActionResult", () => {
     expect(completed.shouldCloseModal).toBe(true);
     expect(completed.next.oauthSession).toBeUndefined();
     expect(completed.next.oauthCallbackUrl).toBe("");
+  });
+});
+
+describe("dashboard action retry state", () => {
+  it("keeps a safe failed action payload for direct retry", () => {
+    const requested = reducer(createInitialState(), {
+      type: "request-action",
+      request: {
+        requestId: "retry-1",
+        action: "batchRefresh",
+        accountId: undefined,
+        payload: { accountIds: ["account-1", "account-2"] },
+        requestedAt: 1
+      }
+    });
+    const failed = reducer(requested, {
+      type: "action-failed",
+      retry: {
+        action: "batchRefresh",
+        payload: requested.pendingActions[0]?.payload,
+        error: "network unavailable"
+      }
+    });
+
+    expect(failed.failedAction).toEqual({
+      action: "batchRefresh",
+      payload: { accountIds: ["account-1", "account-2"] },
+      error: "network unavailable"
+    });
+
+    const retried = reducer(failed, {
+      type: "request-action",
+      request: {
+        requestId: "retry-2",
+        action: failed.failedAction.action,
+        payload: failed.failedAction.payload,
+        requestedAt: 2
+      }
+    });
+    expect(retried.failedAction).toBeUndefined();
+  });
+
+  it("does not retain sensitive or destructive actions as retryable actions", () => {
+    expect(isRetryableDashboardAction("batchRefresh")).toBe(true);
+    expect(isRetryableDashboardAction("refreshLocalUsage")).toBe(true);
+    expect(isRetryableDashboardAction("importSharedJson")).toBe(false);
+    expect(isRetryableDashboardAction("restartServices")).toBe(false);
+    expect(isRetryableDashboardAction("repairRuntime")).toBe(false);
   });
 });
 

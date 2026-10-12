@@ -8,6 +8,7 @@ import type { CodexExecProviderConfig, RuntimeAccountSwitchOutcome } from "../sr
 import type { CodexAccountRecord, SharedCodexAccountJson } from "../src/core/types";
 import { accountConcurrencyTracker } from "../src/application/accounts/accountConcurrency";
 import type { AccountHealthInfo } from "../src/application/accounts/health";
+import { runRestartRecoveryCheck } from "../src/presentation/workbench/restartRecovery";
 
 const servers: ManagerControlServer[] = [];
 
@@ -19,6 +20,33 @@ afterEach(() => {
 });
 
 describe("ManagerControlServer", () => {
+  it("reports liveness to restart recovery only after the real loopback API is listening", async () => {
+    const server = createServer();
+    expect(server.isRunning()).toBe(false);
+
+    const address = await server.start(0, "control-secret");
+    servers.push(server);
+    expect(server.isRunning()).toBe(true);
+
+    const healthResponse = await fetch(`http://${address.host}:${address.port}/healthz`, {
+      headers: { authorization: "Bearer control-secret" }
+    });
+    expect(healthResponse.status).toBe(200);
+
+    const report = await runRestartRecoveryCheck(1_000, {
+      readIndexHealth: async () => ({ status: "healthy" }),
+      managerControlEnabled: true,
+      managerControlReady: () => server.isRunning(),
+      runtimeEnabled: false,
+      readRuntimeStatus: async () => ({ ready: false }),
+      retryDelaysMs: [0]
+    });
+    expect(report.status).toBe("passed");
+
+    server.dispose();
+    expect(server.isRunning()).toBe(false);
+  });
+
   it("requires the bearer token and returns sanitized account and usage views", async () => {
     const server = createServer();
     const address = await server.start(0, "control-secret");
@@ -305,7 +333,11 @@ function createServer(
     enqueueImport?: (accounts: readonly SharedCodexAccountJson[]) => Promise<{ id: string; accountCount: number }>;
     switchAccount?: (
       accountId: string,
-      options?: { force?: boolean; gracePeriodMs?: number; longTurnPolicy?: "defer" | "interrupt" | "interruptAndContinue" }
+      options?: {
+        force?: boolean;
+        gracePeriodMs?: number;
+        longTurnPolicy?: "defer" | "interrupt" | "interruptAndContinue";
+      }
     ) => Promise<RuntimeAccountSwitchOutcome>;
     getCodexExecProviderConfig?: () => Promise<CodexExecProviderConfig>;
     getAccountHealth?: (account: CodexAccountRecord) => Promise<AccountHealthInfo>;

@@ -214,7 +214,7 @@ class DashboardPanelController {
   }
 
   private getPanelIconUri(): vscode.Uri {
-    return vscode.Uri.joinPath(this.context.extensionUri, "media", "CT_logo_transparent_square_hd.png");
+    return vscode.Uri.joinPath(this.context.extensionUri, "media", "accounts.svg");
   }
 
   private getTargetViewColumn(): vscode.ViewColumn {
@@ -243,7 +243,7 @@ class DashboardPanelController {
     }
 
     const logoUri = this.panel.webview
-      .asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "CT_logo_transparent_square_hd.png"))
+      .asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "accounts.svg"))
       .toString();
     const revision = ++this.publishRevision;
     const signature = await publishDashboardSnapshot({

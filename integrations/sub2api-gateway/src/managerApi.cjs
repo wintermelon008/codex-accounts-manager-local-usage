@@ -1,6 +1,6 @@
 "use strict";
 
-const MANAGER_EXTENSION_ID = "wannanbigpig.codex-accounts-manager";
+const MANAGER_EXTENSION_ID = "wintermelon.codex-account-manager";
 const MANAGER_INTEGRATION_API_VERSION = 1;
 
 async function resolveManagerIntegrationApi(vscode) {

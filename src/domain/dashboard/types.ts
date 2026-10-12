@@ -778,6 +778,8 @@ export type DashboardActionName =
   | "batchResyncProfile"
   | "batchRemove"
   | "refreshView"
+  | "testProxy"
+  | "repairRuntime"
   | "restartServices"
   | "refreshLocalUsage"
   | "unlockCodexSessionLocks"

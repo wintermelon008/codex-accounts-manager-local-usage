@@ -7,7 +7,7 @@ import type {
 } from "../../src/domain/dashboard/types";
 import { BLOCKING_GLOBAL_ACTIONS, createActionRequestId, getActionTimeoutMs, postMessageToHost } from "./host";
 import type { AppDispatch, SendAction } from "./hookTypes";
-import type { AppState } from "./state";
+import { isRetryableDashboardAction, type AppState } from "./state";
 
 export function useDashboardActions(state: AppState, dispatch: AppDispatch) {
   const actionTimeoutsRef = useRef<Map<string, number>>(new Map());
@@ -68,6 +68,7 @@ export function useDashboardActions(state: AppState, dispatch: AppDispatch) {
         requestId,
         action,
         accountId,
+        payload: isRetryableDashboardAction(action) ? payload : undefined,
         requestedAt: Date.now()
       }
     });

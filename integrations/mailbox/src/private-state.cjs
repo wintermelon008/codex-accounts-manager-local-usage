@@ -4,7 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const PRIVATE_STATE_DIRECTORY_ENV = "CODEX_ACCOUNTS_PRIVATE_DIR";
-const MANAGER_EXTENSION_ID = "wannanbigpig.codex-accounts-manager";
+const MANAGER_EXTENSION_ID = "wintermelon.codex-account-manager";
+const LEGACY_MANAGER_EXTENSION_ID = "wannanbigpig.codex-accounts-manager";
 
 function resolvePrivateStateRoot({ storageUri, managerExtensionRoot, env = process.env } = {}) {
   const configured = String(env[PRIVATE_STATE_DIRECTORY_ENV] || "").trim();
@@ -32,7 +33,15 @@ function resolvePrivateStateRoot({ storageUri, managerExtensionRoot, env = proce
     // it survives a VSIX replacement.
     const globalStorageRoot = path.dirname(storageRoot);
     if (managerExtensionRoot && path.basename(globalStorageRoot) === "globalStorage") {
-      return path.join(globalStorageRoot, MANAGER_EXTENSION_ID);
+      const currentRoot = path.join(globalStorageRoot, MANAGER_EXTENSION_ID);
+      if (fs.existsSync(currentRoot)) {
+        return currentRoot;
+      }
+      const legacyRoot = path.join(globalStorageRoot, LEGACY_MANAGER_EXTENSION_ID);
+      if (fs.existsSync(legacyRoot)) {
+        return legacyRoot;
+      }
+      return currentRoot;
     }
     return path.resolve(storageRoot);
   }
