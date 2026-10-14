@@ -1573,7 +1573,7 @@ test("registration phone keys are claimed for取号, consumed on SMS, and releas
 
   await integration.addRegistrationPhoneKeys("POOL-KEY-1\nPOOL-KEY-2");
   const before = await integration.getPanelState();
-  assert.deepEqual(before.phoneSources.map((source) => source.id), ["fivesim", "future", "sms688", "liye"]);
+  assert.deepEqual(before.phoneSources.map((source) => source.id), ["fivesim", "miaoic", "future", "sms688", "liye"]);
   const keyId = before.registrationKeyPool.keys[0].id;
   await integration.acquireRegistrationPhone(sessionId, { sourceId: "liye", keyId });
   assert.equal(acquired.code, "POOL-KEY-1");
@@ -1646,6 +1646,39 @@ test("SMS688 registration uses its own API Key and never claims the LIYE Key poo
   assert.deepEqual(acquired.options, { sourceId: "sms688" });
   assert.equal(integration.registrationPhoneKeyClaims.has(sessionId), false);
   assert.deepEqual((await integration.getPanelState()).registrationSms688Token, { configured: true, masked: "sms6…-key" });
+  integration.dispose();
+});
+
+test("Miaoic registration uses its page Token and stays separate from the LIYE Key pool", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const requests = [];
+  const api = {
+    registerDashboardIntegration() { return { dispose() {} }; },
+    fetchWithManagerProxy: async (url, options) => {
+      requests.push({ url, options });
+      return fakeResponse({ ok: true, balance: 6, active: false, phone: "", code: "" });
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  const sessionId = integration.registrationManager.createSession({ email: "miaoic@example.com", password: "password" });
+  let acquired;
+  integration.registrationManager.acquirePhoneNumber = async (_id, credential, options) => {
+    acquired = { credential, options };
+    return { phase: "polling", running: true };
+  };
+
+  await integration.saveMiaoicToken("miaoic-page-token");
+  await integration.refreshRegistrationMiaoic(sessionId);
+  await integration.acquireRegistrationPhone(sessionId, { sourceId: "miaoic" });
+
+  assert.equal(acquired.credential, "miaoic-page-token");
+  assert.deepEqual(acquired.options, { sourceId: "miaoic" });
+  assert.equal(integration.registrationPhoneKeyClaims.has(sessionId), false);
+  assert.deepEqual((await integration.getPanelState()).registrationMiaoicToken, { configured: true, masked: "miao…oken" });
+  assert.equal(requests[0].url, "http://miaoic.shop/recv/state");
+  assert.equal(requests[0].options.headers.cookie, "bj_user=miaoic-page-token");
   integration.dispose();
 });
 

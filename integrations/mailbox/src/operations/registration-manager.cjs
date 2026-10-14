@@ -17,6 +17,7 @@ class RegistrationManager extends EventEmitter {
     this.fiveSimFetch = typeof options.fiveSimFetch === "function" ? options.fiveSimFetch : undefined;
     this.sms688Fetch = typeof options.sms688Fetch === "function" ? options.sms688Fetch : this.fiveSimFetch;
     this.futureFetch = typeof options.futureFetch === "function" ? options.futureFetch : this.sms688Fetch;
+    this.miaoicFetch = typeof options.miaoicFetch === "function" ? options.miaoicFetch : this.futureFetch;
   }
 
   createSession(params) {
@@ -37,6 +38,7 @@ class RegistrationManager extends EventEmitter {
       fiveSimFetch: this.fiveSimFetch,
       sms688Fetch: this.sms688Fetch,
       futureFetch: this.futureFetch,
+      miaoicFetch: this.miaoicFetch,
       onStateChange: (event) => {
         this.emit("stateChange", { sessionId: session.id, ...event });
       },
@@ -215,7 +217,8 @@ class RegistrationManager extends EventEmitter {
         openRegistrationBrowser: !importCodex ? this.openRegistrationBrowser : null,
         fiveSimFetch: this.fiveSimFetch,
         sms688Fetch: this.sms688Fetch,
-        futureFetch: this.futureFetch
+        futureFetch: this.futureFetch,
+        miaoicFetch: this.miaoicFetch
       });
       session.id = record.id;
       session.oauthOperationId = `registration-oauth:${session.id}`;

@@ -15,6 +15,7 @@ const { LIYEPhoneOrderSession } = require("./liye-phone-order.cjs");
 const { FiveSimPhoneOrderSession } = require("./fivesim-phone-order.cjs");
 const { Sms688PhoneOrderSession } = require("./sms688-phone-order.cjs");
 const { FuturePhoneOrderSession } = require("./future-phone-order.cjs");
+const { MiaoicPhoneOrderSession } = require("./miaoic-phone-order.cjs");
 const { createEmailCodeState } = require("./registration-email-code.cjs");
 
 const REGISTER_URL = "https://chatgpt.com/auth/login";
@@ -171,6 +172,7 @@ class RegistrationSession {
     this.fiveSimFetch = typeof options.fiveSimFetch === "function" ? options.fiveSimFetch : undefined;
     this.sms688Fetch = typeof options.sms688Fetch === "function" ? options.sms688Fetch : this.fiveSimFetch;
     this.futureFetch = typeof options.futureFetch === "function" ? options.futureFetch : this.sms688Fetch;
+    this.miaoicFetch = typeof options.miaoicFetch === "function" ? options.miaoicFetch : this.futureFetch;
 
     this.state = STATES.IDLE;
     this.mode = this.importCodex
@@ -701,6 +703,20 @@ class RegistrationSession {
       this.onStateChange({ sessionId: this.id, phoneOrder });
       return phoneOrder;
     }
+    if (String(sourceId).trim().toLowerCase() === "miaoic") {
+      if (!(this.phoneOrder instanceof MiaoicPhoneOrderSession)) {
+        await this.phoneOrder?.dispose?.();
+        this.phoneOrder = new MiaoicPhoneOrderSession({
+          sourceId,
+          fetchImpl: this.miaoicFetch,
+          onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
+          onLog: (level, msg) => this.log(level, msg)
+        });
+      }
+      const phoneOrder = await this.phoneOrder.start(credential);
+      this.onStateChange({ sessionId: this.id, phoneOrder });
+      return phoneOrder;
+    }
     if (String(sourceId).trim().toLowerCase() === "sms688") {
       if (!(this.phoneOrder instanceof Sms688PhoneOrderSession)) {
         await this.phoneOrder?.dispose?.();
@@ -746,7 +762,7 @@ class RegistrationSession {
 
   async refreshPhoneInfo(credential, { sourceId = "fivesim", country = "", operator = "any", product = "openai" } = {}) {
     const normalizedSourceId = String(sourceId).trim().toLowerCase();
-    if (!["fivesim", "future", "sms688"].includes(normalizedSourceId)) {
+    if (!["fivesim", "miaoic", "future", "sms688"].includes(normalizedSourceId)) {
       throw new Error("当前接码来源不支持账户信息刷新");
     }
     if (this.phoneOrder?.state?.running) {
@@ -758,6 +774,20 @@ class RegistrationSession {
         this.phoneOrder = new Sms688PhoneOrderSession({
           sourceId,
           fetchImpl: this.sms688Fetch,
+          onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
+          onLog: (level, msg) => this.log(level, msg)
+        });
+      }
+      const phoneOrder = await this.phoneOrder.refreshInfo(credential);
+      this.onStateChange({ sessionId: this.id, phoneOrder });
+      return phoneOrder;
+    }
+    if (normalizedSourceId === "miaoic") {
+      if (!(this.phoneOrder instanceof MiaoicPhoneOrderSession)) {
+        await this.phoneOrder?.dispose?.();
+        this.phoneOrder = new MiaoicPhoneOrderSession({
+          sourceId,
+          fetchImpl: this.miaoicFetch,
           onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
           onLog: (level, msg) => this.log(level, msg)
         });

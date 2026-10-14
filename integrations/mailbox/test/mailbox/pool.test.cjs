@@ -9,6 +9,7 @@ const { OutlookLocalProvider } = require("../../src/core/providers/outlook-local
 const { createMailboxProvider } = require("../../src/core/provider.cjs");
 const {
   MailboxPool,
+  DAY_MS,
   METADATA_KEY,
   TRASH_INDEX_KEY,
   detailKey,
@@ -326,7 +327,7 @@ test("renewal writes a new secret only after the provider reports changed creden
   await pool.load();
   const [{ id }] = (await pool.importProvider({ provider, input: "one@example.com----password-one----client-one----refresh-one" })).imported;
   const initialNextRenewal = pool.listMetadata()[0].autoRenewalNextAt;
-  assert.ok(initialNextRenewal > clock);
+  assert.equal(initialNextRenewal, 101 + 7 * DAY_MS);
 
   await pool.recordRenewalResult(id, {
     ok: true,
@@ -335,7 +336,7 @@ test("renewal writes a new secret only after the provider reports changed creden
   });
   assert.match(stores.secretStore.values.get(secretKey(id)), /refresh-one/u);
   assert.equal(pool.listMetadata()[0].lastRenewalAt, undefined);
-  assert.ok(pool.listMetadata()[0].autoRenewalNextAt > initialNextRenewal);
+  assert.equal(pool.listMetadata()[0].autoRenewalNextAt, 102 + 7 * DAY_MS);
 
   const renewed = await pool.recordRenewalResult(id, {
     ok: true,
@@ -348,7 +349,7 @@ test("renewal writes a new secret only after the provider reports changed creden
   assert.match(stores.secretStore.values.get(secretKey(id)), /refresh-two/u);
   assert.equal((await pool.getAccount(id)).credentials.refreshToken, "refresh-two");
   assert.equal(renewed.lastRenewalAt, 103);
-  assert.ok(renewed.autoRenewalNextAt > renewed.lastRenewalAt);
+  assert.equal(renewed.autoRenewalNextAt, 103 + 7 * DAY_MS);
 
   await pool.recordRenewalResult(id, {
     ok: false,
@@ -437,6 +438,33 @@ test("legacy renewal schedules become due immediately when their interval alread
   await pool.initializeAutomaticRenewalSchedules([id], clock);
 
   assert.equal(pool.listMetadata()[0].autoRenewalNextAt, clock);
+});
+
+test("migrates persisted automatic renewal schedules to seven days", async () => {
+  const stores = memoryStores();
+  const mailboxId = "mailbox:legacy-schedule";
+  stores.metadata.values.set(METADATA_KEY, {
+    version: 2,
+    accounts: [{
+      id: mailboxId,
+      providerId: "outlook-local",
+      address: "legacy-schedule@example.com",
+      createdAt: 100,
+      updatedAt: 200,
+      lastRenewalAt: 1_000,
+      autoRenewalNextAt: 1_000 + 14 * DAY_MS
+    }]
+  });
+
+  const pool = new MailboxPool({
+    metadataStore: stores.metadata,
+    secretStore: stores.secretStore,
+    now: () => 2_000
+  });
+  await pool.load();
+
+  assert.equal(pool.listMetadata()[0].autoRenewalNextAt, 1_000 + 7 * DAY_MS);
+  assert.equal(stores.metadata.values.get(METADATA_KEY).autoRenewalScheduleVersion, 2);
 });
 
 test("silent provider credential refresh replaces only the private credential record", async () => {

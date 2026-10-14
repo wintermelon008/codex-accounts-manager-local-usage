@@ -15,8 +15,9 @@ const POOL_SCHEMA_VERSION = 2;
 const MAX_STORED_MESSAGES = 20;
 const MAX_STORED_BODY_HTML_LENGTH = 24_000;
 const TRASH_RETENTION_MS = 24 * 60 * 60 * 1000;
-const AUTO_RENEWAL_MIN_INTERVAL_DAYS = 14;
-const AUTO_RENEWAL_MAX_INTERVAL_DAYS = 21;
+const AUTO_RENEWAL_MIN_INTERVAL_DAYS = 7;
+const AUTO_RENEWAL_MAX_INTERVAL_DAYS = 7;
+const AUTO_RENEWAL_SCHEDULE_VERSION = 2;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 class MailboxPool {
@@ -50,6 +51,10 @@ class MailboxPool {
   async loadFromStore() {
     const raw = await this.metadataStore.get(METADATA_KEY);
     this.metadata = parseMetadata(raw);
+    if (this.metadata.autoRenewalScheduleVersion < AUTO_RENEWAL_SCHEDULE_VERSION
+      && migrateAutomaticRenewalSchedules(this.metadata, this.now())) {
+      await this.persistMetadata();
+    }
     await this.purgeExpiredTrash();
     this.loaded = true;
     if (!this.deactivationBackfillDone) {
@@ -793,7 +798,11 @@ function migrateStoredCredentials(fromProviderId, toProviderId, account) {
 }
 
 function emptyMetadata() {
-  return { version: POOL_SCHEMA_VERSION, accounts: [] };
+  return {
+    version: POOL_SCHEMA_VERSION,
+    autoRenewalScheduleVersion: AUTO_RENEWAL_SCHEDULE_VERSION,
+    accounts: []
+  };
 }
 
 function parseMetadata(raw) {
@@ -802,8 +811,29 @@ function parseMetadata(raw) {
   }
   return {
     version: POOL_SCHEMA_VERSION,
+    autoRenewalScheduleVersion: Number.isInteger(raw.autoRenewalScheduleVersion)
+      ? raw.autoRenewalScheduleVersion
+      : 1,
     accounts: raw.accounts.filter(isMetadataEntry).map(sanitizeMetadata)
   };
+}
+
+function migrateAutomaticRenewalSchedules(metadata, now) {
+  if (metadata.autoRenewalScheduleVersion >= AUTO_RENEWAL_SCHEDULE_VERSION) return false;
+  const timestamp = Number.isFinite(now) ? now : Date.now();
+  for (const account of metadata.accounts) {
+    if (!Number.isFinite(account.autoRenewalNextAt)) continue;
+    const base = Number.isFinite(account.lastRenewalAt)
+      ? account.lastRenewalAt
+      : Number.isFinite(account.createdAt)
+        ? account.createdAt
+        : Number.isFinite(account.updatedAt)
+          ? account.updatedAt
+          : timestamp;
+    account.autoRenewalNextAt = Math.max(timestamp, base + randomAutomaticRenewalDelayMs());
+  }
+  metadata.autoRenewalScheduleVersion = AUTO_RENEWAL_SCHEDULE_VERSION;
+  return true;
 }
 
 function isMetadataEntry(entry) {

@@ -36,6 +36,10 @@ const {
   createLocalFutureTokenStore,
   FutureTokenStore
 } = require("../operations/future-token-store.cjs");
+const {
+  createLocalMiaoicTokenStore,
+  MiaoicTokenStore
+} = require("../operations/miaoic-token-store.cjs");
 const { FutureClient } = require("../operations/future-phone-order.cjs");
 const { RegistrationExchangeRateStore } = require("../operations/registration-exchange-rate.cjs");
 const { TwoFactorManager, resolveTotpConfigFilePath } = require("../totp/manager.cjs");
@@ -149,6 +153,9 @@ class MailboxIntegration {
       futureFetch: typeof this.api?.fetchWithManagerProxy === "function"
         ? (input, init) => this.api.fetchWithManagerProxy(input, init)
         : undefined,
+      miaoicFetch: typeof this.api?.fetchWithManagerProxy === "function"
+        ? (input, init) => this.api.fetchWithManagerProxy(input, init)
+        : undefined,
     });
     this.registrationDiagnostics = createRegistrationDiagnostics(vscode, context, {
       storageRoot: this.privateStateRoot
@@ -179,6 +186,11 @@ class MailboxIntegration {
     this.futureTokenStore = new FutureTokenStore({
       secretStore: serverFutureTokenStore || context.secrets,
       backupStore: serverFutureTokenStore ? context.secrets : undefined
+    });
+    const serverMiaoicTokenStore = createLocalMiaoicTokenStore({ fsPath: this.privateStateRoot });
+    this.miaoicTokenStore = new MiaoicTokenStore({
+      secretStore: serverMiaoicTokenStore || context.secrets,
+      backupStore: serverMiaoicTokenStore ? context.secrets : undefined
     });
     this.registrationExchangeRateStore = exchangeRateStore || (this.privateStateRoot
       ? new RegistrationExchangeRateStore({
@@ -510,7 +522,7 @@ class MailboxIntegration {
   }
 
   getDeactivatedMailboxEmails() {
-    if (!this.mailboxEnabled || !this.pool.isLoaded()) {
+    if (this.mailboxEnabled === false || !this.pool.isLoaded()) {
       return [];
     }
     return this.pool
@@ -827,6 +839,15 @@ class MailboxIntegration {
           return;
         case "registrationRefreshFuture":
           await this.refreshRegistrationFuture(message.sessionId);
+          return;
+        case "registrationSaveMiaoicToken":
+          await this.saveMiaoicToken(message.token);
+          return;
+        case "registrationClearMiaoicToken":
+          await this.clearMiaoicToken();
+          return;
+        case "registrationRefreshMiaoic":
+          await this.refreshRegistrationMiaoic(message.sessionId);
           return;
         case "registrationSetDefaultPhoneSource":
           await this.setRegistrationDefaultPhoneSource(message.sourceId);
@@ -1602,6 +1623,16 @@ class MailboxIntegration {
       await this.publishPanelState();
       return;
     }
+    if (source.id === "miaoic") {
+      const token = await this.miaoicTokenStore.get();
+      if (!token) throw new Error("请先保存 Miaoic Token");
+      const result = await this.registrationManager.acquirePhoneNumber(id, token, {
+        sourceId: source.id
+      });
+      if (result?.phase === "error") throw new Error(result.error || "Miaoic 取号失败");
+      await this.publishPanelState();
+      return;
+    }
     if (source.id === "future") {
       const token = await this.futureTokenStore.get();
       if (!token) throw new Error("请先兑换并保存 Future CDK");
@@ -1683,6 +1714,28 @@ class MailboxIntegration {
     await this.publishPanelState();
   }
 
+  async saveMiaoicToken(value) {
+    const result = await this.miaoicTokenStore.set(value);
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationSaveMiaoicToken",
+      message: `Miaoic Token 已保存（${result.masked}）`
+    });
+    await this.publishPanelState();
+  }
+
+  async clearMiaoicToken() {
+    await this.miaoicTokenStore.clear();
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationClearMiaoicToken",
+      message: "Miaoic Token 已清除"
+    });
+    await this.publishPanelState();
+  }
+
   async saveFutureToken(value) {
     const cdk = String(value ?? "").trim();
     if (!cdk) throw new Error("请填写 Future CDK");
@@ -1734,6 +1787,17 @@ class MailboxIntegration {
       sourceId: "sms688"
     });
     if (result?.phase === "error") throw new Error(result.error || "SMS688 信息刷新失败");
+    await this.publishPanelState();
+  }
+
+  async refreshRegistrationMiaoic(sessionId) {
+    const id = this.requireRegistrationSessionId(sessionId);
+    const token = await this.miaoicTokenStore.get();
+    if (!token) throw new Error("请先保存 Miaoic Token");
+    const result = await this.registrationManager.refreshPhoneInfo(id, token, {
+      sourceId: "miaoic"
+    });
+    if (result?.phase === "error") throw new Error(result.error || "Miaoic 信息刷新失败");
     await this.publishPanelState();
   }
 
@@ -2251,6 +2315,7 @@ class MailboxIntegration {
     const registrationFiveSimToken = await this.getRegistrationFiveSimTokenState();
     const registrationFutureToken = await this.getRegistrationFutureTokenState();
     const registrationSms688Token = await this.getRegistrationSms688TokenState();
+    const registrationMiaoicToken = await this.getRegistrationMiaoicTokenState();
     const registrationFiveSimExchangeRate = await this.getRegistrationExchangeRateState();
     let totpSummary = { configured: false, baseUrl: "", links: {}, error: this.totpLoadError || "" };
     try {
@@ -2279,6 +2344,7 @@ class MailboxIntegration {
       registrationFiveSimToken,
       registrationFutureToken,
       registrationSms688Token,
+      registrationMiaoicToken,
       registrationFiveSimExchangeRate,
       totp: {
         configured: totpSummary.configured,
@@ -2370,6 +2436,14 @@ class MailboxIntegration {
       return await this.sms688TokenStore.snapshot();
     } catch {
       return { configured: false, masked: "", error: "SMS688 API Key 存储不可用" };
+    }
+  }
+
+  async getRegistrationMiaoicTokenState() {
+    try {
+      return await this.miaoicTokenStore.snapshot();
+    } catch {
+      return { configured: false, masked: "", error: "Miaoic Token 存储不可用" };
     }
   }
 

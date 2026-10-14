@@ -444,12 +444,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationPhoneSourceSelections = {};
       let registrationPhoneKeySelections = {};
       let registrationFiveSimTokenInputs = {};
+      let registrationMiaoicTokenInputs = {};
       let registrationFutureTokenInputs = {};
       let registrationSms688TokenInputs = {};
       let registrationFiveSimSelections = {};
       let registrationFiveSimCountrySelections = {};
       let registrationFiveSimFilters = {};
       let registrationFiveSimAutoRefreshRequested = new Set();
+      let registrationMiaoicAutoRefreshRequested = new Set();
       let registrationFutureAutoRefreshRequested = new Set();
       let registrationSms688AutoRefreshRequested = new Set();
       let registrationInputValues = {};
@@ -499,6 +501,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           }
           const registrationSessionIds = new Set((state.registrationSessions || []).map((session) => session.id));
           registrationFiveSimAutoRefreshRequested = new Set([...registrationFiveSimAutoRefreshRequested].filter((sessionId) => registrationSessionIds.has(sessionId)));
+          registrationMiaoicAutoRefreshRequested = new Set([...registrationMiaoicAutoRefreshRequested].filter((sessionId) => registrationSessionIds.has(sessionId)));
           const selectedRegistrationMailbox = (state.mailboxes || []).find((mailbox) => mailbox.id === selectedRegistrationMailboxId);
           if (selectedRegistrationMailbox && hasManagedCodexEmail(selectedRegistrationMailbox.address)) {
             selectedRegistrationMailboxId = "";
@@ -814,6 +817,14 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             send("registrationAcquirePhone", { sessionId, sourceId, country: selection.country, operator: selection.operator, product: "openai" });
             return;
           }
+          if (sourceId === "miaoic") {
+            if (!state.registrationMiaoicToken?.configured) {
+              showNotice("请先保存 Miaoic Token", "warning");
+              return;
+            }
+            send("registrationAcquirePhone", { sessionId, sourceId });
+            return;
+          }
           if (sourceId === "sms688") {
             if (!state.registrationSms688Token?.configured) {
               showNotice("请先保存 SMS688 API Key", "warning");
@@ -851,6 +862,20 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "registration-clear-fivesim-token") {
           send("registrationClearFiveSimToken");
         }
+        else if (action === "registration-save-miaoic-token") {
+          const sessionId = target.dataset.sessionId || "";
+          const input = document.getElementById("registrationMiaoicTokenInput-" + sessionId)?.value?.trim() || registrationMiaoicTokenInputs[sessionId] || "";
+          if (!input) {
+            showNotice("请先粘贴 Miaoic Token", "warning");
+            return;
+          }
+          registrationMiaoicTokenInputs[sessionId] = "";
+          send("registrationSaveMiaoicToken", { token: input });
+          render();
+        }
+        else if (action === "registration-clear-miaoic-token") {
+          send("registrationClearMiaoicToken");
+        }
         else if (action === "registration-save-sms688-token") {
           const sessionId = target.dataset.sessionId || "";
           const input = document.getElementById("registrationSms688TokenInput-" + sessionId)?.value?.trim() || registrationSms688TokenInputs[sessionId] || "";
@@ -884,6 +909,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           if (!sessionId) return;
           const selection = getFiveSimSelection(sessionId);
           send("registrationRefreshFiveSim", { sessionId, country: selection.country, operator: selection.operator, product: "openai" });
+        }
+        else if (action === "registration-refresh-miaoic") {
+          const sessionId = target.dataset.sessionId || "";
+          if (sessionId) send("registrationRefreshMiaoic", { sessionId });
         }
         else if (action === "registration-refresh-sms688") {
           const sessionId = target.dataset.sessionId || "";
@@ -989,6 +1018,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           registrationPhoneSourceSelections[sessionId] = sourceId;
           if (!updateRegistrationPhoneSourcePanels(sessionId, sourceId)) render();
           if (sourceId === "fivesim") requestRegistrationFiveSimRefresh(sessionId);
+          if (sourceId === "miaoic") requestRegistrationMiaoicRefresh(sessionId);
           if (sourceId === "future") requestRegistrationFutureRefresh(sessionId);
           if (sourceId === "sms688") requestRegistrationSms688Refresh(sessionId);
         }
@@ -1038,6 +1068,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         }
         if (event.target.id.startsWith("registrationFiveSimTokenInput-")) {
           registrationFiveSimTokenInputs[event.target.id.slice("registrationFiveSimTokenInput-".length)] = event.target.value || "";
+        }
+        if (event.target.id.startsWith("registrationMiaoicTokenInput-")) {
+          registrationMiaoicTokenInputs[event.target.id.slice("registrationMiaoicTokenInput-".length)] = event.target.value || "";
         }
         if (event.target.id.startsWith("registrationFutureTokenInput-")) {
           registrationFutureTokenInputs[event.target.id.slice("registrationFutureTokenInput-".length)] = event.target.value || "";
@@ -1551,6 +1584,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           ? state.phoneSources
           : [
             { id: "fivesim", displayName: "5SIM" },
+            { id: "miaoic", displayName: "Miaoic" },
             { id: "future", displayName: "Future" },
             { id: "sms688", displayName: "SMS688" },
             { id: "liye", displayName: "LIYE" }
@@ -1567,6 +1601,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           let detail = "未配置";
           if (source.id === "fivesim") {
             configured = state.registrationFiveSimToken?.configured === true;
+            detail = configured ? "Token 已保存" : "未保存 Token";
+          } else if (source.id === "miaoic") {
+            configured = state.registrationMiaoicToken?.configured === true;
             detail = configured ? "Token 已保存" : "未保存 Token";
           } else if (source.id === "future") {
             configured = state.registrationFutureToken?.configured === true;
@@ -1950,6 +1987,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           ? state.phoneSources
           : [
             { id: "fivesim", displayName: "5SIM", websiteUrl: "https://5sim.net", credentialType: "api-token" },
+            { id: "miaoic", displayName: "Miaoic", websiteUrl: "http://miaoic.shop", credentialType: "token" },
             { id: "future", displayName: "Future", websiteUrl: "https://sms.futurepixelai.com/docs", purchaseUrl: "https://www.16688.com.cn/shop/AIAISHARE", credentialType: "cdk" },
             { id: "sms688", displayName: "SMS688", websiteUrl: "https://cdk.sms688.cc", credentialType: "api-key" },
             { id: "liye", displayName: "LIYE", websiteUrl: "https://liye.5x20.cn", credentialType: "key" }
@@ -1958,9 +1996,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const source = sources.find((item) => item.id === storedSourceId) || sources[0];
         registrationPhoneSourceSelections[session.id] = source.id;
         const isFiveSim = source.id === "fivesim";
+        const isMiaoic = source.id === "miaoic";
         const isFuture = source.id === "future";
         const isSms688 = source.id === "sms688";
         const refreshingFiveSim = isFiveSim && phase === "logging_in";
+        const refreshingMiaoic = isMiaoic && phase === "logging_in";
         const refreshingFuture = isFuture && phase === "logging_in";
         const refreshingSms688 = isSms688 && phase === "logging_in";
         const keyPool = state.registrationKeyPool || { keys: [], available: 0, inUse: 0, count: 0 };
@@ -1991,6 +2031,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           : "";
         const configDisabled = active || terminal ? " disabled" : "";
         const keyInput = registrationPhoneKeyInputs[session.id] || "";
+        const miaoicToken = state.registrationMiaoicToken || { configured: false, masked: "" };
+        const miaoicTokenInput = registrationMiaoicTokenInputs[session.id] || "";
         const futureToken = state.registrationFutureToken || { configured: false, masked: "" };
         const futureTokenInput = registrationFutureTokenInputs[session.id] || "";
         const futureAccount = orderState.card || {};
@@ -2111,6 +2153,19 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '<div class="registration-fivesim-section"><div class="registration-fivesim-section-title"><span>选择地区</span><span>按内部最低价递增</span></div><div class="registration-fivesim-country-list" data-scroll-preserve="registration-fivesim-country-list-' + esc(session.id) + '" aria-label="5SIM 地区列表">' + fiveSimCountryRows + '</div></div>' +
           '<div class="registration-fivesim-section"><div class="registration-fivesim-section-title"><span>' + (selectedFiveSimCountryGroup ? '选择运营商 · ' + esc(selectedFiveSimCountryGroup.minOffer.countryName || selectedFiveSimCountry) : '选择运营商') + '</span><span>推荐项优先</span></div><div class="registration-fivesim-operator-list" data-scroll-preserve="registration-fivesim-operator-list-' + esc(session.id) + '" aria-label="5SIM 运营商列表">' + fiveSimOperatorRows + '</div></div>' +
           '</div>';
+        const miaoicAccount = orderState.card || {};
+        const miaoicAvailableUses = Number.isFinite(Number(miaoicAccount.availableUses))
+          ? Number(miaoicAccount.availableUses)
+          : Number.isFinite(Number(miaoicAccount.balance))
+            ? Number(miaoicAccount.balance)
+            : null;
+        const miaoicCatalog = '<div class="registration-fivesim-account">' +
+          '<div class="registration-fivesim-token-row"><input id="registrationMiaoicTokenInput-' + esc(session.id) + '" type="password" value="' + esc(miaoicTokenInput) + '" placeholder="粘贴 Miaoic Token" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-miaoic-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>保存 Token</button><button type="button" class="secondary small danger" data-action="registration-clear-miaoic-token"' + (miaoicToken.configured && !active ? "" : " disabled") + '>清除</button></div>' +
+          '<div class="field-note">' + (miaoicToken.configured ? '当前 Token：' + esc(miaoicToken.masked || "已配置") : '尚未配置 Miaoic Token') + '。Token 单独保存，不进入 LIYE Key 池。</div>' +
+          '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>可用次数</label><strong>' + esc(formatSms688Uses(miaoicAvailableUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>接口</label><strong>/recv/*</strong></div><div class="registration-fivesim-account-item"><label>传输</label><strong>HTTP</strong></div></div>' +
+          '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-miaoic" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingMiaoic || !miaoicToken.configured ? " disabled" : "") + '>刷新余额</button>' + (miaoicAccount.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(miaoicAccount.updatedAt)) + '</span>' : '') + '</div>' +
+          '<div class="field-note">Miaoic 使用页面显示的 Token，通过 HTTP Cookie 调用 /recv/open、/recv/state、/recv/switch 和 /recv/release；点击开始取号后自动轮询号码和短信，换号/取消仍需你点击。</div>' +
+        '</div>';
         const futureCatalog = '<div class="registration-fivesim-account">' +
           '<div class="registration-fivesim-token-row"><input id="registrationFutureTokenInput-' + esc(session.id) + '" type="password" value="' + esc(futureTokenInput) + '" placeholder="粘贴 Future CDK" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-future-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>兑换并保存</button><button type="button" class="secondary small danger" data-action="registration-clear-future-token"' + (futureToken.configured && !active ? "" : " disabled") + '>清除</button></div>' +
           '<div class="field-note">' + (futureToken.configured ? '当前 Session Token：' + esc(futureToken.masked || "已配置") : '尚未配置 Future Session Token') + '。输入 CDK 后会先兑换 Session Token，Token 单独保存，不进入 LIYE Key 池。</div>' +
@@ -2128,15 +2183,17 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sourcePanel = (sourceId, content, hidden) => '<div data-registration-phone-source-panel="' + sourceId + '"' + (hidden ? ' hidden' : '') + '>' + content + '</div>';
         const liyeKeyField = '<div class="field"><label for="registrationPhoneKey-' + esc(session.id) + '">选择 Key（SecretStorage）</label><select id="registrationPhoneKey-' + esc(session.id) + '"' + configDisabled + '><option value="">请选择 Key</option>' + keyOptions + '</select>' + keyVisibilityNote + '</div>';
         const fiveSimServiceField = '<div class="field"><label>服务</label><input value="OpenAI/ChatGPT（openai）" disabled></div>';
+        const miaoicServiceField = '<div class="field"><label>服务</label><input value="Manual SMS（/recv/*）" disabled></div>';
         const futureServiceField = '<div class="field"><label>服务</label><input value="Manual SMS（manual-sms）" disabled></div>';
         const sms688ServiceField = '<div class="field"><label>服务</label><input value="Manual SMS（manual-sms）" disabled></div>';
         const acquireHtml = '<div class="registration-phone-source-root" data-registration-phone-source-root="' + esc(session.id) + '">' +
           '<div class="registration-phone-config"><div class="field"><label for="registrationPhoneSource-' + esc(session.id) + '">接码来源</label><select id="registrationPhoneSource-' + esc(session.id) + '"' + configDisabled + '>' + sourceOptions + '</select></div>' +
-          sourcePanel("fivesim", fiveSimServiceField, !isFiveSim) + sourcePanel("future", futureServiceField, !isFuture) + sourcePanel("sms688", sms688ServiceField, !isSms688) + sourcePanel("liye", liyeKeyField, isFiveSim || isFuture || isSms688) + '</div>' +
+          sourcePanel("fivesim", fiveSimServiceField, !isFiveSim) + sourcePanel("miaoic", miaoicServiceField, !isMiaoic) + sourcePanel("future", futureServiceField, !isFuture) + sourcePanel("sms688", sms688ServiceField, !isSms688) + sourcePanel("liye", liyeKeyField, isFiveSim || isMiaoic || isFuture || isSms688) + '</div>' +
           sourcePanel("fivesim", fiveSimCatalog, !isFiveSim) +
+          sourcePanel("miaoic", miaoicCatalog, !isMiaoic) +
           sourcePanel("future", futureCatalog, !isFuture) +
           sourcePanel("sms688", sms688Catalog, !isSms688) +
-          sourcePanel("liye", keyPoolDetails + (!active && !selectedKeyAvailable ? '<div class="field-note">请选择一个可用 Key，再开始取号。</div>' : ""), isFiveSim || isFuture || isSms688) +
+          sourcePanel("liye", keyPoolDetails + (!active && !selectedKeyAvailable ? '<div class="field-note">请选择一个可用 Key，再开始取号。</div>' : ""), isFiveSim || isMiaoic || isFuture || isSms688) +
         '</div>';
         const phoneButton = isCompletePhoneNumber(phone)
           ? '<button type="button" class="secondary small" data-action="registration-copy-phone" data-session-id="' + esc(session.id) + '" data-value="' + esc(phone) + '">复制手机号</button>'
@@ -2162,6 +2219,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           : "";
         const successRateLabel = isFiveSim
           ? '即时成功率：' + formatPhoneSuccessRate(fiveSimInstantSuccessRateRaw(selectedFiveSimOffer)) + ' · 平均成功率：' + formatPhoneSuccessRate(fiveSimAverageSuccessRateRaw(selectedFiveSimOffer))
+          : isMiaoic
+            ? '可用次数：' + formatSms688Uses(miaoicAvailableUses)
           : isFuture
             ? '可用次数：' + formatSms688Uses(futureAvailableUses)
             : isSms688
@@ -2173,6 +2232,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           : "";
         const acquireReady = isFiveSim
           ? Boolean(fiveSimToken.configured && selectedFiveSimOffer)
+          : isMiaoic
+            ? Boolean(miaoicToken.configured && (miaoicAvailableUses === null || miaoicAvailableUses > 0))
           : isFuture
             ? Boolean(futureToken.configured && (futureAvailableUses === null || futureAvailableUses > 0))
             : isSms688
@@ -2185,7 +2246,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '</div>';
         const phoneNote = registrationOnly
           ? ""
-          : (isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : isFuture ? "Future 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : isSms688 ? "SMS688 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "");
+          : (isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : isMiaoic ? "Miaoic 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。该站点当前使用 HTTP，请仅在信任其服务时保存 Token。" : isFuture ? "Future 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : isSms688 ? "SMS688 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "");
         return '<div class="registration-phone-order" data-registration-phone-order-session-id="' + esc(session.id) + '" aria-keyshortcuts="N">' +
           '<div class="registration-phone-order-head"><strong>接码平台（' + (manualBrowser ? "手动控制" : "手动确认，自动读取短信") + '）</strong><span class="registration-phone-order-source">' + sourceLink + (purchaseLink ? ' · ' + purchaseLink : '') + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' ' + esc(successRateLabel) + selectedOfferLabel + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
           acquireHtml +
@@ -2617,11 +2678,13 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         delete registrationPhoneSourceSelections[sessionId];
         delete registrationPhoneKeySelections[sessionId];
         delete registrationFiveSimTokenInputs[sessionId];
+        delete registrationMiaoicTokenInputs[sessionId];
         delete registrationSms688TokenInputs[sessionId];
         delete registrationFiveSimSelections[sessionId];
         delete registrationFiveSimCountrySelections[sessionId];
         delete registrationFiveSimFilters[sessionId];
         registrationFiveSimAutoRefreshRequested.delete(sessionId);
+        registrationMiaoicAutoRefreshRequested.delete(sessionId);
         registrationSms688AutoRefreshRequested.delete(sessionId);
       }
 
@@ -3014,6 +3077,17 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         send("registrationRefreshSms688", { sessionId });
       }
 
+      function requestRegistrationMiaoicRefresh(sessionId) {
+        if (!registrationOnly || !sessionId || state.registrationMiaoicToken?.configured !== true) return;
+        if (registrationMiaoicAutoRefreshRequested.has(sessionId)) return;
+        const session = (state.registrationSessions || []).find((item) => item.id === sessionId);
+        if (!session) return;
+        registrationMiaoicAutoRefreshRequested.add(sessionId);
+        const orderState = session?.phoneOrder || {};
+        if (orderState.running === true || orderState.phase === "logging_in") return;
+        send("registrationRefreshMiaoic", { sessionId });
+      }
+
       function requestRegistrationFutureRefresh(sessionId) {
         if (!registrationOnly || !sessionId || state.registrationFutureToken?.configured !== true) return;
         if (registrationFutureAutoRefreshRequested.has(sessionId)) return;
@@ -3031,6 +3105,19 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         if (sourceId === "fivesim") {
           const offer = getFiveSimSelectedOffer(session || { id: sessionId }, session?.phoneOrder || {});
           const enabled = Boolean(state.registrationFiveSimToken?.configured && offer);
+          document.querySelectorAll('[data-action="registration-acquire-phone"]').forEach((button) => {
+            if (button.dataset.sessionId === sessionId) button.disabled = !enabled;
+          });
+          return;
+        }
+        if (sourceId === "miaoic") {
+          const account = session?.phoneOrder?.card || {};
+          const availableUses = Number.isFinite(Number(account.availableUses))
+            ? Number(account.availableUses)
+            : Number.isFinite(Number(account.balance))
+              ? Number(account.balance)
+              : null;
+          const enabled = Boolean(state.registrationMiaoicToken?.configured && (availableUses === null || availableUses > 0));
           document.querySelectorAll('[data-action="registration-acquire-phone"]').forEach((button) => {
             if (button.dataset.sessionId === sessionId) button.disabled = !enabled;
           });

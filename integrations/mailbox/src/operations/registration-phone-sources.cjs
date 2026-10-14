@@ -9,6 +9,13 @@ const REGISTRATION_PHONE_SOURCES = Object.freeze([
     credentialType: "api-token"
   }),
   Object.freeze({
+    id: "miaoic",
+    displayName: "Miaoic",
+    websiteUrl: "http://miaoic.shop",
+    service: "manual-sms",
+    credentialType: "token"
+  }),
+  Object.freeze({
     id: "future",
     displayName: "Future",
     websiteUrl: "https://sms.futurepixelai.com/docs",
