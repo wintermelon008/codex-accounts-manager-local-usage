@@ -496,6 +496,42 @@ describe("GatewaySessionManager", () => {
     assert.equal(sessions.get(session.id)?.events.some((event) => event.type === "session.recovery_failed"), true);
   });
 
+  it("drains new sessions after automatic recovery fails", async () => {
+    let runs = 0;
+    const sessions = new GatewaySessionManager({
+      maxSessions: 1,
+      provider: {
+        async run() {
+          runs += 1;
+          if (runs === 1) throw new QuotaExhaustionError("quota reached");
+          return { text: "runs after recovery failure" };
+        }
+      },
+      manager: {
+        async getActiveAccount() {
+          return { id: "account-a", email: "a@example.com" };
+        },
+        async getAccounts() {
+          return { accounts: [{ id: "account-b", isActive: false, health: "healthy" }] };
+        },
+        async switchAccount() {
+          return { status: "failed", message: "runtime switch unavailable" };
+        }
+      }
+    });
+    const exhausted = sessions.create({ mode: "research", message: "first attempt" });
+
+    await waitUntil(() => sessions.getRecoveryStatus().state === "failed");
+
+    const next = sessions.create({ mode: "research", message: "next attempt" });
+    await sessions.waitForTerminal(next.id);
+
+    assert.equal(sessions.get(exhausted.id)?.status, "quota_exhausted");
+    assert.equal(sessions.get(next.id)?.status, "completed");
+    assert.equal(sessions.get(next.id)?.result?.text, "runs after recovery failure");
+    assert.equal(runs, 2);
+  });
+
   it("skips hidden, manual-only, and non-pool accounts during automatic recovery", async () => {
     let activeAccountId = "account-a";
     const switches = [];

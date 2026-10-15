@@ -382,7 +382,8 @@ export class GatewaySessionManager {
   }
 
   #drain() {
-    if (this.#manualSwitchActive || this.#manualSwitchInFlight || (this.#exhaustionBatch && this.#exhaustionBatch.state !== "ready")) {
+    const recoveryBlocking = this.#exhaustionBatch && !["ready", "failed"].includes(this.#exhaustionBatch.state);
+    if (this.#manualSwitchActive || this.#manualSwitchInFlight || recoveryBlocking) {
       return;
     }
     while (this.#running < this.maxSessions) {
@@ -666,6 +667,9 @@ export class GatewaySessionManager {
   #registerQuotaExhaustion(session) {
     if (!session.accountId) {
       return;
+    }
+    if (this.#exhaustionBatch?.state === "failed") {
+      this.#exhaustionBatch = undefined;
     }
     if (!this.#exhaustionBatch) {
       const sessionIds = [...this.#sessions.values()]
