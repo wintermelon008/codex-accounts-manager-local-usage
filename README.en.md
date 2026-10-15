@@ -4,13 +4,13 @@
 
 A VS Code extension for managing multiple Codex accounts: add or import accounts, inspect quota, switch the active `auth.json`, and optionally use local usage analytics, experimental seamless switching, and local integrations.
 
-> This is the independent local build from this repository. This guide describes the `0.1.19-dev` development build and the `0.1.19-l7` local release build.
+> This is the independent local build from this repository. This guide describes the `0.1.21-dev` development build and the `0.1.21-l1` local release build.
 
 This build includes proxy, quota parsing, authenticated retry, ChatGPT desktop, and subscription-consistency fixes, together with the Dashboard, Mailbox, Gateway, and local usage features.
 
 ## Start in three minutes
 
-1. Install a `0.1.19-dev`/`0.1.19-l7` `.vsix` supplied by, or built from, this repository.
+1. Install a `0.1.21-dev`/`0.1.21-l1` `.vsix` supplied by, or built from, this repository.
 2. Run `Codex Accounts: Add Account via OAuth`, or `Codex Accounts: Import Current auth.json`.
 3. Run `Codex Accounts: Show Quota Summary` to refresh quota, switch accounts, and manage backups from the Dashboard.
 
@@ -25,7 +25,8 @@ This table applies only to local builds from this repository.
 | Ready after install    | Multi-account OAuth/import, quota cards, per-account import JSON copy, manual quota-countdown start, switching, details, backup/restore, status bar, and cross-window sync | Import an account. Each real Codex account card can copy Manager-compatible import JSON; the starter appears while at least one valid 5-hour or long-term primary quota window has not started.                                                                             |
 | Ready after install    | Local Codex token usage, six time categories, and multi-select Free/Plus/Pro filters                                                                                       | Local sessions and imported accounts make the relevant views available. The usage view reads metadata only, never conversation bodies.                                                                                                              |
 | Opt-in settings        | Advanced appearance (Command Center)                                                                                                                                        | Enable **Advanced appearance** in Dashboard Settings. It adds the Command Center overview and visual skin; disabling it restores the standard appearance while keeping account data and core actions equivalent. |
-| Opt-in settings        | Upstream Auto Switch, quota warnings, timed quota refresh, and ChatGPT/Codex desktop restart                                                                                | Enable warnings and timed refresh in the Dashboard; Upstream Auto Switch and the desktop restart policy remain VS Code settings. No automatic switch is enabled by default.                                                                          |
+| Opt-in settings        | Automatic quota countdown start, Upstream Auto Switch, quota warnings, timed quota refresh, and ChatGPT/Codex desktop restart                                      | Enable automatic countdown start, warnings, and timed refresh in Dashboard Settings; enabling automatic countdown start hides the Wakeup entry and pauses Wakeup tasks. Upstream Auto Switch and desktop restart remain VS Code settings. |
+| Opt-in settings        | Wakeup editor: scheduled tasks and one-time sending                                                                                                                        | When automatic quota countdown start is off, use the Dashboard clock or an account-card clock to configure schedules or send once. Requests consume a small amount of quota and never switch the active `auth.json`. |
 | One-time bundled setup | Experimental seamless switching and quota bands                                                                                                                            | On Linux/macOS, run the install command, reload once, then prepare at least two fresh accounts and configure their pool; quota-band scheduling is off by default and can only be enabled in config. Windows is not supported yet.                   |
 | Optional package       | Sub2API Gateway                                                                                                                                                            | Install the standalone Gateway VSIX; it registers the downstream as a saved manual-only virtual account whose card owns configuration, key storage, refresh, usage, and estimated price. Core Manager never imports provider-side accounts or keys. |
 
@@ -68,7 +69,7 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 ### Use the local build
 
-Obtain `codex-account-manager-<version>.vsix` from this repository (`0.1.19-dev` for development or `0.1.19-l7` for the current local release), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
+Obtain `codex-account-manager-<version>.vsix` from this repository (`0.1.21-dev` for development or `0.1.21-l1` for the current local release), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
 
 ```bash
 code --install-extension codex-account-manager-<version>.vsix --force

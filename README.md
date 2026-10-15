@@ -4,13 +4,13 @@
 
 面向 VS Code 的多 Codex 账号管理扩展：导入或 OAuth 添加账号、查看配额、切换当前 `auth.json`，并提供本机用量、实验性无感切号和可选的本地集成。
 
-> 这是本仓库的独立本地版本。本文说明的是 `0.1.19-dev` 开发构建与 `0.1.19-l7` 本地发布构建。
+> 这是本仓库的独立本地版本。本文说明的是 `0.1.21-dev` 开发构建与 `0.1.21-l1` 本地发布构建。
 
 本版本包含代理环境、状态栏配额控制、Business/Free 配额解析、认证请求重试、ChatGPT 桌面应用联动、订阅一致性修复，并保留 Dashboard、Mailbox、Gateway 和本机用量功能。
 
 ## 三分钟开始
 
-1. 安装本仓库提供或自行构建的 `0.1.19-dev`/`0.1.19-l7` `.vsix`。
+1. 安装本仓库提供或自行构建的 `0.1.21-dev`/`0.1.21-l1` `.vsix`。
 2. 从命令面板运行 `Codex Accounts: Add Account via OAuth`，或 `Codex Accounts: Import Current auth.json`。
 3. 运行 `Codex Accounts: Show Quota Summary`，在 Dashboard 中刷新配额、切换账号和管理备份。
 
@@ -25,7 +25,8 @@
 | 直接可用   | 多账号 OAuth/导入、配额卡片、单账号导入凭据复制、手动启动额度倒计时、隐藏账号到期自动查询、切换、详情、备份/恢复、状态栏、跨窗口同步 | 安装后导入账号即可使用；真实 Codex 账号可从卡片直接复制 Manager 可识别的导入 JSON；只要任一有效 5h/长期主额度窗口尚未启动，倒计时启动按钮就会显示。                 |
 | 直接可用   | 本机 Codex token 用量、六类时间范围、Free/Plus/Pro 多选筛选                                                    | 读取已缓存的本机元数据；首次使用或需要最新值时点击“刷新用量”，不读取会话正文。                                                                            |
 | 设置后启用 | 高级外观（Command Center）                                                                                     | 在 Dashboard 设置的“高级外观”中打开；开启后显示 Command Center 总览和增强视觉皮肤，关闭后恢复标准外观，账号数据与核心操作保持等价。                         |
-| 设置后启用 | 官方自动切号、低额度提醒、配额定时刷新、ChatGPT/Codex 桌面应用重启                                                  | 提醒和定时刷新在 Dashboard 设置中显式打开；官方自动切号和桌面应用重启策略保留为 VS Code 配置项；默认不会自动切号。                                                    |
+| 设置后启用 | 自动启动额度倒计时、官方自动切号、低额度提醒、配额定时刷新、ChatGPT/Codex 桌面应用重启                    | 自动启动额度倒计时、提醒和定时刷新在 Dashboard 设置中显式打开；开启自动倒计时后会隐藏唤醒入口并暂停唤醒任务；官方自动切号和桌面应用重启策略保留为 VS Code 配置项。 |
+| 设置后启用 | 唤醒界面：定时任务与单次发送                                                                                | 关闭自动启动额度倒计时后，可从 Dashboard 右上角时钟或账号卡片时钟配置定时任务，或在任务编辑器中单次发送；执行会消耗少量额度但不会切换当前 `auth.json`。 |
 | 一次性安装 | 实验性无感切号与额度分档                                                                                       | Linux/macOS 运行安装命令、按提示 reload 一次、准备至少两个新鲜账号并在 Dashboard 配置账号池；分档调度默认关闭，仅可在 config 层开启。Windows 目前不支持。 |
 | 可选包     | Sub2API Gateway                                                                                                | 单独安装 Gateway VSIX；它会把下游注册为已保存账号中的虚拟账号，配置、保存密钥和刷新动作都在账号卡片内。核心 Manager 没有该供应商的 SecretStorage 访问。   |
 
@@ -68,7 +69,7 @@
 
 ### 使用本地版本
 
-从本仓库获得 `codex-account-manager-<version>.vsix`（开发版使用 `0.1.19-dev`，本地发布版使用 `0.1.19-l7`），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
+从本仓库获得 `codex-account-manager-<version>.vsix`（开发版使用 `0.1.21-dev`，本地发布版使用 `0.1.21-l1`），然后在目标 VS Code 窗口执行 **Extensions: Install from VSIX…**，或运行：
 
 ```bash
 code --install-extension codex-account-manager-<version>.vsix --force

@@ -104,7 +104,7 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
   try {
     const now = Date.now();
     const filePath = getAideckCodexAccountFilePath(account.id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await ensurePrivateDirectory(path.dirname(filePath));
     const lease = await acquireMirrorLease(filePath);
     if (!lease) {
       return;
@@ -113,7 +113,7 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
       if (await hasAideckCodexAccountTombstone(account.id)) {
         return;
       }
-      const existing = (await readJsonFile(filePath)) ?? {};
+      const existing = (await readWritableMirrorJson(filePath)) ?? {};
       const existingTokens = getRecord(existing["tokens"]) ?? {};
       const existingQuota = getRecord(existing["quota"]);
       const existingQuotaError = getSharedQuotaError(existing["quota_error"]);
@@ -185,7 +185,7 @@ export async function mirrorAideckCurrentAccount(accountId: string): Promise<voi
 
   try {
     const currentPath = path.join(getAideckCodexRoot(), "current.json");
-    await fs.mkdir(path.dirname(currentPath), { recursive: true });
+    await ensurePrivateDirectory(path.dirname(currentPath));
     const lease = await acquireMirrorLease(currentPath);
     if (!lease) {
       return;
@@ -216,7 +216,7 @@ export async function removeAideckCodexAccount(accountId: string): Promise<void>
     }
     try {
       const tombstonePath = getAideckCodexTombstonePath(accountId);
-      await fs.mkdir(path.dirname(tombstonePath), { recursive: true });
+      await ensurePrivateDirectory(path.dirname(tombstonePath));
       await writeJsonFile(tombstonePath, {
         id: accountId,
         deleted_at: Date.now()
@@ -320,13 +320,13 @@ function getAideckDataRoot(): string {
 
 async function writeAideckCodexIndex(accountId: string, account: JsonRecord): Promise<void> {
   const indexPath = path.join(getAideckCodexRoot(), "accounts-index.json");
-  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await ensurePrivateDirectory(path.dirname(indexPath));
   const lease = await acquireMirrorLease(indexPath);
   if (!lease) {
     return;
   }
   try {
-    const existing = (await readJsonFile(indexPath)) ?? {};
+    const existing = (await readWritableMirrorJson(indexPath)) ?? {};
     const accounts: unknown[] = Array.isArray(existing["accounts"]) ? existing["accounts"].slice() : [];
     const summary = buildAideckIndexRecord(account);
     const nextAccounts = accounts.filter((item) => getRecord(item)?.["id"] !== accountId);
@@ -349,7 +349,7 @@ async function removeAideckCodexIndexRecord(accountId: string): Promise<void> {
     return;
   }
   try {
-    const existing = await readJsonFile(indexPath);
+    const existing = await readWritableMirrorJson(indexPath);
     if (!existing) {
       return;
     }
@@ -360,7 +360,7 @@ async function removeAideckCodexIndexRecord(accountId: string): Promise<void> {
       return;
     }
 
-    await fs.mkdir(path.dirname(indexPath), { recursive: true });
+    await ensurePrivateDirectory(path.dirname(indexPath));
     await writeJsonFile(indexPath, {
       ...existing,
       schema_version: readNumber(existing["schema_version"]) ?? 1,
@@ -623,15 +623,54 @@ async function readJsonFile(filePath: string): Promise<JsonRecord | undefined> {
   }
 }
 
-async function writeJsonFile(filePath: string, value: JsonRecord): Promise<void> {
-  const temporaryPath = `${filePath}.tmp.${process.pid}.${randomUUID()}`;
-  await fs.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+async function readWritableMirrorJson(filePath: string): Promise<JsonRecord | undefined> {
+  let content: string;
   try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+
+  const record = getRecord(JSON.parse(content));
+  if (!record || record["ciphertext"] !== undefined || record["algorithm"] !== undefined) {
+    throw new Error("Unsupported Aideck mirror format; refusing to overwrite it");
+  }
+  return record;
+}
+
+async function writeJsonFile(filePath: string, value: JsonRecord): Promise<void> {
+  await ensurePrivateDirectory(path.dirname(filePath));
+  const temporaryPath = `${filePath}.tmp.${process.pid}.${randomUUID()}`;
+  try {
+    const file = await fs.open(temporaryPath, "wx", 0o600);
+    try {
+      await file.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
     await fs.rename(temporaryPath, filePath);
+    if (process.platform !== "win32") {
+      await fs.chmod(filePath, 0o600);
+    }
   } catch (error) {
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+async function ensurePrivateDirectory(directory: string): Promise<void> {
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") {
+    await fs.chmod(directory, 0o700);
+  }
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
 async function readPathRevision(filePath: string): Promise<string> {

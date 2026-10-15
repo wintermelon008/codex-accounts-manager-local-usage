@@ -21,23 +21,6 @@ export function renderRefreshIcon() {
   );
 }
 
-export function renderQuotaCountdownStartIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <path d="M12 7.5v5l3 1.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <path
-        d="M4.4 4.8 6.8 2.9M19.6 4.8l-2.4-1.9"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.8"
-        stroke-linecap="round"
-      />
-      <path d="m10.2 16.2 4.1 2.4-4.1 2.4Z" fill="currentColor" />
-    </svg>
-  );
-}
-
 export function renderResyncProfileIcon() {
   return (
     <svg viewBox="0 0 1024 1024" aria-hidden="true">
@@ -82,6 +65,21 @@ export function renderRemoveIcon() {
       <path
         d="M313.412525 335.90303h44.127677V733.090909h-44.127677V335.90303z m176.523637 0h44.127676V733.090909H489.936162V335.90303z m176.523636 0h44.127677V733.090909h-44.127677V335.90303z"
         fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+export function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M15 5l4 4M4 20l5-1L20 8a2.83 2.83 0 0 0-4-4L5 15Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
       />
     </svg>
   );

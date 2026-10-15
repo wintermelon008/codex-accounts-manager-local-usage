@@ -28,6 +28,7 @@ import { clearDashboardAccountScope, setDashboardAccountScope } from "./accountS
 import type { AccountSharingService } from "../../sharing";
 import { getActiveManagerIntegrationHost } from "../../integrations";
 import { readDashboardSeamlessRuntime, type HotSwitchRuntimeStatusSource } from "./seamlessRuntimeStatus";
+import { getWakeupService } from "../workbench/wakeupRegistration";
 
 const DASHBOARD_VIEW_TYPE = "codexQuotaSummary";
 export const DASHBOARD_LOCAL_USAGE_MIN_REFRESH_DELAY_MS = 1_000;
@@ -69,6 +70,7 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
     accountTokenUsage,
     ...sharingArgument
   );
+  state.wakeup = await getWakeupService()?.snapshot();
   if (params.hotSwitchRuntime) {
     state.seamlessRuntime = await readDashboardSeamlessRuntime(params.hotSwitchRuntime);
   }

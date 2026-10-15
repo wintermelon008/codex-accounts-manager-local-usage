@@ -5,11 +5,13 @@ import type { CodexAccountGroup } from "../../src/core/types";
 import {
   DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS,
   DASHBOARD_ACCOUNTS_PAGE_SIZE,
+  type DashboardHostMessage,
   type DashboardAccountPageSize,
   type DashboardAccountPlanFilter,
   type DashboardSharingFilter,
   type DashboardSettingKey
 } from "../../src/domain/dashboard/types";
+import { getWakeupCopy } from "../../src/domain/wakeup/copy";
 import { AnnouncementCenter } from "./announcementCenter";
 import { ActionRetryBanner } from "./actionRetryBanner";
 import { AdvancedAppearanceSummary } from "./advancedAppearance";
@@ -65,6 +67,7 @@ import { SavedAccountCard } from "./savedAccountCard";
 import { LocalUsageSection } from "./localUsageSection";
 import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
+import { ClockIcon, WakeupModal } from "./wakeupModal";
 
 const ACCOUNT_GROUPS: readonly CodexAccountGroup[] = ["A", "B", "C"];
 const ACCOUNT_PLAN_FILTERS: readonly DashboardAccountPlanFilter[] = ["free", "plus", "pro"];
@@ -95,6 +98,9 @@ function App() {
   const [repairRuntimeOpen, setRepairRuntimeOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
   const [sharingAccountIds, setSharingAccountIds] = useState<string[]>([]);
+  const [wakeupOpen, setWakeupOpen] = useState(false);
+  const [wakeupAccountId, setWakeupAccountId] = useState<string>();
+  const [wakeupResult, setWakeupResult] = useState<Extract<DashboardHostMessage, { type: "dashboard:action-result" }>>();
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
   const [selectedHealthFilters, setSelectedHealthFilters] = useState<DashboardHealthFilter[]>([]);
   const [selectedSharingFilters, setSelectedSharingFilters] = useState<DashboardSharingFilter[]>([]);
@@ -153,8 +159,24 @@ function App() {
     importJsonFileReadError: snapshot?.copy.importJsonFileReadError ?? "Failed to read JSON file."
   });
   useDashboardHostSync({
-    handleHostMessage: modals.handleHostMessage,
-    handleEscape: () => modals.handleEscape(isActionPending("completeOAuthSession"))
+    handleHostMessage: (message) => {
+      modals.handleHostMessage(message);
+      if (
+        message.type === "dashboard:action-result" &&
+        ["saveWakeupTask", "removeWakeupTask", "toggleWakeupTask", "runWakeupTask", "sendQuotaCountdownOnce"].includes(
+          message.action
+        )
+      ) {
+        setWakeupResult(message);
+      }
+    },
+    handleEscape: () => {
+      if (wakeupOpen) {
+        setWakeupOpen(false);
+        return true;
+      }
+      return modals.handleEscape(isActionPending("completeOAuthSession"));
+    }
   });
   useEffect(() => {
     const preference = snapshot?.settings.dashboardTheme ?? "auto";
@@ -175,6 +197,15 @@ function App() {
       observer.disconnect();
     };
   }, [snapshot?.settings.dashboardTheme]);
+
+  useEffect(() => {
+    if (!snapshot?.settings.autoStartQuotaCountdownEnabled || !wakeupOpen) {
+      return;
+    }
+    setWakeupOpen(false);
+    setWakeupAccountId(undefined);
+    setWakeupResult(undefined);
+  }, [snapshot?.settings.autoStartQuotaCountdownEnabled, wakeupOpen]);
 
   useEffect(() => {
     if (!healthFilterOpen) {
@@ -570,6 +601,30 @@ function App() {
                 disabled={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
                 onClick={modals.openAddAccountModal}
               />
+              {!snapshot.settings.autoStartQuotaCountdownEnabled ? (
+                <button
+                  id="wakeupButton"
+                  class={`settings-btn action-btn icon-only wakeup-button ${snapshot.wakeup?.tasks.some((task) => task.enabled) ? "is-enabled" : ""}`}
+                  type="button"
+                  title={getWakeupCopy(snapshot.lang).title}
+                  aria-label={getWakeupCopy(snapshot.lang).title}
+                  onClick={() => {
+                    setWakeupAccountId(undefined);
+                    setWakeupResult(undefined);
+                    setWakeupOpen(true);
+                  }}
+                >
+                  <span class="button-face">
+                    <span class="button-icon">
+                      <ClockIcon />
+                    </span>
+                  </span>
+                  {snapshot.wakeup?.tasks.some((task) => task.enabled) ? <span class="wakeup-button-dot" /> : null}
+                  <span class="button-tip" aria-hidden="true">
+                    {getWakeupCopy(snapshot.lang).title}
+                  </span>
+                </button>
+              ) : null}
               {sharingEnabled ? (
                 <button
                   id="accountSharingButton"
@@ -1159,7 +1214,6 @@ function App() {
                   sharingEnabled={sharingEnabled}
                   accountNameCopyPending={isActionPending("copyText", account.id)}
                   accountNameCopySucceeded={modals.copyFeedbackKey === `account-name:${account.id}`}
-                  quotaCountdownStartPending={isActionPending("startQuotaCountdown", account.id)}
                   removePending={isActionPending("remove", account.id)}
                   poolTogglePending={isActionPending("toggleBalancePool", account.id)}
                   consumeResetCreditPending={isActionPending("consumeResetCredit", account.id)}
@@ -1168,6 +1222,11 @@ function App() {
                   )}
                   selected={selectedAccountIds.has(account.id)}
                   onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
+                  onConfigureWakeup={() => {
+                    setWakeupAccountId(account.id);
+                    setWakeupResult(undefined);
+                    setWakeupOpen(true);
+                  }}
                   onAction={sendAction}
                   onRequestShare={() => openSharingForAccounts([account.id])}
                 />
@@ -1276,6 +1335,26 @@ function App() {
           onRefresh={() => sendAction("refreshLocalUsage")}
         />
       </div>
+
+      {wakeupOpen && !snapshot.settings.autoStartQuotaCountdownEnabled ? (
+        <WakeupModal
+          key={wakeupAccountId ?? "all"}
+          accountId={wakeupAccountId}
+          lang={snapshot.lang}
+          wakeup={snapshot.wakeup}
+          accounts={snapshot.accounts}
+          privacyMode={state.privacyMode}
+          onClose={() => setWakeupOpen(false)}
+          sendAction={sendAction}
+          pending={state.pendingActions.some(
+            (request) =>
+              ["saveWakeupTask", "removeWakeupTask", "toggleWakeupTask", "sendQuotaCountdownOnce"].includes(
+                request.action
+              )
+          )}
+          result={wakeupResult}
+        />
+      ) : null}
 
       <SettingsOverlay
         open={state.settingsOpen}

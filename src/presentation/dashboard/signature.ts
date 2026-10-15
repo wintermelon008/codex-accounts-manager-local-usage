@@ -118,6 +118,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
   const integrationsSignature = JSON.stringify(state.integrations ?? []);
   const seamlessRuntimeSignature = JSON.stringify(state.seamlessRuntime ?? null);
   const sharingSignature = JSON.stringify(state.sharing ?? null);
+  const wakeupSignature = JSON.stringify(state.wakeup ?? null);
 
   return [
     state.lang,
@@ -172,6 +173,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     integrationsSignature,
     JSON.stringify(state.integrationSettings ?? []),
     seamlessRuntimeSignature,
-    sharingSignature
+    sharingSignature,
+    wakeupSignature
   ].join("||");
 }

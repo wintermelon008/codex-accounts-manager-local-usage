@@ -328,18 +328,17 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(savedCard).not.toContain("height: 100%");
   });
 
-  it("places a conditional quota countdown starter beside the manual refresh action", () => {
+  it("moves one-time quota countdown sending into the Wakeup editor", () => {
     const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
-    const refreshIndex = card.indexOf('onAction("refresh", account.id)');
-    const starterIndex = card.indexOf('onAction("startQuotaCountdown", account.id)');
+    const modal = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/wakeupModal.tsx"), "utf8");
+    const enableIndex = modal.indexOf("{copy.enableTask}");
+    const sendOnceIndex = modal.indexOf("{copy.sendOnce}");
 
-    expect(card).toContain("account.quotaCountdownStartAvailable");
-    expect(card).toContain("isQuotaCountdownWindowFresh");
-    expect(card).toContain("showQuotaCountdownStart");
-    expect(card).not.toContain("account.metrics.every");
-    expect(card).toContain("quotaCountdownStartPending");
-    expect(refreshIndex).toBeGreaterThan(-1);
-    expect(starterIndex).toBeGreaterThan(refreshIndex);
+    expect(card).not.toContain("startQuotaCountdown");
+    expect(card).not.toContain("quotaCountdownStartPending");
+    expect(modal).toContain('props.sendAction("sendQuotaCountdownOnce"');
+    expect(sendOnceIndex).toBeGreaterThan(-1);
+    expect(enableIndex).toBeGreaterThan(sendOnceIndex);
   });
 
   it("adds host-side Codex import JSON copy feedback to every real account card", () => {

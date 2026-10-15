@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-10-codex-accounts-0-1-19-l7-dashboard-operations-usage",
+      "id": "ann-2026-10-codex-accounts-0-1-21-l1-wakeup-security",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.19-l7",
-      "title": "Codex Accounts Manager 0.1.19-l7 — operations and local usage",
-      "summary": "Adds runtime diagnostics, safer integration visibility, and a vertical local Codex usage chart.",
-      "content": "This release improves Dashboard operations, optional integration safety, and local Codex usage visibility.\n1. Operations: adds a runtime status panel for protocol, route, active turns, usage attribution, and last-check state.\n2. Integration safety: hides or disables sharing and optional integration entry points when their services are unavailable or disabled.\n3. Local usage: replaces daily text rows with a vertical bar chart, compact labels for every supported range, and fast hover details for each bucket.\n4. Mailbox and Dashboard: improves Chinese labels, diagnostics, integration presentation, and regression coverage.",
+      "releaseVersion": "0.1.21-l1",
+      "title": "Codex Accounts Manager 0.1.21-l1 — wakeup tasks and hardening",
+      "summary": "Adds scheduled wakeup tasks, safer persistence, request cancellation, and upstream 0.1.21 packaging compatibility.",
+      "content": "This release ports the upstream Wakeup capability and hardens the local build.\n1. Wakeup: schedule daily, weekly, fixed-interval, quota-reset, and after-startup tasks for all accounts or individual accounts.\n2. Dashboard: configure, enable, disable, run, and inspect Wakeup tasks from the global clock or account cards without switching the active auth.json.\n3. Reliability: preserve caller cancellation, cover response-body reads with request timeouts, and use locked, atomic, permission-restricted private storage.\n4. Packaging: align with upstream 0.1.21 icon requirements and dependency updates.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -20,9 +20,9 @@
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.19-l7 — 运维与本机用量",
-          "summary": "新增 Runtime 状态诊断、更安全的集成入口和竖向本机 Codex 用量图表。",
-          "content": "本地版本改进 Dashboard 运维、可选集成安全性和本机用量展示。\n1. 运维状态：新增无感 Runtime 状态面板，展示协议、路由、活动会话、用量归因和最近检查时间。\n2. 集成安全：服务不可用或功能关闭时隐藏或停用共享与可选集成入口。\n3. 本机用量：每日文字行改为竖向柱状图，支持所有时间范围的紧凑标签，并在悬浮时快速显示时间段和用量。\n4. Mailbox 与 Dashboard：改进中文界面、诊断信息、集成展示和回归测试。"
+          "title": "Codex Accounts Manager 0.1.21-l1 — 定时唤醒与加固",
+          "summary": "新增定时唤醒任务、更加安全的持久化、请求取消和上游 0.1.21 打包兼容性。",
+          "content": "本地版本移植上游 Wakeup 功能，并加固扩展运行时。\n1. 定时唤醒：支持每日、每周、固定间隔、额度重置和启动后触发，可作用于全部账号或单个账号。\n2. Dashboard：可从全局时钟或账号卡片配置、启停、立即执行和查看唤醒任务，不会切换当前生效的 auth.json。\n3. 可靠性：保留调用方取消语义，让响应体读取受请求超时保护，并使用带文件锁、原子写入和受限权限的私有存储。\n4. 打包：对齐上游 0.1.21 的图标要求和依赖更新。"
         }
       }
     }

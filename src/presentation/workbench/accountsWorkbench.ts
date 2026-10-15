@@ -90,6 +90,7 @@ import {
   type QuotaCountdownRefreshScheduler,
   type SeamlessUsageLimitMonitor
 } from "./schedulerRegistration";
+import { registerWakeupScheduler } from "./wakeupRegistration";
 import { AccountSharingService } from "../../sharing";
 import { SessionHub, resolveSessionRegistryPath } from "../../sessions";
 import {
@@ -483,6 +484,20 @@ export class AccountsWorkbench {
           skewSeconds: TOKEN_REFRESH_SKEW_SECONDS
         })
       );
+    });
+    await measureStep("registerWakeupScheduler", async () => {
+      try {
+        await registerWakeupScheduler(this.context, this.repo, () => {
+          refreshers.refresh();
+          void refreshQuotaSummaryPanel();
+        });
+      } catch (error) {
+        console.warn(
+          `[codexAccounts] wakeup scheduler initialization failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
     });
     const localImportInbox = this.localImportInbox;
     if (localImportInbox) {

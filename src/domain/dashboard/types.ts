@@ -1,4 +1,5 @@
 import type { DashboardLanguage, DashboardLanguageOption } from "../../localization/languages";
+import type { WakeupSnapshot, WakeupTaskInput } from "../wakeup/types";
 import type {
   CodexAnnouncementState,
   CodexImportPreviewSummary,
@@ -734,6 +735,7 @@ export interface DashboardState {
   integrationSettings?: DashboardIntegrationSettingViewModel[];
   seamlessRuntime?: DashboardSeamlessRuntimeViewModel;
   sharing?: DashboardSharingViewModel;
+  wakeup?: WakeupSnapshot;
 }
 
 export interface DashboardIntegrationSettingViewModel {
@@ -744,6 +746,10 @@ export interface DashboardIntegrationSettingViewModel {
 }
 
 export type DashboardActionName =
+  | "saveWakeupTask"
+  | "removeWakeupTask"
+  | "toggleWakeupTask"
+  | "runWakeupTask"
   | "addAccount"
   | "importCurrent"
   | "refreshAll"
@@ -793,7 +799,7 @@ export type DashboardActionName =
   | "details"
   | "switch"
   | "refresh"
-  | "startQuotaCountdown"
+  | "sendQuotaCountdownOnce"
   | "remove"
   | "toggleStatusBar"
   | "getResetCredits"
@@ -806,6 +812,8 @@ export interface DashboardOAuthSessionDescriptor {
 }
 
 export interface DashboardActionPayload {
+  wakeupTask?: WakeupTaskInput;
+  wakeupTaskId?: string;
   accountIds?: string[];
   removeLinkedMailboxes?: boolean;
   jsonText?: string;

@@ -18,24 +18,51 @@ export async function fetchWithTimeout(
   timeoutLabel = "Request"
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const callerSignal =
+    init.signal ?? (typeof Request !== "undefined" && input instanceof Request ? input.signal : undefined);
+  callerSignal?.throwIfAborted();
+  const cancel = (): void => controller.abort(callerSignal?.reason);
+  callerSignal?.addEventListener("abort", cancel, { once: true });
+  let timedOut = false;
+  let phase = "headers";
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
 
   try {
-    return await fetchWithConfiguredProxy(input, {
+    const response = await fetchWithConfiguredProxy(input, {
       ...init,
       signal: controller.signal
     });
+    // Manager endpoints return finite JSON, text, or SSE bodies. Buffer the
+    // body here so the deadline also covers a response that stalls after its
+    // headers arrive; callers still receive a normal, single-use Response.
+    phase = "body";
+    const body = response.body ? await response.arrayBuffer() : null;
+    const buffered = new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    });
+    Object.defineProperties(buffered, {
+      url: { value: response.url },
+      redirected: { value: response.redirected },
+      type: { value: response.type }
+    });
+    return buffered;
   } catch (error) {
-    if (isAbortError(error)) {
+    if (timedOut) {
       throw new NetworkError(`${timeoutLabel} timed out after ${Math.round(timeoutMs / 1000)}s`, {
         code: ErrorCode.NETWORK_ERROR,
         cause: error,
-        context: { timeoutMs, timeoutLabel }
+        context: { timeoutMs, timeoutLabel, phase }
       });
     }
     throw error;
   } finally {
     clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", cancel);
   }
 }
 
@@ -56,10 +83,6 @@ export async function fetchWithConfiguredProxy(
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
   }
   return fetch(input, init);
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
 }
 
 export async function retryWithBackoff<T>(

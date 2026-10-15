@@ -127,6 +127,43 @@ describe("Codex proxy environment", () => {
       await close(proxyServer);
     }
   });
+
+  it("times out while consuming a response body", async () => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.write("partial");
+    });
+    await listen(server);
+    const address = server.address() as AddressInfo;
+
+    try {
+      await expect(fetchWithTimeout(`http://127.0.0.1:${address.port}`, {}, 25, "Body request")).rejects.toThrow(
+        "Body request timed out"
+      );
+    } finally {
+      await close(server);
+    }
+  });
+
+  it("preserves caller cancellation instead of reporting it as a timeout", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason ?? new Error("aborted")),
+            { once: true }
+          );
+        })
+    );
+    const controller = new AbortController();
+    const request = fetchWithTimeout("https://example.com", { signal: controller.signal }, 5_000);
+    const reason = new Error("caller cancelled");
+    controller.abort(reason);
+
+    await expect(request).rejects.toBe(reason);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
 
 function listen(server: http.Server): Promise<void> {

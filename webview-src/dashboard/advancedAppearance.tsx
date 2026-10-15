@@ -5,7 +5,6 @@ import type {
   DashboardState
 } from "../../src/domain/dashboard/types";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCountdown";
 import {
   getAccountHealthCategory,
   getDashboardHealthFilter,
@@ -18,7 +17,6 @@ import {
   CodeIcon,
   CopyIcon,
   renderDetailsIcon,
-  renderQuotaCountdownStartIcon,
   renderRefreshIcon,
   renderReauthorizeIcon,
   renderReloadIcon,
@@ -367,14 +365,6 @@ function AdvancedAccountFocus(props: {
       hasRecoverableRenewalWarning ||
       hasUsableRenewalWarning ||
       hasUnknownHealth);
-  const showQuotaCountdownStart =
-    account.quotaCountdownStartAvailable &&
-    account.metrics.some(
-      (metric) =>
-        metric.visible &&
-        (metric.key === "hourly" || metric.key === "weekly") &&
-        isQuotaCountdownWindowFresh(metric.key, metric.resetAt, props.now, metric.windowMinutes)
-    );
   const providerCard = virtual ? account.providerCard : undefined;
   const profileSelectionActions =
     providerCard?.actions?.filter((action) => action.id.startsWith("selectProfile:")) ?? [];
@@ -563,17 +553,6 @@ function AdvancedAccountFocus(props: {
             disabled={busy || Boolean(account.sharingState)}
             pending={props.isActionPending("copyAccountImportJson", account.id)}
             onClick={() => props.onAction("copyAccountImportJson", account.id)}
-          />
-        ) : null}
-        {!virtual && showQuotaCountdownStart ? (
-          <ActionButton
-            class="advanced-account-action"
-            icon={renderQuotaCountdownStartIcon()}
-            iconOnly
-            label={props.lang === "zh" ? "启动额度倒计时" : "Start quota countdown"}
-            disabled={busy}
-            pending={props.isActionPending("startQuotaCountdown", account.id)}
-            onClick={() => props.onAction("startQuotaCountdown", account.id)}
           />
         ) : null}
         {!virtual && account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (

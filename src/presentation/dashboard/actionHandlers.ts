@@ -30,10 +30,15 @@ import { buildCodexImportFile } from "../../codex/authFile";
 import type { HotSwitchRuntimeRepairResult } from "../../codex";
 import { clearStaleCodexSessionLocks } from "../../sessions";
 import type { AccountSharingService } from "../../sharing";
-import { getDashboardProxyAddress, getDashboardProxyAddresses } from "../../infrastructure/config/extensionSettings";
+import {
+  getDashboardProxyAddress,
+  getDashboardProxyAddresses,
+  isAutoStartQuotaCountdownEnabled
+} from "../../infrastructure/config/extensionSettings";
 import { initializeCodexProxyEnvironment } from "../../infrastructure/config/proxyEnvironment";
 import { testProxyCandidates, type ProxyProbeSummary } from "../../infrastructure/config/proxyHealth";
 import { handleDashboardSettingUpdate } from "./settings";
+import { getWakeupService } from "../workbench/wakeupRegistration";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -90,6 +95,37 @@ async function runDashboardAction(
   const translate = t(ctx.resolveLanguage());
 
   switch (action) {
+    case "saveWakeupTask":
+    case "removeWakeupTask":
+    case "toggleWakeupTask":
+    case "runWakeupTask": {
+      const wakeup = getWakeupService();
+      if (!wakeup) {
+        throw new Error("Wakeup scheduler is unavailable");
+      }
+      if (action === "saveWakeupTask") {
+        if (!payload?.wakeupTask) {
+          throw new Error("Wakeup task is required");
+        }
+        await wakeup.saveTask(payload.wakeupTask);
+      } else {
+        if (!payload?.wakeupTaskId) {
+          throw new Error("Wakeup task ID is required");
+        }
+        if (action === "removeWakeupTask") {
+          await wakeup.removeTask(payload.wakeupTaskId);
+        } else if (action === "toggleWakeupTask") {
+          if (typeof payload.enabled !== "boolean") {
+            throw new Error("Enabled state is required");
+          }
+          await wakeup.setTaskEnabled(payload.wakeupTaskId, payload.enabled);
+        } else {
+          await wakeup.runNow(payload.wakeupTaskId);
+        }
+      }
+      ctx.schedulePublishState();
+      return undefined;
+    }
     case "addAccount":
       await vscode.commands.executeCommand("codexAccounts.addAccount");
       return undefined;
@@ -395,19 +431,61 @@ async function runDashboardAction(
         await vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
       }
       return undefined;
-    case "startQuotaCountdown":
-      if (account) {
-        try {
-          const result = await startQuotaCountdownForAccount(ctx.repo, account.id);
-          ctx.schedulePublishState();
-          void vscode.window.showInformationMessage(resolveQuotaCountdownResultMessage(ctx.resolveLanguage(), result));
-        } catch (error) {
-          const message = toFailureMessage(error);
-          void vscode.window.showErrorMessage(resolveQuotaCountdownErrorMessage(ctx.resolveLanguage(), message));
-          throw error;
-        }
+    case "sendQuotaCountdownOnce": {
+      if (isAutoStartQuotaCountdownEnabled()) {
+        throw new Error(
+          ctx.resolveLanguage() === "zh"
+            ? "自动额度倒计时已开启，请由自动调度发送。"
+            : ctx.resolveLanguage() === "zh-hant"
+              ? "自動額度倒數已啟用，請由自動排程傳送。"
+              : "Automatic quota countdown is enabled; use the automatic scheduler."
+        );
       }
-      return undefined;
+      const accountIds = [
+        ...new Set(
+          (payload?.accountIds ?? (account ? [account.id] : [])).filter(
+            (accountId): accountId is string => typeof accountId === "string" && accountId.trim().length > 0
+          )
+        )
+      ];
+      if (!accountIds.length) {
+        throw new Error(
+          ctx.resolveLanguage() === "zh"
+            ? "请至少选择一个账号。"
+            : ctx.resolveLanguage() === "zh-hant"
+              ? "請至少選擇一個帳號。"
+              : "Select at least one account."
+        );
+      }
+      const failures: string[] = [];
+      const succeeded: string[] = [];
+      await runWithConcurrencyLimit(accountIds, CODEX_BATCH_REFRESH_CONCURRENCY, async (accountId) => {
+        const target = await ctx.repo.getAccount(accountId);
+        if (!target) {
+          failures.push(`${accountId}: account no longer exists`);
+          return;
+        }
+        try {
+          await startQuotaCountdownForAccount(ctx.repo, accountId);
+          succeeded.push(accountId);
+        } catch (error) {
+          failures.push(`${target.email || accountId}: ${toFailureMessage(error)}`);
+        }
+      });
+      ctx.schedulePublishState();
+      if (failures.length) {
+        const detail = failures.slice(0, 3).join("; ");
+        const suffix = failures.length > 3 ? `; +${failures.length - 3}` : "";
+        throw new Error(
+          ctx.resolveLanguage() === "zh"
+            ? `单次发送部分失败：${detail}${suffix}`
+            : ctx.resolveLanguage() === "zh-hant"
+              ? `單次傳送部分失敗：${detail}${suffix}`
+              : `One-time send partially failed: ${detail}${suffix}`
+        );
+      }
+      return { affectedAccountIds: succeeded };
+    }
     case "remove":
       if (account) {
         await vscode.commands.executeCommand("codexAccounts.removeAccount", account);
@@ -567,31 +645,6 @@ function scheduleRestartReload(context: vscode.ExtensionContext, errorMessage: s
       void vscode.window.showErrorMessage(errorMessage);
     }
   })();
-}
-
-function resolveQuotaCountdownResultMessage(
-  language: DashboardLanguage,
-  result: "started" | "already-started"
-): string {
-  if (language === "zh") {
-    return result === "started" ? "已发送短消息并刷新额度倒计时。" : "额度倒计时已经启动，无需重复发送。";
-  }
-  if (language === "zh-hant") {
-    return result === "started" ? "已傳送短訊息並重新整理額度倒數。" : "額度倒數已經啟動，無需重複傳送。";
-  }
-  return result === "started"
-    ? "A short message was sent and the quota countdown was refreshed."
-    : "The quota countdown is already running; no message was sent.";
-}
-
-function resolveQuotaCountdownErrorMessage(language: DashboardLanguage, message: string): string {
-  if (language === "zh") {
-    return `启动额度倒计时失败：${message}`;
-  }
-  if (language === "zh-hant") {
-    return `啟動額度倒數失敗：${message}`;
-  }
-  return `Failed to start the quota countdown: ${message}`;
 }
 
 function requireManagerIntegrationHost() {

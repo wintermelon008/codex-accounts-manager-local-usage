@@ -1366,6 +1366,61 @@ describe("AccountsRepository token persistence", () => {
     repo.dispose();
   });
 
+  it("uses private permissions for Aideck mirror directories and files", async () => {
+    const storageId = buildAccountStorageId("private@example.com", "acct_private", undefined);
+    await mirrorAideckCodexAccount(
+      {
+        id: storageId,
+        email: "private@example.com",
+        accountId: "acct_private",
+        isActive: false,
+        createdAt: 1,
+        updatedAt: 1
+      },
+      createTokens("acct_private", "private@example.com")
+    );
+
+    const root = path.join(process.env.AIDECK_DATA_DIR as string, "accounts", "codex");
+    const accountFile = path.join(root, "accounts", `${storageId}.json`);
+    const indexFile = path.join(root, "accounts-index.json");
+    expect((await fs.stat(root)).isDirectory()).toBe(true);
+    expect((await fs.stat(accountFile)).isFile()).toBe(true);
+    expect((await fs.stat(indexFile)).isFile()).toBe(true);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(root)).mode & 0o777).toBe(0o700);
+      expect((await fs.stat(accountFile)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(indexFile)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("does not overwrite an unsupported encrypted Aideck mirror", async () => {
+    const storageId = buildAccountStorageId("encrypted@example.com", "acct_encrypted", undefined);
+    const accountFile = path.join(
+      process.env.AIDECK_DATA_DIR as string,
+      "accounts",
+      "codex",
+      "accounts",
+      `${storageId}.json`
+    );
+    await fs.mkdir(path.dirname(accountFile), { recursive: true });
+    const protectedContents = JSON.stringify({ algorithm: "aes-gcm", ciphertext: "opaque" });
+    await fs.writeFile(accountFile, protectedContents, "utf8");
+
+    await mirrorAideckCodexAccount(
+      {
+        id: storageId,
+        email: "encrypted@example.com",
+        accountId: "acct_encrypted",
+        isActive: false,
+        createdAt: 1,
+        updatedAt: 1
+      },
+      createTokens("acct_encrypted", "encrypted@example.com")
+    );
+
+    await expect(fs.readFile(accountFile, "utf8")).resolves.toBe(protectedContents);
+  });
+
   it("preserves Aideck workspace metadata while replacing an older quota snapshot", async () => {
     const secrets = new Map<string, string>();
     const context = {

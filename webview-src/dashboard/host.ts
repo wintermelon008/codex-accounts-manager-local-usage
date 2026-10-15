@@ -41,6 +41,12 @@ let actionRequestSequence = 0;
 
 export function getActionTimeoutMs(action: DashboardActionName): number {
   switch (action) {
+    case "runWakeupTask":
+      return 300_000;
+    case "saveWakeupTask":
+    case "removeWakeupTask":
+    case "toggleWakeupTask":
+      return 30_000;
     case "refreshView":
       return 30_000;
     case "restartServices":
@@ -53,8 +59,8 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
       return 120_000;
     case "unlockCodexSessionLocks":
       return 30_000;
-    case "startQuotaCountdown":
-      return 90_000;
+    case "sendQuotaCountdownOnce":
+      return 300_000;
     case "details":
     case "reloadPrompt":
     case "reauthorize":

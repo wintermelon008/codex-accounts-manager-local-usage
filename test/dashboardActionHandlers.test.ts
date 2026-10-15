@@ -523,7 +523,7 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
-  it("starts one account quota countdown and republishes the card state", async () => {
+  it("sends a one-time quota countdown message for selected accounts", async () => {
     const schedulePublishState = vi.fn();
     const account = { id: "account-1", email: "dev@example.com" };
     const repo = {
@@ -543,9 +543,9 @@ describe("executeDashboardActionMessage", () => {
       },
       {
         type: "dashboard:action",
-        action: "startQuotaCountdown",
-        requestId: "req-start-countdown",
-        accountId: account.id
+        action: "sendQuotaCountdownOnce",
+        requestId: "req-send-countdown",
+        payload: { accountIds: [account.id] }
       }
     );
 

@@ -42,7 +42,6 @@ function renderCard(
     copyImportJsonSucceeded: false,
     accountNameCopyPending: false,
     accountNameCopySucceeded: false,
-    quotaCountdownStartPending: false,
     removePending: false,
     poolTogglePending: false,
     consumeResetCreditPending: false,

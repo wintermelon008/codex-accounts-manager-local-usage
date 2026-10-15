@@ -8,7 +8,6 @@ import type {
   DashboardSettings,
   DashboardState
 } from "../../src/domain/dashboard/types";
-import { isQuotaCountdownWindowFresh } from "../../src/domain/dashboard/quotaCountdown";
 import {
   getAccountHealthCategory,
   getDashboardHealthFilter,
@@ -22,7 +21,6 @@ import {
   CopyIcon,
   SuccessIcon,
   renderDetailsIcon,
-  renderQuotaCountdownStartIcon,
   renderRefreshIcon,
   renderReauthorizeIcon,
   renderReloadIcon,
@@ -34,6 +32,8 @@ import { ActionButton } from "./primitives";
 import { MetricRow, renderHealthPill } from "./accountMetricPrimitives";
 import { AccountDiagnosticPanel } from "./accountDiagnostics";
 import { estimateStandardApiCost } from "./localUsageInsights";
+import { ClockIcon } from "./wakeupModal";
+import { getWakeupCopy } from "../../src/domain/wakeup/copy";
 
 export function SavedAccountCard(props: {
   account: DashboardAccountViewModel;
@@ -54,13 +54,13 @@ export function SavedAccountCard(props: {
   sharingEnabled?: boolean;
   accountNameCopyPending: boolean;
   accountNameCopySucceeded: boolean;
-  quotaCountdownStartPending: boolean;
   removePending: boolean;
   poolTogglePending: boolean;
   consumeResetCreditPending: boolean;
   providerActionPending: boolean;
   selected: boolean;
   onToggleSelected: () => void;
+  onConfigureWakeup: () => void;
   onAction: (
     action:
       | "switch"
@@ -71,7 +71,6 @@ export function SavedAccountCard(props: {
       | "shareAccounts"
       | "returnSharedAccount"
       | "copyText"
-      | "startQuotaCountdown"
       | "remove"
       | "toggleBalancePool"
       | "consumeResetCredit"
@@ -159,16 +158,6 @@ export function SavedAccountCard(props: {
     .filter(Boolean)
     .join(" ");
   const visibleMetrics = virtual ? [] : account.metrics.filter((metric) => metric.visible);
-  const quotaCountdownStartLabel =
-    props.lang === "zh" ? "启动额度倒计时" : props.lang === "zh-hant" ? "啟動額度倒數" : "Start quota countdown";
-  const showQuotaCountdownStart =
-    account.quotaCountdownStartAvailable &&
-    account.metrics.some(
-      (metric) =>
-        metric.visible &&
-        (metric.key === "hourly" || metric.key === "weekly") &&
-        isQuotaCountdownWindowFresh(metric.key, metric.resetAt, now, metric.windowMinutes)
-    );
   const stopFlip = (event: Event): void => {
     event.stopPropagation();
   };
@@ -351,6 +340,15 @@ export function SavedAccountCard(props: {
               disabled={props.busy || account.isHidden}
               onClick={() => onAction("switch", account.id)}
             />
+            {!virtual && !settings.autoStartQuotaCountdownEnabled ? (
+              <ActionButton
+                icon={<ClockIcon />}
+                iconOnly
+                label={getWakeupCopy(props.lang).configureAccount}
+                disabled={props.busy}
+                onClick={props.onConfigureWakeup}
+              />
+            ) : null}
             {profileSelectionActions.length > 1 ? (
               <select
                 class="saved-provider-profile-select"
@@ -405,16 +403,6 @@ export function SavedAccountCard(props: {
                 pending={props.copyImportJsonPending}
                 disabled={props.busy || Boolean(account.sharingState)}
                 onClick={() => onAction("copyAccountImportJson", account.id)}
-              />
-            ) : null}
-            {!virtual && showQuotaCountdownStart ? (
-              <ActionButton
-                icon={renderQuotaCountdownStartIcon()}
-                iconOnly
-                label={quotaCountdownStartLabel}
-                pending={props.quotaCountdownStartPending}
-                disabled={props.busy}
-                onClick={() => onAction("startQuotaCountdown", account.id)}
               />
             ) : null}
             {!virtual && account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
