@@ -52,7 +52,7 @@
 
 也兼容 `邮箱----旧字段----client-id----refresh-token` 四段格式，但第二段不会被本地来源使用或保存。编辑已有 `tototo-outlook` 邮箱时，将来源切换为本地 Outlook 并留空凭据栏，会自动从已保存凭据迁移 client id 和 refresh token；其他来源切换仍需填写新格式。该来源不请求发送邮件权限，access token 不写入持久存储；refresh token 只保存在扩展宿主的受限私有凭据存储中。
 
-注册助手的手机号来源默认顺序为 `5SIM`、`Miaoic`、`Future`、`SMS688`、`LIYE`；注册卡片可按会话切换来源。LIYE 继续使用独立的接码卡密池；5SIM 使用单独保存的 API Token，Miaoic 使用网站页面显示的 Token，Future 使用 CDK 兑换后的 Session Token，SMS688 使用账户专属 API Key，这些凭据都不进入 LIYE Key 池。5SIM 面板通过账户资料显示余额/冻结余额/评分，并从公开价格接口加载 OpenAI 可选号区、运营商、库存、成功率和价格；地区列表默认按可用内部条目的最低价格递增，默认最高价格为 `0.1`，还可设置最低成功率筛选。面板将 API 的即时 `rate` 与 `rate1`、`rate3`、`rate24`、`rate72`、`rate168`、`rate720` 等窗口计算出的平均成功率分开显示；筛选使用平均成功率，低于 1% 或没有任何可用成功率数据的条目会自动剔除。Miaoic 对接 `http://miaoic.shop` 的 `/recv/open`、`/recv/state`、`/recv/switch` 和 `/recv/release`，Token 通过 `bj_user` Cookie 发送；该站点当前只有 HTTP，使用前请确认你信任其服务。Future 按[接口文档](https://sms.futurepixelai.com/docs)先兑换 CDK，再对接 `manual-sms` 租约接口；面板同时提供[购买 CDK](https://www.16688.com.cn/shop/AIAISHARE)入口。SMS688 对接账户 API 的手动接码接口：`POST /api/v1/manual-sms/leases` 获取异步租约，轮询 `GET /api/v1/manual-sms/leases/{job_id}` 读取号码和短信，并通过 `/change`、`/release` 执行用户明确的换号和停止。5SIM、Miaoic、Future、SMS688 和 LIYE 均允许在当前订单可换号期间重新取号；取号界面打开且有可换号订单时，按 `N` 可重新取号并在新号码返回后自动复制。价格同时显示美元原价和人民币估算；人民币按每天首次打开注册助手时保存的 USD/CNY 汇率并额外乘以 `1.029`（2.9% 手续费）计算。缓存只保留一个当天记录，下一天成功查询后覆盖。各平台凭据只保存在扩展宿主的私有存储中，面板和日志只显示脱敏值。
+注册助手的手机号来源默认顺序为 `5SIM`、`Miaoic`、`Future`、`SMS688`；注册卡片可按会话切换来源。5SIM 使用单独保存的 API Token，Miaoic 使用购买的 CDK 兑换后的内部账户标识，Future 使用 CDK 兑换后的 Session Token，SMS688 使用账户专属 API Key。5SIM 面板通过账户资料显示余额/冻结余额/评分，并从公开价格接口加载 OpenAI 可选号区、运营商、库存、成功率和价格；地区列表默认按可用内部条目的最低价格递增，默认最高价格为 `0.1`，还可设置最低成功率筛选。面板将 API 的即时 `rate` 与 `rate1`、`rate3`、`rate24`、`rate72`、`rate168`、`rate720` 等窗口计算出的平均成功率分开显示；筛选使用平均成功率，低于 1% 或没有任何可用成功率数据的条目会自动剔除。Miaoic 的[接码页](http://miaoic.shop/?tab=recv&page=1&size=20)需要先在[商店](https://www.16688.com.cn/shop/S301395)购买 CDK，扩展通过 `POST /me/redeem` 的 `codes` 表单字段兑换，并把生成的内部账户标识保存在私有存储中，再通过 `/recv/open`、`/recv/state`、`/recv/switch` 和 `/recv/release` 接码；该站点当前只有 HTTP，使用前请确认你信任其服务。Future 按[接口文档](https://sms.futurepixelai.com/docs)先兑换 CDK，再对接 `manual-sms` 租约接口；面板同时提供[购买 CDK](https://www.16688.com.cn/shop/AIAISHARE)入口。SMS688 对接账户 API 的手动接码接口：`POST /api/v1/manual-sms/leases` 获取异步租约，轮询 `GET /api/v1/manual-sms/leases/{job_id}` 读取号码和短信，并通过 `/change`、`/release` 执行用户明确的换号和停止。四个来源均允许在当前订单可换号期间重新取号；取号界面打开且有可换号订单时，按 `N` 可重新取号并在新号码返回后自动复制。价格同时显示美元原价和人民币估算；人民币按每天首次打开注册助手时保存的 USD/CNY 汇率并额外乘以 `1.029`（2.9% 手续费）计算。缓存只保留一个当天记录，下一天成功查询后覆盖。各平台凭据只保存在扩展宿主的私有存储中，面板和日志只显示脱敏值。
 
 ## 内置 boya 来源
 
@@ -96,13 +96,13 @@ user@example.com----https://ima2.52dfd.top/api/v1/mailboxes/user@example.com/cod
 
 provider 要求 HTTPS、固定接口路径、非空 `key`，并校验 URL 路径中的邮箱与导入地址一致，不限制查询主机。接口返回 `code` 为六位数字时转换为统一验证码消息；`code: "no_code"` 是正常的空结果，验证码监听会继续轮询。查询 URL 和 key 只存入 Mailbox 私有服务器秘密文件，不进入邮箱池公共元数据、Manager API 或日志。
 
-卸载本扩展不会删除 Manager 账号。当前版本使用全新的 `Mailbox` 扩展身份和存储命名空间，不从旧的 provider 专用扩展迁移数据；若需要清理旧扩展凭据，应在卸载前通过 VS Code 的扩展存储清理能力处理。本扩展没有自动续期或后台网络任务；注册助手每天首次打开时才会查询一次汇率。
+卸载本扩展不会删除 Manager 账号。当前版本使用全新的 `Mailbox` 扩展身份和存储命名空间，不从旧的 provider 专用扩展迁移数据；若需要清理旧扩展凭据，应在卸载前通过 VS Code 的扩展存储清理能力处理。本扩展不会在激活时主动查询邮件；支持续期的邮箱会按计划执行后台续期扫描，注册助手每天首次打开时才会查询一次汇率。
 
 5SIM 使用[当前 REST v1 接口](https://5sim.net/docs)：`/v1/user/profile` 查询余额，`/v1/guest/prices?product=openai` 查询可选号区，`/v1/user/buy/activation/{country}/{operator}/openai` 购买，`/v1/user/check/{id}` 轮询短信，`/v1/user/finish/{id}` 完成订单，`/v1/user/cancel/{id}` 取消订单。目录解析同时保留即时 `rate` 和由 `rate1`/`rate3`/`rate24`/`rate72`/`rate168`/`rate720` 窗口计算的平均值，并按平均值的 1% 门槛过滤。5SIM 没有独立换号接口，注册助手的“重新取号”会先取消旧订单再购买新订单，当前订单可持续执行；短信到达与取消并发时会优先保留已收到的验证码。
 
 SMS688 使用[账户 API 接入指南](https://cdk.sms688.cc/api-guide)中的 Manual SMS API：凭据为账户中心生成的 API Key，使用 `Authorization: Bearer <ACCOUNT_API_KEY>`；`GET /api/v1/manual-sms/me` 查询可用次数和活动租约，`POST /api/v1/manual-sms/leases` 获取号码，`GET /api/v1/manual-sms/leases/{job_id}` 轮询租约，`POST .../{job_id}/change` 换号，`POST .../{job_id}/release` 释放号码。创建、换号和释放请求各使用新的 `Idempotency-Key`，刷新或断线时只查询已有 `job_id`，不会重复创建租约。
 
-Miaoic 使用网站页面显示的 Token，通过 `Cookie: bj_user=<TOKEN>` 调用 `POST http://miaoic.shop/recv/open` 取号，轮询 `GET /recv/state` 读取手机号和验证码；用户明确点击时调用 `/recv/switch` 换号或 `/recv/release` 释放。该来源的 Token 单独保存在扩展宿主私有存储中，面板和日志只显示脱敏值。站点当前未提供 HTTPS，Token 会以明文 HTTP 请求发送，请仅在信任网络和服务时使用。
+Miaoic 使用[接码页](http://miaoic.shop/?tab=recv&page=1&size=20)和[CDK 商店](https://www.16688.com.cn/shop/S301395)。输入 CDK 后通过 `POST http://miaoic.shop/me/redeem` 的 `codes` 表单字段兑换到当前内部账户标识；兑换成功后，内部账户标识单独保存在扩展宿主私有存储中，不在面板或日志中显示。接码时通过 `Cookie: bj_user=<内部账户标识>` 调用 `/recv/open` 取号，轮询 `/recv/state` 读取手机号和验证码；用户明确点击时调用 `/recv/switch` 换号或 `/recv/release` 释放。站点当前未提供 HTTPS，账户标识会以明文 HTTP 请求发送，请仅在信任网络和服务时使用。
 
 ## 安装
 

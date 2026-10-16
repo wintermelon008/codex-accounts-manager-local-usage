@@ -69,33 +69,6 @@ class RegistrationEmailCodeWatcher {
     return promise;
   }
 
-  // 保留显式一次性查询原语；注册流程本身使用 start() 的持续 watcher。
-  queryOnce(email, options = {}) {
-    if (this.promise) {
-      return this.promise;
-    }
-
-    const controller = new AbortController();
-    this.controller = controller;
-    this.active = true;
-    this.state = createEmailCodeState({
-      phase: "searching",
-      running: true,
-      message: "正在查询一次最近 30 分钟内的邮箱验证码…"
-    });
-    this.publish();
-
-    const promise = (async () => {
-      try {
-        return await this.runOnce(email, controller.signal, options);
-      } finally {
-        this.finish(controller);
-      }
-    })();
-    this.promise = promise;
-    return promise;
-  }
-
   async refresh(email, options = {}) {
     this.refreshing = true;
     try {
@@ -196,59 +169,6 @@ class RegistrationEmailCodeWatcher {
       return this.finishState({
         phase: "expired",
         message: "最近 30 分钟查询窗口已结束，未找到邮箱验证码"
-      });
-    } catch (error) {
-      if (signal.aborted || error?.name === "AbortError") {
-        return this.snapshot();
-      }
-      return this.fail(safeError(error, "邮箱验证码查询失败"));
-    }
-  }
-
-  async runOnce(email, signal, { ignoreCode = "", ignoreReceivedAt = "" } = {}) {
-    const address = normalizeEmail(email);
-
-    try {
-      if (signal.aborted) return this.snapshot();
-      const mailbox = this.findMailbox(address);
-      if (!mailbox) {
-        return this.fail("未找到已导入的邮箱，请先在邮箱管理面板导入该邮箱");
-      }
-      this.setState({
-        mailboxId: mailbox.id,
-        providerId: mailbox.providerId,
-        message: "已匹配邮箱来源，正在自动查询最近 30 分钟内的验证码…",
-        error: ""
-      });
-
-      const result = await this.queryMailbox(mailbox.id, signal);
-      if (signal.aborted) return this.snapshot();
-      if (!result.ok) {
-        const message = safeError(result.error, "邮箱查询失败");
-        return this.finishState({
-          phase: "error",
-          error: message,
-          message: emailQueryFailureMessage(result.error, "本次邮箱查询失败，请点击“查询邮件”重试")
-        });
-      }
-
-      const latest = findLatestRecentEmailCode(result.messages, this.now(), this.windowMs);
-      const sameAsIgnored = latest && latest.code === String(ignoreCode || "").trim() &&
-        (!ignoreReceivedAt || latest.receivedAt === ignoreReceivedAt);
-      if (latest && !sameAsIgnored) {
-        return this.finishState({
-          phase: "received",
-          code: latest.code,
-          receivedAt: latest.receivedAt,
-          subject: latest.subject,
-          error: "",
-          message: "已找到最近 30 分钟内最新的邮箱验证码"
-        });
-      }
-      return this.finishState({
-        phase: "checked",
-        error: "",
-        message: "已完成一次查询，最近 30 分钟内暂无带有效收到时间的邮箱验证码"
       });
     } catch (error) {
       if (signal.aborted || error?.name === "AbortError") {

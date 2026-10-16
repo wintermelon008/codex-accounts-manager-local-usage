@@ -94,19 +94,14 @@ class RegistrationManager extends EventEmitter {
     return session.completeManualRegistration();
   }
 
-  async acquirePhoneNumber(sessionId, cardCode, options = {}) {
+  async acquirePhoneNumber(sessionId, credential, options = {}) {
     const session = this._get(sessionId);
-    return session.acquirePhoneNumber(cardCode, options);
+    return session.acquirePhoneNumber(credential, options);
   }
 
   async refreshPhoneInfo(sessionId, credential, options = {}) {
     const session = this._get(sessionId);
     return session.refreshPhoneInfo(credential, options);
-  }
-
-  async confirmPhoneNumber(sessionId) {
-    const session = this._get(sessionId);
-    return session.confirmPhoneNumber();
   }
 
   async replacePhoneNumber(sessionId) {

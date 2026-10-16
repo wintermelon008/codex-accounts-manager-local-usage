@@ -9,9 +9,7 @@
 // - 邮箱验证码同样必须由用户确认后提交；注册流程不会自动换号或自动点击最终授权。
 
 const crypto = require("node:crypto");
-const { chromium } = require("playwright");
 const { isDisplayLaunchError, prepareBrowserEnvironment } = require("./browser-mode.cjs");
-const { LIYEPhoneOrderSession } = require("./liye-phone-order.cjs");
 const { FiveSimPhoneOrderSession } = require("./fivesim-phone-order.cjs");
 const { Sms688PhoneOrderSession } = require("./sms688-phone-order.cjs");
 const { FuturePhoneOrderSession } = require("./future-phone-order.cjs");
@@ -344,6 +342,9 @@ class RegistrationSession {
   }
 
   async _launchBrowser(browserMode, launchEnv = process.env) {
+    // Keep Playwright out of OAuth and external-browser activation paths. It is
+    // only needed when the standalone registration fallback owns the browser.
+    const { chromium } = require("playwright");
     this.browserMode = browserMode;
     if (browserMode === "headless") {
       return chromium.launch({ headless: true });
@@ -685,7 +686,7 @@ class RegistrationSession {
     }
   }
 
-  async acquirePhoneNumber(credential, { sourceId = "liye", cardKeyId = "", cardMasked = "", country = "", operator = "any", product = "openai" } = {}) {
+  async acquirePhoneNumber(credential, { sourceId = "fivesim", country = "", operator = "any", product = "openai" } = {}) {
     if (this.phoneOrder?.state?.running) {
       throw new Error("当前会话已有取号任务正在运行");
     }
@@ -745,19 +746,7 @@ class RegistrationSession {
       this.onStateChange({ sessionId: this.id, phoneOrder });
       return phoneOrder;
     }
-    if (!(this.phoneOrder instanceof LIYEPhoneOrderSession)) {
-      await this.phoneOrder?.dispose?.();
-    }
-    this.phoneOrder = new LIYEPhoneOrderSession({
-      sourceId,
-      cardKeyId,
-      cardMasked,
-      onStateChange: (phoneOrder) => this.onStateChange({ sessionId: this.id, phoneOrder }),
-      onLog: (level, msg) => this.log(level, msg),
-    });
-    const phoneOrder = await this.phoneOrder.start(credential);
-    this.onStateChange({ sessionId: this.id, phoneOrder });
-    return phoneOrder;
+    throw new Error(`不支持的接码来源：${sourceId}`);
   }
 
   async refreshPhoneInfo(credential, { sourceId = "fivesim", country = "", operator = "any", product = "openai" } = {}) {
@@ -820,13 +809,6 @@ class RegistrationSession {
       });
     }
     const phoneOrder = await this.phoneOrder.refreshInfo(credential, { country, operator, product });
-    this.onStateChange({ sessionId: this.id, phoneOrder });
-    return phoneOrder;
-  }
-
-  async confirmPhoneNumber() {
-    if (!this.phoneOrder) throw new Error("请先开始取号");
-    const phoneOrder = await this.phoneOrder.confirmNumber();
     this.onStateChange({ sessionId: this.id, phoneOrder });
     return phoneOrder;
   }

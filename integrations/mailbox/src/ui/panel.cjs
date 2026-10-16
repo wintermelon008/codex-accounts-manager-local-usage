@@ -264,14 +264,6 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     .registration-phone-config .field { margin-top: 0; }
     .registration-phone-config textarea { min-height: 54px; height: 54px; resize: vertical; }
     .registration-phone-config button { margin-top: 6px; }
-    .registration-key-pool { margin-top: 8px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--vscode-editor-background) 55%, transparent); }
-    .registration-key-pool summary { cursor: pointer; color: var(--muted); font-size: 11px; user-select: none; }
-    .registration-key-pool[open] summary { margin-bottom: 7px; color: var(--text); }
-    .registration-key-pool-count { margin-left: 6px; color: var(--muted); }
-    .registration-key-pool-list { display: grid; gap: 5px; margin-top: 8px; }
-    .registration-key-pool-row { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: 11px; }
-    .registration-key-pool-row .key-mask { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--vscode-editor-font-family); }
-    .registration-key-pool-row button { padding: 3px 7px; font-size: 11px; }
     .registration-countdown { color: var(--muted); font-size: 11px; }
     .registration-phone-order-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
     .registration-phone-result { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--vscode-editor-background); }
@@ -440,11 +432,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationOnlyUnregisteredGpt = false;
       let registrationOnlyGptSevenDays = false;
       let registrationMaxRetries = 25;
-      let registrationPhoneKeyInputs = {};
       let registrationPhoneSourceSelections = {};
-      let registrationPhoneKeySelections = {};
       let registrationFiveSimTokenInputs = {};
-      let registrationMiaoicTokenInputs = {};
+      let registrationMiaoicCdkInputs = {};
       let registrationFutureTokenInputs = {};
       let registrationSms688TokenInputs = {};
       let registrationFiveSimSelections = {};
@@ -819,7 +809,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           }
           if (sourceId === "miaoic") {
             if (!state.registrationMiaoicToken?.configured) {
-              showNotice("请先保存 Miaoic Token", "warning");
+              showNotice("请先购买并兑换 Miaoic CDK", "warning");
               return;
             }
             send("registrationAcquirePhone", { sessionId, sourceId });
@@ -841,12 +831,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             send("registrationAcquirePhone", { sessionId, sourceId });
             return;
           }
-          const keyId = registrationPhoneKeySelections[sessionId] || document.getElementById("registrationPhoneKey-" + sessionId)?.value || "";
-          if (!sessionId || !keyId) {
-            showNotice("请先选择接码平台 Key", "warning");
-            return;
-          }
-          send("registrationAcquirePhone", { sessionId, sourceId, keyId });
+          showNotice("请选择有效的接码来源", "warning");
         }
         else if (action === "registration-save-fivesim-token") {
           const sessionId = target.dataset.sessionId || "";
@@ -862,19 +847,19 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         else if (action === "registration-clear-fivesim-token") {
           send("registrationClearFiveSimToken");
         }
-        else if (action === "registration-save-miaoic-token") {
+        else if (action === "registration-save-miaoic-cdk") {
           const sessionId = target.dataset.sessionId || "";
-          const input = document.getElementById("registrationMiaoicTokenInput-" + sessionId)?.value?.trim() || registrationMiaoicTokenInputs[sessionId] || "";
+          const input = document.getElementById("registrationMiaoicCdkInput-" + sessionId)?.value?.trim() || registrationMiaoicCdkInputs[sessionId] || "";
           if (!input) {
-            showNotice("请先粘贴 Miaoic Token", "warning");
+            showNotice("请先粘贴 Miaoic CDK", "warning");
             return;
           }
-          registrationMiaoicTokenInputs[sessionId] = "";
-          send("registrationSaveMiaoicToken", { token: input });
+          registrationMiaoicCdkInputs[sessionId] = "";
+          send("registrationSaveMiaoicCdk", { cdk: input });
           render();
         }
-        else if (action === "registration-clear-miaoic-token") {
-          send("registrationClearMiaoicToken");
+        else if (action === "registration-clear-miaoic-account") {
+          send("registrationClearMiaoicAccount");
         }
         else if (action === "registration-save-sms688-token") {
           const sessionId = target.dataset.sessionId || "";
@@ -944,11 +929,6 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           };
           render();
         }
-        else if (action === "registration-confirm-phone") {
-          const sessionId = target.dataset.sessionId;
-          if (!sessionId) return;
-          send("registrationConfirmPhone", { sessionId });
-        }
         else if (action === "registration-replace-phone") {
           const sessionId = target.dataset.sessionId;
           if (!sessionId) return;
@@ -958,21 +938,6 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const sessionId = target.dataset.sessionId;
           if (!sessionId) return;
           send("registrationCancelPhone", { sessionId });
-        }
-        else if (action === "registration-add-phone-key") {
-          const sessionId = target.dataset.sessionId || "";
-          const input = document.getElementById("registrationPhoneKeyInput-" + sessionId)?.value?.trim() || registrationPhoneKeyInputs[sessionId] || "";
-          if (!input) {
-            showNotice("请先粘贴至少一个接码平台 Key", "warning");
-            return;
-          }
-          registrationPhoneKeyInputs[sessionId] = "";
-          send("registrationAddPhoneKeys", { input });
-          render();
-        }
-        else if (action === "registration-remove-phone-key") {
-          const keyId = target.dataset.keyId || "";
-          if (keyId) send("registrationRemovePhoneKey", { keyId });
         }
         else if (action === "registration-request-new-phone") {
           const sessionId = target.dataset.sessionId;
@@ -1022,14 +987,6 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           if (sourceId === "future") requestRegistrationFutureRefresh(sessionId);
           if (sourceId === "sms688") requestRegistrationSms688Refresh(sessionId);
         }
-        if (target.id.startsWith("registrationPhoneKey-")) {
-          const sessionId = target.id.slice("registrationPhoneKey-".length);
-          registrationPhoneKeySelections[sessionId] = target.value || "";
-          // The acquire button is initially disabled when no key is selected.
-          // Enable it immediately after a valid available key is chosen instead
-          // of waiting for a state event to re-render the whole panel.
-          updateRegistrationAcquireButton(sessionId);
-        }
         if (target.id.startsWith("registrationFiveSimPriceMax-")) {
           const sessionId = target.id.slice("registrationFiveSimPriceMax-".length);
           registrationFiveSimFilters[sessionId] = { ...(registrationFiveSimFilters[sessionId] || {}), priceMax: target.value || "" };
@@ -1063,14 +1020,11 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           }
           if (previousMailboxId && !selectedRegistrationMailboxId) render();
         }
-        if (event.target.id.startsWith("registrationPhoneKeyInput-")) {
-          registrationPhoneKeyInputs[event.target.id.slice("registrationPhoneKeyInput-".length)] = event.target.value || "";
-        }
         if (event.target.id.startsWith("registrationFiveSimTokenInput-")) {
           registrationFiveSimTokenInputs[event.target.id.slice("registrationFiveSimTokenInput-".length)] = event.target.value || "";
         }
-        if (event.target.id.startsWith("registrationMiaoicTokenInput-")) {
-          registrationMiaoicTokenInputs[event.target.id.slice("registrationMiaoicTokenInput-".length)] = event.target.value || "";
+        if (event.target.id.startsWith("registrationMiaoicCdkInput-")) {
+          registrationMiaoicCdkInputs[event.target.id.slice("registrationMiaoicCdkInput-".length)] = event.target.value || "";
         }
         if (event.target.id.startsWith("registrationFutureTokenInput-")) {
           registrationFutureTokenInputs[event.target.id.slice("registrationFutureTokenInput-".length)] = event.target.value || "";
@@ -1586,8 +1540,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             { id: "fivesim", displayName: "5SIM" },
             { id: "miaoic", displayName: "Miaoic" },
             { id: "future", displayName: "Future" },
-            { id: "sms688", displayName: "SMS688" },
-            { id: "liye", displayName: "LIYE" }
+            { id: "sms688", displayName: "SMS688" }
           ];
         const defaultSourceId = sources.some((source) => source.id === state.registrationDefaultPhoneSource)
           ? state.registrationDefaultPhoneSource
@@ -1595,7 +1548,6 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sourceOptions = sources.map((source) =>
           '<option value="' + esc(source.id) + '" ' + (source.id === defaultSourceId ? "selected" : "") + '>' + esc(source.displayName || source.id) + '</option>'
         ).join("");
-        const keyPool = state.registrationKeyPool || {};
         const statuses = sources.map((source) => {
           let configured = false;
           let detail = "未配置";
@@ -1611,11 +1563,6 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           } else if (source.id === "sms688") {
             configured = state.registrationSms688Token?.configured === true;
             detail = configured ? "API Key 已保存" : "未保存 API Key";
-          } else if (source.id === "liye") {
-            const available = Number(keyPool.available || 0);
-            const inUse = Number(keyPool.inUse || 0);
-            configured = available > 0 || inUse > 0;
-            detail = configured ? available + " 个可用 · " + inUse + " 个使用中" : "Key 池为空";
           }
           return '<div class="registration-channel-center-item"><strong>' + esc(source.displayName || source.id) + '</strong><span><span class="tag' + (configured ? ' success' : '') + '">' + (configured ? '已配置' : '待配置') + '</span><small> ' + esc(detail) + '</small></span></div>';
         }).join("");
@@ -1987,10 +1934,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           ? state.phoneSources
           : [
             { id: "fivesim", displayName: "5SIM", websiteUrl: "https://5sim.net", credentialType: "api-token" },
-            { id: "miaoic", displayName: "Miaoic", websiteUrl: "http://miaoic.shop", credentialType: "token" },
+            { id: "miaoic", displayName: "Miaoic", websiteUrl: "http://miaoic.shop/?tab=recv&page=1&size=20", purchaseUrl: "https://www.16688.com.cn/shop/S301395", credentialType: "cdk" },
             { id: "future", displayName: "Future", websiteUrl: "https://sms.futurepixelai.com/docs", purchaseUrl: "https://www.16688.com.cn/shop/AIAISHARE", credentialType: "cdk" },
-            { id: "sms688", displayName: "SMS688", websiteUrl: "https://cdk.sms688.cc", credentialType: "api-key" },
-            { id: "liye", displayName: "LIYE", websiteUrl: "https://liye.5x20.cn", credentialType: "key" }
+            { id: "sms688", displayName: "SMS688", websiteUrl: "https://cdk.sms688.cc", credentialType: "api-key" }
           ];
         const storedSourceId = registrationPhoneSourceSelections[session.id] || orderState.card?.source || state.registrationDefaultPhoneSource || sources[0].id;
         const source = sources.find((item) => item.id === storedSourceId) || sources[0];
@@ -2003,36 +1949,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const refreshingMiaoic = isMiaoic && phase === "logging_in";
         const refreshingFuture = isFuture && phase === "logging_in";
         const refreshingSms688 = isSms688 && phase === "logging_in";
-        const keyPool = state.registrationKeyPool || { keys: [], available: 0, inUse: 0, count: 0 };
-        const keys = Array.isArray(keyPool.keys) ? keyPool.keys : [];
-        const availableKeys = keys.filter((key) => key.status === "available");
-        const storedKeyId = registrationPhoneKeySelections[session.id] || orderState.card?.keyId || "";
-        const storedKey = keys.find((key) => key.id === storedKeyId);
-        const selectedKeyId = active && storedKey?.status === "in_use"
-          ? storedKey.id
-          : availableKeys.some((key) => key.id === storedKeyId)
-            ? storedKeyId
-            : availableKeys[0]?.id || "";
-        if (selectedKeyId) registrationPhoneKeySelections[session.id] = selectedKeyId;
-        else delete registrationPhoneKeySelections[session.id];
-        const visibleKeys = [
-          ...(selectedKeyId ? keys.filter((key) => key.id === selectedKeyId) : []),
-          ...availableKeys.filter((key) => key.id !== selectedKeyId)
-        ].slice(0, 5);
         const sourceOptions = sources.map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === source.id ? "selected" : "") + '>' + esc(item.displayName || item.id) + '</option>').join("");
-        const selectedKey = keys.find((key) => key.id === selectedKeyId);
-        const selectedKeyAvailable = selectedKey?.status === "available";
-        const keyOptions = visibleKeys.length
-          ? visibleKeys.map((key) => '<option value="' + esc(key.id) + '" ' + (key.id === selectedKeyId ? "selected" : "") + (key.status === "in_use" ? " disabled" : "") + '>' + esc(key.masked || key.id) + (key.status === "in_use" ? "（使用中）" : "") + '</option>').join("")
-          : '<option value="">暂无 Key，请先添加</option>';
-        const hiddenAvailableKeyCount = Math.max(0, availableKeys.length - visibleKeys.filter((key) => key.status === "available").length);
-        const keyVisibilityNote = hiddenAvailableKeyCount > 0
-          ? '<div class="field-note">可用 Key 共 ' + availableKeys.length + ' 个，选择器仅显示前 5 个；其余仍保留在 Key 池中。</div>'
-          : "";
         const configDisabled = active || terminal ? " disabled" : "";
-        const keyInput = registrationPhoneKeyInputs[session.id] || "";
         const miaoicToken = state.registrationMiaoicToken || { configured: false, masked: "" };
-        const miaoicTokenInput = registrationMiaoicTokenInputs[session.id] || "";
+        const miaoicCdkInput = registrationMiaoicCdkInputs[session.id] || "";
         const futureToken = state.registrationFutureToken || { configured: false, masked: "" };
         const futureTokenInput = registrationFutureTokenInputs[session.id] || "";
         const futureAccount = orderState.card || {};
@@ -2139,13 +2059,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const fiveSimExchangeRate = state.registrationFiveSimExchangeRate || {};
         const fiveSimTokenInput = registrationFiveSimTokenInputs[session.id] || "";
         const fiveSimAccount = orderState.card || {};
-        const keyPoolDetails = '<details class="registration-key-pool"><summary>管理接码 Key 池 <span class="registration-key-pool-count">' + Number(keyPool.available || 0) + ' 个可用 · ' + Number(keyPool.inUse || 0) + ' 个使用中</span></summary>' +
-          (!active && !terminal ? '<div class="registration-session-input"><label for="registrationPhoneKeyInput-' + esc(session.id) + '">加入 Key 池（可多行粘贴）</label><textarea id="registrationPhoneKeyInput-' + esc(session.id) + '" rows="2" autocomplete="off" spellcheck="false" placeholder="每行一个接码平台 Key">' + esc(keyInput) + '</textarea><button type="button" class="secondary small" data-action="registration-add-phone-key" data-session-id="' + esc(session.id) + '">加入 Key 池</button></div>' : '') +
-          (keys.length ? '<div class="registration-key-pool-list" aria-label="接码平台 Key 池">' + keys.map((key) => '<div class="registration-key-pool-row"><span class="key-mask" title="仅显示脱敏值">' + esc(key.masked || key.id) + '</span><span>' + esc(key.status === "in_use" ? "使用中" : "可用") + '</span><button type="button" class="secondary small" data-action="registration-remove-phone-key" data-key-id="' + esc(key.id) + '"' + (key.status === "in_use" ? " disabled" : "") + '>删除</button></div>').join("") + '</div>' : '<div class="field-note">暂未保存 Key。展开后可粘贴添加。</div>') +
-          '</details>';
         const fiveSimCatalog = '<div class="registration-fivesim-account">' +
           '<div class="registration-fivesim-token-row"><input id="registrationFiveSimTokenInput-' + esc(session.id) + '" type="password" value="' + esc(fiveSimTokenInput) + '" placeholder="粘贴 5SIM API Token" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-fivesim-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>保存 Token</button><button type="button" class="secondary small danger" data-action="registration-clear-fivesim-token"' + (fiveSimToken.configured && !active ? "" : " disabled") + '>清除</button></div>' +
-          '<div class="field-note">' + (fiveSimToken.configured ? '当前 Token：' + esc(fiveSimToken.masked || "已配置") : '尚未配置 5SIM API Token') + '。Token 单独保存，不进入 LIYE Key 池。</div>' +
+          '<div class="field-note">' + (fiveSimToken.configured ? '当前 Token：' + esc(fiveSimToken.masked || "已配置") : '尚未配置 5SIM API Token') + '。Token 单独保存。</div>' +
           '<div class="field-note">' + esc(formatFiveSimExchangeRateNote(fiveSimExchangeRate)) + '</div>' +
           '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>当前余额</label><strong>' + esc(formatFiveSimPrice(fiveSimAccount.balance)) + '</strong></div><div class="registration-fivesim-account-item"><label>冻结余额</label><strong>' + esc(formatFiveSimPrice(fiveSimAccount.frozenBalance)) + '</strong></div><div class="registration-fivesim-account-item"><label>账号评分</label><strong>' + esc(Number.isFinite(Number(fiveSimAccount.rating)) ? String(fiveSimAccount.rating) : "平台未提供") + '</strong></div></div>' +
           '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-fivesim" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingFiveSim || !fiveSimToken.configured ? " disabled" : "") + '>刷新余额与地区</button>' + (fiveSimAccount.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(fiveSimAccount.updatedAt)) + '</span>' : '') + '</div>' +
@@ -2160,40 +2076,38 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             ? Number(miaoicAccount.balance)
             : null;
         const miaoicCatalog = '<div class="registration-fivesim-account">' +
-          '<div class="registration-fivesim-token-row"><input id="registrationMiaoicTokenInput-' + esc(session.id) + '" type="password" value="' + esc(miaoicTokenInput) + '" placeholder="粘贴 Miaoic Token" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-miaoic-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>保存 Token</button><button type="button" class="secondary small danger" data-action="registration-clear-miaoic-token"' + (miaoicToken.configured && !active ? "" : " disabled") + '>清除</button></div>' +
-          '<div class="field-note">' + (miaoicToken.configured ? '当前 Token：' + esc(miaoicToken.masked || "已配置") : '尚未配置 Miaoic Token') + '。Token 单独保存，不进入 LIYE Key 池。</div>' +
+          '<div class="registration-fivesim-token-row"><input id="registrationMiaoicCdkInput-' + esc(session.id) + '" type="password" value="' + esc(miaoicCdkInput) + '" placeholder="粘贴 Miaoic CDK" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-miaoic-cdk" data-session-id="' + esc(session.id) + '"' + configDisabled + '>兑换并保存</button><button type="button" class="secondary small danger" data-action="registration-clear-miaoic-account"' + (miaoicToken.configured && !active ? "" : " disabled") + '>清除账户</button></div>' +
+          '<div class="field-note">' + (miaoicToken.configured ? 'CDK 已兑换，账户已保存' : '尚未兑换 Miaoic CDK') + '。内部账户标识不会显示。</div>' +
           '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>可用次数</label><strong>' + esc(formatSms688Uses(miaoicAvailableUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>接口</label><strong>/recv/*</strong></div><div class="registration-fivesim-account-item"><label>传输</label><strong>HTTP</strong></div></div>' +
           '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-miaoic" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingMiaoic || !miaoicToken.configured ? " disabled" : "") + '>刷新余额</button>' + (miaoicAccount.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(miaoicAccount.updatedAt)) + '</span>' : '') + '</div>' +
-          '<div class="field-note">Miaoic 使用页面显示的 Token，通过 HTTP Cookie 调用 /recv/open、/recv/state、/recv/switch 和 /recv/release；点击开始取号后自动轮询号码和短信，换号/取消仍需你点击。</div>' +
+          '<div class="field-note">购买 Miaoic CDK 后点击“兑换并保存”；接码时使用内部账户标识调用 /recv/open、/recv/state、/recv/switch 和 /recv/release。点击开始取号后自动轮询号码和短信，换号/取消仍需你点击。</div>' +
         '</div>';
         const futureCatalog = '<div class="registration-fivesim-account">' +
           '<div class="registration-fivesim-token-row"><input id="registrationFutureTokenInput-' + esc(session.id) + '" type="password" value="' + esc(futureTokenInput) + '" placeholder="粘贴 Future CDK" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-future-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>兑换并保存</button><button type="button" class="secondary small danger" data-action="registration-clear-future-token"' + (futureToken.configured && !active ? "" : " disabled") + '>清除</button></div>' +
-          '<div class="field-note">' + (futureToken.configured ? '当前 Session Token：' + esc(futureToken.masked || "已配置") : '尚未配置 Future Session Token') + '。输入 CDK 后会先兑换 Session Token，Token 单独保存，不进入 LIYE Key 池。</div>' +
+          '<div class="field-note">' + (futureToken.configured ? '当前 Session Token：' + esc(futureToken.masked || "已配置") : '尚未配置 Future Session Token') + '。输入 CDK 后会先兑换 Session Token，Token 单独保存。</div>' +
           '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>可用次数</label><strong>' + esc(formatSms688Uses(futureAvailableUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>剩余次数</label><strong>' + esc(formatSms688Uses(futureAccount.remainingUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>接口</label><strong>manual-sms</strong></div></div>' +
           '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-future" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingFuture || !futureToken.configured ? " disabled" : "") + '>刷新余额</button>' + (futureAccount.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(futureAccount.updatedAt)) + '</span>' : '') + '</div>' +
           '<div class="field-note">Future 使用文档中的 CDK 兑换 Session Token，再调用 manual-sms 接口；点击开始取号后自动轮询号码和短信，换号/取消仍需你点击。</div>' +
         '</div>';
         const sms688Catalog = '<div class="registration-fivesim-account">' +
           '<div class="registration-fivesim-token-row"><input id="registrationSms688TokenInput-' + esc(session.id) + '" type="password" value="' + esc(sms688TokenInput) + '" placeholder="粘贴 SMS688 账户 API Key" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-sms688-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>保存 Key</button><button type="button" class="secondary small danger" data-action="registration-clear-sms688-token"' + (sms688Token.configured && !active ? "" : " disabled") + '>清除</button></div>' +
-          '<div class="field-note">' + (sms688Token.configured ? '当前 Key：' + esc(sms688Token.masked || "已配置") : '尚未配置 SMS688 API Key') + '。Key 单独保存，不进入 LIYE Key 池。</div>' +
+          '<div class="field-note">' + (sms688Token.configured ? '当前 Key：' + esc(sms688Token.masked || "已配置") : '尚未配置 SMS688 API Key') + '。Key 单独保存。</div>' +
           '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>可用次数</label><strong>' + esc(formatSms688Uses(sms688AvailableUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>剩余次数</label><strong>' + esc(formatSms688Uses(sms688Account.remainingUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>接口</label><strong>manual-sms</strong></div></div>' +
           '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-sms688" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingSms688 || !sms688Token.configured ? " disabled" : "") + '>刷新余额</button>' + (sms688Account.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(sms688Account.updatedAt)) + '</span>' : '') + '</div>' +
           '<div class="field-note">SMS688 使用账户 API Key 调用手动接码接口；点击开始取号后会自动轮询号码和短信，换号/取消仍需你点击。</div>' +
         '</div>';
         const sourcePanel = (sourceId, content, hidden) => '<div data-registration-phone-source-panel="' + sourceId + '"' + (hidden ? ' hidden' : '') + '>' + content + '</div>';
-        const liyeKeyField = '<div class="field"><label for="registrationPhoneKey-' + esc(session.id) + '">选择 Key（SecretStorage）</label><select id="registrationPhoneKey-' + esc(session.id) + '"' + configDisabled + '><option value="">请选择 Key</option>' + keyOptions + '</select>' + keyVisibilityNote + '</div>';
         const fiveSimServiceField = '<div class="field"><label>服务</label><input value="OpenAI/ChatGPT（openai）" disabled></div>';
         const miaoicServiceField = '<div class="field"><label>服务</label><input value="Manual SMS（/recv/*）" disabled></div>';
         const futureServiceField = '<div class="field"><label>服务</label><input value="Manual SMS（manual-sms）" disabled></div>';
         const sms688ServiceField = '<div class="field"><label>服务</label><input value="Manual SMS（manual-sms）" disabled></div>';
         const acquireHtml = '<div class="registration-phone-source-root" data-registration-phone-source-root="' + esc(session.id) + '">' +
           '<div class="registration-phone-config"><div class="field"><label for="registrationPhoneSource-' + esc(session.id) + '">接码来源</label><select id="registrationPhoneSource-' + esc(session.id) + '"' + configDisabled + '>' + sourceOptions + '</select></div>' +
-          sourcePanel("fivesim", fiveSimServiceField, !isFiveSim) + sourcePanel("miaoic", miaoicServiceField, !isMiaoic) + sourcePanel("future", futureServiceField, !isFuture) + sourcePanel("sms688", sms688ServiceField, !isSms688) + sourcePanel("liye", liyeKeyField, isFiveSim || isMiaoic || isFuture || isSms688) + '</div>' +
+          sourcePanel("fivesim", fiveSimServiceField, !isFiveSim) + sourcePanel("miaoic", miaoicServiceField, !isMiaoic) + sourcePanel("future", futureServiceField, !isFuture) + sourcePanel("sms688", sms688ServiceField, !isSms688) + '</div>' +
           sourcePanel("fivesim", fiveSimCatalog, !isFiveSim) +
           sourcePanel("miaoic", miaoicCatalog, !isMiaoic) +
           sourcePanel("future", futureCatalog, !isFuture) +
           sourcePanel("sms688", sms688Catalog, !isSms688) +
-          sourcePanel("liye", keyPoolDetails + (!active && !selectedKeyAvailable ? '<div class="field-note">请选择一个可用 Key，再开始取号。</div>' : ""), isFiveSim || isMiaoic || isFuture || isSms688) +
         '</div>';
         const phoneButton = isCompletePhoneNumber(phone)
           ? '<button type="button" class="secondary small" data-action="registration-copy-phone" data-session-id="' + esc(session.id) + '" data-value="' + esc(phone) + '">复制手机号</button>'
@@ -2238,7 +2152,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             ? Boolean(futureToken.configured && (futureAvailableUses === null || futureAvailableUses > 0))
             : isSms688
             ? Boolean(sms688Token.configured && (sms688AvailableUses === null || sms688AvailableUses > 0))
-            : selectedKeyAvailable;
+            : false;
         const actionHtml = '<div class="registration-phone-order-actions">' +
           '<button type="button" class="secondary" data-action="registration-replace-phone" data-session-id="' + esc(session.id) + '"' + (canReplace ? "" : " disabled") + '>重新取号</button>' +
           '<button type="button" class="secondary danger" data-action="registration-cancel-phone" data-session-id="' + esc(session.id) + '"' + (canCancel ? "" : " disabled") + '>取消取号</button>' +
@@ -2246,7 +2160,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           '</div>';
         const phoneNote = registrationOnly
           ? ""
-          : (isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : isMiaoic ? "Miaoic 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。该站点当前使用 HTTP，请仅在信任其服务时保存 Token。" : isFuture ? "Future 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : isSms688 ? "SMS688 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "");
+          : (isFiveSim ? "5SIM 只在点击开始取号、重新取号或取消取号后访问；拿到号码后会自动读取并完成短信订单，手机号和验证码不会自动提交到注册页面。" : isMiaoic ? "Miaoic 先购买并兑换 CDK，接码时调用 /recv/*；手机号和验证码不会自动提交到注册页面。该站点当前使用 HTTP，请仅在信任其服务时使用。" : isFuture ? "Future 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : isSms688 ? "SMS688 只在点击开始取号、刷新、重新取号或取消取号后访问；手机号和验证码不会自动提交到注册页面。" : "手机号和验证码只显示/复制，不会自动填写或提交到注册页面；拿到号码后会自动读取验证码，换号和取消仍需你点击。") + (availability ? " · " + availability : "");
         return '<div class="registration-phone-order" data-registration-phone-order-session-id="' + esc(session.id) + '" aria-keyshortcuts="N">' +
           '<div class="registration-phone-order-head"><strong>接码平台（' + (manualBrowser ? "手动控制" : "手动确认，自动读取短信") + '）</strong><span class="registration-phone-order-source">' + sourceLink + (purchaseLink ? ' · ' + purchaseLink : '') + '<span class="registration-phone-success-rate">' + esc(source.displayName || source.id || "平台") + ' ' + esc(successRateLabel) + selectedOfferLabel + '</span>' + orderWindow + '<span class="tag' + statusClass + '">' + esc(PHONE_ORDER_PHASE_LABELS[phase] || phase) + '</span></span></div>' +
           acquireHtml +
@@ -2674,11 +2588,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       function clearRegistrationSessionClientState(sessionId) {
         if (!sessionId) return;
         delete registrationInputValues[sessionId];
-        delete registrationPhoneKeyInputs[sessionId];
         delete registrationPhoneSourceSelections[sessionId];
-        delete registrationPhoneKeySelections[sessionId];
         delete registrationFiveSimTokenInputs[sessionId];
-        delete registrationMiaoicTokenInputs[sessionId];
+        delete registrationMiaoicCdkInputs[sessionId];
         delete registrationSms688TokenInputs[sessionId];
         delete registrationFiveSimSelections[sessionId];
         delete registrationFiveSimCountrySelections[sessionId];
@@ -3149,12 +3061,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           });
           return;
         }
-        const keys = Array.isArray(state.registrationKeyPool?.keys) ? state.registrationKeyPool.keys : [];
-        const selectedKeyId = registrationPhoneKeySelections[sessionId] || "";
-        const selectedKey = keys.find((key) => key.id === selectedKeyId);
-        const enabled = selectedKey?.status === "available";
         document.querySelectorAll('[data-action="registration-acquire-phone"]').forEach((button) => {
-          if (button.dataset.sessionId === sessionId) button.disabled = !enabled;
+          if (button.dataset.sessionId === sessionId) button.disabled = true;
         });
       }
 

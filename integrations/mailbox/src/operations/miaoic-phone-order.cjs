@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("node:crypto");
+
 const {
   Sms688OrderError,
   Sms688PhoneOrderSession
@@ -31,23 +33,26 @@ class MiaoicClient {
     this.lastState = null;
   }
 
-  async request(method, path) {
-    if (!this.token) throw new MiaoicOrderError("缺少 Miaoic Token", { code: "MISSING_TOKEN" });
-    if (/[\r\n;,]/u.test(this.token)) throw new MiaoicOrderError("Miaoic Token 包含无效字符", { code: "INVALID_TOKEN" });
+  async request(method, path, { body, secrets = [] } = {}) {
+    if (!this.token) throw new MiaoicOrderError("缺少 Miaoic 内部账户标识", { code: "MISSING_TOKEN" });
+    assertMiaoicToken(this.token);
     const requestUrl = `${this.baseUrl}${path}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     this.onLog("info", `Miaoic 请求 ${method} ${path}`);
     try {
+      const headers = {
+        accept: "application/json",
+        "cache-control": "no-cache, no-store, max-age=0",
+        cookie: `bj_user=${this.token}`,
+        referer: `${this.baseUrl}/?tab=recv&page=1&size=20`,
+        "x-requested-with": "fetch"
+      };
+      if (body !== undefined) headers["content-type"] = "application/x-www-form-urlencoded;charset=UTF-8";
       const response = await this.fetchImpl(requestUrl, {
         method,
-        headers: {
-          accept: "application/json",
-          "cache-control": "no-cache, no-store, max-age=0",
-          cookie: `bj_user=${this.token}`,
-          referer: `${this.baseUrl}/?tab=recv`,
-          "x-requested-with": "fetch"
-        },
+        headers,
+        ...(body === undefined ? {} : { body }),
         signal: controller.signal
       });
       const raw = typeof response.text === "function"
@@ -58,7 +63,7 @@ class MiaoicClient {
       const payload = parsePayload(raw);
       if (!response.ok || payload?.ok === false) {
         const message = responseMessage(payload) || `HTTP ${response.status}`;
-        this.onLog("error", `Miaoic 响应 ${method} ${path} 失败：${safeError(message, this.token)}`);
+        this.onLog("error", `Miaoic 响应 ${method} ${path} 失败：${safeError(message, [this.token, ...secrets])}`);
         throw new MiaoicOrderError(message, { status: response.status, code: responseCode(payload) });
       }
       return payload;
@@ -72,6 +77,32 @@ class MiaoicClient {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  async redeem(cdk, token = this.token) {
+    const code = text(cdk);
+    if (!code) throw new MiaoicOrderError("请填写 Miaoic CDK", { code: "MISSING_CDK" });
+    const savedToken = text(token);
+    const candidates = [];
+    if (isMiaoicAccountToken(savedToken)) candidates.push(savedToken);
+    candidates.push(createMiaoicAccountToken());
+    const previousToken = this.token;
+    let lastError;
+    for (const accountToken of candidates) {
+      this.token = accountToken;
+      try {
+        await this.request("POST", "/me/redeem", {
+          body: new URLSearchParams({ codes: code }).toString(),
+          secrets: [code]
+        });
+        return accountToken;
+      } catch (error) {
+        lastError = error;
+        if (!isMiaoicMissingTokenError(error)) break;
+      }
+    }
+    this.token = previousToken;
+    throw lastError;
   }
 
   async profile() {
@@ -128,7 +159,7 @@ class MiaoicPhoneOrderSession extends Sms688PhoneOrderSession {
       baseUrl,
       sourceId: options.sourceId || "miaoic",
       providerName: "Miaoic",
-      credentialLabel: "Token",
+      credentialLabel: "内部账户标识",
       errorClass: MiaoicOrderError,
       clientFactory
     });
@@ -183,8 +214,30 @@ function responseCode(payload) {
 
 function safeError(error, secret = "") {
   let message = error instanceof Error ? error.message : text(error);
-  if (secret) message = message.split(secret).join("[已隐藏]");
+  const secrets = Array.isArray(secret) ? secret : [secret];
+  for (const value of secrets) {
+    if (value) message = message.split(value).join("[已隐藏]");
+  }
   return (message || "Miaoic 请求失败").replace(/[\r\n\t]+/gu, " ").slice(0, 180);
+}
+
+function assertMiaoicToken(value) {
+  if (!value) throw new MiaoicOrderError("缺少 Miaoic 内部账户标识", { code: "MISSING_TOKEN" });
+  if (!isMiaoicAccountToken(value)) {
+    throw new MiaoicOrderError("Miaoic 内部账户标识格式无效", { code: "INVALID_TOKEN" });
+  }
+}
+
+function isMiaoicAccountToken(value) {
+  return /^[a-f0-9]{16,64}$/iu.test(text(value));
+}
+
+function isMiaoicMissingTokenError(error) {
+  return error instanceof MiaoicOrderError && /(?:还没有|没有) Token/u.test(error.message);
+}
+
+function createMiaoicAccountToken() {
+  return crypto.randomBytes(16).toString("hex");
 }
 
 function finiteOrNull(value) {
@@ -201,5 +254,7 @@ module.exports = {
   MiaoicClient,
   MiaoicOrderError,
   MiaoicPhoneOrderSession,
+  createMiaoicAccountToken,
+  isMiaoicAccountToken,
   normalizeMiaoicState
 };

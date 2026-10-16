@@ -41,7 +41,6 @@ import { observeAccountAvailability } from "../../application/accounts/observeAv
 import {
   clearAccountStates,
   initAccountStatePersistence,
-  recordAuthorization,
   recordRuntimeAuthenticationSuccess
 } from "../../application/accounts/accountState";
 import { getErrorMessage } from "../../core/errors";
@@ -92,6 +91,7 @@ import {
 } from "./schedulerRegistration";
 import { registerWakeupScheduler } from "./wakeupRegistration";
 import { AccountSharingService } from "../../sharing";
+import { persistOAuthAccount } from "../../application/accounts/oauthImport";
 import { SessionHub, resolveSessionRegistryPath } from "../../sessions";
 import {
   accountConcurrencyTracker,
@@ -756,11 +756,10 @@ export class AccountsWorkbench {
       }
 
       throwIfOAuthImportCancelled(cancellationSource);
-      const account = await this.repo.upsertFromTokens(tokens, false, {
+      const account = await persistOAuthAccount(this.repo, tokens, {
         registrationAt: normalizeTimestamp(options.registrationAt),
         addedVia: options.addedVia
       });
-      recordAuthorization(account.id, { ...tokens, accountId: account.accountId ?? tokens.accountId });
       throwIfOAuthImportCancelled(cancellationSource);
       const quota = await refreshImportedAccountQuota(this.repo, account.id);
       void refreshQuotaSummaryPanel();

@@ -47,7 +47,7 @@ test("registration diagnostics write a sanitized record to the extension global 
     level: "error",
     sessionId: "session-1",
     msg: "请求失败 user@example.com code=123456",
-    url: "https://liye.5x20.cn/api/orders/order-secret/status?token=secret"
+    url: "https://example.com/api/orders/order-secret/status?token=secret"
   });
   await diagnostics.flush();
 
@@ -55,7 +55,7 @@ test("registration diagnostics write a sanitized record to the extension global 
   assert.equal(lines.length, 1);
   assert.equal(contents.trim(), lines[0]);
   assert.doesNotMatch(contents, /user@example\.com|123456|order-secret|token=secret/u);
-  assert.match(contents, /https:\/\/liye\.5x20\.cn\/api\/orders\/\[order-id\]\/status/u);
+  assert.match(contents, /https:\/\/example\.com\/api\/orders\/\[order-id\]\/status/u);
 
   diagnostics.dispose();
   await fs.promises.rm(directory, { recursive: true, force: true });

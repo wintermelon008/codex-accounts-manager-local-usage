@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { FiveSimTokenStore } = require("../../src/operations/fivesim-token-store.cjs");
 
-test("5SIM token storage is separate from the registration Key pool and exposes only a mask", async () => {
+test("5SIM token storage exposes only a mask", async () => {
   const store = new FiveSimTokenStore({ secretStore: memoryStore() });
 
   const saved = await store.set("five-sim-secret-token");

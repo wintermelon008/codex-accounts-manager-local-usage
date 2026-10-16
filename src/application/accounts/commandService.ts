@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { loginWithOAuth } from "../../auth";
-import { recordAuthorization } from "./accountState";
+import { persistOAuthAccount } from "./oauthImport";
 import { CodexHotSwitchRuntime, RuntimeAccountSwitchOutcome, getCodexHome } from "../../codex";
 import { getErrorMessage } from "../../core";
 import { CodexAccountRecord, SharedCodexAccountJson, isSub2ApiAccount } from "../../core/types";
@@ -76,8 +76,7 @@ export class AccountsCommandService {
             hasRefreshToken: Boolean(tokens.refreshToken),
             accountId: tokens.accountId
           });
-          const account = await this.repo.upsertFromTokens(tokens, false);
-          recordAuthorization(account.id, { ...tokens, accountId: account.accountId ?? tokens.accountId });
+          const account = await persistOAuthAccount(this.repo, tokens);
           logNetworkEvent("account.add", {
             step: "account-upserted",
             storedAccountId: account.accountId,
@@ -165,8 +164,7 @@ export class AccountsCommandService {
           return;
         }
 
-        const updated = await this.repo.upsertFromTokens(tokens, account.isActive);
-        recordAuthorization(updated.id, { ...tokens, accountId: updated.accountId ?? tokens.accountId });
+        const updated = await persistOAuthAccount(this.repo, tokens, { forceActive: account.isActive });
         if (account.isActive) {
           // The OAuth exchange already produced the replacement credentials.
           // Do not let switchAccount start/reuse a refresh for the superseded

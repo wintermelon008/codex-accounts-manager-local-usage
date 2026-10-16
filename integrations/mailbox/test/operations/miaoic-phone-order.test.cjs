@@ -8,10 +8,58 @@ const {
   normalizeMiaoicState
 } = require("../../src/operations/miaoic-phone-order.cjs");
 
-test("Miaoic client uses the page Token cookie and recv endpoints", async () => {
+test("Miaoic client redeems a CDK into an internal account cookie", async () => {
   const requests = [];
   const client = new MiaoicClient({
-    token: "miaoic-token-1234",
+    fetchImpl: async (url, options) => {
+      requests.push({ path: new URL(url).pathname, options });
+      return response("兑换成功");
+    }
+  });
+
+  const token = await client.redeem("miaoic-cdk");
+
+  assert.match(token, /^[a-f0-9]{32}$/u);
+  assert.equal(requests[0].path, "/me/redeem");
+  assert.equal(requests[0].options.method, "POST");
+  assert.equal(requests[0].options.headers.cookie, `bj_user=${token}`);
+  assert.equal(requests[0].options.headers["content-type"], "application/x-www-form-urlencoded;charset=UTF-8");
+  assert.equal(requests[0].options.body, "codes=miaoic-cdk");
+});
+
+test("Miaoic redemption replaces a legacy token and retries a stale account token", async () => {
+  const legacyRequests = [];
+  const legacyClient = new MiaoicClient({
+    token: "miaoic-page-token",
+    fetchImpl: async (url, options) => {
+      legacyRequests.push(options.headers.cookie);
+      return response("兑换成功");
+    }
+  });
+  const legacyReplacement = await legacyClient.redeem("miaoic-cdk");
+  assert.match(legacyReplacement, /^[a-f0-9]{32}$/u);
+  assert.equal(legacyRequests.length, 1);
+  assert.equal(legacyRequests[0], `bj_user=${legacyReplacement}`);
+
+  const staleToken = "0123456789abcdef0123456789abcdef";
+  const staleRequests = [];
+  const staleClient = new MiaoicClient({
+    token: staleToken,
+    fetchImpl: async (url, options) => {
+      staleRequests.push(options.headers.cookie);
+      return staleRequests.length === 1 ? response("还没有 Token", 400) : response("兑换成功");
+    }
+  });
+  const staleReplacement = await staleClient.redeem("miaoic-cdk");
+  assert.match(staleReplacement, /^[a-f0-9]{32}$/u);
+  assert.notEqual(staleReplacement, staleToken);
+  assert.deepEqual(staleRequests, [`bj_user=${staleToken}`, `bj_user=${staleReplacement}`]);
+});
+
+test("Miaoic client uses the internal account cookie and recv endpoints", async () => {
+  const requests = [];
+  const client = new MiaoicClient({
+    token: "0123456789abcdef0123456789abcdef",
     fetchImpl: async (url, options) => {
       const parsed = new URL(url);
       requests.push({ path: parsed.pathname, options });
@@ -36,7 +84,7 @@ test("Miaoic client uses the page Token cookie and recv endpoints", async () => 
   await client.changeLease(opened);
   await client.releaseLease(opened);
 
-  assert.equal(requests[0].options.headers.cookie, "bj_user=miaoic-token-1234");
+  assert.equal(requests[0].options.headers.cookie, "bj_user=0123456789abcdef0123456789abcdef");
   assert.equal(requests[0].options.headers["x-requested-with"], "fetch");
   assert.deepEqual(requests.map((request) => [request.options.method, request.path]), [
     ["GET", "/recv/state"],
@@ -50,7 +98,7 @@ test("Miaoic client uses the page Token cookie and recv endpoints", async () => 
 test("Miaoic reuses an active page lease instead of opening a duplicate", async () => {
   const requests = [];
   const client = new MiaoicClient({
-    token: "miaoic-token-1234",
+    token: "0123456789abcdef0123456789abcdef",
     fetchImpl: async (url, options) => {
       requests.push([options.method, new URL(url).pathname]);
       return response({ ok: true, balance: 4, active: true, phone: "+8613800000000", can_switch: true, can_release: true });

@@ -8,7 +8,6 @@ const {
 
 const DEFAULT_BASE_URL = "https://sms.futurepixelai.com/api/v1/manual-sms";
 const DEFAULT_AUTH_BASE_URL = "https://sms.futurepixelai.com/api/v1/auth";
-const DEFAULT_PURCHASE_URL = "https://www.16688.com.cn/shop/AIAISHARE";
 
 class FutureOrderError extends Sms688OrderError {
   constructor(message, options) {
@@ -86,9 +85,6 @@ class FutureClient extends Sms688Client {
     }
   }
 
-  async redeemCdk(cdk) {
-    return this.redeem(cdk);
-  }
 }
 
 class FuturePhoneOrderSession extends Sms688PhoneOrderSession {
@@ -158,7 +154,6 @@ function text(value) {
 module.exports = {
   DEFAULT_AUTH_BASE_URL,
   DEFAULT_BASE_URL,
-  DEFAULT_PURCHASE_URL,
   FutureClient,
   FutureOrderError,
   FuturePhoneOrderSession,

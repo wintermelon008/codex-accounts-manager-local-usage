@@ -7,15 +7,15 @@ const {
   maskMiaoicToken
 } = require("../../src/operations/miaoic-token-store.cjs");
 
-test("Miaoic Token storage is independent and exposes only a mask", async () => {
+test("Miaoic internal account storage is independent and exposes no credential", async () => {
   const store = new MiaoicTokenStore({ secretStore: memoryStore() });
 
-  const saved = await store.set("miaoic-secret-token");
-  assert.equal(saved.masked, "miao…oken");
-  assert.deepEqual(await store.snapshot(), { configured: true, masked: "miao…oken" });
-  assert.equal(await store.get(), "miaoic-secret-token");
+  const saved = await store.set("0123456789abcdef0123456789abcdef");
+  assert.equal(saved.masked, "");
+  assert.deepEqual(await store.snapshot(), { configured: true, masked: "" });
+  assert.equal(await store.get(), "0123456789abcdef0123456789abcdef");
   assert.equal(maskMiaoicToken(""), "");
-  await assert.rejects(() => store.set("bad;cookie"), /无效字符/u);
+  await assert.rejects(() => store.set("bad;cookie"), /格式无效/u);
 });
 
 function memoryStore() {

@@ -1,150 +1,48 @@
 "use strict";
 
-const fs = require("node:fs/promises");
-const path = require("node:path");
+const {
+  RegistrationCredentialStore,
+  createLocalCredentialStore,
+  maskCredential,
+  normalizeCredential
+} = require("./registration-credential-store.cjs");
+const { isMiaoicAccountToken } = require("./miaoic-phone-order.cjs");
 
 const DEFAULT_STORE_KEY = "codexAccounts.mailbox.registration.miaoicToken.v1";
 const DEFAULT_FILE_NAME = "registration-miaoic-token.v1.json";
 
-class MiaoicTokenStore {
+class MiaoicTokenStore extends RegistrationCredentialStore {
   constructor({ secretStore, backupStore, storeKey = DEFAULT_STORE_KEY } = {}) {
-    if (!isStore(secretStore)) {
-      throw new TypeError("Miaoic Token store requires a secret store");
-    }
-    this.secretStore = secretStore;
-    this.backupStore = isStore(backupStore) ? backupStore : undefined;
-    this.storeKey = storeKey;
-    this.lock = Promise.resolve();
-  }
-
-  async get() {
-    return this._exclusive(async () => {
-      const primary = parseStoredToken(await readStore(this.secretStore, this.storeKey));
-      if (primary !== undefined) return primary;
-      const backup = parseStoredToken(await readStore(this.backupStore, this.storeKey));
-      if (backup === undefined) return "";
-      try {
-        await this.secretStore.store(this.storeKey, JSON.stringify({ version: 1, token: backup }));
-      } catch {
-        // The backup already made the credential available; retry on a later save.
-      }
-      return backup;
+    super({
+      secretStore,
+      backupStore,
+      storeKey,
+      missingStoreMessage: "Miaoic Token store requires a secret store",
+      emptyMessage: "Miaoic 内部账户标识不能为空",
+      validate: (token) => {
+        if (!isMiaoicAccountToken(token)) throw new Error("Miaoic 内部账户标识格式无效");
+      },
+      mask: () => "",
+      normalize: normalizeToken
     });
   }
 
   async snapshot() {
     const token = await this.get();
-    return {
-      configured: Boolean(token),
-      masked: maskMiaoicToken(token)
-    };
-  }
-
-  async set(value) {
-    const token = normalizeToken(value);
-    if (!token) throw new Error("请填写 Miaoic Token");
-    if (/[\r\n;,]/u.test(token)) throw new Error("Miaoic Token 包含无效字符");
-    if (token.length > 2048) throw new Error("Miaoic Token 过长");
-    return this._exclusive(async () => {
-      await this._save(token);
-      return { configured: true, masked: maskMiaoicToken(token) };
-    });
-  }
-
-  async clear() {
-    return this._exclusive(async () => {
-      await this._save("");
-      return { configured: false, masked: "" };
-    });
-  }
-
-  async _save(token) {
-    const value = JSON.stringify({ version: 1, token });
-    let saved = false;
-    let firstError;
-    for (const store of [this.secretStore, this.backupStore]) {
-      if (!store) continue;
-      try {
-        await store.store(this.storeKey, value);
-        saved = true;
-      } catch (error) {
-        firstError ||= error;
-      }
-    }
-    if (!saved && firstError) throw firstError;
-  }
-
-  async _exclusive(task) {
-    const previous = this.lock;
-    let release;
-    this.lock = new Promise((resolve) => { release = resolve; });
-    await previous;
-    try {
-      return await task();
-    } finally {
-      release();
-    }
+    return { configured: isMiaoicAccountToken(token), masked: "" };
   }
 }
 
 function createLocalMiaoicTokenStore(storageUri) {
-  const root = typeof storageUri?.fsPath === "string" ? storageUri.fsPath : "";
-  if (!root) return undefined;
-  const filePath = path.join(root, DEFAULT_FILE_NAME);
-  return {
-    async get() {
-      try {
-        return await fs.readFile(filePath, "utf8");
-      } catch (error) {
-        if (error?.code === "ENOENT") return undefined;
-        throw error;
-      }
-    },
-    async store(_key, value) {
-      await fs.mkdir(root, { recursive: true, mode: 0o700 });
-      await fs.writeFile(filePath, value, { encoding: "utf8", mode: 0o600 });
-      try {
-        await fs.chmod(filePath, 0o600);
-      } catch {
-        // SecretStorage remains the primary store on platforms without chmod.
-      }
-    }
-  };
-}
-
-function parseStoredToken(raw) {
-  if (typeof raw !== "string" || !raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw);
-    if (typeof parsed === "string") return normalizeToken(parsed);
-    return parsed && typeof parsed === "object" ? normalizeToken(parsed.token) : undefined;
-  } catch {
-    return undefined;
-  }
+  return createLocalCredentialStore(storageUri, DEFAULT_FILE_NAME);
 }
 
 function maskMiaoicToken(value) {
-  const token = normalizeToken(value);
-  if (!token) return "";
-  if (token.length <= 8) return `${token.slice(0, 2)}…${token.slice(-2)}`;
-  return `${token.slice(0, 4)}…${token.slice(-4)}`;
+  return maskCredential(value);
 }
 
 function normalizeToken(value) {
-  return String(value ?? "").trim();
-}
-
-function isStore(store) {
-  return Boolean(store && typeof store.get === "function" && typeof store.store === "function");
-}
-
-async function readStore(store, key) {
-  if (!store) return undefined;
-  try {
-    return await store.get(key);
-  } catch {
-    return undefined;
-  }
+  return normalizeCredential(value);
 }
 
 module.exports = {

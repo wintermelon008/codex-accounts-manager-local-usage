@@ -11,9 +11,10 @@ const REGISTRATION_PHONE_SOURCES = Object.freeze([
   Object.freeze({
     id: "miaoic",
     displayName: "Miaoic",
-    websiteUrl: "http://miaoic.shop",
+    websiteUrl: "http://miaoic.shop/?tab=recv&page=1&size=20",
+    purchaseUrl: "https://www.16688.com.cn/shop/S301395",
     service: "manual-sms",
-    credentialType: "token"
+    credentialType: "cdk"
   }),
   Object.freeze({
     id: "future",
@@ -30,13 +31,6 @@ const REGISTRATION_PHONE_SOURCES = Object.freeze([
     service: "manual-sms",
     credentialType: "api-key"
   }),
-  Object.freeze({
-    id: "liye",
-    displayName: "LIYE",
-    websiteUrl: "https://liye.5x20.cn",
-    service: "chatai",
-    credentialType: "key"
-  })
 ]);
 
 function getRegistrationPhoneSource(sourceId = "fivesim") {

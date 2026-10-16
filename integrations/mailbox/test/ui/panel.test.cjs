@@ -1141,13 +1141,8 @@ test("completed GPT sessions keep manual helpers and expose Codex import termina
       codexImportAvailable: true,
       codexImports: ["mailbox:gpt"],
       codexImportCancellable: true,
-      phoneSources: [{ id: "liye", displayName: "LIYE" }],
-      registrationKeyPool: {
-        count: 1,
-        available: 1,
-        inUse: 0,
-        keys: [{ id: "key:gpt", masked: "KEY…GPT", status: "available" }]
-      },
+      phoneSources: [{ id: "fivesim", displayName: "5SIM" }],
+      registrationFiveSimToken: { configured: true, masked: "five…oken" },
       registrationSessions: [{
         id: "session:gpt",
         email: "gpt@example.com",
@@ -1162,7 +1157,6 @@ test("completed GPT sessions keep manual helpers and expose Codex import termina
 
   assert.match(renderedHtml, /data-action="registration-refresh-email-code"/u);
   assert.match(renderedHtml, /data-action="registration-acquire-phone"[^>]*>开始取号/u);
-  assert.match(renderedHtml, /<select id="registrationPhoneKey-session:gpt">/u);
   assert.match(renderedHtml, /data-action="registration-cancel-codex-import"/u);
   assert.match(renderedHtml, /class="registration-copy-email-actions"/u);
   assert.match(renderedHtml, /class="registration-copy-email-button"[^>]*data-action="registration-copy-email"/u);
@@ -1394,101 +1388,6 @@ test("Mailbox latest code displays its query time and received time", () => {
   });
 });
 
-test("selecting an available registration key enables phone ordering", () => {
-  const html = createRegistrationPanelHtml();
-  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
-  assert.ok(script);
-
-  const windowListeners = new Map();
-  const documentListeners = new Map();
-  const acquireButton = { dataset: { sessionId: "session:key-select" }, disabled: true };
-  const messages = [];
-  const app = { innerHTML: "" };
-  const notice = { textContent: "", className: "" };
-  const document = {
-    activeElement: null,
-    getElementById(id) {
-      return id === "app" ? app : id === "notice" ? notice : null;
-    },
-    querySelector() { return null; },
-    querySelectorAll(selector) {
-      return selector === '[data-action="registration-acquire-phone"]' ? [acquireButton] : [];
-    },
-    addEventListener(type, listener) { documentListeners.set(type, listener); }
-  };
-  const window = {
-    addEventListener(type, listener) { windowListeners.set(type, listener); }
-  };
-
-  vm.runInNewContext(script, {
-    window,
-    document,
-    acquireVsCodeApi: () => ({ postMessage(message) { messages.push(message); } }),
-    console
-  });
-
-  windowListeners.get("message")({ data: {
-    type: "state",
-    state: {
-      mailboxes: [],
-      providers: [],
-      phoneSources: [
-        { id: "liye", displayName: "LIYE", websiteUrl: "https://liye.5x20.cn" },
-        { id: "other", displayName: "Other", websiteUrl: "https://example.com" }
-      ],
-      registrationKeyPool: {
-        count: 7,
-        available: 7,
-        inUse: 0,
-        keys: Array.from({ length: 7 }, (_, index) => ({ id: `key-${index + 1}`, masked: `KEY…-${index + 1}`, status: "available" }))
-      },
-      registrationSessions: [{
-        id: "session:key-select",
-        email: "key@example.com",
-        state: "awaiting_phone_input",
-        mode: "oauth",
-        phoneOrder: { phase: "idle", running: false, order: { phone: "+861380000000" } }
-      }]
-    }
-  } });
-
-  const renderedHtml = app.innerHTML;
-  const keySelectStart = renderedHtml.indexOf('<select id="registrationPhoneKey-session:key-select"');
-  const keySelectEnd = renderedHtml.indexOf("</select>", keySelectStart);
-  const keySelectHtml = renderedHtml.slice(keySelectStart, keySelectEnd);
-  assert.match(keySelectHtml, /value="key-1" selected/u);
-  assert.match(keySelectHtml, /value="key-5"/u);
-  assert.doesNotMatch(keySelectHtml, /value="key-6"/u);
-  assert.match(renderedHtml, /选择器仅显示前 5 个/u);
-  assert.match(renderedHtml, /等待完整手机号/u);
-  assert.match(renderedHtml, /LIYE/u);
-
-  const selected = {
-    id: "registrationPhoneKey-session:key-select",
-    value: "key-1",
-    closest() { return this; },
-    matches() { return false; }
-  };
-  documentListeners.get("change")({ target: selected });
-  assert.equal(acquireButton.disabled, false);
-
-  documentListeners.get("change")({ target: {
-    id: "registrationPhoneSource-session:key-select",
-    value: "other",
-    matches() { return false; },
-    closest() { return this; }
-  } });
-  assert.match(app.innerHTML, /Other/u);
-  assert.match(app.innerHTML, /https:\/\/example\.com/u);
-  documentListeners.get("click")({ target: {
-    disabled: false,
-    dataset: { action: "registration-acquire-phone", sessionId: "session:key-select" },
-    closest() { return this; }
-  } });
-  assert.equal(messages.at(-1).sourceId, "other");
-  assert.equal(messages.at(-1).keyId, "key-1");
-});
-
 test("changing the registration phone source toggles its panels without rebuilding the form", () => {
   const html = createRegistrationPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];
@@ -1505,12 +1404,12 @@ test("changing the registration phone source toggles its panels without rebuildi
     set(value) { renderedHtml = value; renderCount += 1; }
   });
   const acquireButton = { dataset: { sessionId: "session:source-partial" }, disabled: true };
-  const liyePanel = { dataset: { registrationPhoneSourcePanel: "liye" }, hidden: false };
+  const miaoicPanel = { dataset: { registrationPhoneSourcePanel: "miaoic" }, hidden: false };
   const fiveSimPanel = { dataset: { registrationPhoneSourcePanel: "fivesim" }, hidden: true };
   const sourceRoot = {
     dataset: { registrationPhoneSourceRoot: "session:source-partial" },
     querySelectorAll(selector) {
-      return selector === "[data-registration-phone-source-panel]" ? [liyePanel, fiveSimPanel] : [];
+      return selector === "[data-registration-phone-source-panel]" ? [miaoicPanel, fiveSimPanel] : [];
     }
   };
   const document = {
@@ -1538,17 +1437,16 @@ test("changing the registration phone source toggles its panels without rebuildi
       mailboxes: [],
       providers: [],
       phoneSources: [
-        { id: "liye", displayName: "LIYE", credentialType: "key" },
+        { id: "miaoic", displayName: "Miaoic", credentialType: "token" },
         { id: "fivesim", displayName: "5SIM", credentialType: "api-token" }
       ],
       registrationFiveSimToken: { configured: true, masked: "five…oken" },
-      registrationKeyPool: { count: 0, available: 0, inUse: 0, keys: [] },
       registrationSessions: [{
         id: "session:source-partial",
         email: "source@example.com",
         mode: "manual-browser",
         state: "awaiting_phone_input",
-        phoneOrder: { phase: "idle", running: false, card: { source: "liye" }, catalog: [] },
+        phoneOrder: { phase: "idle", running: false, card: { source: "miaoic" }, catalog: [] },
         emailCode: { phase: "idle" }
       }]
     }
@@ -1563,7 +1461,7 @@ test("changing the registration phone source toggles its panels without rebuildi
   } });
 
   assert.equal(renderCount, beforeChange);
-  assert.equal(liyePanel.hidden, true);
+  assert.equal(miaoicPanel.hidden, true);
   assert.equal(fiveSimPanel.hidden, false);
 });
 
@@ -1601,14 +1499,12 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
       mailboxes: [{ id: "mailbox:fivesim", address: "five@example.com", displayName: "five@example.com", providerId: "mock" }],
       providers: [],
       phoneSources: [
-        { id: "liye", displayName: "LIYE", credentialType: "key" },
         { id: "fivesim", displayName: "5SIM", credentialType: "api-token", websiteUrl: "https://5sim.net" },
         { id: "sms688", displayName: "SMS688", credentialType: "api-key", websiteUrl: "https://cdk.sms688.cc" }
       ],
       registrationFiveSimToken: { configured: true, masked: "five…oken" },
       registrationSms688Token: { configured: true, masked: "sms6…-key" },
       registrationFiveSimExchangeRate: { rate: 6.8, date: "2026-09-06", stale: false },
-      registrationKeyPool: { count: 0, available: 0, inUse: 0, keys: [] },
       registrationSessions: [{
         id: "session:fivesim",
         email: "five@example.com",
@@ -1663,7 +1559,6 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   assert.doesNotMatch(renderedHtml, /zerorate/u);
   assert.doesNotMatch(renderedHtml, /missingrate/u);
   assert.ok(renderedHtml.indexOf("England") < renderedHtml.indexOf("USA"));
-  assert.match(renderedHtml, /data-registration-phone-source-panel="liye" hidden/u);
   assert.match(renderedHtml, /data-registration-phone-source-panel="fivesim"/u);
   assert.match(renderedHtml, /registrationSms688TokenInput-session:fivesim/u);
   assert.match(renderedHtml, /Manual SMS（manual-sms）/u);
@@ -1722,7 +1617,6 @@ test("Future registration panel exposes the docs and CDK purchase links", () => 
       ],
       registrationDefaultPhoneSource: "future",
       registrationFutureToken: { configured: false, masked: "" },
-      registrationKeyPool: { count: 0, available: 0, inUse: 0, keys: [] },
       registrationSessions: [{
         id: "session:future",
         email: "future@example.com",
@@ -1779,7 +1673,6 @@ test("registration panel refreshes 5SIM once for a mailbox session regardless of
     mailboxes: [{ id: "mailbox:any", address: "any@example.com", displayName: "any@example.com", providerId: "mock" }],
     providers: [],
     phoneSources: [
-      { id: "liye", displayName: "LIYE", credentialType: "key" },
       { id: "fivesim", displayName: "5SIM", credentialType: "api-token" }
     ],
     registrationFiveSimToken: { configured: true, masked: "five…oken" },
@@ -1788,7 +1681,7 @@ test("registration panel refreshes 5SIM once for a mailbox session regardless of
       email: "any@example.com",
       mode: "oauth",
       state: "awaiting_oauth",
-      phoneOrder: { phase: "idle", running: false, card: { source: "liye" } },
+      phoneOrder: { phase: "idle", running: false, card: { source: "fivesim" } },
       emailCode: { phase: "idle" }
     }]
   };

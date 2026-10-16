@@ -21,10 +21,6 @@ const { STATES } = require("../operations/registration-flow.cjs");
 const { RegistrationEmailCodeWatcher } = require("../operations/registration-email-code.cjs");
 const { createRegistrationDiagnostics } = require("../operations/registration-diagnostics.cjs");
 const {
-  createLocalRegistrationKeyStore,
-  RegistrationKeyPool
-} = require("../operations/registration-key-pool.cjs");
-const {
   createLocalFiveSimTokenStore,
   FiveSimTokenStore
 } = require("../operations/fivesim-token-store.cjs");
@@ -41,6 +37,7 @@ const {
   MiaoicTokenStore
 } = require("../operations/miaoic-token-store.cjs");
 const { FutureClient } = require("../operations/future-phone-order.cjs");
+const { MiaoicClient } = require("../operations/miaoic-phone-order.cjs");
 const { RegistrationExchangeRateStore } = require("../operations/registration-exchange-rate.cjs");
 const { TwoFactorManager, resolveTotpConfigFilePath } = require("../totp/manager.cjs");
 const { resolvePrivateStateRoot } = require("../private-state.cjs");
@@ -167,11 +164,6 @@ class MailboxIntegration {
     this.registrationSessionsOperation = Promise.resolve();
     this.registrationClipboardCopied = new Map();
     this.registrationClipboardQueues = new Map();
-    const serverRegistrationKeyStore = createLocalRegistrationKeyStore({ fsPath: this.privateStateRoot });
-    this.registrationKeyPool = new RegistrationKeyPool({
-      secretStore: serverRegistrationKeyStore || context.secrets,
-      backupStore: serverRegistrationKeyStore ? context.secrets : undefined
-    });
     const serverFiveSimTokenStore = createLocalFiveSimTokenStore({ fsPath: this.privateStateRoot });
     this.fiveSimTokenStore = new FiveSimTokenStore({
       secretStore: serverFiveSimTokenStore || context.secrets,
@@ -199,7 +191,6 @@ class MailboxIntegration {
       })
       : undefined);
     this.registrationExchangeRateState = undefined;
-    this.registrationPhoneKeyClaims = new Map();
     this.registrationManager.on("stateChange", (event) => {
       // Once the registration browser is ready, both routes use the same
       // background mailbox watcher. The watcher only displays the code;
@@ -223,14 +214,6 @@ class MailboxIntegration {
       if (event?.state === STATES.COMPLETED) {
         this.queueRegistrationGptStatusSync(event.sessionId);
       }
-      void this.syncRegistrationPhoneKey(event).catch((error) => {
-        this.postPanelMessage({
-          type: "toast",
-          level: "error",
-          action: "registrationPhoneKeyPool",
-          message: safeError(error, "接码平台 Key 状态更新失败")
-        });
-      });
       void this.syncRegistrationClipboard(event).catch((error) => {
         this.postPanelMessage({
           type: "toast",
@@ -802,8 +785,6 @@ class MailboxIntegration {
         case "registrationAcquirePhone":
           await this.acquireRegistrationPhone(message.sessionId, {
             sourceId: message.sourceId,
-            keyId: message.keyId,
-            cardCode: message.cardCode,
             country: message.country,
             operator: message.operator,
             product: message.product
@@ -840,9 +821,13 @@ class MailboxIntegration {
         case "registrationRefreshFuture":
           await this.refreshRegistrationFuture(message.sessionId);
           return;
-        case "registrationSaveMiaoicToken":
-          await this.saveMiaoicToken(message.token);
+        case "registrationSaveMiaoicCdk":
+          await this.saveMiaoicCdk(message.cdk);
           return;
+        case "registrationSaveMiaoicToken":
+          await this.saveMiaoicCdk(message.cdk ?? message.token);
+          return;
+        case "registrationClearMiaoicAccount":
         case "registrationClearMiaoicToken":
           await this.clearMiaoicToken();
           return;
@@ -852,20 +837,11 @@ class MailboxIntegration {
         case "registrationSetDefaultPhoneSource":
           await this.setRegistrationDefaultPhoneSource(message.sourceId);
           return;
-        case "registrationConfirmPhone":
-          await this.confirmRegistrationPhone(message.sessionId);
-          return;
         case "registrationReplacePhone":
           await this.replaceRegistrationPhone(message.sessionId);
           return;
         case "registrationCancelPhone":
           await this.cancelRegistrationPhone(message.sessionId);
-          return;
-        case "registrationAddPhoneKeys":
-          await this.addRegistrationPhoneKeys(message.input);
-          return;
-        case "registrationRemovePhoneKey":
-          await this.removeRegistrationPhoneKey(message.keyId);
           return;
         case "registrationRequestNewPhone":
           await this.requestRegistrationNewPhone(message.sessionId);
@@ -1594,8 +1570,7 @@ class MailboxIntegration {
 
   async acquireRegistrationPhone(sessionId, selection = {}) {
     const id = this.requireRegistrationSessionId(sessionId);
-    const legacyCardCode = typeof selection === "string" ? selection.trim() : typeof selection?.cardCode === "string" ? selection.cardCode.trim() : "";
-    const sourceId = typeof selection === "string" ? "liye" : String(selection?.sourceId || "fivesim").trim().toLowerCase();
+    const sourceId = String(selection?.sourceId || "fivesim").trim().toLowerCase();
     const source = getRegistrationPhoneSource(sourceId);
     if (!source) {
       throw new Error("请选择有效的接码平台来源");
@@ -1625,7 +1600,7 @@ class MailboxIntegration {
     }
     if (source.id === "miaoic") {
       const token = await this.miaoicTokenStore.get();
-      if (!token) throw new Error("请先保存 Miaoic Token");
+      if (!token) throw new Error("请先购买并兑换 Miaoic CDK");
       const result = await this.registrationManager.acquirePhoneNumber(id, token, {
         sourceId: source.id
       });
@@ -1643,31 +1618,7 @@ class MailboxIntegration {
       await this.publishPanelState();
       return;
     }
-    if (legacyCardCode) {
-      const result = await this.registrationManager.acquirePhoneNumber(id, legacyCardCode, { sourceId });
-      if (result?.phase === "error") throw new Error(result.error || "取号失败");
-      await this.publishPanelState();
-      return;
-    }
-    const keyId = typeof selection?.keyId === "string" ? selection.keyId.trim() : "";
-    const owner = this.registrationPhoneKeyOwner(id);
-    const claimed = await this.registrationKeyPool.claim(keyId, owner);
-    this.registrationPhoneKeyClaims.set(id, { keyId: claimed.id, owner, sourceId: source.id });
-    try {
-      const result = await this.registrationManager.acquirePhoneNumber(id, claimed.code, {
-        sourceId: source.id,
-        cardKeyId: claimed.id,
-        cardMasked: claimed.masked
-      });
-      if (result?.phase === "error") {
-        await this.releaseRegistrationPhoneKey(id);
-        throw new Error(result.error || "取号失败");
-      }
-      await this.publishPanelState();
-    } catch (error) {
-      await this.releaseRegistrationPhoneKey(id);
-      throw error;
-    }
+    throw new Error(`不支持的接码来源：${source.id}`);
   }
 
   async saveFiveSimToken(value) {
@@ -1714,15 +1665,28 @@ class MailboxIntegration {
     await this.publishPanelState();
   }
 
-  async saveMiaoicToken(value) {
-    const result = await this.miaoicTokenStore.set(value);
+  async saveMiaoicCdk(value) {
+    const cdk = String(value ?? "").trim();
+    if (!cdk) throw new Error("请填写 Miaoic CDK");
+    const existingToken = await this.miaoicTokenStore.get();
+    const client = new MiaoicClient({
+      token: existingToken,
+      fetchImpl: this.registrationManager.miaoicFetch,
+      onLog: (level, message) => this.registrationManager.emit("log", { level, message })
+    });
+    const accountToken = await client.redeem(cdk, existingToken);
+    await this.miaoicTokenStore.set(accountToken);
     this.postPanelMessage({
       type: "toast",
       level: "success",
-      action: "registrationSaveMiaoicToken",
-      message: `Miaoic Token 已保存（${result.masked}）`
+      action: "registrationSaveMiaoicCdk",
+      message: "Miaoic CDK 已兑换，账户已保存"
     });
     await this.publishPanelState();
+  }
+
+  async saveMiaoicToken(value) {
+    return this.saveMiaoicCdk(value);
   }
 
   async clearMiaoicToken() {
@@ -1730,8 +1694,8 @@ class MailboxIntegration {
     this.postPanelMessage({
       type: "toast",
       level: "success",
-      action: "registrationClearMiaoicToken",
-      message: "Miaoic Token 已清除"
+      action: "registrationClearMiaoicAccount",
+      message: "Miaoic 账户已清除"
     });
     await this.publishPanelState();
   }
@@ -1793,7 +1757,7 @@ class MailboxIntegration {
   async refreshRegistrationMiaoic(sessionId) {
     const id = this.requireRegistrationSessionId(sessionId);
     const token = await this.miaoicTokenStore.get();
-    if (!token) throw new Error("请先保存 Miaoic Token");
+    if (!token) throw new Error("请先购买并兑换 Miaoic CDK");
     const result = await this.registrationManager.refreshPhoneInfo(id, token, {
       sourceId: "miaoic"
     });
@@ -1826,15 +1790,6 @@ class MailboxIntegration {
     await this.publishPanelState();
   }
 
-  async confirmRegistrationPhone(sessionId) {
-    const id = this.requireRegistrationSessionId(sessionId);
-    const result = await this.registrationManager.confirmPhoneNumber(id);
-    if (result?.phase === "error") {
-      throw new Error(result.error || "开始读取验证码失败");
-    }
-    await this.publishPanelState();
-  }
-
   async replaceRegistrationPhone(sessionId) {
     const id = this.requireRegistrationSessionId(sessionId);
     const result = await this.registrationManager.replacePhoneNumber(id);
@@ -1850,45 +1805,7 @@ class MailboxIntegration {
     if (result?.phase === "error") {
       throw new Error(result.error || "取消取号失败");
     }
-    await this.releaseRegistrationPhoneKey(id);
     await this.publishPanelState();
-  }
-
-  async addRegistrationPhoneKeys(input) {
-    if (typeof input !== "string" || !input.trim()) {
-      throw new Error("请粘贴至少一个接码平台 Key，每行一个");
-    }
-    const result = await this.registrationKeyPool.add(input);
-    this.postPanelMessage({
-      type: "toast",
-      level: result.added > 0 ? "success" : "warning",
-      action: "registrationAddPhoneKeys",
-      message: result.added > 0 ? `已加入 ${result.added} 个接码平台 Key` : "没有加入新的接码平台 Key"
-    });
-    await this.publishPanelState();
-  }
-
-  async removeRegistrationPhoneKey(keyId) {
-    const result = await this.registrationKeyPool.remove(keyId);
-    this.postPanelMessage({
-      type: "toast",
-      level: "success",
-      action: "registrationRemovePhoneKey",
-      message: "接码平台 Key 已删除"
-    });
-    await this.publishPanelState();
-    return result;
-  }
-
-  registrationPhoneKeyOwner(sessionId) {
-    return `registration:${sessionId}`;
-  }
-
-  async releaseRegistrationPhoneKey(sessionId) {
-    const claim = this.registrationPhoneKeyClaims.get(sessionId);
-    if (!claim) return false;
-    this.registrationPhoneKeyClaims.delete(sessionId);
-    return this.registrationKeyPool.release(claim.keyId, claim.owner);
   }
 
   async copyText(value, successMessage = "已复制", { automatic = false, sessionId } = {}) {
@@ -2005,38 +1922,6 @@ class MailboxIntegration {
     this.registrationClipboardQueues.delete(sessionId);
   }
 
-  async syncRegistrationPhoneKey(event) {
-    const sessionId = typeof event?.sessionId === "string" ? event.sessionId : "";
-    if (!sessionId) return;
-    const phoneOrder = event?.phoneOrder;
-    const order = phoneOrder?.order;
-    const smsCode = typeof order?.smsCode === "string" ? order.smsCode.trim() : "";
-    const claim = this.registrationPhoneKeyClaims.get(sessionId);
-    if (!claim) return;
-    if (smsCode) {
-      const consumed = await this.registrationKeyPool.consume(claim.keyId, claim.owner);
-      if (consumed) {
-        this.registrationPhoneKeyClaims.delete(sessionId);
-        this.postPanelMessage({
-          type: "toast",
-          level: "success",
-          action: "registrationPhoneCodeReceived",
-          message: "已收到短信验证码，所用接码平台 Key 已从池中移除"
-        });
-        await this.publishPanelState();
-      }
-      return;
-    }
-    const terminalPhonePhase = ["cancelled", "error", "timed_out"].includes(phoneOrder?.phase);
-    const terminalSession = [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(event?.state);
-    const currentPhoneOrder = phoneOrder || this.registrationManager.getSessionState(sessionId)?.phoneOrder;
-    const phoneStillRunning = currentPhoneOrder?.running === true;
-    if (terminalPhonePhase || (terminalSession && !phoneStillRunning)) {
-      await this.releaseRegistrationPhoneKey(sessionId);
-      await this.publishPanelState();
-    }
-  }
-
   async requestRegistrationNewPhone(sessionId) {
     const id = this.requireRegistrationSessionId(sessionId);
     this.registrationManager.requestNewPhone(id);
@@ -2058,7 +1943,6 @@ class MailboxIntegration {
     if (session?.phoneOrder?.running) {
       await this.registrationManager.cancelPhoneNumber(id).catch(() => undefined);
     }
-    await this.releaseRegistrationPhoneKey(id);
     this.registrationManager.cleanupSession(id);
     await this.publishPanelState();
     this.publish();
@@ -2071,7 +1955,6 @@ class MailboxIntegration {
         await this.cancelRegistrationCodexImport(session.id, { silent: true });
         this.stopRegistrationEmailWatcher(session.id);
         await this.registrationManager.cancelSession(session.id);
-        await this.releaseRegistrationPhoneKey(session.id);
         this.registrationManager.cleanupSession(session.id);
       }
       await this.persistRegistrationSessions();
@@ -2184,7 +2067,6 @@ class MailboxIntegration {
     for (const session of sessions) {
       this.stopRegistrationEmailWatcher(session.id);
       await this.registrationManager.cancelSession(session.id);
-      await this.releaseRegistrationPhoneKey(session.id);
     }
     return sessions.length > 0;
   }
@@ -2311,7 +2193,6 @@ class MailboxIntegration {
     const selectedMailbox = mailboxes.find((mailbox) => mailbox.id === this.selectedMailboxId);
     const detail = selectedMailbox ? await this.pool.getDetail(selectedMailbox.id) : undefined;
     const codexImportState = await this.getCodexImportState();
-    const registrationKeyPool = await this.getRegistrationKeyPoolState();
     const registrationFiveSimToken = await this.getRegistrationFiveSimTokenState();
     const registrationFutureToken = await this.getRegistrationFutureTokenState();
     const registrationSms688Token = await this.getRegistrationSms688TokenState();
@@ -2340,7 +2221,6 @@ class MailboxIntegration {
       managedAccountRemovalAvailable: codexImportState.removalAvailable,
       phoneSources: listRegistrationPhoneSources(),
       registrationDefaultPhoneSource: getRegistrationPhoneSource(this.registrationDefaultPhoneSource)?.id || "fivesim",
-      registrationKeyPool,
       registrationFiveSimToken,
       registrationFutureToken,
       registrationSms688Token,
@@ -2407,14 +2287,6 @@ class MailboxIntegration {
     }
   }
 
-  async getRegistrationKeyPoolState() {
-    try {
-      return await this.registrationKeyPool.snapshot();
-    } catch {
-      return { count: 0, available: 0, inUse: 0, keys: [], error: "接码平台 Key 池不可用" };
-    }
-  }
-
   async getRegistrationFiveSimTokenState() {
     try {
       return await this.fiveSimTokenStore.snapshot();
@@ -2443,7 +2315,7 @@ class MailboxIntegration {
     try {
       return await this.miaoicTokenStore.snapshot();
     } catch {
-      return { configured: false, masked: "", error: "Miaoic Token 存储不可用" };
+      return { configured: false, masked: "", error: "Miaoic 账户存储不可用" };
     }
   }
 
@@ -2568,8 +2440,6 @@ class MailboxIntegration {
           sessionId: session.id,
           msg: `关闭注册助手时取消 GPT 会话失败：${safeError(error, "未知错误")}`
         });
-      } finally {
-        await this.releaseRegistrationPhoneKey(session.id).catch(() => undefined);
       }
     }
     if (sessions.length > 0) {
@@ -2598,8 +2468,6 @@ class MailboxIntegration {
           sessionId: session.id,
           msg: `关闭注册助手时取消注册会话失败：${safeError(error, "未知错误")}`
         });
-      } finally {
-        await this.releaseRegistrationPhoneKey(session.id).catch(() => undefined);
       }
     }
     if (sessions.length > 0) {
@@ -2638,10 +2506,6 @@ class MailboxIntegration {
       watcher.stop();
     }
     this.registrationEmailWatchers.clear();
-    for (const sessionId of this.registrationPhoneKeyClaims.keys()) {
-      void this.releaseRegistrationPhoneKey(sessionId).catch(() => undefined);
-    }
-    this.registrationPhoneKeyClaims.clear();
     for (const session of this.registrationManager.getAllSessions()) {
       void this.registrationManager.cancelSession(session.id).catch(() => undefined);
     }

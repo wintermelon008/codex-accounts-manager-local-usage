@@ -6,12 +6,12 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-// Never let integration tests write credentials or other state into the
-// checkout's real private/ directory. The production environment may point
-// CODEX_ACCOUNTS_PRIVATE_DIR at that directory, so tests must override it
-// before constructing MailboxIntegration.
-const testPrivateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-accounts-mailbox-integration-"));
-process.env.CODEX_ACCOUNTS_PRIVATE_DIR = testPrivateRoot;
+// Never let integration tests inherit or share the Manager's real private
+// directory. Each test context receives a separate extension storage root so
+// persisted mailbox records cannot leak into another test.
+delete process.env.CODEX_ACCOUNTS_PRIVATE_DIR;
+delete process.env.AIDECK_DATA_DIR;
+const testStorageRoots = new Set();
 
 const {
   MailboxIntegration,
@@ -21,7 +21,9 @@ const {
 } = require("../../src/ui/integration.cjs");
 
 test.after(() => {
-  fs.rmSync(testPrivateRoot, { recursive: true, force: true });
+  for (const root of testStorageRoots) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("activation loads local state, registers a generic Manager card, and does not query a provider", async () => {
@@ -1557,49 +1559,7 @@ test("registration email, phone, and SMS codes are auto-copied by the host clipb
   integration.dispose();
 });
 
-test("registration phone keys are claimed for取号, consumed on SMS, and released otherwise", async () => {
-  const vscode = createVscode();
-  const context = createContext();
-  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
-  const integration = new MailboxIntegration(vscode, context, api);
-  await integration.initialize();
-  await integration.openRegistrationPanel();
-  const sessionId = integration.registrationManager.createSession({ email: "phone-key@example.com", password: "password" });
-  let acquired;
-  integration.registrationManager.acquirePhoneNumber = async (_id, code, options) => {
-    acquired = { code, options };
-    return { phase: "polling", running: true };
-  };
-
-  await integration.addRegistrationPhoneKeys("POOL-KEY-1\nPOOL-KEY-2");
-  const before = await integration.getPanelState();
-  assert.deepEqual(before.phoneSources.map((source) => source.id), ["fivesim", "miaoic", "future", "sms688", "liye"]);
-  const keyId = before.registrationKeyPool.keys[0].id;
-  await integration.acquireRegistrationPhone(sessionId, { sourceId: "liye", keyId });
-  assert.equal(acquired.code, "POOL-KEY-1");
-  assert.equal(acquired.options.cardKeyId, keyId);
-  assert.equal((await integration.getPanelState()).registrationKeyPool.inUse, 1);
-
-  await integration.syncRegistrationPhoneKey({
-    sessionId,
-    phoneOrder: { phase: "received", order: { phone: "+8613800000000", smsCode: "123456" } }
-  });
-  const afterCode = await integration.getPanelState();
-  assert.equal(afterCode.registrationKeyPool.count, 1);
-  assert.equal(afterCode.registrationKeyPool.inUse, 0);
-  assert.equal(
-    vscode.panels.flatMap((panel) => panel.webview.messages).some((message) => message.action === "registrationPhoneCodeReceived" && message.level === "success"),
-    true
-  );
-
-  const nextKeyId = afterCode.registrationKeyPool.keys[0].id;
-  await integration.acquireRegistrationPhone(sessionId, { sourceId: "liye", keyId: nextKeyId });
-  await integration.releaseRegistrationPhoneKey(sessionId);
-  assert.equal((await integration.getPanelState()).registrationKeyPool.available, 1);
-  integration.dispose();
-});
-
-test("5SIM registration uses its own API Token and never claims the LIYE Key pool", async () => {
+test("5SIM registration uses its own API Token without a shared credential pool", async () => {
   const vscode = createVscode();
   const context = createContext();
   const api = { registerDashboardIntegration() { return { dispose() {} }; } };
@@ -1621,12 +1581,11 @@ test("5SIM registration uses its own API Token and never claims the LIYE Key poo
 
   assert.equal(acquired.credential, "five-sim-secret-token");
   assert.deepEqual(acquired.options, { sourceId: "fivesim", country: "england", operator: "any", product: "openai" });
-  assert.equal(integration.registrationPhoneKeyClaims.has(sessionId), false);
   assert.deepEqual((await integration.getPanelState()).registrationFiveSimToken, { configured: true, masked: "five…oken" });
   integration.dispose();
 });
 
-test("SMS688 registration uses its own API Key and never claims the LIYE Key pool", async () => {
+test("SMS688 registration uses its own API Key without a shared credential pool", async () => {
   const vscode = createVscode();
   const context = createContext();
   const api = { registerDashboardIntegration() { return { dispose() {} }; } };
@@ -1644,12 +1603,11 @@ test("SMS688 registration uses its own API Key and never claims the LIYE Key poo
 
   assert.equal(acquired.credential, "sms688-account-api-key");
   assert.deepEqual(acquired.options, { sourceId: "sms688" });
-  assert.equal(integration.registrationPhoneKeyClaims.has(sessionId), false);
   assert.deepEqual((await integration.getPanelState()).registrationSms688Token, { configured: true, masked: "sms6…-key" });
   integration.dispose();
 });
 
-test("Miaoic registration uses its page Token and stays separate from the LIYE Key pool", async () => {
+test("Miaoic registration redeems a CDK and keeps the internal account private", async () => {
   const vscode = createVscode();
   const context = createContext();
   const requests = [];
@@ -1657,7 +1615,16 @@ test("Miaoic registration uses its page Token and stays separate from the LIYE K
     registerDashboardIntegration() { return { dispose() {} }; },
     fetchWithManagerProxy: async (url, options) => {
       requests.push({ url, options });
-      return fakeResponse({ ok: true, balance: 6, active: false, phone: "", code: "" });
+      const path = new URL(url).pathname;
+      if (path === "/me/redeem") {
+        assert.equal(options.method, "POST");
+        assert.equal(options.body, "codes=miaoic-cdk");
+        return fakeResponse("兑换成功");
+      }
+      if (path === "/recv/state") {
+        return fakeResponse({ ok: true, balance: 6, active: false, phone: "", code: "" });
+      }
+      throw new Error(`unexpected Miaoic request ${url}`);
     }
   };
   const integration = new MailboxIntegration(vscode, context, api);
@@ -1669,16 +1636,17 @@ test("Miaoic registration uses its page Token and stays separate from the LIYE K
     return { phase: "polling", running: true };
   };
 
-  await integration.saveMiaoicToken("miaoic-page-token");
+  await integration.saveMiaoicCdk("miaoic-cdk");
   await integration.refreshRegistrationMiaoic(sessionId);
   await integration.acquireRegistrationPhone(sessionId, { sourceId: "miaoic" });
 
-  assert.equal(acquired.credential, "miaoic-page-token");
+  assert.match(acquired.credential, /^[a-f0-9]{32}$/u);
   assert.deepEqual(acquired.options, { sourceId: "miaoic" });
-  assert.equal(integration.registrationPhoneKeyClaims.has(sessionId), false);
-  assert.deepEqual((await integration.getPanelState()).registrationMiaoicToken, { configured: true, masked: "miao…oken" });
-  assert.equal(requests[0].url, "http://miaoic.shop/recv/state");
-  assert.equal(requests[0].options.headers.cookie, "bj_user=miaoic-page-token");
+  assert.deepEqual((await integration.getPanelState()).registrationMiaoicToken, { configured: true, masked: "" });
+  assert.equal(requests[0].url, "http://miaoic.shop/me/redeem");
+  assert.equal(requests[0].options.headers.cookie, `bj_user=${acquired.credential}`);
+  assert.equal(requests[1].url, "http://miaoic.shop/recv/state");
+  assert.equal(requests[1].options.headers.cookie, `bj_user=${acquired.credential}`);
   integration.dispose();
 });
 
@@ -1850,8 +1818,11 @@ function createPanel(vscode, column) {
 function createContext() {
   const state = new Map();
   const secrets = new Map();
+  const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-accounts-mailbox-test-"));
+  testStorageRoots.add(storageRoot);
   return {
     subscriptions: [],
+    globalStorageUri: { fsPath: storageRoot },
     globalState: {
       async get(key) { return state.get(key); },
       async update(key, value) { state.set(key, structuredClone(value)); }

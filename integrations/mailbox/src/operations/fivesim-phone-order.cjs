@@ -293,15 +293,6 @@ class FiveSimPhoneOrderSession {
     }
   }
 
-  async confirmNumber() {
-    this.requireOrder();
-    if (!this.state.running || !["waiting", "polling"].includes(this.state.phase)) {
-      throw new FiveSimOrderError("当前没有可读取验证码的号码");
-    }
-    this.beginPolling("已开始读取验证码…");
-    return this.snapshot();
-  }
-
   async replaceNumber() {
     this.requireOrder();
     if (!this.state.running || !["waiting", "polling"].includes(this.state.phase)) {
