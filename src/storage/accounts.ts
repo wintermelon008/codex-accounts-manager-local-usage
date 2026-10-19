@@ -13,8 +13,8 @@ import { randomUUID } from "node:crypto";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import * as vscode from "vscode";
-import { SecretStore } from "./secrets";
+import type * as vscode from "vscode";
+import { SecretStore, type SecretStorageLike } from "./secrets";
 import { createEmptyIndex, cloneIndex, markActive, parseAccountsIndex, syncActiveAccountState } from "./accountsIndex";
 import {
   addAccountTags as addAccountTagsToIndex,
@@ -61,7 +61,6 @@ import {
   SharedFileLease,
   tryAcquireSharedFileLease
 } from "./accountsWriteCoordinator";
-import { readAuthFile, writeAuthFile } from "../codex";
 import {
   ensureFreshAccountTokens,
   invalidateFreshAccountTokenRefresh
@@ -164,6 +163,19 @@ export type TokenRefreshStatusUpdate = {
   tokenRefreshNextRetryAt?: number;
 };
 
+/** Host-neutral subset needed by the account repository. */
+export type AccountsRepositoryContext = {
+  secrets: SecretStorageLike;
+  globalStorageUri: { fsPath: string };
+  extensionUri?: { fsPath?: string };
+  authFile?: AccountsRepositoryAuthFile;
+};
+
+export type AccountsRepositoryAuthFile = {
+  readAuthFile: () => ReturnType<typeof import("../codex/authFile").readAuthFile>;
+  writeAuthFile: (tokens: CodexTokens) => ReturnType<typeof import("../codex/authFile").writeAuthFile>;
+};
+
 export class AccountsRepository {
   private readonly secretStore: SecretStore;
   private readonly privateStatePaths: PrivateStatePaths;
@@ -184,6 +196,8 @@ export class AccountsRepository {
    * onDidChangeAccounts and does not invalidate Mailbox's credential view.
    */
   private readonly accountDirectoryChangeListeners = new Set<AccountChangeListener>();
+  private readonly readAuthFile: AccountsRepositoryAuthFile["readAuthFile"];
+  private readonly writeAuthFile: AccountsRepositoryAuthFile["writeAuthFile"];
 
   /** 防止重复释放 */
   private disposed = false;
@@ -227,10 +241,18 @@ export class AccountsRepository {
     }
   }
 
-  constructor(private readonly context: vscode.ExtensionContext) {
+  constructor(private readonly context: AccountsRepositoryContext) {
     this.privateStatePaths = getPrivateStatePaths(context);
     this.secretStore = new SecretStore(context.secrets, this.privateStatePaths.accountsSecrets);
     this.indexPath = this.privateStatePaths.accountsIndex;
+    this.readAuthFile = context.authFile?.readAuthFile ?? (async () => {
+      const codex = await import("../codex");
+      return codex.readAuthFile();
+    });
+    this.writeAuthFile = context.authFile?.writeAuthFile ?? (async (tokens) => {
+      const codex = await import("../codex");
+      return codex.writeAuthFile(tokens);
+    });
   }
 
   /**
@@ -506,7 +528,7 @@ export class AccountsRepository {
   }
 
   async restoreAccountsFromAuthFile(): Promise<CodexAccountsRestoreResult> {
-    const auth = await readAuthFile();
+    const auth = await this.readAuthFile();
     if (!auth) {
       throw new AccountError("Current auth.json was not found", {
         code: ErrorCode.NOT_FOUND,
@@ -704,7 +726,7 @@ export class AccountsRepository {
       }
 
       if (account.isActive) {
-        await writeAuthFile({
+        await this.writeAuthFile({
           ...effectiveTokens,
           accountId: account.accountId ?? effectiveTokens.accountId
         });
@@ -1055,7 +1077,7 @@ export class AccountsRepository {
    * 导入当前 auth.json
    */
   async importCurrentAuth(): Promise<CodexAccountRecord> {
-    const auth = await readAuthFile();
+    const auth = await this.readAuthFile();
     if (!auth) {
       throw new AccountError("Current auth.json was not found", {
         code: ErrorCode.NOT_FOUND,
@@ -1314,7 +1336,7 @@ export class AccountsRepository {
         })) ?? effectiveTokens;
     }
 
-    await writeAuthFile(effectiveTokens);
+    await this.writeAuthFile(effectiveTokens);
 
     const nextAccount = switchActiveAccount(index, accountId);
     if (!nextAccount) {
@@ -1663,7 +1685,7 @@ export class AccountsRepository {
       await mirrorAideckCodexAccount(account, effectiveNextTokens);
       this.notifyTokensChanged([accountId]);
       if (account.isActive) {
-        await writeAuthFile(effectiveNextTokens);
+        await this.writeAuthFile(effectiveNextTokens);
         await mirrorAideckCurrentAccount(accountId);
       }
     }
@@ -1764,7 +1786,7 @@ export class AccountsRepository {
    * 同步激活账号状态 (从 auth.json)
    */
   async syncActiveAccountFromAuthFile(): Promise<void> {
-    const auth = await readAuthFile();
+    const auth = await this.readAuthFile();
     const index = await this.readIndex();
     if (index.currentProviderRoute === "sub2api") {
       return;
@@ -1995,6 +2017,7 @@ export class AccountsRepository {
    * 打开 Codex Home 目录
    */
   async openCodexHome(): Promise<void> {
+    const vscode = await import("vscode");
     const codexHome = process.env["CODEX_HOME"]?.trim()
       ? process.env["CODEX_HOME"].replace(/^['"]|['"]$/g, "")
       : path.join(os.homedir(), ".codex");

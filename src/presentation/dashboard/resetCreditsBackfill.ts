@@ -4,7 +4,7 @@ import { AccountsRepository } from "../../storage";
 import { fetchResetCredits } from "../../services/quota";
 import { runAuthenticatedAccountRequest } from "../../application/accounts/authenticatedAccountRequest";
 import { getErrorMessage } from "../../core/errors";
-import { logNetworkEvent } from "../../utils/debug";
+import { logNetworkEvent } from "../../utils/networkDebug";
 
 const RESET_CREDITS_BACKFILL_COOLDOWN_MS = 60_000;
 const inflightResetCreditsBackfills = new Set<string>();

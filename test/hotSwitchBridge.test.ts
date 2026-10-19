@@ -4,6 +4,26 @@ import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const originalSpawn = actual.spawn;
+  return {
+    ...actual,
+    spawn: ((command, args, options) => {
+      const normalizedOptions = typeof options === "object" && options !== null ? options : {};
+      return originalSpawn(command, args, {
+        ...normalizedOptions,
+        env: {
+          ...process.env,
+          ...(normalizedOptions.env ?? {}),
+          CODEX_ACCOUNTS_PRIVATE_DIR: `/tmp/codex-hot-switch-child-private-${process.pid}`
+        }
+      });
+    }) as typeof actual.spawn
+  };
+});
+
 import {
   CodexHotSwitchBridge,
   getHotSwitchSocketPath,

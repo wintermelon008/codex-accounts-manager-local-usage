@@ -13,7 +13,7 @@ vi.mock("../src/services/quota", async () => {
   };
 });
 
-vi.mock("../src/utils/debug", () => ({
+vi.mock("../src/utils/networkDebug", () => ({
   logNetworkEvent: logNetworkEventMock
 }));
 

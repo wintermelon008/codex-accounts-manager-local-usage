@@ -5,6 +5,7 @@
 | 组件 | 产物 | 启用 | 停用 / 卸载 |
 | --- | --- | --- | --- |
 | 核心 Manager | 根目录生成的 Manager VSIX | 在 VS Code 安装后直接导入或 OAuth 添加账号；本地收件箱和外部控制接口按需启用 | 关闭各项可选设置或移除无感 runtime；在扩展视图卸载核心 VSIX |
+| Manager headless runtime | 根目录编译出的 `out/runtime/managerDaemon.js` + systemd 用户服务模板 | 与 Manager 共用 private state，长期执行 token 续期、Mailbox 自动续期、额度刷新和本地导入；默认不接管 Codex app-server | 停止 daemon 服务即可；不会删除账号、凭据或 VS Code 扩展 |
 | 飞书 Manager 操纵助手 | `feishu-assistant` tarball | 使用全新的飞书 App 长连接；管理员一对一私聊查询账号、今日用量、触发额度刷新和查看导入状态；Manager 回环控制接口默认开启 | 停止机器人进程或服务、关闭 `codexAccounts.externalControlEnabled`，再卸载其 Node 包；不会删除 Manager、账号或队列数据 |
 | Sub2API Gateway | 独立 Gateway VSIX | 安装后默认隐藏已保存账号中的 Sub2API 卡片；在设置中开启后配置、保存密钥并选择 Gateway | 先在账号卡片切回 ChatGPT Auth，再卸载 Gateway VSIX |
 | Mailbox | `integrations/mailbox` 独立 VSIX | 用户在导入时选择邮箱 provider 后，从 Mailbox 面板手动查询、启动验证码监听或人工续期 | 先停止邮箱操作，再卸载可选 VSIX；不影响 Manager 账号和 Sub2API |

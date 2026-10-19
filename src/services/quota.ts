@@ -30,7 +30,7 @@ import { ensureFreshAccountTokens, type TokenRefreshAccountRepository } from "..
 import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { QUOTA_USAGE_URL, RESET_CREDITS_CONSUME_URL, RESET_CREDITS_URL } from "../infrastructure/config/apiEndpoints";
 import { extractClaims } from "../utils/jwt";
-import { logNetworkEvent } from "../utils/debug";
+import { logNetworkEvent } from "../utils/networkDebug";
 import { fetchWithTimeout, isRetriableHttpStatus, isRetriableNetworkError, retryWithBackoff } from "../utils/network";
 
 /** 配额缓存失效时间 (毫秒) - 避免短时间内重复刷新 */

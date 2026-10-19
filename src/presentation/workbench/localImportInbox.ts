@@ -4,7 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { SharedCodexAccountJson } from "../../core/types";
 import type { AccountsRepository } from "../../storage";
-import { importSharedAccountsIntoBalancePool } from "../../application/accounts/importIntoBalancePool";
+import {
+  importSharedAccountsIntoBalancePool,
+  type BalancePoolQuotaRefresher
+} from "../../application/accounts/importIntoBalancePool";
 import { normalizeLocalImportAccounts } from "../../integrations/localImportProtocol";
 
 export const LOCAL_IMPORT_POLL_INTERVAL_MS = 3_000;
@@ -54,6 +57,7 @@ export type LocalImportStatus = {
 export type LocalImportInboxOptions = {
   queuePath?: string;
   pollIntervalMs?: number;
+  refreshQuota?: BalancePoolQuotaRefresher;
 };
 
 /**
@@ -67,6 +71,7 @@ export class LocalImportInbox {
   private readonly queuePath: string;
   private readonly resultsPath: string;
   private readonly pollIntervalMs: number;
+  private readonly refreshQuota?: BalancePoolQuotaRefresher;
   private timer: NodeJS.Timeout | undefined;
   private processing = false;
   private disposed = false;
@@ -79,6 +84,7 @@ export class LocalImportInbox {
     this.queuePath = options.queuePath ?? getLocalImportInboxPath();
     this.resultsPath = path.join(path.dirname(this.queuePath), "results");
     this.pollIntervalMs = options.pollIntervalMs ?? LOCAL_IMPORT_POLL_INTERVAL_MS;
+    this.refreshQuota = options.refreshQuota;
   }
 
   async start(): Promise<void> {
@@ -203,7 +209,7 @@ export class LocalImportInbox {
   }
 
   private async importAccounts(job: LocalImportJob): Promise<LocalImportResult> {
-    const summary = await importSharedAccountsIntoBalancePool(this.repo, job.accounts);
+    const summary = await importSharedAccountsIntoBalancePool(this.repo, job.accounts, this.refreshQuota);
     return {
       schema: IMPORT_RESULT_SCHEMA,
       id: job.id,

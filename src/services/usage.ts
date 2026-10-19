@@ -2,7 +2,7 @@ import { CodexDailyUsageBreakdown, CodexDailyUsagePoint, CodexTokens } from "../
 import { APIError, formatApiErrorMessage } from "../core/errors";
 import { DAILY_USAGE_BREAKDOWN_URL } from "../infrastructure/config/apiEndpoints";
 import { extractClaims } from "../utils/jwt";
-import { logNetworkEvent } from "../utils/debug";
+import { logNetworkEvent } from "../utils/networkDebug";
 import { fetchWithTimeout } from "../utils/network";
 
 type UnknownRecord = Record<string, unknown>;

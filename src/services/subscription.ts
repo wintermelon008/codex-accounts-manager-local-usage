@@ -9,7 +9,7 @@
 
 import type { CodexAccountRecord } from "../core/types";
 import { fetchWithTimeout } from "../utils/network";
-import { logNetworkEvent } from "../utils/debug";
+import { logNetworkEvent } from "../utils/networkDebug";
 import { APIError, formatApiErrorMessage } from "../core/errors";
 import { isFreePlanType } from "../utils/quotaLabels";
 import {

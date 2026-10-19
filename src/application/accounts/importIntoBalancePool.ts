@@ -1,10 +1,15 @@
-import { refreshImportedAccountQuota } from "./quota";
 import { getBalanceQuotaCapability } from "./balanceScheduler";
 import type { CodexAccountRecord, SharedCodexAccountJson } from "../../core/types";
 import { getQuotaIssueKind } from "../../utils/quotaIssue";
 import type { AccountsRepository } from "../../storage";
+import type { refreshImportedAccountQuota } from "./quota";
 
 const MAX_BALANCE_POOL_IMPORT_ACCOUNTS = 50;
+
+export type BalancePoolQuotaRefresher = (
+  repo: AccountsRepository,
+  accountId: string
+) => ReturnType<typeof refreshImportedAccountQuota>;
 
 export type BalancePoolImportSummary = {
   status: "completed" | "partial" | "failed";
@@ -39,7 +44,8 @@ export type BalancePoolAccountSummary = {
  */
 export async function importSharedAccountsIntoBalancePool(
   repo: AccountsRepository,
-  input: SharedCodexAccountJson | SharedCodexAccountJson[]
+  input: SharedCodexAccountJson | SharedCodexAccountJson[],
+  refreshQuotaForAccount?: BalancePoolQuotaRefresher
 ): Promise<BalancePoolImportSummary> {
   const entries = Array.isArray(input) ? input : [input];
   if (entries.length === 0 || entries.length > MAX_BALANCE_POOL_IMPORT_ACCOUNTS) {
@@ -53,6 +59,7 @@ export async function importSharedAccountsIntoBalancePool(
   let authFailed = 0;
   let importFailed = 0;
   const accounts: BalancePoolAccountSummary[] = [];
+  const refreshQuota = refreshQuotaForAccount ?? loadWorkbenchQuotaRefresher;
 
   for (const entry of entries) {
     let account: CodexAccountRecord;
@@ -76,7 +83,7 @@ export async function importSharedAccountsIntoBalancePool(
     }
 
     try {
-      const refresh = await refreshImportedAccountQuota(repo, account.id);
+      const refresh = await refreshQuota(repo, account.id);
       const updated = await repo.getAccount(account.id);
       const eligible = !refresh.error && updated ? getBalanceQuotaCapability(updated) !== "unknown" : false;
       await repo.setBalancePoolMembership(account.id, eligible);
@@ -118,6 +125,14 @@ export async function importSharedAccountsIntoBalancePool(
     importFailed,
     accounts
   };
+}
+
+async function loadWorkbenchQuotaRefresher(
+  repo: AccountsRepository,
+  accountId: string
+): Promise<Awaited<ReturnType<BalancePoolQuotaRefresher>>> {
+  const module = await import("./quota");
+  return module.refreshImportedAccountQuota(repo, accountId);
 }
 
 function toAccountSummary(

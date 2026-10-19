@@ -1,0 +1,17 @@
+[Unit]
+Description=Codex Accounts Manager headless runtime
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile={{PRIVATE_ENV_FILE}}
+Environment=CODEX_ACCOUNTS_PRIVATE_DIR={{PRIVATE_ROOT}}
+WorkingDirectory={{PACKAGE_ROOT}}
+ExecStart={{NODE_BIN}} {{PACKAGE_ROOT}}/out/runtime/managerDaemon.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

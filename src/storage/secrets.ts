@@ -1,9 +1,11 @@
-import * as vscode from "vscode";
+import type * as vscode from "vscode";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { CodexTokens } from "../core/types";
 import { tryAcquireSharedFileLease } from "./accountsWriteCoordinator";
+
+export type SecretStorageLike = Pick<vscode.SecretStorage, "get" | "store" | "delete">;
 
 const SECRET_PREFIX = "codex.account.";
 const SECRET_FILE_VERSION = 1;
@@ -19,7 +21,7 @@ export class SecretStore {
   private fileQueue: Promise<void> = Promise.resolve();
 
   constructor(
-    private readonly secrets: vscode.SecretStorage,
+    private readonly secrets: SecretStorageLike,
     private readonly privateFilePath?: string
   ) {}
 

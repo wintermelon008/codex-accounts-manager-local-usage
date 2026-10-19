@@ -588,6 +588,13 @@ export class AccountsWorkbench {
       console.info(`[codexAccounts] manager control API listening on ${address.host}:${address.port}`);
     } catch (error) {
       if (isAddressInUseError(error)) {
+        if (await isManagerDaemonControlServer(port, token)) {
+          this.managerControlRetryAttempt = 0;
+          console.info(
+            `[codexAccounts] manager daemon owns control port ${port}; the Extension Host will use its local UI/runtime without starting a second control server`
+          );
+          return;
+        }
         if (this.managerControlRetryAttempt === 0) {
           console.warn(
             `[codexAccounts] manager control port ${port} is already in use; waiting for the previous Manager host to exit before retrying`
@@ -1206,4 +1213,27 @@ function describeControlError(error: unknown): string {
 
 function isAddressInUseError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "EADDRINUSE");
+}
+
+async function isManagerDaemonControlServer(port: number, token: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 500);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const body = (await response.json().catch(() => undefined)) as {
+      service?: unknown;
+      api?: unknown;
+    } | undefined;
+    return body?.service === "codex-accounts-manager" && body.api === "manager-control";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

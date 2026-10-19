@@ -1,5 +1,5 @@
 import * as crypto from "crypto";
-import { readAuthFile } from "../codex";
+import { readAuthFile } from "../codex/authFile";
 import { extractClaims } from "./jwt";
 
 export function buildAccountStorageId(email: string, accountId?: string, organizationId?: string): string {

@@ -10,6 +10,9 @@ const SERVER_SECRET_FILE = "mailbox-shared-secrets.v1.json";
 const REGISTRATION_SESSION_FILE = "registration-sessions.v1.json";
 const REGISTRATION_SESSIONS_KEY = "codexAccounts.mailbox.registrationSessions.v1";
 const LEGACY_MIGRATION_KEY = "codexAccounts.mailbox.serverStorageMigration.v1";
+const FILE_LEASE_MS = 15_000;
+const FILE_LEASE_WAIT_MS = 5_000;
+const FILE_LEASE_RETRY_MS = 25;
 
 /**
  * Mailbox data belongs to the extension host, not to a VS Code client.
@@ -190,11 +193,61 @@ class JsonFileKeyValueStore {
     let release;
     this.lock = new Promise((resolve) => { release = resolve; });
     await previous;
+    const lease = await acquireFileLease(`${this.filePath}.write-lock`, FILE_LEASE_MS, FILE_LEASE_WAIT_MS);
+    if (!lease) {
+      release();
+      throw new Error(`Mailbox storage is busy: ${this.filePath}`);
+    }
     try {
       return await task();
     } finally {
+      await lease.release();
       release();
     }
+  }
+}
+
+async function acquireFileLease(lockPath, leaseMs, waitMs) {
+  const deadline = Date.now() + Math.max(0, waitMs);
+  const token = crypto.randomUUID();
+  for (;;) {
+    try {
+      await fs.mkdir(lockPath, { recursive: false, mode: 0o700 });
+      await fs.writeFile(
+        path.join(lockPath, "owner.json"),
+        JSON.stringify({ token, expiresAt: Date.now() + leaseMs }),
+        { encoding: "utf8", mode: 0o600 }
+      );
+      return {
+        release: async () => {
+          try {
+            const owner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+            if (owner?.token === token) {
+              await fs.rm(lockPath, { recursive: true, force: true });
+            }
+          } catch (error) {
+            if (error?.code !== "ENOENT") throw error;
+          }
+        }
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      if (await reapExpiredFileLease(lockPath)) continue;
+    }
+    if (Date.now() >= deadline) return undefined;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(FILE_LEASE_RETRY_MS, Math.max(1, deadline - Date.now()))));
+  }
+}
+
+async function reapExpiredFileLease(lockPath) {
+  try {
+    const owner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
+    if (typeof owner?.expiresAt !== "number" || owner.expiresAt > Date.now()) return false;
+    await fs.rm(lockPath, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return true;
+    return false;
   }
 }
 

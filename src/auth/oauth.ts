@@ -1,10 +1,10 @@
 import * as crypto from "crypto";
 import * as http from "http";
-import * as vscode from "vscode";
+import type * as vscode from "vscode";
 import { CodexTokens } from "../core/types";
 import { isTokenExpired } from "../utils/jwt";
 import { fetchWithTimeout } from "../utils/network";
-import { logNetworkEvent } from "../utils/debug";
+import { logNetworkEvent } from "../utils/networkDebug";
 import { AuthError, ErrorCode, APIError, formatApiErrorMessage } from "../core/errors";
 import {
   AUTH_ENDPOINT,
@@ -164,6 +164,7 @@ export async function runPreparedOAuthLoginSession(
   session: PreparedOAuthLoginSession,
   cancellationToken?: vscode.CancellationToken
 ): Promise<CodexTokens> {
+  const vscode = await import("vscode");
   const runtimeSession: OAuthSession = {
     state: session.state,
     verifier: session.verifier,
@@ -403,6 +404,7 @@ function buildOAuthAuthorizationUrl(state: string, verifier: string, redirectUri
 }
 
 async function ensureOAuthCallbackTunnel(redirectUri: string): Promise<void> {
+  const vscode = await import("vscode");
   let externalUri: vscode.Uri;
   try {
     externalUri = await vscode.env.asExternalUri(vscode.Uri.parse(redirectUri));

@@ -1,0 +1,19 @@
+[Unit]
+Description=Codex Accounts Manager controlled VS Code handoff
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{PACKAGE_ROOT}}
+Environment=HOME={{HOME}}
+Environment=PATH={{NODE_BIN_DIR}}:/usr/local/bin:/usr/bin:/bin
+Environment=CODEX_HOME={{CODEX_HOME}}
+Environment=CODEX_ACCOUNTS_PRIVATE_DIR={{PRIVATE_ROOT}}
+Environment=MANAGER_DAEMON_PORT={{MANAGER_DAEMON_PORT}}
+Environment=MANAGER_CONTROL_ENV_FILE={{CONTROL_ENV_FILE}}
+Environment=MANAGER_HANDOFF_RECOVERY_SECONDS=60
+ExecStart=/bin/bash {{PACKAGE_ROOT}}/scripts/manager-handoff.sh
+TimeoutStartSec=90
+KillMode=control-group
+NoNewPrivileges=true
+UMask=0077

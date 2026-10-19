@@ -4,7 +4,7 @@ const { fetchWithTimeoutMock } = vi.hoisted(() => ({
   fetchWithTimeoutMock: vi.fn()
 }));
 
-vi.mock("../src/utils/debug", () => ({
+vi.mock("../src/utils/networkDebug", () => ({
   logNetworkEvent: vi.fn()
 }));
 

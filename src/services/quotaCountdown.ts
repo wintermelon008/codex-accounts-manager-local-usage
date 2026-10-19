@@ -4,7 +4,7 @@ import type { CodexTokens } from "../core/types";
 import { formatApiErrorMessage, sanitizeApiErrorText } from "../core/errors";
 import { getCodexHome } from "../codex/authFile";
 import { CODEX_API_BASE } from "../infrastructure/config/apiEndpoints";
-import { logNetworkEvent } from "../utils/debug";
+import { logNetworkEvent } from "../utils/networkDebug";
 import { fetchWithTimeout } from "../utils/network";
 
 const CODEX_RESPONSES_URL = `${CODEX_API_BASE}/backend-api/codex/responses`;

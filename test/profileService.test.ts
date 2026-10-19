@@ -9,7 +9,7 @@ vi.mock("../src/services/workspaceRetry", () => ({
   shouldRetryWithoutWorkspace: vi.fn(() => false)
 }));
 
-vi.mock("../src/utils/debug", () => ({
+vi.mock("../src/utils/networkDebug", () => ({
   logNetworkEvent: vi.fn()
 }));
 

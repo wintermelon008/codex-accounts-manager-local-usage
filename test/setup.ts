@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, vi } from "vitest";
@@ -6,8 +6,11 @@ import { afterAll, vi } from "vitest";
 const testDataRoot = mkdtempSync(path.join(os.tmpdir(), "codex-accounts-vitest-"));
 
 // Never allow tests to inherit the Manager's real private state directory.
+// Tests that spawn a runtime shim inject their own disposable root below.
 delete process.env.CODEX_ACCOUNTS_PRIVATE_DIR;
 process.env.AIDECK_DATA_DIR = path.join(testDataRoot, "aideck-data");
+process.env.CODEX_HOME = path.join(testDataRoot, "codex-home");
+mkdirSync(process.env.CODEX_HOME, { recursive: true });
 
 afterAll(() => {
   rmSync(testDataRoot, { recursive: true, force: true });

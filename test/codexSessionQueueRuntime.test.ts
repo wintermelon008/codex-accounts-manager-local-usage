@@ -27,7 +27,7 @@ describe("Manager session queue runtime", () => {
     const root = path.resolve(__dirname, "..");
     temporaryHome = await mkdtemp(path.join(os.tmpdir(), "codex-session-queue-runtime-"));
     const environment = { ...process.env };
-    delete environment.CODEX_ACCOUNTS_PRIVATE_DIR;
+    environment.CODEX_ACCOUNTS_PRIVATE_DIR = path.join(temporaryHome, "private");
     delete environment.AIDECK_DATA_DIR;
     environment.CODEX_HOME = path.join(temporaryHome, "codex-home");
     environment.CODEX_ACCOUNTS_REAL_CLI = path.join(root, "test", "fixtures", "fake-codex-app-server.cjs");

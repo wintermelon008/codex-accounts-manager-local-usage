@@ -431,6 +431,7 @@
     "compile": "npm run typecheck:webview && npm run build:webview && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "npm run audit:integration-portability && npm run compile && npx --no-install vsce package",
+    "manager:daemon": "node out/runtime/managerDaemon.js",
     "session-hub": "node scripts/session-hub.mjs",
     "audit:integration-portability": "node scripts/audit-integration-portability.mjs",
     "verify:seamless-auth": "node scripts/verify-seamless-http-auth.mjs",

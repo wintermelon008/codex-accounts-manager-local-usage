@@ -14,7 +14,7 @@ import { extractClaims } from "../utils/jwt";
 import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { fetchWithTimeout, isRetriableHttpStatus, isRetriableNetworkError, retryWithBackoff } from "../utils/network";
 import { APIError, formatApiErrorMessage } from "../core/errors";
-import { logNetworkEvent } from "../utils/debug";
+import { logNetworkEvent } from "../utils/networkDebug";
 import { ACCOUNT_CHECK_URL } from "../infrastructure/config/apiEndpoints";
 
 const PROFILE_CACHE_TTL_MS = 60_000;
