@@ -4,6 +4,7 @@ import path from "node:path";
 const DEFAULT_GATEWAY_HOST = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT = 43118;
 const DEFAULT_MANAGER_CONTROL_URL = "http://127.0.0.1:43117";
+const DEFAULT_WORKBENCH_DATA_URL = "http://127.0.0.1:43119";
 const DEFAULT_GATEWAY_STATE_DIR = path.join(
   os.homedir(),
   ".local",
@@ -51,7 +52,8 @@ export function loadConfig(env = process.env) {
       model: optional(env.MANAGER_GATEWAY_CODEX_MODEL),
       timeoutSeconds: parseBoundedInteger(env.MANAGER_GATEWAY_CODEX_TIMEOUT_SECONDS, 1_800, 10, 86_400)
     },
-    workbenchDataUrl: optional(env.MANAGER_GATEWAY_WORKBENCH_DATA_URL) ?? optional(env.WORKBENCH_DATA_URL),
+    workbenchDataUrl:
+      optional(env.MANAGER_GATEWAY_WORKBENCH_DATA_URL) ?? optional(env.WORKBENCH_DATA_URL) ?? DEFAULT_WORKBENCH_DATA_URL,
     workbenchDataToken:
       optional(env.MANAGER_GATEWAY_WORKBENCH_DATA_TOKEN) ?? optional(env.WORKBENCH_DATA_TOKEN),
     sharing: {

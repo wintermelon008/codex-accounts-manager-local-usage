@@ -111,6 +111,10 @@ export function createFeishuAssistant(options) {
     }
     rememberPaymentTarget(result.paymentOrder, chatId);
     await sendText(client, chatId, result.reply);
+    let reimbursementFileSent;
+    if (result.reimbursementArtifact) {
+      reimbursementFileSent = await sendReimbursementFile(client, chatId, result.reimbursementArtifact, options.gateway);
+    }
     let qrSent;
     if (result.paymentQr) {
       qrSent = await sendPaymentQr(client, chatId, result.paymentQr, fetchImpl);
@@ -120,7 +124,12 @@ export function createFeishuAssistant(options) {
         console.warn("[feishu-assistant] quota refresh follow-up failed:", safeError(error));
       });
     }
-    return { ...result, sent: true, ...(qrSent === undefined ? {} : { qrSent }) };
+    return {
+      ...result,
+      sent: true,
+      ...(qrSent === undefined ? {} : { qrSent }),
+      ...(reimbursementFileSent === undefined ? {} : { reimbursementFileSent })
+    };
   }
 
   async function notifyPaymentUpdate(order) {
@@ -189,6 +198,41 @@ async function sendText(client, chatId, text) {
       content: JSON.stringify({ text })
     }
   });
+}
+
+async function sendReimbursementFile(client, chatId, artifact, gateway) {
+  if (typeof gateway?.downloadAttachment !== "function" || !artifact?.id) {
+    await sendText(client, chatId, "PDF 已生成，但当前飞书助手无法下载导出文件。请稍后从 Workbench 获取。 ");
+    return false;
+  }
+  try {
+    const downloaded = await gateway.downloadAttachment(artifact.id);
+    const uploaded = await client.im.v1.file.create({
+      data: {
+        file_type: "pdf",
+        file_name: artifact.filename || downloaded.filename || `reimbursement-${artifact.id}.pdf`,
+        file: downloaded.bytes
+      }
+    });
+    const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
+    if (typeof fileKey !== "string" || !fileKey) throw new Error("飞书文件接口没有返回 file_key");
+    await client.im.v1.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: chatId,
+        msg_type: "file",
+        content: JSON.stringify({ file_key: fileKey })
+      }
+    });
+    if (typeof gateway.deleteAttachment === "function") {
+      await gateway.deleteAttachment(artifact.id).catch(() => undefined);
+    }
+    return true;
+  } catch (error) {
+    console.warn("[feishu-assistant] reimbursement PDF delivery failed:", safeError(error));
+    await sendText(client, chatId, "PDF 已生成，但暂时无法作为飞书文件发送；请稍后重试导出。 ");
+    return false;
+  }
 }
 
 async function downloadMessageAttachments(client, messageId, resources, gateway) {

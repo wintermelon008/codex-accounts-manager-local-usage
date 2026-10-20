@@ -98,6 +98,23 @@ describe("manager gateway Codex provider", () => {
     assert.match(argv.at(-1), /gateway\.test\/v1\/attachments/u);
   });
 
+  it("runs reimbursement interpretation in a read-only Codex sandbox", async () => {
+    const harness = await createHarness("success");
+    const provider = createProvider(harness.config);
+
+    await provider.run({
+      session: sessionFor(harness.root, {
+        message: "请把这张发票导入报销",
+        context: { purpose: "reimbursement-assistant" }
+      }),
+      emit() {}
+    });
+    const [{ argv }] = await readInvocations(harness.logPath);
+    assert.equal(argv.includes("--sandbox"), true);
+    assert.equal(argv[argv.indexOf("--sandbox") + 1], "read-only");
+    assert.equal(argv.includes("--dangerously-bypass-approvals-and-sandbox"), false);
+  });
+
   it("applies the current Manager HTTPS proxy to each Codex child process", async () => {
     const harness = await createHarness("success");
     const provider = createProvider(harness.config, {
@@ -313,6 +330,49 @@ describe("manager gateway Codex provider", () => {
       assert.equal(authorization, "Bearer research-key");
       assert.equal(requestBody.model, "gpt-6-astra");
       assert.deepEqual(requestBody.stream_options, { include_usage: true });
+    } finally {
+      await closeHttpServer(server);
+    }
+  });
+
+  it("passes reimbursement images as multimodal content to an OpenAI-compatible provider", async () => {
+    const harness = await createHarness("success");
+    const imagePath = join(harness.root, "receipt.png");
+    const imageBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    await writeFile(imagePath, imageBytes);
+    let requestBody;
+    const server = http.createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requestBody = JSON.parse(body);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ choices: [{ message: { content: "{}" } }] }));
+      });
+    });
+    await listenHttpServer(server);
+    try {
+      const address = server.address();
+      const provider = createProvider({
+        ...harness.config,
+        research: { baseUrl: `http://127.0.0.1:${address.port}/v1`, model: "vision-model" }
+      });
+      await provider.run({
+        session: sessionFor(harness.root, {
+          mode: "research",
+          message: "请导入这张发票",
+          context: { purpose: "reimbursement-assistant" }
+        }),
+        attachments: [{ id: "receipt", filename: "receipt.png", mimeType: "image/png", path: imagePath }],
+        emit() {}
+      });
+      const content = requestBody.messages.at(-1).content;
+      assert.equal(Array.isArray(content), true);
+      assert.equal(content[1].type, "image_url");
+      assert.equal(Buffer.from(content[1].image_url.url.split(",", 2)[1], "base64").equals(imageBytes), true);
     } finally {
       await closeHttpServer(server);
     }

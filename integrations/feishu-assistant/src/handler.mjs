@@ -26,13 +26,25 @@ export async function handleAssistantEvent(event, options) {
       const attachments = resources.length > 0
         ? await options.loadAttachments?.(resources) ?? []
         : [];
+      const reimbursement = isReimbursementIntent(text)
+        || options.gateway.isReimbursementChat?.(message?.chat_id) === true
+        || (!text && resources.length > 0);
+      const context = reimbursement
+        ? {
+            purpose: "reimbursement-assistant",
+            sourceChannel: "feishu",
+            sourceActorId: senderOpenId,
+            sourceChatId: message?.chat_id,
+            sourceMessageId: message?.message_id,
+          }
+        : undefined;
+      const result = reimbursement && typeof options.gateway.sendMessageDetailed === "function"
+        ? await options.gateway.sendMessageDetailed(message?.chat_id, text || "请分析我发送的附件。", attachments, context)
+        : { text: await options.gateway.sendMessage(message?.chat_id, text || "请分析我发送的附件。", attachments, context) };
       return {
         handled: true,
-        reply: await options.gateway.sendMessage(
-          message?.chat_id,
-          text || "请分析我发送的附件。",
-          attachments
-        )
+        reply: result.text,
+        ...(result.reimbursement ? { reimbursementArtifact: result.reimbursement } : {})
       };
     } catch (error) {
       return { handled: true, reply: `操纵助手\n${safeErrorMessage(error)}` };
@@ -188,6 +200,11 @@ export function extractTextContent(content) {
   } catch {
     return "";
   }
+}
+
+export function isReimbursementIntent(text) {
+  if (typeof text !== "string") return false;
+  return /报销|发票|收据|支付截图|订单截图|凭证|报销项|报销大项|报销小项|汇总导出|导出\s*(?:完整)?\s*pdf/iu.test(text);
 }
 
 export function extractMessageResources(message) {

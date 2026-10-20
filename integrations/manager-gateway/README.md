@@ -78,6 +78,20 @@ FEISHU_GATEWAY_URL=http://127.0.0.1:43118
 
 Feishu Helper 配置 `FEISHU_GATEWAY_URL=http://127.0.0.1:43118` 后，普通管理员私聊会通过本 Gateway 创建或继续 AI session，并与 Workbench session 共用 token ledger。Gateway 启动 Codex exec 时会注入 `WORKBENCH_DATA_URL` 和可选的 `WORKBENCH_DATA_TOKEN`，并把 Workbench HTTP API 约定加入 Codex 指令；因此飞书自然语言任务与 Workbench 网页端 AI 使用同一数据服务边界。Feishu 侧没有 Manager control 接口时，`账号`、`状态`、`健康`、`用量` 仍可按可用接口降级，其中 token 用量优先来自 Gateway；刷新额度、导入状态等 Manager 专属操作会明确提示未接入。
 
+## 报销智能导入
+
+报销数据由 Research Workbench 数据服务持有，Manager Gateway 只负责统一 AI 会话、附件暂存和动作编排，不打开 Workbench SQLite。一个报销事项支持三个凭证角色：`invoice`（发票/收据）、`payment`（支付截图）和 `order`（订单截图）；三类凭证均可缺省，缺失项保持为空，齐全后事项自动进入 `ready` 状态，未齐全时仍可保存、查看和导出。报销大项和子大项通过 `parent_id` 组织，事项通过 `group_id` 归属；导出根大项时默认递归包含子大项。
+
+Workbench AI 和 Feishu 都把自然语言请求标记为 `purpose=reimbursement-assistant`，交给同一个 Gateway。模型只返回结构化动作计划，Gateway 再调用 Workbench `/api/workbench/reimbursements/*` API 执行创建事项、归档凭证、合并大项和导出，避免模型直接写 SQLite。PDF 导出默认固定为 `full`，摘要页后附原始图片；PDF 凭证也会尽量复制原始页。
+
+Feishu 私聊示例（无需记命令）：
+
+```text
+帮我整理这 3 张图的报销，归到“2026 年 9 月出差”下面；识别发票、支付截图和订单截图，缺什么就告诉我。
+```
+
+随后继续发送图片，或一次发送多张图片；如果已有当前导入会话，Gateway 会按 `sourceChannel/sourceChatId/sourceActorId` 继续当前事项。需要汇总时可以直接说“把 2026 年 9 月出差及其子项目导出完整 PDF”，Gateway 生成的 PDF 会通过 Feishu 文件消息回传。Feishu 入口仍是现有 `FEISHU_GATEWAY_URL`，不新增机器人入口；Workbench 页面则在 AI 提供源中选择 `workbench-session`，使网页和 Feishu 共用 session、附件和 token ledger。
+
 `MANAGER_GATEWAY_STATE_DIR` 用于 Gateway 的运行状态、token ledger 和 develop worktree（默认 `worktrees/`）；Workbench SQLite 不属于 Gateway 的运行目录，也不由 Gateway 创建或管理。请按 Workbench 的 [`macos/docs/gateway-setup.md`](https://github.com/Layman-art/Research-Workbench/blob/main/macos/docs/gateway-setup.md) 单独启动数据服务，并通过 `WORKBENCH_DATA_URL` 让 Codex 访问数据接口。
 
 ## 附件与多模态输入
@@ -92,7 +106,7 @@ MANAGER_GATEWAY_ATTACHMENT_TTL_MS=86400000
 MANAGER_GATEWAY_MAX_ATTACHMENT_BYTES=20971520
 ```
 
-Codex provider 对图片会额外使用 Codex CLI 的 `--image` 原生输入，同时在 prompt 中保留附件地址；PDF、Markdown、CSV 等非图片附件会以保存地址和 Gateway 本机路径告知 Codex。Gateway research provider 以及 Workbench 直接连接的标准 provider 都使用同一套“附件已保存，按地址访问”的文字说明，不把二进制强行编码进对话 JSON。标准 provider 只有在数据服务或 Gateway URL 对 provider 所在网络可访问时才能读取地址；`127.0.0.1`、SSH 本地端口和带内网权限的地址不能被公网 provider 直接访问。
+Codex provider 对图片会额外使用 Codex CLI 的 `--image` 原生输入，同时在 prompt 中保留附件地址；PDF、Markdown、CSV 等非图片附件会以保存地址和 Gateway 本机路径告知 Codex。Gateway research provider 会把当前图片作为多模态 data URL 发送；Workbench 直接连接的标准 provider 仍只用于普通研究问答，不执行报销写入。标准 provider 只有在数据服务或 Gateway URL 对 provider 所在网络可访问时才能读取普通附件地址；`127.0.0.1`、SSH 本地端口和带内网权限的地址不能被公网 provider 直接访问。
 
 Feishu Helper 对图片和文件消息使用飞书消息资源接口下载后再上传 Gateway；因此机器人只需访问 Gateway，不需要直接把飞书资源地址交给 Codex。附件只绑定到对应 session turn，删除已结束 session 时会异步清理，未绑定或过期附件会在 Gateway 启动/上传时回收。
 

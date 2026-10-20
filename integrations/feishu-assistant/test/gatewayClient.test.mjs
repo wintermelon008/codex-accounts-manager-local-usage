@@ -100,6 +100,52 @@ describe("Feishu Gateway client", () => {
     assert.equal(await client.sendMessage("chat-attachment", "分析这个", [attachment]), "完成");
     assert.ok(calls.every(({ init }) => init.headers.get("authorization") === "Bearer gateway-token"));
   });
+
+  it("keeps reimbursement context on the shared session and returns the PDF artifact", async () => {
+    const calls = [];
+    const client = createGatewayClient({
+      baseUrl: "http://gateway.test",
+      token: "gateway-token",
+      pollIntervalMs: 0,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        if (url === "http://gateway.test/v1/sessions" && init.method === "POST") {
+          const body = JSON.parse(init.body);
+          assert.equal(body.mode, "research");
+          assert.equal(body.context.purpose, "reimbursement-assistant");
+          return jsonResponse({ sessionId: "session-reimbursement" });
+        }
+        if (url === "http://gateway.test/v1/sessions/session-reimbursement") {
+          return jsonResponse({
+            status: "completed",
+            result: {
+              text: "已生成完整 PDF",
+              reimbursement: { id: "gateway-pdf", filename: "reimbursement.pdf", mimeType: "application/pdf" }
+            }
+          });
+        }
+        throw new Error(`unexpected request ${url}`);
+      }
+    });
+
+    const result = await client.sendMessageDetailed(
+      "chat-reimbursement",
+      "请整理这笔报销",
+      [{ id: "attachment-1" }],
+      {
+        purpose: "reimbursement-assistant",
+        sourceChannel: "feishu",
+        sourceActorId: "admin-open-id",
+        sourceChatId: "chat-reimbursement",
+        sourceMessageId: "message-reimbursement"
+      }
+    );
+
+    assert.equal(result.text, "已生成完整 PDF");
+    assert.equal(result.reimbursement.id, "gateway-pdf");
+    assert.equal(client.isReimbursementChat("chat-reimbursement"), true);
+    assert.ok(calls.every(({ init }) => init.headers.get("authorization") === "Bearer gateway-token"));
+  });
 });
 
 function jsonResponse(body, status = 200) {

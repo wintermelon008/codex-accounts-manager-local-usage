@@ -15,12 +15,13 @@ export class GatewaySessionManager {
   #automaticSwitchInFlight;
   #eventSequence = 0;
 
-  constructor({ provider, manager, workspaces, usage, attachments, maxSessions = 4, now = () => Date.now(), idFactory = randomUUID }) {
+  constructor({ provider, manager, workspaces, usage, attachments, reimbursementAssistant, maxSessions = 4, now = () => Date.now(), idFactory = randomUUID }) {
     this.provider = provider;
     this.manager = manager;
     this.workspaces = workspaces;
     this.usage = usage;
     this.attachments = attachments;
+    this.reimbursementAssistant = reimbursementAssistant;
     this.maxSessions = maxSessions;
     this.now = now;
     this.idFactory = idFactory;
@@ -446,7 +447,7 @@ export class GatewaySessionManager {
       }
       this.#emit(session, { type: "session.started", accountId: session.accountId, accountEmail: session.accountEmail });
       this.#reportAccountActivity(session, true, { accountId: session.runAccountId });
-      const result = await this.provider.run({
+      let result = await this.provider.run({
         session: providerSnapshot(session),
         attachments: this.#resolveCurrentAttachments(session),
         signal: session.controller.signal,
@@ -454,6 +455,14 @@ export class GatewaySessionManager {
       });
       const usage = normalizeTokenUsage(result?.usage);
       await this.#recordUsage(session, usage);
+      if (session.context?.purpose === "reimbursement-assistant" && this.reimbursementAssistant) {
+        result = await this.reimbursementAssistant.execute({
+          session: providerSnapshot(session),
+          result,
+          attachments: this.#resolveCurrentAttachments(session),
+          signal: session.controller.signal,
+        });
+      }
       if (session.interjectionRequested) {
         await this.#refreshWorkspace(session);
         this.#queueInterjection(session, turn);
@@ -468,6 +477,9 @@ export class GatewaySessionManager {
       session.result = {
         text: typeof result?.text === "string" ? result.text : undefined,
         threadId: typeof result?.threadId === "string" ? result.threadId : undefined,
+        ...(result?.reimbursement && typeof result.reimbursement === "object"
+          ? { reimbursement: structuredClone(result.reimbursement) }
+          : {}),
         ...(usage ? { usage } : {})
       };
       if (turn) {

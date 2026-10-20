@@ -116,6 +116,72 @@ describe("Feishu long-connection adapter", () => {
     assert.equal(JSON.parse(sent[0].data.content).text, "来自 Gateway 的回复");
   });
 
+  it("sends a generated reimbursement PDF back as a Feishu file", async () => {
+    const sent = [];
+    let receivedContext;
+    let uploadedFile;
+    let deletedAttachment;
+    const bot = createFeishuAssistant({
+      appId: "app-placeholder",
+      appSecret: "secret-placeholder",
+      adminOpenIds: new Set(["admin-open-id"]),
+      manager: undefined,
+      gateway: {
+        async sendMessage(chatId, message) {
+          return this.sendMessageDetailed(chatId, message, [], undefined).then((result) => result.text);
+        },
+        async sendMessageDetailed(chatId, message, attachments, context) {
+          receivedContext = { chatId, message, attachments, context };
+          return {
+            text: "已生成完整 PDF 汇总",
+            reimbursement: { id: "gateway-pdf", filename: "2026-09-报销.pdf" }
+          };
+        },
+        async downloadAttachment(id) {
+          assert.equal(id, "gateway-pdf");
+          return { bytes: Buffer.from("%PDF-test"), filename: "gateway-pdf.pdf", mimeType: "application/pdf" };
+        },
+        async deleteAttachment(id) {
+          deletedAttachment = id;
+        }
+      },
+      client: {
+        im: {
+          v1: {
+            message: { create: async (request) => sent.push(request) },
+            file: {
+              create: async (request) => {
+                uploadedFile = request;
+                return { file_key: "feishu-pdf-key" };
+              }
+            }
+          }
+        }
+      },
+      wsClient: { start: async () => undefined, close: () => undefined }
+    });
+
+    const result = await bot.processMessage({
+      message: {
+        message_id: "reimbursement-message",
+        chat_type: "p2p",
+        chat_id: "chat-reimbursement",
+        content: JSON.stringify({ text: "请导入这笔报销并导出完整 PDF" })
+      },
+      sender: { sender_id: { open_id: "admin-open-id" } }
+    });
+
+    assert.equal(result.sent, true);
+    assert.equal(receivedContext.context.purpose, "reimbursement-assistant");
+    assert.equal(receivedContext.context.sourceMessageId, "reimbursement-message");
+    assert.equal(sent.length, 2);
+    assert.equal(JSON.parse(sent[1].data.content).file_key, "feishu-pdf-key");
+    assert.equal(uploadedFile.data.file_type, "pdf");
+    assert.equal(uploadedFile.data.file_name, "2026-09-报销.pdf");
+    assert.deepEqual(uploadedFile.data.file, Buffer.from("%PDF-test"));
+    assert.equal(deletedAttachment, "gateway-pdf");
+  });
+
   it("downloads a private image message and uploads it to the Gateway", async () => {
     const sent = [];
     let uploaded;
@@ -136,8 +202,8 @@ describe("Feishu long-connection adapter", () => {
             url: "http://gateway.test/v1/attachments/gateway-attachment-1"
           };
         },
-        async sendMessage(chatId, message, attachments) {
-          received = { chatId, message, attachments };
+        async sendMessage(chatId, message, attachments, context) {
+          received = { chatId, message, attachments, context };
           return "已收到图片";
         }
       },
@@ -177,6 +243,7 @@ describe("Feishu long-connection adapter", () => {
     assert.deepEqual(uploaded.bytes, Buffer.from([1, 2, 3]));
     assert.equal(received.message, "请分析我发送的附件。");
     assert.equal(received.attachments[0].id, "gateway-attachment-1");
+    assert.equal(received.context.purpose, "reimbursement-assistant");
     assert.equal(JSON.parse(sent[0].data.content).text, "已收到图片");
   });
 

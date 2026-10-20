@@ -8,6 +8,7 @@ import { WorktreeManager } from "./worktree-manager.mjs";
 import { GatewayUsageLedger } from "./usage.mjs";
 import { createSharingRelay } from "./sharing-relay.mjs";
 import { GatewayAttachmentStore } from "./attachments.mjs";
+import { ReimbursementAssistant } from "./reimbursement-assistant.mjs";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   printHelp();
@@ -48,6 +49,14 @@ async function start() {
       stateDir: config.server.stateDir
     }),
     attachments,
+    reimbursementAssistant: config.workbenchDataUrl
+      ? new ReimbursementAssistant({
+          dataUrl: config.workbenchDataUrl,
+          dataToken: config.workbenchDataToken,
+          attachments,
+          publicBaseUrl: config.server.publicBaseUrl,
+        })
+      : undefined,
     maxSessions: config.maxSessions
   });
   const server = createGatewayServer({ sessions, config, usage, sharingRelay, attachments });

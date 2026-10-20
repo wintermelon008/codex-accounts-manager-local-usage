@@ -26,6 +26,7 @@ export function createGatewayClient(options) {
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const pollTimeoutMs = options.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
   const sessionByChat = new Map();
+  const reimbursementChats = new Set();
 
   async function request(path, init = {}) {
     const controller = new AbortController();
@@ -97,10 +98,16 @@ export function createGatewayClient(options) {
       }
       return attachment;
     },
-    async sendMessage(chatId, message, attachments = []) {
+    async sendMessage(chatId, message, attachments = [], context = {}) {
+      const result = await this.sendMessageDetailed(chatId, message, attachments, context);
+      return result.text;
+    },
+    async sendMessageDetailed(chatId, message, attachments = [], context = {}) {
       const key = typeof chatId === "string" && chatId.trim() ? chatId.trim() : "default";
+      if (context?.purpose === "reimbursement-assistant") reimbursementChats.add(key);
       const requestBody = {
         message,
+        ...(context && typeof context === "object" && Object.keys(context).length > 0 ? { context } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((attachment) => ({ id: attachment.id })) } : {})
       };
       let sessionId = sessionByChat.get(key);
@@ -122,7 +129,7 @@ export function createGatewayClient(options) {
       if (!sessionId) {
         const created = await request("/v1/sessions", {
           method: "POST",
-          body: JSON.stringify({ mode: "develop", ...requestBody })
+          body: JSON.stringify({ mode: context?.purpose === "reimbursement-assistant" ? "research" : "develop", ...requestBody })
         });
         sessionId = readSessionId(created);
         if (!sessionId) {
@@ -132,6 +139,37 @@ export function createGatewayClient(options) {
       }
 
       return waitForTerminal(sessionId);
+    },
+    async downloadAttachment(attachmentId) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+      try {
+        const headers = new Headers({ accept: "application/pdf, application/octet-stream" });
+        if (options.token) headers.set("authorization", `Bearer ${options.token}`);
+        const response = await fetchImpl(`${baseUrl}/v1/attachments/${encodeURIComponent(attachmentId)}`, {
+          headers,
+          signal: controller.signal
+        });
+        if (!response.ok) throw new GatewayClientError(`Gateway 附件下载失败（HTTP ${response.status}）`, response.status);
+        return {
+          bytes: Buffer.from(await response.arrayBuffer()),
+          mimeType: response.headers.get("content-type") || "application/octet-stream",
+          filename: parseFilename(response.headers.get("content-disposition")) || "attachment"
+        };
+      } catch (error) {
+        if (error instanceof GatewayClientError) throw error;
+        if (error?.name === "AbortError") throw new GatewayClientError("Gateway 附件下载超时。 ");
+        throw new GatewayClientError("无法下载 Gateway 附件。 ");
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+    async deleteAttachment(attachmentId) {
+      await request(`/v1/attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE" });
+    },
+    isReimbursementChat(chatId) {
+      const key = typeof chatId === "string" && chatId.trim() ? chatId.trim() : "default";
+      return reimbursementChats.has(key);
     }
   };
 
@@ -145,7 +183,12 @@ export function createGatewayClient(options) {
             session.error?.message || `Gateway 会话以 ${session.status || "unknown"} 状态结束。`
           );
         }
-        return session.result?.text || "Gateway 会话已完成，但没有返回文本。";
+        return {
+          text: session.result?.text || "Gateway 会话已完成，但没有返回文本。",
+          ...(session.result?.reimbursement && typeof session.result.reimbursement === "object"
+            ? { reimbursement: session.result.reimbursement }
+            : {})
+        };
       }
       await delay(pollIntervalMs);
     }
@@ -181,4 +224,10 @@ async function readJson(response) {
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function parseFilename(value) {
+  if (typeof value !== "string") return "";
+  const match = /filename="?([^";]+)"?/iu.exec(value);
+  return match?.[1]?.trim() || "";
 }
