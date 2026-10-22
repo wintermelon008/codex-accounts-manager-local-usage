@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-10-codex-accounts-0-1-21-dev-wakeup-security",
+      "id": "ann-2026-10-codex-accounts-0-1-21-l2-headless-automation",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.21-dev",
-      "title": "Codex Accounts Manager 0.1.21-dev — wakeup tasks and hardening",
-      "summary": "Adds scheduled wakeup tasks, safer persistence, request cancellation, and upstream 0.1.21 packaging compatibility.",
-      "content": "This release ports the upstream Wakeup capability and hardens the local build.\n1. Wakeup: schedule daily, weekly, fixed-interval, quota-reset, and after-startup tasks for all accounts or individual accounts.\n2. Dashboard: configure, enable, disable, run, and inspect Wakeup tasks from the global clock or account cards without switching the active auth.json.\n3. Reliability: preserve caller cancellation, cover response-body reads with request timeouts, and use locked, atomic, permission-restricted private storage.\n4. Packaging: align with upstream 0.1.21 icon requirements and dependency updates.",
+      "releaseVersion": "0.1.21-l2",
+      "title": "Codex Accounts Manager 0.1.21-l2 — headless automation",
+      "summary": "Adds the headless daemon handoff for quota refresh, token renewal, Mailbox renewal, and quota countdown automation.",
+      "content": "This local release makes Manager automation continue without an active VS Code connection.\n1. Headless daemon: keep token renewal, Mailbox renewal, and quota refresh running while VS Code is closed.\n2. Quota ownership: delegate automatic foreground refresh through the loopback Control API and retry shared-lease contention instead of misreporting a whole batch as failed.\n3. Countdown: synchronize the Dashboard setting to the daemon so an eligible reset window can send one short conversation and start the official countdown.\n4. Safety: preserve the existing extension identity, private-state permissions, proxy selection, and cross-host lease protection.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-10-09T00:00:00Z",
+      "createdAt": "2026-10-22T00:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.21-dev — 定时唤醒与加固",
-          "summary": "新增定时唤醒任务、更加安全的持久化、请求取消和上游 0.1.21 打包兼容性。",
-          "content": "本地版本移植上游 Wakeup 功能，并加固扩展运行时。\n1. 定时唤醒：支持每日、每周、固定间隔、额度重置和启动后触发，可作用于全部账号或单个账号。\n2. Dashboard：可从全局时钟或账号卡片配置、启停、立即执行和查看唤醒任务，不会切换当前生效的 auth.json。\n3. 可靠性：保留调用方取消语义，让响应体读取受请求超时保护，并使用带文件锁、原子写入和受限权限的私有存储。\n4. 打包：对齐上游 0.1.21 的图标要求和依赖更新。"
+          "title": "Codex Accounts Manager 0.1.21-l2 — 后台自动化",
+          "summary": "新增无需 VS Code 连接即可持续运行的 daemon，接管额度刷新、token 和 Mailbox 续期以及倒计时自动化。",
+          "content": "本地版本让 Manager 自动化在没有活动 VS Code 连接时继续工作。\n1. Headless daemon：VS Code 关闭后继续执行 token 续期、Mailbox 续期和额度刷新。\n2. 额度归属：前台自动刷新通过 loopback Control API 委托给 daemon，共享 lease 冲突改为可重试状态，不再把整批账号误报为失败。\n3. 倒计时：Dashboard 设置同步到 daemon，额度窗口符合条件时发送一次短对话并启动官方倒计时。\n4. 安全性：保留既有扩展 ID、私有状态权限、代理选择和跨宿主 lease 保护。"
         }
       }
     }

@@ -1,4 +1,6 @@
 *.vsix
+.env
+.env.*
 .git/**
 .github/**
 .vscode/**

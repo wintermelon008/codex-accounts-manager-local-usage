@@ -1,14 +1,17 @@
 import { isSub2ApiAccount, type CodexAccountRecord } from "../../core/types";
 import { isQuotaCountdownStartEligible } from "../../domain/dashboard/quotaCountdown";
-import { sendQuotaCountdownStartMessage } from "../../services/quotaCountdown";
 import type { AccountsRepository } from "../../storage";
 import { refreshSingleQuota } from "./quota";
+import {
+  startQuotaCountdownWithLease,
+  type QuotaCountdownStartResult
+} from "./quotaCountdownCore";
+
+export type { QuotaCountdownStartResult } from "./quotaCountdownCore";
 
 const RECENT_START_SUPPRESSION_MS = 10 * 60 * 1000;
 const recentStarts = new Map<string, number>();
 const inflightStarts = new Map<string, Promise<QuotaCountdownStartResult>>();
-
-export type QuotaCountdownStartResult = "started" | "already-started";
 
 export function isQuotaCountdownStartAvailable(account: CodexAccountRecord, nowMs: number = Date.now()): boolean {
   if (isSub2ApiAccount(account) || account.quotaMode === "none") {
@@ -69,42 +72,25 @@ async function runQuotaCountdownStart(
     return "already-started";
   }
 
-  const selected = await repo.getAccount(accountId);
-  if (selected && isSub2ApiAccount(selected)) {
-    throw new Error("Gateway accounts do not expose quota countdowns");
+  const result = await startQuotaCountdownWithLease(repo, accountId, {
+    refreshBeforeStart: refreshBeforeStart
+      ? () => refreshQuotaWithoutUi(repo, accountId)
+      : undefined,
+    refreshAfterStart: () => refreshQuotaWithoutUi(repo, accountId)
+  });
+  if (result === "started") {
+    recentStarts.set(accountId, Date.now());
   }
+  return result;
+}
 
-  if (refreshBeforeStart) {
-    await refreshSingleQuota(repo, { refresh: () => undefined }, accountId, {
-      announce: false,
-      forceRefresh: true,
-      refreshView: false,
-      warnQuota: false
-    });
-  }
-  const account = await repo.getAccount(accountId);
-  if (!account) {
-    throw new Error("The selected account no longer exists");
-  }
-  if (!isQuotaCountdownStartEligible(account.quotaSummary)) {
-    return "already-started";
-  }
-
-  const tokens = await repo.getTokens(accountId);
-  const remoteAccountId = account.accountId ?? tokens?.accountId;
-  if (!tokens?.accessToken || !remoteAccountId) {
-    throw new Error("The selected account has no usable Codex credentials");
-  }
-
-  await sendQuotaCountdownStartMessage({ accessToken: tokens.accessToken, accountId: remoteAccountId });
-  recentStarts.set(accountId, Date.now());
-  await refreshSingleQuota(repo, { refresh: () => undefined }, accountId, {
+function refreshQuotaWithoutUi(repo: AccountsRepository, accountId: string): Promise<void> {
+  return refreshSingleQuota(repo, { refresh: () => undefined }, accountId, {
     announce: false,
     forceRefresh: true,
     refreshView: false,
     warnQuota: false
   });
-  return "started";
 }
 
 function pruneRecentStarts(nowMs: number): void {

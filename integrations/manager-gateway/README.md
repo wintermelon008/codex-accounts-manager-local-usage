@@ -16,7 +16,7 @@ Manager 侧的独立 task/session Gateway。Research Workbench 只需配置 Gate
 - `GET /v1/capabilities`、`GET /healthz`：能力和健康检查。
 - `GET /v1/usage/today`：读取 Gateway 自己记录的今日 token 用量和按模型统计。
 - `GET /v1/manager/accounts`、`GET /v1/manager/status`：向受控客户端提供脱敏的 Manager 账号/状态摘要。
-- `GET /v1/manager/proxy`：向同机 Feishu Helper 提供当前 Manager 有效的 HTTPS 代理和 `NO_PROXY`；该接口仍受 Gateway/Manager 本机令牌保护。
+- `GET /v1/manager/proxy`：向同机 Feishu Helper 提供当前 Manager 有效的 HTTPS 代理和 `NO_PROXY`；该接口仍受 Gateway/Manager 本机令牌保护。代理选择与 Manager Dashboard 的 `codexAccounts.proxyAddress` 共用，选择会在共享私有状态中持久化。
 - `POST /v1/attachments`、`GET/DELETE /v1/attachments/:id`：保存、读取和清理 session 附件；上传使用原始二进制请求体，不把文件内容放入 session JSON。
 - `/v1/sharing/*`：可选的跨网络账号共享 Relay；只保存公开用户资料、请求状态和端到端加密的共享包，不读取 OAuth token 明文。
 - 多 session 并行，使用 `MANAGER_GATEWAY_MAX_SESSIONS` 限制并发数。

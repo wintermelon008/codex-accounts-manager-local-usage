@@ -22,6 +22,16 @@ type QuotaCountdownDependencies = {
   request?: typeof fetchWithTimeout;
 };
 
+export class QuotaCountdownStartError extends Error {
+  readonly ambiguous: boolean;
+
+  constructor(message: string, options: { ambiguous: boolean; cause?: unknown }) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "QuotaCountdownStartError";
+    this.ambiguous = options.ambiguous;
+  }
+}
+
 export async function sendQuotaCountdownStartMessage(
   tokens: Pick<CodexTokens, "accessToken" | "accountId">,
   dependencies: QuotaCountdownDependencies = {}
@@ -33,29 +43,47 @@ export async function sendQuotaCountdownStartMessage(
     throw new Error("The selected account has no ChatGPT workspace identifier");
   }
 
-  const cache = await (dependencies.loadModelCache ?? loadCodexModelCache)();
+  let cache: unknown;
+  try {
+    cache = await (dependencies.loadModelCache ?? loadCodexModelCache)();
+  } catch (error) {
+    throw new QuotaCountdownStartError(getErrorMessage(error), { ambiguous: false, cause: error });
+  }
   const model = selectQuotaCountdownModel(cache);
   if (!model) {
-    throw new Error("No usable Codex model was found; open Codex once to refresh its model list");
+    throw new QuotaCountdownStartError(
+      "No usable Codex model was found; open Codex once to refresh its model list",
+      { ambiguous: false }
+    );
   }
 
-  const response = await (dependencies.request ?? fetchWithTimeout)(
-    CODEX_RESPONSES_URL,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
-        "ChatGPT-Account-Id": tokens.accountId,
-        "Content-Type": "application/json",
-        Accept: "text/event-stream"
+  let response: Response;
+  try {
+    response = await (dependencies.request ?? fetchWithTimeout)(
+      CODEX_RESPONSES_URL,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${tokens.accessToken}`,
+          "ChatGPT-Account-Id": tokens.accountId,
+          "Content-Type": "application/json",
+          Accept: "text/event-stream"
+        },
+        body: JSON.stringify(buildQuotaCountdownRequest(model))
       },
-      body: JSON.stringify(buildQuotaCountdownRequest(model))
-    },
-    RESPONSE_TIMEOUT_MS,
-    "Quota countdown starter"
-  );
+      RESPONSE_TIMEOUT_MS,
+      "Quota countdown starter"
+    );
+  } catch (error) {
+    throw new QuotaCountdownStartError(getErrorMessage(error), { ambiguous: true, cause: error });
+  }
 
-  const raw = await response.text();
+  let raw: string;
+  try {
+    raw = await response.text();
+  } catch (error) {
+    throw new QuotaCountdownStartError(getErrorMessage(error), { ambiguous: true, cause: error });
+  }
   logNetworkEvent("quota.countdownStarter", {
     accountId: tokens.accountId,
     model,
@@ -63,10 +91,17 @@ export async function sendQuotaCountdownStartMessage(
     ok: response.ok
   });
   if (!response.ok) {
-    throw new Error(formatApiErrorMessage("Codex rejected the countdown starter", response.status, raw));
+    throw new QuotaCountdownStartError(
+      formatApiErrorMessage("Codex rejected the countdown starter", response.status, raw),
+      { ambiguous: response.status >= 500 || response.status === 408 || response.status === 429 }
+    );
   }
 
-  assertQuotaCountdownResponseCompleted(raw);
+  try {
+    assertQuotaCountdownResponseCompleted(raw);
+  } catch (error) {
+    throw new QuotaCountdownStartError(getErrorMessage(error), { ambiguous: true, cause: error });
+  }
 }
 
 export function buildQuotaCountdownRequest(model: string): Record<string, unknown> {
@@ -198,4 +233,8 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value != null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

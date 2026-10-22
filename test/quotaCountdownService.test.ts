@@ -87,6 +87,22 @@ describe("quota countdown starter service", () => {
     ).rejects.toThrow("model unavailable");
   });
 
+  it("treats a server error as an ambiguous send result", async () => {
+    await expect(
+      sendQuotaCountdownStartMessage(
+        { accessToken: "secret-token", accountId: "workspace-1" },
+        {
+          loadModelCache: async () => ({ models: [{ slug: "gpt-luna" }] }),
+          request: async () =>
+            new Response(JSON.stringify({ error: { message: "upstream unavailable" } }), { status: 503 })
+        }
+      )
+    ).rejects.toMatchObject({
+      name: "QuotaCountdownStartError",
+      ambiguous: true
+    });
+  });
+
   it("surfaces an error event from a successful HTTP stream", async () => {
     await expect(
       sendQuotaCountdownStartMessage(

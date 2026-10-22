@@ -330,6 +330,8 @@ export function registerAutoRefreshScheduler(params: {
   context: vscode.ExtensionContext;
   repo: AccountsRepository;
   onRefresh: () => void;
+  /** Prefer the headless owner so the Extension Host does not hold the batch lease. */
+  refreshThroughDaemon?: (accountIds: readonly string[]) => Promise<boolean>;
 }): vscode.Disposable {
   let timer: NodeJS.Timeout | undefined;
   let inFlight = false;
@@ -359,6 +361,11 @@ export function registerAutoRefreshScheduler(params: {
           : getAutomaticQuotaRefreshAccountIds(accounts, configuration);
         const accountIds = automaticAccountIds;
         if (!shouldRunAccountScheduler(accountIds.length)) {
+          return;
+        }
+
+        if (await params.refreshThroughDaemon?.(accountIds)) {
+          params.onRefresh();
           return;
         }
 
@@ -635,6 +642,7 @@ class QuotaCountdownAutomationController {
     onRefresh: () => void;
     startQuotaCountdown?: (accountId: string) => Promise<QuotaCountdownStartResult>;
     startQuotaCountdownAfterRefresh?: (accountId: string) => Promise<QuotaCountdownStartResult>;
+    refreshThroughDaemon?: (accountIds: readonly string[]) => Promise<boolean>;
   }) {
     this.state = readPersistedQuotaCountdownState(params.context);
     this.startQuotaCountdown = params.startQuotaCountdown ?? ((accountId) =>
@@ -1131,6 +1139,13 @@ class QuotaCountdownAutomationController {
       if (pending.length === 0) {
         return;
       }
+      if (await this.params.refreshThroughDaemon?.(pending.map((target) => target.accountId))) {
+        pending.forEach((target) => {
+          this.handledWindows.set(target.accountId, target);
+        });
+        this.params.onRefresh();
+        return;
+      }
       const refreshed = await withSchedulerLease(this.params.repo, "quota-refresh", async (leaseIsActive) => {
         if (!leaseIsActive()) {
           return false;
@@ -1192,6 +1207,8 @@ export function registerQuotaCountdownRefreshScheduler(params: {
   onRefresh: () => void;
   startQuotaCountdown?: (accountId: string) => Promise<QuotaCountdownStartResult>;
   startQuotaCountdownAfterRefresh?: (accountId: string) => Promise<QuotaCountdownStartResult>;
+  /** Used by the refresh-only legacy path; countdown starts remain local and lease-protected. */
+  refreshThroughDaemon?: (accountIds: readonly string[]) => Promise<boolean>;
 }): QuotaCountdownRefreshScheduler {
   const controller = new QuotaCountdownAutomationController(params);
   controller.start();

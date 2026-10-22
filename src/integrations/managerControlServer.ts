@@ -139,6 +139,8 @@ export type ManagerControlRefreshSummary = {
   total: number;
   succeeded: number;
   failed: number;
+  /** The shared quota-refresh lease was occupied; the caller should retry. */
+  busy?: boolean;
   unknownAccountIds: string[];
   failedAccountIds: string[];
 };

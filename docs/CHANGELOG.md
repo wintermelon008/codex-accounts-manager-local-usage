@@ -1,5 +1,12 @@
 # 变更日志
 
+## 0.1.21-l2（2026-10-22）
+
+- 新增 headless Manager daemon：VS Code 关闭或没有 Remote-SSH 连接时，仍可持续执行 token 续期、Mailbox 自动续期和额度刷新。
+- Dashboard 的自动额度刷新在线时委托给 daemon；共享 lease 冲突改为等待和可重试的 busy 状态，避免把整批账号误报为失败。
+- 自动启动额度倒计时设置同步到共享私有状态，daemon 可在额度窗口重置后发送一次短对话并启动官方倒计时；代理选择也同步到 daemon。
+- 保留 wintermelon.codex-account-manager 扩展 ID，并补充 daemon、loopback Control API、前台委托和跨宿主恢复测试。
+
 ## 0.1.21-dev（2026-10-15）
 
 - 基于 `0.1.21-l1` 的开发构建，包含当前 Manager、Mailbox 和注册助手的测试隔离、凭证存储内核、注册流程惰性加载及无引用逻辑清理；保留既有扩展 ID、token/API 存储 key、文件名和数据格式。

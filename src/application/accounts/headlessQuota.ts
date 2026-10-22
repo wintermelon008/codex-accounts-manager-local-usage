@@ -9,6 +9,8 @@ export type HeadlessQuotaRefreshSummary = {
   total: number;
   succeeded: number;
   failed: number;
+  /** The shared scheduler lease was occupied; callers should retry later. */
+  busy?: boolean;
   unknownAccountIds: string[];
   failedAccountIds: string[];
 };
@@ -20,7 +22,11 @@ export type HeadlessQuotaRefreshOutcome = {
 };
 
 const QUOTA_REFRESH_LEASE_MS = 2 * 60 * 1000;
-const QUOTA_REFRESH_LEASE_WAIT_MS = 250;
+// A foreground batch can legitimately take longer than a single request. The
+// daemon waits for a useful hand-off window, while the explicit busy result
+// below prevents a remaining contention from being reported as account
+// failures.
+const QUOTA_REFRESH_LEASE_WAIT_MS = 30_000;
 
 export async function refreshImportedAccountQuotaHeadlessly(
   repo: AccountsRepository,
@@ -131,9 +137,10 @@ export async function refreshAllQuotasHeadlessly(
     return {
       total: requestedAccounts.length + unknownAccountIds.length,
       succeeded: 0,
-      failed: refreshable.length + failedAccountIds.length,
+      failed: failedAccountIds.length,
+      busy: true,
       unknownAccountIds,
-      failedAccountIds: [...failedAccountIds, ...refreshable.map((account) => account.id)]
+      failedAccountIds
     };
   }
 

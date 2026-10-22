@@ -63,6 +63,7 @@ import { LocalUsageAnalyticsService } from "../../services/localUsageAnalytics";
 import { selectFreshGatewayFallbackCandidate } from "../../application/accounts/gatewayFallbackSelection";
 import {
   ManagerControlServer,
+  ManagerControlClient,
   ManagerIntegrationHost,
   setActiveManagerIntegrationHost,
   type CodexAccountsIntegrationApi,
@@ -115,6 +116,7 @@ export class AccountsWorkbench {
   private readonly runtimeSwitchCoordinator: RuntimeSwitchCoordinator;
   private readonly localImportInbox: LocalImportInbox | undefined;
   private readonly managerControlServer: ManagerControlServer;
+  private readonly managerControlClient: ManagerControlClient;
   private readonly sessionHub: SessionHub | undefined;
   private readonly integrationHost: ManagerIntegrationHost;
   private readonly accountSharingSetting: vscode.Disposable;
@@ -140,6 +142,10 @@ export class AccountsWorkbench {
     accountConcurrencyTracker.reset();
     this.privateStatePaths = getPrivateStatePaths(context);
     this.repo = new AccountsRepository(context);
+    this.managerControlClient = new ManagerControlClient({
+      getPort: () => getExternalControlPort(),
+      getToken: () => process.env["CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN"]?.trim()
+    });
     this.statusBar = new AccountsStatusBarProvider(context, this.repo);
     this.accountSharing = new AccountSharingService(context, this.repo, () => {
       void refreshQuotaSummaryPanel();
@@ -450,7 +456,8 @@ export class AccountsWorkbench {
         registerAutoRefreshScheduler({
           context: this.context,
           repo: this.repo,
-          onRefresh: refreshers.refresh
+          onRefresh: refreshers.refresh,
+          refreshThroughDaemon: (accountIds) => this.refreshQuotasThroughDaemon(accountIds)
         })
       );
     });
@@ -458,7 +465,8 @@ export class AccountsWorkbench {
       quotaCountdownScheduler = registerQuotaCountdownRefreshScheduler({
         context: this.context,
         repo: this.repo,
-        onRefresh: refreshers.refresh
+        onRefresh: refreshers.refresh,
+        refreshThroughDaemon: (accountIds) => this.refreshQuotasThroughDaemon(accountIds)
       });
       this.context.subscriptions.push(quotaCountdownScheduler);
     });
@@ -560,6 +568,27 @@ export class AccountsWorkbench {
 
   getIntegrationApi(): CodexAccountsIntegrationApi {
     return this.integrationHost.api;
+  }
+
+  private async refreshQuotasThroughDaemon(accountIds: readonly string[]): Promise<boolean> {
+    if (!isExternalControlEnabled()) {
+      return false;
+    }
+
+    const dispatch = await this.managerControlClient.refreshQuotas(accountIds);
+    if (!dispatch) {
+      return false;
+    }
+    if (dispatch.timedOut) {
+      console.warn("[codexAccounts] manager quota refresh job is still running; local fallback was skipped");
+    }
+    if (dispatch.job.state === "failed") {
+      console.warn("[codexAccounts] manager quota refresh job failed; local fallback was skipped");
+    }
+    if (dispatch.job.result?.busy) {
+      console.info("[codexAccounts] manager quota refresh is busy on another host; it will be retried");
+    }
+    return true;
   }
 
   private async startManagerControlServer(): Promise<void> {

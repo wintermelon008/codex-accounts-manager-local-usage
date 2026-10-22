@@ -5,30 +5,37 @@ import { isSub2ApiAccount } from "../core/types";
 import { initAccountStatePersistence, flushAccountStates } from "../application/accounts/accountState";
 import { resolveAccountHealth } from "../application/accounts/health";
 import { getTokenAutomationSnapshot, configureTokenAutomation } from "../presentation/workbench/tokenAutomationState";
-import { LocalImportInbox, enqueueLocalImportJob, readLocalImportStatus } from "../presentation/workbench/localImportInbox";
 import {
-  ManagerControlServer,
-  type ManagerControlProxySettings
-} from "../integrations/managerControlServer";
+  LocalImportInbox,
+  enqueueLocalImportJob,
+  readLocalImportStatus
+} from "../presentation/workbench/localImportInbox";
+import { ManagerControlServer, type ManagerControlProxySettings } from "../integrations/managerControlServer";
 import { loadManagerControlEnvironment } from "../infrastructure/config/managerControlEnvironment";
 import {
   disposeCodexProxyEnvironment,
   getConfiguredProxySettings,
   initializeCodexProxyEnvironment
 } from "../infrastructure/config/proxyEnvironment";
+import { readManagerProxySelection } from "../infrastructure/config/managerProxySelection";
 import { LocalUsageAnalyticsService } from "../services/localUsageAnalytics";
 import { createNodeAccountsContext, NodeJsonKeyValueStore } from "./nodeHost";
 import { refreshAllQuotasHeadlessly } from "./headlessQuota";
 import { refreshImportedAccountQuotaHeadlessly } from "../application/accounts/headlessQuota";
 import { HeadlessTokenRefreshScheduler } from "./tokenRefreshScheduler";
 import { MailboxDaemonService } from "./mailboxDaemon";
+import { HeadlessQuotaCountdownScheduler } from "./quotaCountdownScheduler";
 import { configureHeadlessNetworkDebug } from "../utils/networkDebug";
+import { readManagerAutomationSettings } from "../infrastructure/config/managerAutomationSettings";
 
 const CONTROL_HOST = "127.0.0.1" as const;
 const DEFAULT_PORT = 43117;
 const DEFAULT_QUOTA_REFRESH_MINUTES = 15;
 const DEFAULT_TOKEN_REFRESH_INTERVAL_SECONDS = 300;
 const DEFAULT_MAILBOX_SCAN_INTERVAL_SECONDS = 60;
+const DEFAULT_QUOTA_COUNTDOWN_CHECK_INTERVAL_SECONDS = 60;
+const PROXY_SELECTION_REFRESH_INTERVAL_MS = 30_000;
+const AUTOMATION_SETTINGS_REFRESH_INTERVAL_MS = 5_000;
 
 export type ManagerDaemonConfig = {
   privateRoot: string;
@@ -37,6 +44,8 @@ export type ManagerDaemonConfig = {
   quotaRefreshIntervalMs: number;
   tokenRefreshIntervalMs: number;
   mailboxScanIntervalMs: number;
+  autoStartQuotaCountdown: boolean;
+  quotaCountdownCheckIntervalMs: number;
   debugNetwork: boolean;
 };
 
@@ -45,7 +54,12 @@ export function resolveManagerDaemonConfig(
   cwd = process.cwd()
 ): ManagerDaemonConfig {
   const privateRoot = resolvePrivateRoot(env, cwd);
-  const port = parseInteger(env["MANAGER_DAEMON_PORT"] ?? env["CODEX_ACCOUNTS_MANAGER_CONTROL_PORT"], DEFAULT_PORT, 0, 65535);
+  const port = parseInteger(
+    env["MANAGER_DAEMON_PORT"] ?? env["CODEX_ACCOUNTS_MANAGER_CONTROL_PORT"],
+    DEFAULT_PORT,
+    0,
+    65535
+  );
   const quotaMinutes = parseInteger(
     env["MANAGER_DAEMON_QUOTA_REFRESH_MINUTES"],
     DEFAULT_QUOTA_REFRESH_MINUTES,
@@ -64,6 +78,12 @@ export function resolveManagerDaemonConfig(
     10,
     24 * 60 * 60
   );
+  const quotaCountdownSeconds = parseInteger(
+    env["MANAGER_DAEMON_QUOTA_COUNTDOWN_CHECK_INTERVAL_SECONDS"],
+    DEFAULT_QUOTA_COUNTDOWN_CHECK_INTERVAL_SECONDS,
+    10,
+    24 * 60 * 60
+  );
   const token = (env["CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN"] ?? env["MANAGER_CONTROL_TOKEN"] ?? "").trim();
   if (!token) {
     throw new Error("CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN or MANAGER_CONTROL_TOKEN is required");
@@ -76,6 +96,8 @@ export function resolveManagerDaemonConfig(
     quotaRefreshIntervalMs: quotaMinutes * 60 * 1000,
     tokenRefreshIntervalMs: tokenSeconds * 1000,
     mailboxScanIntervalMs: mailboxSeconds * 1000,
+    autoStartQuotaCountdown: env["MANAGER_DAEMON_AUTO_START_QUOTA_COUNTDOWN"] === "1",
+    quotaCountdownCheckIntervalMs: quotaCountdownSeconds * 1000,
     debugNetwork: env["MANAGER_DAEMON_DEBUG_NETWORK"] === "1"
   };
 }
@@ -89,7 +111,12 @@ export class ManagerDaemon {
   private readonly localImportInbox: LocalImportInbox;
   private readonly tokenScheduler: HeadlessTokenRefreshScheduler;
   private readonly mailbox: MailboxDaemonService;
+  private quotaCountdownScheduler: HeadlessQuotaCountdownScheduler | undefined;
   private quotaTimer: NodeJS.Timeout | undefined;
+  private proxySelectionTimer: NodeJS.Timeout | undefined;
+  private automationSettingsTimer: NodeJS.Timeout | undefined;
+  private appliedProxySelection: string | undefined;
+  private appliedQuotaCountdownAutomation: boolean | undefined;
   private started = false;
 
   constructor(private readonly config: ManagerDaemonConfig) {
@@ -107,11 +134,7 @@ export class ManagerDaemon {
       refreshQuota: refreshImportedAccountQuotaHeadlessly
     });
     this.tokenScheduler = new HeadlessTokenRefreshScheduler(this.repo, config.tokenRefreshIntervalMs);
-    this.mailbox = new MailboxDaemonService(
-      this.repo,
-      config.privateRoot,
-      config.mailboxScanIntervalMs
-    );
+    this.mailbox = new MailboxDaemonService(this.repo, config.privateRoot, config.mailboxScanIntervalMs);
     this.managerControlServer = new ManagerControlServer({
       repo: this.repo,
       usage: this.usage,
@@ -155,7 +178,8 @@ export class ManagerDaemon {
         }
       },
       getProxySettings: async (): Promise<ManagerControlProxySettings> => {
-        const proxy = await getConfiguredProxySettings();
+        const selectedProxy = await readManagerProxySelection(this.config.privateRoot);
+        const proxy = await getConfiguredProxySettings(selectedProxy);
         return {
           httpsProxy: proxy.httpsProxy,
           noProxy: proxy.noProxy
@@ -172,13 +196,14 @@ export class ManagerDaemon {
     try {
       configureHeadlessNetworkDebug(this.config.debugNetwork);
       await loadManagerControlEnvironment({ privateRoot: this.config.privateRoot });
-      await initializeCodexProxyEnvironment();
+      await this.refreshProxyEnvironment(true);
       await this.accountStateStore.load();
       initAccountStatePersistence(this.accountStateStore);
       configureTokenAutomation(true, this.config.tokenRefreshIntervalMs, 5 * 60);
       await this.repo.init();
       await this.mailbox.start();
       await this.localImportInbox.start();
+      await this.syncQuotaCountdownAutomation(true);
       this.tokenScheduler.start();
       if (this.config.quotaRefreshIntervalMs > 0) {
         void this.runQuotaSweep();
@@ -187,6 +212,14 @@ export class ManagerDaemon {
         }, this.config.quotaRefreshIntervalMs);
         this.quotaTimer.unref?.();
       }
+      this.proxySelectionTimer = setInterval(() => {
+        void this.refreshProxyEnvironment();
+      }, PROXY_SELECTION_REFRESH_INTERVAL_MS);
+      this.proxySelectionTimer.unref?.();
+      this.automationSettingsTimer = setInterval(() => {
+        void this.syncQuotaCountdownAutomation();
+      }, AUTOMATION_SETTINGS_REFRESH_INTERVAL_MS);
+      this.automationSettingsTimer.unref?.();
       await this.managerControlServer.start(this.config.port, this.config.token);
       console.info(`[codexAccounts] manager daemon listening on ${CONTROL_HOST}:${this.config.port}`);
     } catch (error) {
@@ -196,11 +229,22 @@ export class ManagerDaemon {
   }
 
   async stop(): Promise<void> {
+    if (this.proxySelectionTimer) {
+      clearInterval(this.proxySelectionTimer);
+      this.proxySelectionTimer = undefined;
+    }
+    if (this.automationSettingsTimer) {
+      clearInterval(this.automationSettingsTimer);
+      this.automationSettingsTimer = undefined;
+    }
     if (this.quotaTimer) {
       clearInterval(this.quotaTimer);
       this.quotaTimer = undefined;
     }
     this.tokenScheduler.dispose();
+    this.quotaCountdownScheduler?.dispose();
+    this.quotaCountdownScheduler = undefined;
+    this.appliedQuotaCountdownAutomation = undefined;
     this.mailbox.dispose();
     this.localImportInbox.dispose();
     this.managerControlServer.dispose();
@@ -213,6 +257,43 @@ export class ManagerDaemon {
     });
     disposeCodexProxyEnvironment();
     this.started = false;
+  }
+
+  private async refreshProxyEnvironment(force = false): Promise<void> {
+    const selectedProxy = await readManagerProxySelection(this.config.privateRoot);
+    if (!force && selectedProxy === this.appliedProxySelection) {
+      return;
+    }
+
+    const initialized = await initializeCodexProxyEnvironment(selectedProxy);
+    if (initialized || !selectedProxy) {
+      this.appliedProxySelection = selectedProxy;
+      if (!force) {
+        console.info("[codexAccounts] manager daemon applied the Dashboard proxy selection");
+      }
+    }
+  }
+
+  private async syncQuotaCountdownAutomation(force = false): Promise<void> {
+    const sharedSetting = await readManagerAutomationSettings(this.config.privateRoot);
+    const enabled = resolveQuotaCountdownAutomationEnabled(sharedSetting, this.config.autoStartQuotaCountdown);
+    if (!force && this.appliedQuotaCountdownAutomation === enabled) {
+      return;
+    }
+
+    this.quotaCountdownScheduler?.dispose();
+    this.quotaCountdownScheduler = undefined;
+    this.appliedQuotaCountdownAutomation = enabled;
+    if (enabled) {
+      this.quotaCountdownScheduler = new HeadlessQuotaCountdownScheduler(
+        this.repo,
+        this.config.quotaCountdownCheckIntervalMs
+      );
+      this.quotaCountdownScheduler.start();
+    }
+    console.info(
+      `[codexAccounts] daemon quota countdown automation ${enabled ? "enabled" : "disabled"} (${sharedSetting === undefined ? "environment fallback" : "Dashboard setting"})`
+    );
   }
 
   private async runQuotaSweep(): Promise<void> {
@@ -229,6 +310,13 @@ export class ManagerDaemon {
   private localImportInboxPath(): string {
     return path.join(this.config.privateRoot, "import-inbox");
   }
+}
+
+export function resolveQuotaCountdownAutomationEnabled(
+  sharedSetting: boolean | undefined,
+  environmentSetting: boolean
+): boolean {
+  return sharedSetting ?? environmentSetting;
 }
 
 export async function main(): Promise<void> {

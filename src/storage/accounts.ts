@@ -384,6 +384,11 @@ export class AccountsRepository {
     }
   }
 
+  /** Return the private root shared by the extension host and headless runtime. */
+  getPrivateStateRoot(): string {
+    return this.privateStatePaths.root;
+  }
+
   async syncFromAideckMirror(): Promise<CodexAccountRecord[]> {
     const sharedAccounts = await listAideckCodexSharedAccounts();
     if (sharedAccounts.length === 0) {

@@ -282,6 +282,42 @@ describe("WorkbenchRefreshCoordinator external auth convergence", () => {
     }
   });
 
+  it("delegates scheduled quota refresh to the daemon before taking the local lease", async () => {
+    vi.useFakeTimers();
+    const configurationDisposable = { dispose: vi.fn() };
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: (key: string, defaultValue?: unknown) => (key === "autoRefreshMinutes" ? 1 : defaultValue),
+      update: vi.fn(),
+      inspect: vi.fn()
+    } as never);
+    vi.mocked(vscode.workspace.onDidChangeConfiguration).mockReturnValue(configurationDisposable as never);
+    const repo = {
+      listAccounts: vi
+        .fn()
+        .mockResolvedValue([{ id: "a", email: "a@example.invalid", isActive: true, createdAt: 1, updatedAt: 1 }]),
+      tryAcquireSchedulerLease: vi.fn()
+    };
+    const refreshThroughDaemon = vi.fn().mockResolvedValue(true);
+    const onRefresh = vi.fn();
+    const registration = registerAutoRefreshScheduler({
+      context: { subscriptions: [] } as never,
+      repo: repo as never,
+      onRefresh,
+      refreshThroughDaemon
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(refreshThroughDaemon).toHaveBeenCalledWith(["a"]);
+      expect(onRefresh).toHaveBeenCalledOnce();
+      expect(repo.tryAcquireSchedulerLease).not.toHaveBeenCalled();
+      expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
+    } finally {
+      registration.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshes expired visible accounts so the quota event can start their countdown", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000 * 1000);

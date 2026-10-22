@@ -5,7 +5,9 @@ import {
   getCodexProxyConfigurationError,
   initializeCodexProxyEnvironment
 } from "./infrastructure/config/proxyEnvironment";
-import { getDashboardProxyAddress } from "./infrastructure/config/extensionSettings";
+import { writeManagerAutomationSettings } from "./infrastructure/config/managerAutomationSettings";
+import { writeManagerProxySelection } from "./infrastructure/config/managerProxySelection";
+import { getDashboardProxyAddress, isAutoStartQuotaCountdownEnabled } from "./infrastructure/config/extensionSettings";
 import { loadManagerControlEnvironment } from "./infrastructure/config/managerControlEnvironment";
 import { AccountsWorkbench } from "./presentation/workbench/accountsWorkbench";
 import { flushAccountStates } from "./application/accounts/accountState";
@@ -20,17 +22,21 @@ let workbench: AccountsWorkbench | undefined;
  */
 export async function activate(context: vscode.ExtensionContext): Promise<CodexAccountsIntegrationApi> {
   await migrateLegacyGlobalStorage(context);
-  await loadManagerControlEnvironment({ privateRoot: getPrivateStatePaths(context).root });
-  await initializeConfiguredProxyEnvironment();
+  const privateRoot = getPrivateStatePaths(context).root;
+  await loadManagerControlEnvironment({ privateRoot });
+  await initializeConfiguredProxyEnvironment(privateRoot);
+  await publishManagerAutomationSettings(privateRoot);
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
-        !event.affectsConfiguration("codexAccounts.proxyAddress") &&
-        !event.affectsConfiguration("codexAccounts.proxyAddresses")
+        event.affectsConfiguration("codexAccounts.proxyAddress") ||
+        event.affectsConfiguration("codexAccounts.proxyAddresses")
       ) {
-        return;
+        void initializeConfiguredProxyEnvironment(privateRoot);
       }
-      void initializeConfiguredProxyEnvironment();
+      if (event.affectsConfiguration("codexAccounts.autoStartQuotaCountdownEnabled")) {
+        void publishManagerAutomationSettings(privateRoot);
+      }
     })
   );
   workbench = new AccountsWorkbench(context);
@@ -38,8 +44,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<CodexA
   return workbench.getIntegrationApi();
 }
 
-async function initializeConfiguredProxyEnvironment(): Promise<void> {
-  await initializeCodexProxyEnvironment(getDashboardProxyAddress() || undefined);
+async function publishManagerAutomationSettings(privateRoot: string): Promise<void> {
+  try {
+    await writeManagerAutomationSettings(privateRoot, isAutoStartQuotaCountdownEnabled());
+  } catch (error) {
+    console.warn("[codexAccounts] could not publish Dashboard automation settings to the headless runtime:", error);
+  }
+}
+
+async function initializeConfiguredProxyEnvironment(privateRoot: string): Promise<void> {
+  const selectedProxy = getDashboardProxyAddress();
+  try {
+    await writeManagerProxySelection(privateRoot, selectedProxy);
+  } catch (error) {
+    console.warn("[codexAccounts] could not publish Dashboard proxy selection to the headless runtime:", error);
+  }
+  await initializeCodexProxyEnvironment(selectedProxy || undefined);
   const proxyError = getCodexProxyConfigurationError();
   if (proxyError) {
     void vscode.window.showErrorMessage(`[Codex Accounts Manager] ${proxyError.message}`);
