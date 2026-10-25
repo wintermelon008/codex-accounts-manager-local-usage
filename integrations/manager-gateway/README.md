@@ -80,7 +80,7 @@ Feishu Helper 配置 `FEISHU_GATEWAY_URL=http://127.0.0.1:43118` 后，普通管
 
 ## 报销智能导入
 
-报销数据由 Research Workbench 数据服务持有，Manager Gateway 只负责统一 AI 会话、附件暂存和动作编排，不打开 Workbench SQLite。一个报销事项支持三个凭证角色：`invoice`（发票/收据）、`payment`（支付截图）和 `order`（订单截图）；三类凭证均可缺省，缺失项保持为空，齐全后事项自动进入 `ready` 状态，未齐全时仍可保存、查看和导出。报销大项和子大项通过 `parent_id` 组织，事项通过 `group_id` 归属；导出根大项时默认递归包含子大项。
+报销数据由 Research Workbench 数据服务持有，Manager Gateway 只负责统一 AI 会话、附件暂存和动作编排，不打开 Workbench SQLite。一个报销事项支持三个凭证角色：`invoice`（发票/收据）、`payment`（支付截图）和 `order`（订单截图）；三类凭证均可缺省，缺失项保持为空，齐全后事项自动进入 `ready` 状态，未齐全时仍可保存、查看和导出。用户可将事项标记为 `draft`（未提交）、`submitted`（已提交）或 `reimbursed`（已到账），并维护 `statusDate`；省略日期时由 Workbench 使用修改当天。报销大项和子大项通过 `parent_id` 组织，事项通过 `group_id` 归属；导出根大项时默认递归包含子大项。
 
 Workbench AI 和 Feishu 都把自然语言请求标记为 `purpose=reimbursement-assistant`，交给同一个 Gateway。模型只返回结构化动作计划，Gateway 再调用 Workbench `/api/workbench/reimbursements/*` API 执行创建事项、归档凭证、合并大项和导出，避免模型直接写 SQLite。PDF 导出默认固定为 `full`，摘要页后附原始图片；PDF 凭证也会尽量复制原始页。
 

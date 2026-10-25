@@ -34,7 +34,16 @@ describe("Reimbursement assistant", () => {
         return json(response, 201, { group: { id: "group-1", name: "2026-09 出差" } });
       }
       if (request.method === "POST" && request.url === "/api/workbench/reimbursements") {
+        const payload = JSON.parse(body.toString("utf8"));
+        assert.equal(payload.status, "submitted");
+        assert.equal(payload.statusDate, "2026-09-09");
         return json(response, 201, { item: { id: "item-1", title: "会议注册费", missingEvidence: ["invoice", "payment", "order"] } });
+      }
+      if (request.method === "PATCH" && request.url === "/api/workbench/reimbursements/item-1") {
+        const payload = JSON.parse(body.toString("utf8"));
+        assert.equal(payload.status, "submitted");
+        assert.equal(payload.statusDate, "2026-09-10");
+        return json(response, 200, { item: { id: "item-1", title: "会议注册费", status: "submitted", statusDate: "2026-09-10" } });
       }
       if (request.method === "PUT" && request.url === "/api/workbench/reimbursements/intake") {
         return json(response, 200, { intake: { itemId: "item-1" } });
@@ -93,7 +102,8 @@ describe("Reimbursement assistant", () => {
           reply: "我来整理这笔报销。",
           actions: [
             { type: "group.create", ref: "travel", name: "2026-09 出差" },
-            { type: "item.create", ref: "expense", groupRef: "travel", title: "会议注册费", amountMinor: 12000, currency: "CNY" },
+            { type: "item.create", ref: "expense", groupRef: "travel", title: "会议注册费", amountMinor: 12000, currency: "CNY", status: "submitted", statusDate: "2026-09-09" },
+            { type: "item.update", itemId: "item-1", status: "submitted", statusDate: "2026-09-10" },
             { type: "evidence.attach", itemRef: "expense", role: "invoice", attachmentIndex: 0 },
             { type: "group.export_pdf", groupRef: "travel" }
           ]

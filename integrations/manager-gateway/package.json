@@ -24,6 +24,6 @@
     "check": "npm test",
     "start": "node src/cli.mjs",
     "package:check": "npm test && npm pack --dry-run",
-    "package": "npm run package:check && npm pack --pack-destination dist"
+    "package": "npm run package:check && node -e \"require('fs').mkdirSync('dist', { recursive: true })\" && npm pack --pack-destination dist"
   }
 }

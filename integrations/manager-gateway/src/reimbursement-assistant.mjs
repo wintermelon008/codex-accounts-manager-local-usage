@@ -99,6 +99,8 @@ export class ReimbursementAssistant {
           expenseDate: action.expenseDate,
           purpose: action.purpose,
           groupId,
+          status: action.status,
+          statusDate: action.statusDate,
           sourceChannel: source.channel,
           sourceActorId: source.actorId,
           sourceChatId: source.chatId,
@@ -140,6 +142,7 @@ export class ReimbursementAssistant {
           purpose: action.purpose,
           groupId: action.groupId,
           status: action.status,
+          statusDate: action.statusDate,
         }),
         signal,
       });

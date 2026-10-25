@@ -64,6 +64,41 @@ describe("manager gateway Codex provider", () => {
     assert.doesNotMatch(prompt, /WORKBENCH_DATA_URL/u);
   });
 
+  it("passes selected papers to Codex for literature AI review", async () => {
+    const harness = await createHarness("success");
+    const provider = createProvider(harness.config);
+
+    await provider.run({
+      session: sessionFor(harness.root, {
+        message: "请按要求生成论文科研阅读整理",
+        context: {
+          purpose: "literature-ai-review",
+          papers: [{
+            id: "paper-1",
+            title: "稀疏加速器",
+            authors: "A. Author",
+            venue: "DAC",
+            year: 2026,
+            abstract: "本文提出一种稀疏计算方法。",
+            tags: ["FPGA"]
+          }]
+        }
+      }),
+      emit() {}
+    });
+    const [{ argv }] = await readInvocations(harness.logPath);
+    const prompt = argv.at(-1);
+    assert.match(prompt, /论文科研阅读整理/u);
+    assert.match(prompt, /paper-1/u);
+    assert.match(prompt, /稀疏加速器/u);
+    assert.match(prompt, /本文提出一种稀疏计算方法/u);
+    assert.match(prompt, /顶层键必须使用对应论文的 id/u);
+    assert.match(prompt, /positioning、problem、coreIdea、innovations、evidence、limitations/u);
+    assert.ok(valuesFor(argv, "--config").includes('model="gpt-5.6-luna"'));
+    assert.ok(valuesFor(argv, "--config").includes('model_reasoning_effort="max"'));
+    assert.doesNotMatch(prompt, /请先阅读仓库根目录 AGENTS\.md/u);
+  });
+
   it("passes saved image attachments to Codex and describes every attachment by address", async () => {
     const harness = await createHarness("success");
     const imagePath = join(harness.root, "uploaded-image.png");
@@ -314,13 +349,20 @@ describe("manager gateway Codex provider", () => {
       });
 
       const result = await provider.run({
-        session: sessionFor(harness.root, { mode: "research", message: "research with usage" }),
+        session: sessionFor(harness.root, {
+          mode: "research",
+          message: "research with usage",
+          context: {
+            purpose: "literature-ai-review",
+            papers: [{ id: "paper-1", title: "研究论文", abstract: "研究摘要" }]
+          }
+        }),
         emit() {}
       });
 
       assert.equal(result.text, "research response");
       assert.deepEqual(result.usage, {
-        model: "gpt-6-astra",
+        model: "gpt-5.6-luna",
         inputTokens: 10,
         cachedInputTokens: 2,
         outputTokens: 6,
@@ -328,8 +370,12 @@ describe("manager gateway Codex provider", () => {
         totalTokens: 16
       });
       assert.equal(authorization, "Bearer research-key");
-      assert.equal(requestBody.model, "gpt-6-astra");
+      assert.equal(requestBody.model, "gpt-5.6-luna");
       assert.deepEqual(requestBody.stream_options, { include_usage: true });
+      assert.equal(requestBody.reasoning_effort, "max");
+      assert.match(requestBody.messages[0].content, /论文科研阅读整理/u);
+      assert.match(requestBody.messages[0].content, /paper-1/u);
+      assert.match(requestBody.messages[0].content, /研究摘要/u);
     } finally {
       await closeHttpServer(server);
     }
