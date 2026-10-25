@@ -1,5 +1,11 @@
 # 变更日志
 
+## 0.1.21-l3（2026-10-25）
+
+- Manager Gateway 新增按需论文科研阅读整理：把选中的论文资料交给独立阅读提示和高推理模型，要求按论文 ID 输出定位、问题、核心思路、创新、证据和局限，避免把缺失全文误写成已读全文。
+- 报销助手支持事项状态 `draft`、`submitted`、`reimbursed` 及 `statusDate`，创建和更新动作会把状态变化传递给 Workbench。
+- 加固无感切号启动和重启恢复：Codex runtime 状态探测超时不再长时间阻塞扩展宿主，Manager control readiness 也能识别由 daemon 持有的控制服务。
+
 ## 0.1.21-l2（2026-10-22）
 
 - 新增 headless Manager daemon：VS Code 关闭或没有 Remote-SSH 连接时，仍可持续执行 token 续期、Mailbox 自动续期和额度刷新。

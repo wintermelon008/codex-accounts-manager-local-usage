@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-10-codex-accounts-0-1-21-l2-headless-automation",
+      "id": "ann-2026-10-codex-accounts-0-1-21-l3-manager-followups",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.21-l2",
-      "title": "Codex Accounts Manager 0.1.21-l2 — headless automation",
-      "summary": "Adds the headless daemon handoff for quota refresh, token renewal, Mailbox renewal, and quota countdown automation.",
-      "content": "This local release makes Manager automation continue without an active VS Code connection.\n1. Headless daemon: keep token renewal, Mailbox renewal, and quota refresh running while VS Code is closed.\n2. Quota ownership: delegate automatic foreground refresh through the loopback Control API and retry shared-lease contention instead of misreporting a whole batch as failed.\n3. Countdown: synchronize the Dashboard setting to the daemon so an eligible reset window can send one short conversation and start the official countdown.\n4. Safety: preserve the existing extension identity, private-state permissions, proxy selection, and cross-host lease protection.",
+      "releaseVersion": "0.1.21-l3",
+      "title": "Codex Accounts Manager 0.1.21-l3 — Manager follow-ups",
+      "summary": "Adds literature review handoff, reimbursement status tracking, and safer Manager startup recovery.",
+      "content": "This local release extends the Manager-side workflow and hardens startup recovery.\n1. Literature review: pass selected papers to a dedicated AI reading task with strict per-paper JSON output and explicit evidence limits.\n2. Reimbursement: create and update items with draft, submitted, or reimbursed status and an optional status date.\n3. Recovery: bound the Codex runtime status probe during parallel startup and recognize a daemon-owned Manager control service.\n4. Compatibility: preserve the existing extension identity, private-state boundaries, and Manager Gateway session behavior.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -20,9 +20,9 @@
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.21-l2 — 后台自动化",
-          "summary": "新增无需 VS Code 连接即可持续运行的 daemon，接管额度刷新、token 和 Mailbox 续期以及倒计时自动化。",
-          "content": "本地版本让 Manager 自动化在没有活动 VS Code 连接时继续工作。\n1. Headless daemon：VS Code 关闭后继续执行 token 续期、Mailbox 续期和额度刷新。\n2. 额度归属：前台自动刷新通过 loopback Control API 委托给 daemon，共享 lease 冲突改为可重试状态，不再把整批账号误报为失败。\n3. 倒计时：Dashboard 设置同步到 daemon，额度窗口符合条件时发送一次短对话并启动官方倒计时。\n4. 安全性：保留既有扩展 ID、私有状态权限、代理选择和跨宿主 lease 保护。"
+          "title": "Codex Accounts Manager 0.1.21-l3 — Manager 后续更新",
+          "summary": "新增论文科研阅读整理、报销状态跟踪和更安全的 Manager 启动恢复。",
+          "content": "本地版本扩展 Manager 侧工作流并加固启动恢复。\n1. 论文阅读：把选中的论文交给独立 AI 阅读任务，按论文 ID 严格输出 JSON，并明确证据边界。\n2. 报销状态：创建和更新事项时支持草稿、已提交和已到账状态及状态日期。\n3. 恢复逻辑：并行启动期间对 Codex runtime 状态探测设置边界，并识别由 daemon 持有的 Manager control 服务。\n4. 兼容性：保留既有扩展 ID、私有状态边界和 Manager Gateway session 行为。"
         }
       }
     }
