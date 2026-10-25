@@ -897,7 +897,7 @@ describe("Codex hot-switch runtime setup", () => {
 
       const getStatus = vi
         .spyOn(CodexHotSwitchBridge.prototype, "getStatus")
-        .mockRejectedValueOnce(new Error("Codex hot-switch runtime is not available"))
+        .mockImplementationOnce(() => new Promise<never>(() => undefined))
         .mockResolvedValueOnce({
           runtimeProtocolVersion: 18,
           ready: false,

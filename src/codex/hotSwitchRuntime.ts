@@ -55,6 +55,7 @@ const RUNTIME_OWNER_FILE = "runtime-owner.lease";
 const USAGE_ATTRIBUTION_DIRECTORY = "account-usage-attribution";
 export const HOT_SWITCH_RUNTIME_PROTOCOL_VERSION = 18;
 const RUNTIME_PROTOCOL_VERSION = HOT_SWITCH_RUNTIME_PROTOCOL_VERSION;
+const RUNTIME_STATUS_PROBE_TIMEOUT_MS = 1_000;
 const GATEWAY_RUNTIME_CONFIG_KEY = "gateway.runtimeConfig";
 const UNMANAGED_ROLLBACK_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 const USAGE_ATTRIBUTION_RETRY_DELAY_MS = 5_000;
@@ -833,7 +834,14 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         let runtimeStatusChecked = false;
         if (isOpenAiCodexExtensionActive()) {
           try {
-            const status = await candidateBridge.getStatus();
+            // The official Codex extension and this Manager activate in parallel.
+            // Do not hold the Extension Host behind a full bridge request timeout
+            // while the app-server is still starting; the bridge remains lazy.
+            const status = await withTimeout(
+              candidateBridge.getStatus(),
+              RUNTIME_STATUS_PROBE_TIMEOUT_MS,
+              "Codex hot-switch runtime status probe timed out during startup"
+            );
             runtimeStatusChecked = true;
             requiresReload =
               status.runtimeProtocolVersion !== RUNTIME_PROTOCOL_VERSION ||
@@ -1386,6 +1394,23 @@ function sameGatewayRuntimeConfig(left: GatewayRuntimeConfig, right: GatewayRunt
 
 function readRuntimeString(value: unknown, maxLength: number): string | undefined {
   return typeof value === "string" && value.trim() && value.trim().length <= maxLength ? value.trim() : undefined;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
+  });
 }
 
 function isRemoteExtensionHost(): boolean {

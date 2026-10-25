@@ -34,7 +34,7 @@ export type RestartRecoveryReport = {
 export type RestartRecoveryProbe = {
   readIndexHealth: () => Promise<{ status: CodexIndexHealthStatus }>;
   managerControlEnabled: boolean;
-  managerControlReady: () => boolean;
+  managerControlReady: () => boolean | Promise<boolean>;
   runtimeEnabled: boolean;
   readRuntimeStatus: () => Promise<{ ready: boolean }>;
   now?: () => number;

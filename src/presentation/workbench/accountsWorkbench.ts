@@ -1167,7 +1167,7 @@ export class AccountsWorkbench {
       report = await runRestartRecoveryCheck(marker.requestedAt, {
         readIndexHealth: () => this.repo.getIndexHealthSummary(),
         managerControlEnabled: isExternalControlEnabled(),
-        managerControlReady: () => this.managerControlServer.isRunning(),
+        managerControlReady: () => this.isManagerControlReady(),
         runtimeEnabled: this.hotSwitchRuntime.isEnabled(),
         readRuntimeStatus: async () => {
           const status = await this.hotSwitchRuntime.getStatus();
@@ -1218,6 +1218,19 @@ export class AccountsWorkbench {
     } else if (choice === openDashboard) {
       void vscode.commands.executeCommand("codexAccounts.showQuotaSummary");
     }
+  }
+
+  private async isManagerControlReady(): Promise<boolean> {
+    if (this.managerControlServer.isRunning()) {
+      return true;
+    }
+
+    const token = process.env["CODEX_ACCOUNTS_MANAGER_CONTROL_TOKEN"]?.trim();
+    if (!token || !isExternalControlEnabled()) {
+      return false;
+    }
+
+    return isManagerDaemonControlServer(getExternalControlPort(), token);
   }
 }
 

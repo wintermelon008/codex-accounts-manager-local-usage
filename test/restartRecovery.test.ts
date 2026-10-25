@@ -97,6 +97,22 @@ describe("restart recovery", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it("accepts an asynchronously confirmed manager control owner", async () => {
+    const report = await runRestartRecoveryCheck(1_000, {
+      readIndexHealth: async () => ({ status: "healthy" }),
+      managerControlEnabled: true,
+      managerControlReady: async () => true,
+      runtimeEnabled: false,
+      readRuntimeStatus: async () => ({ ready: false }),
+      retryDelaysMs: [0]
+    });
+
+    expect(report.status).toBe("passed");
+    expect(report.checks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "managerControl", status: "passed" })])
+    );
+  });
+
   it("fails when the runtime never becomes ready while allowing disabled APIs to be skipped", async () => {
     const report = await runRestartRecoveryCheck(1_000, {
       readIndexHealth: async () => ({ status: "corrupted_unrecoverable" }),
