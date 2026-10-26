@@ -286,14 +286,14 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(primitives).toContain("const tooltip = props.tooltip ?? accessibleLabel");
   });
 
-  it("renders quota-window token totals and detailed input/output usage in the paginated account card", () => {
+  it("keeps quota-window token details in the paginated account card tooltip", () => {
     const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
     const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
 
     expect(card).toContain("saved-token-usage-line");
-    expect(card).toContain("saved-token-usage-details");
+    expect(card).toContain("formatAccountTokenUsageTitle");
     expect(card).toContain("formatAccountTokenUsage");
-    expect(card).toContain("formatAccountTokenUsageDetails");
+    expect(card).toContain("formatTokenUsageDetails");
     expect(card).toContain("formatAccountTokenUsagePrice");
     expect(card).toContain("usage.inputTokens");
     expect(card).toContain("usage.outputTokens");
@@ -307,7 +307,8 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(card).not.toContain("本五小时窗口 Token");
     expect(card).not.toContain("creditsText");
     expect(stylesheet).toContain(".saved-token-usage-line");
-    expect(stylesheet).toContain(".saved-token-usage-details");
+    expect(card).not.toContain("saved-token-usage-details");
+    expect(stylesheet).not.toContain(".saved-token-usage-details");
     expect(stylesheet).toContain(".saved-provider-metric");
     expect(stylesheet).toContain("text-overflow: ellipsis");
   });

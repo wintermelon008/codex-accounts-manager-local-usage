@@ -95,6 +95,19 @@ test("Miaoic client uses the internal account cookie and recv endpoints", async 
   assert.equal(normalizeMiaoicState({ ok: true, active: true, phone: "+8613800000000", code: "123456" }, "unused", "state").status, "code_received");
 });
 
+test("Miaoic normalizes a code returned only in the recent codes list", () => {
+  const normalized = normalizeMiaoicState({
+    ok: true,
+    active: true,
+    phone: "+8613800000000",
+    code: "",
+    codes: [{ at: "recent", code: "654321" }]
+  }, "unused", "state");
+
+  assert.equal(normalized.status, "code_received");
+  assert.equal(normalized.sms_code, "654321");
+});
+
 test("Miaoic reuses an active page lease instead of opening a duplicate", async () => {
   const requests = [];
   const client = new MiaoicClient({

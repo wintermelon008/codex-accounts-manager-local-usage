@@ -1,14 +1,14 @@
-# 独立组件交付与迁移
+# 组件交付与迁移
 
-本仓库的核心 Manager 与多项可选组件分别交付。核心 VSIX 有意不包含可选组件源码、私有环境文件或已有服务配置；请从同一已审阅源码副本或发布附件取得对应产物。
+本仓库的 Manager 与可选组件按不同边界交付。Mailbox 已作为默认关闭的内置模块随 Manager VSIX 提供；其他可选组件仍保持独立交付。任何组件都不会自动复制私有环境文件或已有服务配置。
 
 | 组件 | 产物 | 启用 | 停用 / 卸载 |
 | --- | --- | --- | --- |
 | 核心 Manager | 根目录生成的 Manager VSIX | 在 VS Code 安装后直接导入或 OAuth 添加账号；本地收件箱和外部控制接口按需启用 | 关闭各项可选设置或移除无感 runtime；在扩展视图卸载核心 VSIX |
-| Manager headless runtime | 根目录编译出的 `out/runtime/managerDaemon.js` + systemd 用户服务模板 | 与 Manager 共用 private state，长期执行 token 续期、Mailbox 自动续期、额度刷新和本地导入；默认不接管 Codex app-server | 停止 daemon 服务即可；不会删除账号、凭据或 VS Code 扩展 |
+| Manager headless runtime | 根目录编译出的 `out/runtime/managerDaemon.js` + systemd 用户服务模板 | 与 Manager 共用 private state，长期执行 token 续期、开启后的 Mailbox 自动续期、额度刷新和本地导入；默认不接管 Codex app-server | 停止 daemon 服务即可；不会删除账号、凭据或 VS Code 扩展 |
 | 飞书 Manager 操纵助手 | `feishu-assistant` tarball | 使用全新的飞书 App 长连接；管理员一对一私聊查询账号、今日用量、触发额度刷新和查看导入状态；Manager 回环控制接口默认开启 | 停止机器人进程或服务、关闭 `codexAccounts.externalControlEnabled`，再卸载其 Node 包；不会删除 Manager、账号或队列数据 |
 | Sub2API Gateway | 独立 Gateway VSIX | 安装后默认隐藏已保存账号中的 Sub2API 卡片；在设置中开启后配置、保存密钥并选择 Gateway | 先在账号卡片切回 ChatGPT Auth，再卸载 Gateway VSIX |
-| Mailbox | `integrations/mailbox` 独立 VSIX | 用户在导入时选择邮箱 provider 后，从 Mailbox 面板手动查询、启动验证码监听或人工续期 | 先停止邮箱操作，再卸载可选 VSIX；不影响 Manager 账号和 Sub2API |
+| Mailbox | Manager VSIX 内置 `mailbox` 模块 | 在 Dashboard 设置中开启“邮箱管理”总开关后，使用邮箱面板、注册助手、验证码监听、人工续期和后台自动续期 | 关闭“邮箱管理”总开关；不会删除邮箱凭据、邮件记录、注册历史或配置 |
 | Manager Gateway | `manager-gateway` Node companion | Manager extension 在线时提供 Workbench task/session、并行 exec 和额度批次恢复；不持有 Workbench SQLite | 先停止浏览器客户端和 Gateway，再停止/卸载 companion；不会删除账号或 Workbench 数据库 |
 
 从源码构建全部产物：
@@ -17,7 +17,6 @@
 npm run package
 npm --prefix integrations/feishu-assistant run package
 npm --prefix integrations/sub2api-gateway run package
-npm --prefix integrations/mailbox run package
 npm --prefix integrations/manager-gateway run package
 ```
 

@@ -13,6 +13,12 @@ async function activate(context) {
   } catch (error) {
     void vscode.window.showWarningMessage(error instanceof Error ? error.message : "Manager integration is unavailable.");
   }
+  if (api?.mailboxBuiltIn === true) {
+    // New Manager releases host Mailbox in the core VSIX. The standalone
+    // compatibility extension must stay inert to avoid duplicate cards,
+    // timers, and provider operations against the same private state.
+    return;
+  }
   integration = new MailboxIntegration(vscode, context, api);
   await integration.initialize();
   context.subscriptions.push(integration);

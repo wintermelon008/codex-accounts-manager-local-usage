@@ -61,6 +61,7 @@
 
 ## 可选本地集成
 
+- **内置 Mailbox**：随 Manager VSIX 提供，Dashboard 设置中的“邮箱管理”总开关默认关闭；开启后同时显示邮箱管理和注册助手入口，并启用邮箱查询、注册辅助与后台续期。关闭只停用功能，不删除邮箱凭据、邮件记录或配置。
 - [独立 Sub2API Gateway](docs/integrations/sub2api-gateway.md)：Gateway VSIX 与核心 Manager 可独立安装/停用；Gateway 默认隐藏已保存账号中的“手动 / Gateway”虚拟账号卡片，开启后可在卡片内显示 tracker 用量/估算价格和配置动作，但不伪造 OAuth 账号或进入任何自动账号池。
 - [Manager Gateway](integrations/manager-gateway/README.md)：独立 task/session companion，承载浏览器入口、并行 Codex exec 和额度批次恢复；Workbench 数据由独立数据服务负责；需要 Manager extension 在线。
 - [Manager 账号共享与好友端配置](docs/ACCOUNT_SHARING.md)：基于 Manager 用户 ID、好友接受、加密 Relay、租约期限和自动归还的跨网络共享；包含 Ubuntu/Windows、Tailscale、首次注册令牌和故障排查流程。
@@ -93,11 +94,10 @@ npm run package
 ```bash
 npm --prefix integrations/feishu-assistant run package
 npm --prefix integrations/sub2api-gateway run package
-npm --prefix integrations/mailbox run package
 npm --prefix integrations/manager-gateway run package
 ```
 
-可选包不包含在核心 VSIX 中。分别进入 `integrations/feishu-assistant`、`integrations/sub2api-gateway`、`integrations/mailbox` 或 `integrations/manager-gateway` 按各自 README 构建和配置；它们不会自动复制旧服务、凭据、账号或设备路径。
+Mailbox 已随核心 Manager VSIX 构建；其他可选包仍需分别进入 `integrations/feishu-assistant`、`integrations/sub2api-gateway` 或 `integrations/manager-gateway` 按各自 README 构建和配置。它们不会自动复制旧服务、凭据、账号或设备路径。
 
 ## 文档索引
 

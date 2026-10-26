@@ -15,7 +15,6 @@ type AboutLocaleText = {
   extensionChip: string;
   localChip: string;
   desc: string;
-  subdesc: string;
   author: string;
   authorDesc: string;
   github: string;
@@ -39,8 +38,6 @@ const ABOUT_TEXT: Record<"en" | "zh" | "zh-hant", AboutLocaleText> = {
     extensionChip: "VS Code Extension",
     localChip: "Local-first",
     desc: "A local dashboard for managing Codex accounts, quota visibility, and account switching inside VS Code.",
-    subdesc:
-      "Codex Accounts Manager focuses on saved accounts you already own, helping you organize tokens, inspect quotas, switch accounts, and keep account state easier to understand.",
     author: "Author",
     authorDesc: "wintermelon008",
     github: "Repository",
@@ -71,8 +68,6 @@ const ABOUT_TEXT: Record<"en" | "zh" | "zh-hant", AboutLocaleText> = {
     extensionChip: "VS Code 扩展",
     localChip: "本地优先",
     desc: "在 VS Code 内管理 Codex 多账号、查看配额与切换状态的本地工具。",
-    subdesc:
-      "Codex Accounts Manager 面向你已合法拥有的账号，提供本地导入、账号切换、配额查看、标签整理、导出与状态提示等能力。",
     author: "主作者",
     authorDesc: "wintermelon008",
     github: "开源仓库",
@@ -103,8 +98,6 @@ const ABOUT_TEXT: Record<"en" | "zh" | "zh-hant", AboutLocaleText> = {
     extensionChip: "VS Code 擴充套件",
     localChip: "本機優先",
     desc: "在 VS Code 內管理 Codex 多帳號、查看配額與切換狀態的本機工具。",
-    subdesc:
-      "Codex Accounts Manager 面向你已合法擁有的帳號，提供本機匯入、帳號切換、配額查看、標籤整理、匯出與狀態提示等能力。",
     author: "主作者",
     authorDesc: "wintermelon008",
     github: "開源倉庫",
@@ -193,7 +186,6 @@ export function AboutModal(props: {
             <span class="about-chip">{text.localChip}</span>
           </div>
           <p class="about-desc">{text.desc}</p>
-          <p class="about-subdesc">{text.subdesc}</p>
         </section>
 
         <section class="about-section about-section-compact">

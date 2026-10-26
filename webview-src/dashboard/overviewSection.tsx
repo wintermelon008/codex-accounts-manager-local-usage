@@ -27,7 +27,7 @@ export function OverviewSection(props: {
 }) {
   const { account, copy, hasAccounts, privacyMode } = props;
   const emptyTitle = hasAccounts ? copy.noActiveAccountTitle : copy.empty;
-  const emptySub = hasAccounts ? copy.noActiveAccountSub : copy.savedAccountsSub;
+  const emptySub = hasAccounts ? copy.noActiveAccountSub : undefined;
 
   return (
     <div class="overview-shell overview-shell-compact">
@@ -39,7 +39,7 @@ export function OverviewSection(props: {
         ) : (
           <>
             <div class="overview-empty-title">{emptyTitle}</div>
-            <div class="overview-empty-sub">{emptySub}</div>
+            {emptySub ? <div class="overview-empty-sub">{emptySub}</div> : null}
           </>
         )}
       </div>

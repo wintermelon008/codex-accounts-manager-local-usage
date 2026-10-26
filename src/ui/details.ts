@@ -356,7 +356,6 @@ function renderHtml(
               </button>
             </div>
             <div class="meta">${renderSensitiveHtml(account.email, "email")}</div>
-            <div class="meta">${escapeHtml(copy.detailsSubtitle)}</div>
           </div>
           <div class="badges">
             ${account.isActive ? `<span class="pill active">${escapeHtml(copy.current)}</span>` : `<span class="pill">${escapeHtml(copy.saved)}</span>`}
@@ -394,7 +393,6 @@ function renderHtml(
         <div class="usage-title-block">
           <h2>${escapeHtml(copy.usageTitle)}</h2>
           <div class="usage-note">${escapeHtml(copy.usageHint)}</div>
-          <div class="meta">${escapeHtml(copy.usageSubtitle)}</div>
         </div>
         <div class="usage-range">${escapeHtml(copy.rangeLabel(options.usage?.days ?? 30))}</div>
       </div>
@@ -415,10 +413,6 @@ function renderHtml(
         <div class="meta-box">
           <div class="label">${escapeHtml(copy.lastQuotaRefresh)}</div>
           <div class="content">${renderLiveTimestamp(account.lastQuotaAt, copy)}</div>
-        </div>
-        <div class="meta-box">
-          <div class="label">${escapeHtml(copy.loginTime)}</div>
-          <div class="content">${renderLiveTimestamp(account.loginAt, copy)}</div>
         </div>
       </div>
     </section>

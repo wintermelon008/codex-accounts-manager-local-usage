@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-10-codex-accounts-0-1-21-l3-manager-followups",
+      "id": "ann-2026-10-codex-accounts-0-1-21-dev-ui-copy",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.21-l3",
-      "title": "Codex Accounts Manager 0.1.21-l3 — Manager follow-ups",
-      "summary": "Adds literature review handoff, reimbursement status tracking, and safer Manager startup recovery.",
-      "content": "This local release extends the Manager-side workflow and hardens startup recovery.\n1. Literature review: pass selected papers to a dedicated AI reading task with strict per-paper JSON output and explicit evidence limits.\n2. Reimbursement: create and update items with draft, submitted, or reimbursed status and an optional status date.\n3. Recovery: bound the Codex runtime status probe during parallel startup and recognize a daemon-owned Manager control service.\n4. Compatibility: preserve the existing extension identity, private-state boundaries, and Manager Gateway session behavior.",
+      "releaseVersion": "0.1.21-dev",
+      "title": "Codex Accounts Manager 0.1.21-dev — Dashboard copy cleanup",
+      "summary": "Simplifies Dashboard and settings copy while keeping state, actions, risks, and token details available.",
+      "content": "This development build reduces visual repetition across the Dashboard, settings, account details, About panel, and advanced appearance.\n1. Layout: remove secondary labels and descriptions that duplicate section structure, controls, colors, or values.\n2. Account cards: keep token input, cached-input, and output details in the existing tooltip instead of the visual card face.\n3. Compatibility: preserve the existing extension identity, private-state boundaries, account formats, and local integrations.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -20,9 +20,9 @@
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.21-l3 — Manager 后续更新",
-          "summary": "新增论文科研阅读整理、报销状态跟踪和更安全的 Manager 启动恢复。",
-          "content": "本地版本扩展 Manager 侧工作流并加固启动恢复。\n1. 论文阅读：把选中的论文交给独立 AI 阅读任务，按论文 ID 严格输出 JSON，并明确证据边界。\n2. 报销状态：创建和更新事项时支持草稿、已提交和已到账状态及状态日期。\n3. 恢复逻辑：并行启动期间对 Codex runtime 状态探测设置边界，并识别由 daemon 持有的 Manager control 服务。\n4. 兼容性：保留既有扩展 ID、私有状态边界和 Manager Gateway session 行为。"
+          "title": "Codex Accounts Manager 0.1.21-dev — Dashboard 文案精简",
+          "summary": "精简 Dashboard 和设置页文案，同时保留状态、动作、风险与 Token 明细。",
+          "content": "本开发构建减少 Dashboard、设置、账号详情、About 和高级外观中的重复说明。\n1. 布局：移除可由区块结构、控件、颜色或数值表达的次要标签和描述。\n2. 账号卡片：Token 输入、缓存输入和输出明细移入现有 tooltip，保留信息但不占用卡片视觉空间。\n3. 兼容性：保留既有扩展 ID、私有状态边界、账号格式和本地集成功能。"
         }
       }
     }

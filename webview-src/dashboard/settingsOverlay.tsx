@@ -31,36 +31,31 @@ type SettingsSectionId = "base" | "operations" | "switching" | "quota" | "advanc
 function resolveSettingsSectionLabels(lang: DashboardState["lang"]): Array<{
   id: SettingsSectionId;
   title: string;
-  sub: string;
 }> {
   if (lang === "zh") {
     return [
-      { id: "base", title: "基础设置", sub: "外观、用量与连接" },
-      { id: "operations", title: "运维与集成", sub: "Manager 状态、功能选择与集成控制" },
-      { id: "switching", title: "账号切换", sub: "无感切号与账号选项" },
-      { id: "quota", title: "配额自动化", sub: "刷新、倒计时、提醒与颜色" },
-      { id: "advanced", title: "高级与诊断", sub: "低频配置与调试" }
+      { id: "base", title: "基础设置" },
+      { id: "operations", title: "运维与集成" },
+      { id: "switching", title: "账号切换" },
+      { id: "quota", title: "配额自动化" },
+      { id: "advanced", title: "高级与诊断" }
     ];
   }
   if (lang === "zh-hant") {
     return [
-      { id: "base", title: "基礎設定", sub: "外觀、用量與連線" },
-      { id: "operations", title: "維運與整合", sub: "Manager 狀態、功能選擇與整合控制" },
-      { id: "switching", title: "帳號切換", sub: "無感切換與帳號選項" },
-      { id: "quota", title: "配額自動化", sub: "重新整理、倒數、警示與顏色" },
-      { id: "advanced", title: "進階與診斷", sub: "低頻設定與除錯" }
+      { id: "base", title: "基礎設定" },
+      { id: "operations", title: "維運與整合" },
+      { id: "switching", title: "帳號切換" },
+      { id: "quota", title: "配額自動化" },
+      { id: "advanced", title: "進階與診斷" }
     ];
   }
   return [
-    { id: "base", title: "Basics", sub: "Appearance, usage, and connection" },
-    {
-      id: "operations",
-      title: "Operations & integrations",
-      sub: "Manager status, feature selection, and integration controls"
-    },
-    { id: "switching", title: "Account switching", sub: "Seamless switching and account options" },
-    { id: "quota", title: "Quota automation", sub: "Refresh, countdown, alerts, and colors" },
-    { id: "advanced", title: "Advanced and diagnostics", sub: "Low-frequency settings and debug" }
+    { id: "base", title: "Basics" },
+    { id: "operations", title: "Operations & integrations" },
+    { id: "switching", title: "Account switching" },
+    { id: "quota", title: "Quota automation" },
+    { id: "advanced", title: "Advanced and diagnostics" }
   ];
 }
 
@@ -96,84 +91,59 @@ function resolveSettingsCloseLabel(lang: DashboardState["lang"]): string {
 
 function resolveAdvancedAppearanceCopy(lang: DashboardState["lang"]): {
   title: string;
-  sub: string;
-  enabled: string;
-  disabled: string;
 } {
   if (lang === "zh") {
     return {
-      title: "高级外观",
-      sub: "启用 Command Center 风格的 Dashboard 视觉布局。",
-      enabled: "已开启：仅改变外观与只读总览，账号数据和核心操作保持一致。",
-      disabled: "已关闭：使用标准 Dashboard 外观。"
+      title: "高级外观"
     };
   }
   if (lang === "zh-hant") {
     return {
-      title: "進階外觀",
-      sub: "啟用 Command Center 風格的 Dashboard 視覺佈局。",
-      enabled: "已開啟：只改變外觀與唯讀總覽，帳號資料和核心操作保持一致。",
-      disabled: "已關閉：使用標準 Dashboard 外觀。"
+      title: "進階外觀"
     };
   }
   return {
-    title: "Advanced appearance",
-    sub: "Use the Command Center visual layout for the Dashboard.",
-    enabled:
-      "Enabled: changes the appearance and read-only overview only; account data and core actions stay equivalent.",
-    disabled: "Disabled: use the standard Dashboard appearance."
+    title: "Advanced appearance"
   };
 }
 
 function resolveQuotaCountdownAutoStartCopy(lang: DashboardState["lang"]): {
   title: string;
   sub: string;
-  onDesc: string;
-  offDesc: string;
 } {
   if (lang === "zh") {
     return {
       title: "自动启动额度倒计时",
-      sub: "额度窗口恢复后自动发送一次短对话，重新启动额度倒计时。",
-      onDesc: "已开启：额度刷新后会自动发送一次短对话启动倒计时。",
-      offDesc: "已关闭：额度到期后只刷新额度，不自动发送短对话。"
+      sub: "额度窗口恢复后自动发送一次短对话，重新启动额度倒计时。"
     };
   }
   if (lang === "zh-hant") {
     return {
       title: "自動啟動配額倒數",
-      sub: "配額視窗恢復後自動發送一次短對話，重新啟動配額倒數。",
-      onDesc: "已開啟：配額重新整理後會自動發送一次短對話啟動倒數。",
-      offDesc: "已關閉：配額到期後只重新整理配額，不會自動發送短對話。"
+      sub: "配額視窗恢復後自動發送一次短對話，重新啟動配額倒數。"
     };
   }
   return {
     title: "Automatic quota countdown start",
-    sub: "Send one short conversation after a quota window resets to start the next countdown.",
-    onDesc: "Enabled: a short conversation starts the countdown after the quota refresh.",
-    offDesc: "Disabled: expired quotas are refreshed without sending a conversation."
+    sub: "Send one short conversation after a quota window resets to start the next countdown."
   };
 }
 
 function resolveOperationsCopy(lang: DashboardState["lang"]): {
   featuresTitle: string;
-  featuresSub: string;
 } {
   if (lang === "zh") {
     return {
-      featuresTitle: "功能选择",
-      featuresSub: "集中启用或停用由 Manager 集成提供的功能入口。"
+      featuresTitle: "功能选择"
     };
   }
   if (lang === "zh-hant") {
     return {
-      featuresTitle: "功能選擇",
-      featuresSub: "集中啟用或停用由 Manager 整合提供的功能入口。"
+      featuresTitle: "功能選擇"
     };
   }
   return {
-    featuresTitle: "Feature selection",
-    featuresSub: "Enable or disable feature entry points provided by Manager integrations."
+    featuresTitle: "Feature selection"
   };
 }
 
@@ -200,7 +170,7 @@ export function SettingsOverlay(props: {
 }) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>("base");
   const patchAndSend = (key: DashboardSettingKey, value: DashboardSettingValue) => {
-    props.onPatchSettings({ [key]: value } as Partial<DashboardSettings>);
+    props.onPatchSettings({ [key]: value });
     props.onSendSetting(key, value);
   };
   const quotaCountdownAutoStartCopy = resolveQuotaCountdownAutoStartCopy(props.lang);
@@ -261,7 +231,6 @@ export function SettingsOverlay(props: {
                   onClick={() => setActiveSection(section.id)}
                 >
                   <span class="settings-section-tab-title">{section.title}</span>
-                  <span class="settings-section-tab-sub">{section.sub}</span>
                 </button>
               ))}
             </nav>
@@ -278,16 +247,9 @@ export function SettingsOverlay(props: {
                   />
                   <SettingsToggleBlock
                     title={advancedAppearanceCopy.title}
-                    sub={advancedAppearanceCopy.sub}
                     enabled={props.settings.advancedAppearanceEnabled}
                     onToggle={(enabled) => patchAndSend("advancedAppearanceEnabled", enabled)}
-                  >
-                    <div class="settings-note">
-                      {props.settings.advancedAppearanceEnabled
-                        ? advancedAppearanceCopy.enabled
-                        : advancedAppearanceCopy.disabled}
-                    </div>
-                  </SettingsToggleBlock>
+                  />
                   <SettingsLanguageBlock
                     copy={props.copy}
                     settings={props.settings}
@@ -306,47 +268,40 @@ export function SettingsOverlay(props: {
                   />
                   <SettingsSegmentBlock
                     title={props.copy.localUsageSettingsTitle}
-                    sub={props.copy.localUsageSettingsSub}
                     options={[
                       {
                         key: "local-usage-24h",
                         title: props.copy.localUsageRange24Hours,
-                        description: props.copy.localUsageRange24HoursDesc,
                         active: props.settings.localUsageEnabledRanges.includes("24h"),
                         onClick: () => toggleUsageRange("24h")
                       },
                       {
                         key: "local-usage-3d",
                         title: props.copy.localUsageRange3Days,
-                        description: props.copy.localUsageRange3DaysDesc,
                         active: props.settings.localUsageEnabledRanges.includes("3d"),
                         onClick: () => toggleUsageRange("3d")
                       },
                       {
                         key: "local-usage-7d",
                         title: props.copy.localUsageRange7Days,
-                        description: props.copy.localUsageRange7DaysDesc,
                         active: props.settings.localUsageEnabledRanges.includes("7d"),
                         onClick: () => toggleUsageRange("7d")
                       },
                       {
                         key: "local-usage-14d",
                         title: props.copy.localUsageRange14Days,
-                        description: props.copy.localUsageRange14DaysDesc,
                         active: props.settings.localUsageEnabledRanges.includes("14d"),
                         onClick: () => toggleUsageRange("14d")
                       },
                       {
                         key: "local-usage-7w",
                         title: props.copy.localUsageRange7Weeks,
-                        description: props.copy.localUsageRange7WeeksDesc,
                         active: props.settings.localUsageEnabledRanges.includes("7w"),
                         onClick: () => toggleUsageRange("7w")
                       },
                       {
                         key: "local-usage-7m",
                         title: props.copy.localUsageRange7Months,
-                        description: props.copy.localUsageRange7MonthsDesc,
                         active: props.settings.localUsageEnabledRanges.includes("7m"),
                         onClick: () => toggleUsageRange("7m")
                       }
@@ -355,7 +310,6 @@ export function SettingsOverlay(props: {
                   />
                   <SettingsToggleBlock
                     title={props.copy.localUsagePriceSettingsTitle}
-                    sub={props.copy.localUsagePriceSettingsSub}
                     enabled={props.settings.localUsageShowEquivalentPrice}
                     onToggle={(enabled) => patchAndSend("localUsageShowEquivalentPrice", enabled)}
                   >
@@ -372,7 +326,6 @@ export function SettingsOverlay(props: {
                   />
                   <div class="settings-subsection-heading">
                     <div class="settings-block-title">{operationsCopy.featuresTitle}</div>
-                    <div class="settings-block-sub">{operationsCopy.featuresSub}</div>
                   </div>
                   {props.integrationSettings.map((setting) => (
                     <SettingsToggleBlock
@@ -608,7 +561,6 @@ export function SettingsOverlay(props: {
                 <section id="settings-section-quota" class="settings-section-panel" role="tabpanel">
                   <SettingsToggleBlock
                     title={props.copy.autoRefreshTitle}
-                    sub={props.copy.autoRefreshSub}
                     enabled={props.settings.autoRefreshMinutes > 0}
                     onToggle={props.onAutoRefreshToggle}
                   >
@@ -619,7 +571,6 @@ export function SettingsOverlay(props: {
                         accent="violet"
                         scaleValues={AUTO_REFRESH_SCALE_VALUES}
                         valueLabel={(value) => formatTemplate(props.copy.autoRefreshValueTemplate, value)}
-                        description={(value) => formatTemplate(props.copy.autoRefreshValueDescTemplate, value)}
                         onPreview={(value) => props.onPatchSettings({ autoRefreshMinutes: value })}
                         onCommit={props.onAutoRefreshValue}
                       />
@@ -630,25 +581,13 @@ export function SettingsOverlay(props: {
                     sub={props.copy.hourlyQuotaControlSub}
                     enabled={props.settings.hourlyQuotaControlEnabled}
                     onToggle={(enabled) => patchAndSend("hourlyQuotaControlEnabled", enabled)}
-                  >
-                    <div class="settings-note">
-                      {props.settings.hourlyQuotaControlEnabled
-                        ? props.copy.hourlyQuotaControlOnDesc
-                        : props.copy.hourlyQuotaControlOffDesc}
-                    </div>
-                  </SettingsToggleBlock>
+                  />
                   <SettingsToggleBlock
                     title={props.copy.quotaCountdownAutoStartTitle ?? quotaCountdownAutoStartCopy.title}
                     sub={props.copy.quotaCountdownAutoStartSub ?? quotaCountdownAutoStartCopy.sub}
                     enabled={props.settings.autoStartQuotaCountdownEnabled}
                     onToggle={(enabled) => patchAndSend("autoStartQuotaCountdownEnabled", enabled)}
-                  >
-                    <div class="settings-note">
-                      {props.settings.autoStartQuotaCountdownEnabled
-                        ? props.copy.quotaCountdownAutoStartOnDesc ?? quotaCountdownAutoStartCopy.onDesc
-                        : props.copy.quotaCountdownAutoStartOffDesc ?? quotaCountdownAutoStartCopy.offDesc}
-                    </div>
-                  </SettingsToggleBlock>
+                  />
                   <SettingsToggleBlock
                     title={props.copy.warningTitle}
                     sub={
@@ -709,20 +648,17 @@ export function SettingsOverlay(props: {
                   </SettingsToggleBlock>
                   <SettingsSegmentBlock
                     title={props.copy.debugTitle}
-                    sub={props.copy.debugSub}
                     note={props.copy.debugNote}
                     options={[
                       {
                         key: "debug-on",
                         title: props.copy.debugOn,
-                        description: props.copy.debugOnDesc,
                         active: props.settings.debugNetwork,
                         onClick: () => patchAndSend("debugNetwork", true)
                       },
                       {
                         key: "debug-off",
                         title: props.copy.debugOff,
-                        description: props.copy.debugOffDesc,
                         active: !props.settings.debugNetwork,
                         onClick: () => patchAndSend("debugNetwork", false)
                       }

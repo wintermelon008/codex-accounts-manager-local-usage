@@ -38,13 +38,12 @@ export function LocalUsageSection(props: {
 
   const range = deriveLocalUsageRange(usage, selectedRange);
   const price = estimateStandardApiCost(range.byModel);
-  const subtitle = copy.localUsageSub.replace("{range}", rangeLabel(copy, range.range));
   const freshness = usage.isRefreshing
     ? copy.localUsageRefreshing
     : usage.calculatedAt != null
       ? `${copy.localUsageUpdated}: ${formatTimestamp(usage.calculatedAt)}`
       : undefined;
-  const priceSub = price.unpricedTokens > 0 ? copy.localUsagePriceUnpriced : copy.localUsagePriceSub;
+  const priceSub = price.unpricedTokens > 0 ? copy.localUsagePriceUnpriced : undefined;
   const showPrice = settings.localUsageShowEquivalentPrice;
   const visibleModels = range.byModel.filter((row) => row.model !== "unknown");
 
@@ -63,7 +62,6 @@ export function LocalUsageSection(props: {
               {copy.localUsageRefreshBtn}
             </ActionButton>
           </div>
-          <div class="header-sub">{subtitle}</div>
         </div>
         {freshness ? (
           <div class={`local-usage-freshness ${usage.isRefreshing ? "is-refreshing" : ""}`}>{freshness}</div>
@@ -119,7 +117,6 @@ export function LocalUsageSection(props: {
             />
             <UsageBars
               title={copy.localUsageByModel}
-              titleMeta={copy.localUsageSameRange}
               rows={visibleModels.slice(0, 8).map((row) => ({
                 key: `model-${row.model}`,
                 label: row.model,
@@ -247,7 +244,6 @@ function UsageMetric(props: {
 
 function UsageBars(props: {
   title: string;
-  titleMeta?: string;
   control?: ComponentChildren;
   rows: Array<{ key: string; label: string; value: number; price?: LocalUsagePriceEstimate }>;
   emptyLabel?: string;
@@ -258,10 +254,7 @@ function UsageBars(props: {
   return (
     <div class="local-usage-panel">
       <div class="local-usage-panel-head">
-        <div class="local-usage-panel-title">
-          {props.title}
-          {props.titleMeta ? <span>{props.titleMeta}</span> : null}
-        </div>
+        <div class="local-usage-panel-title">{props.title}</div>
         {props.control}
       </div>
       {props.rows.length > 0 ? (

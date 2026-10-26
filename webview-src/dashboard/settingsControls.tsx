@@ -8,7 +8,6 @@ import {
   isDashboardLanguageOption
 } from "../../src/localization/languages";
 import {
-  formatTemplate,
   parsePercentageInput,
   pickSparseScaleValues,
   resolveDiscreteIndex,
@@ -25,7 +24,6 @@ export function SettingsLanguageBlock(props: {
     <div class="settings-block">
       <div class="settings-block-head">
         <div class="settings-block-title">{props.copy.languageTitle}</div>
-        <div class="settings-block-sub">{props.copy.languageSub}</div>
       </div>
       <select
         class="settings-select"
@@ -61,7 +59,6 @@ export function SettingsProxyBlock(props: {
     <div class="settings-block">
       <div class="settings-block-head">
         <div class="settings-block-title">{props.copy.proxyTitle}</div>
-        <div class="settings-block-sub">{props.copy.proxySub}</div>
       </div>
       <div class="settings-proxy-row">
         <select
@@ -132,12 +129,12 @@ export function SettingsThemeBlock(props: {
 
 export function SettingsSegmentBlock(props: {
   title: string;
-  sub: string;
+  sub?: string;
   note?: string;
   options: Array<{
     key: string;
     title: string;
-    description: string;
+    description?: string;
     active: boolean;
     onClick: () => void;
   }>;
@@ -147,13 +144,13 @@ export function SettingsSegmentBlock(props: {
     <div class="settings-block">
       <div class="settings-block-head">
         <div class="settings-block-title">{props.title}</div>
-        <div class="settings-block-sub">{props.sub}</div>
+        {props.sub ? <div class="settings-block-sub">{props.sub}</div> : null}
       </div>
       <div class="settings-segment">
         {props.options.map((option) => (
           <button key={option.key} class={`segment-btn ${option.active ? "active" : ""}`} type="button" onClick={option.onClick}>
             <span class="segment-title">{option.title}</span>
-            <span class="segment-copy">{option.description}</span>
+            {option.description ? <span class="segment-copy">{option.description}</span> : null}
           </button>
         ))}
       </div>
@@ -165,7 +162,7 @@ export function SettingsSegmentBlock(props: {
 
 export function SettingsToggleBlock(props: {
   title: string;
-  sub: string;
+  sub?: string;
   enabled: boolean;
   onToggle: (enabled: boolean) => void;
   children?: ComponentChildren;
@@ -175,7 +172,7 @@ export function SettingsToggleBlock(props: {
       <div class="settings-toggle-head">
         <div class="settings-block-head">
           <div class="settings-block-title">{props.title}</div>
-          <div class="settings-block-sub">{props.sub}</div>
+          {props.sub ? <div class="settings-block-sub">{props.sub}</div> : null}
         </div>
         <button class={`settings-inline-toggle ${props.enabled ? "active" : ""}`} type="button" aria-pressed={props.enabled} onClick={() => props.onToggle(!props.enabled)}>
           <span class="settings-inline-toggle-track">
@@ -221,7 +218,6 @@ export function SettingsPathBlock(props: {
     <>
       <div class="settings-block-head">
         <div class="settings-block-title">{props.copy.appPathTitle}</div>
-        <div class="settings-block-sub">{props.copy.appPathSub}</div>
       </div>
       <div class="settings-note settings-path-note">{props.pathValue || props.copy.appPathEmpty}</div>
       <div class="saved-actions settings-inline-actions">
@@ -258,9 +254,7 @@ export function SettingsThresholdBlock(props: {
     <div class="settings-block">
       <div class="settings-block-head">
         <div class="settings-block-title">{props.copy.colorThresholdTitle}</div>
-        <div class="settings-block-sub">{props.copy.colorThresholdSub}</div>
       </div>
-      <div class="settings-note">{formatTemplate(props.copy.colorThresholdRedNoteTemplate, yellow)}</div>
       <div class="threshold-dual">
         <div class="threshold-dual-head">
           <div class="threshold-marker threshold-marker-yellow">
@@ -271,10 +265,6 @@ export function SettingsThresholdBlock(props: {
             <span class="threshold-marker-label">{props.copy.colorThresholdGreenTitle}</span>
             <span class="threshold-slider-value">{green}%</span>
           </div>
-        </div>
-        <div class="threshold-dual-copy">
-          <div class="threshold-slider-copy">{formatTemplate(props.copy.colorThresholdYellowDescTemplate, yellow)}</div>
-          <div class="threshold-slider-copy">{formatTemplate(props.copy.colorThresholdGreenDescTemplate, green)}</div>
         </div>
         <div class="threshold-range-stack">
           <div class="threshold-range-rail"></div>
@@ -438,7 +428,7 @@ export function SettingsDiscreteSlider(props: {
   values: number[];
   accent: "violet" | "amber" | "sky";
   valueLabel: (value: number) => string;
-  description: (value: number) => string;
+  description?: (value: number) => string;
   sparseScale?: boolean;
   scaleValues?: number[];
   onPreview: (value: number) => void;
@@ -455,7 +445,7 @@ export function SettingsDiscreteSlider(props: {
   return (
     <div class={`step-slider step-slider-${props.accent}`}>
       <div class="step-slider-head">
-        <div class="step-slider-copy">{props.description(currentValue)}</div>
+        {props.description ? <div class="step-slider-copy">{props.description(currentValue)}</div> : null}
         <div class="step-slider-value">{props.valueLabel(currentValue)}</div>
       </div>
       <div class="step-slider-stack">

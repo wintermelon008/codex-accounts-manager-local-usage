@@ -4,7 +4,11 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AccountsRepository } from "../src/storage";
 import { createNodeAccountsContext, NodeJsonKeyValueStore } from "../src/runtime/nodeHost";
-import { resolveManagerDaemonConfig, resolveQuotaCountdownAutomationEnabled } from "../src/runtime/managerDaemon";
+import {
+  resolveManagerDaemonConfig,
+  resolveManagerMailboxEnabled,
+  resolveQuotaCountdownAutomationEnabled
+} from "../src/runtime/managerDaemon";
 import { HeadlessTokenRefreshScheduler } from "../src/runtime/tokenRefreshScheduler";
 import { MailboxDaemonService } from "../src/runtime/mailboxDaemon";
 import type { CodexAccountRecord, CodexTokens } from "../src/core/types";
@@ -51,6 +55,12 @@ describe("headless Manager runtime", () => {
     expect(resolveQuotaCountdownAutomationEnabled(false, true)).toBe(false);
     expect(resolveQuotaCountdownAutomationEnabled(undefined, true)).toBe(true);
     expect(resolveQuotaCountdownAutomationEnabled(undefined, false)).toBe(false);
+  });
+
+  it("keeps the headless Mailbox disabled until the Dashboard publishes true", () => {
+    expect(resolveManagerMailboxEnabled(undefined)).toBe(false);
+    expect(resolveManagerMailboxEnabled(false)).toBe(false);
+    expect(resolveManagerMailboxEnabled(true)).toBe(true);
   });
 
   it("persists daemon diagnostics atomically and reloads them", async () => {

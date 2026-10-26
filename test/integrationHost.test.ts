@@ -47,6 +47,7 @@ describe("ManagerIntegrationHost", () => {
       fetchWithManagerProxy
     });
 
+    expect(host.api.mailboxBuiltIn).toBe(true);
     await expect(host.api.getManagedAccountEmails?.()).resolves.toEqual(["linked@example.com"]);
     await expect(host.api.getManagedAccountDirectory?.()).resolves.toEqual([
       { accountId: "account-1", email: "linked@example.com", requiresReauthorization: true }

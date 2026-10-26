@@ -256,10 +256,6 @@ export function SavedAccountCard(props: {
                   </div>
                 ))}
               </div>
-            ) : virtual ? (
-              <div class="quota-empty-placeholder">
-                {props.lang === "zh" ? "Gateway · 仅手动切换" : "Gateway · Manual only"}
-              </div>
             ) : visibleMetrics.length > 0 ? (
               visibleMetrics.map((metric) => (
                 <MetricRow
@@ -271,9 +267,9 @@ export function SavedAccountCard(props: {
                   now={now}
                 />
               ))
-            ) : (
+            ) : !virtual ? (
               <div class="quota-empty-placeholder">{copy.resetUnknown}</div>
-            )}
+            ) : null}
           </div>
           {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
             <div class="saved-credits-line saved-reset-credits-line">
@@ -288,9 +284,6 @@ export function SavedAccountCard(props: {
               <div class="saved-token-usage-line" title={formatAccountTokenUsageTitle(account, props.lang)}>
                 {formatAccountTokenUsage(account, props.lang)}
               </div>
-              {account.tokenUsage.status === "tracking" ? (
-                <div class="saved-token-usage-details">{formatAccountTokenUsageDetails(account, props.lang)}</div>
-              ) : null}
             </>
           ) : null}
           <div class="saved-card-divider"></div>
@@ -525,9 +518,6 @@ export function SavedAccountCard(props: {
                   }}
                 />
               ) : null}
-              <div class="saved-back-hint">
-                {showDiagnostic ? resolveDiagnosticToggleHint(props.lang) : resolveBackHint(props.lang)}
-              </div>
               <ActionButton
                 class="saved-back-diagnostic-action"
                 icon={<span aria-hidden="true">?</span>}
@@ -644,17 +634,6 @@ function resolveAccountGroupLabel(group: "A" | "B" | "C", lang: DashboardState["
   return `Group ${group}`;
 }
 
-function resolveBackHint(lang: DashboardState["lang"]): string {
-  switch (lang) {
-    case "zh":
-      return "点击卡片任意区域返回配额监控";
-    case "zh-hant":
-      return "點擊卡片任意區域返回配額監控";
-    default:
-      return "Click anywhere to return to quota monitor";
-  }
-}
-
 function resolveDiagnosticToggleLabel(lang: DashboardState["lang"], showing: boolean): string {
   if (lang === "zh") {
     return showing ? "返回账号详情" : "查看账号诊断";
@@ -663,16 +642,6 @@ function resolveDiagnosticToggleLabel(lang: DashboardState["lang"], showing: boo
     return showing ? "返回帳號詳情" : "查看帳號診斷";
   }
   return showing ? "Back to account details" : "View account diagnostics";
-}
-
-function resolveDiagnosticToggleHint(lang: DashboardState["lang"]): string {
-  if (lang === "zh") {
-    return "点击 ? 返回账号详情";
-  }
-  if (lang === "zh-hant") {
-    return "點擊 ? 返回帳號詳情";
-  }
-  return "Click ? to return to account details";
 }
 
 function resolveAccountNameCopyLabel(lang: DashboardState["lang"]): string {
@@ -734,13 +703,21 @@ function formatAccountTokenUsage(account: DashboardAccountViewModel, lang: Dashb
   return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
 }
 
-function formatAccountTokenUsageDetails(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
+function formatAccountTokenUsageTitle(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
   const usage = account.tokenUsage;
   if (usage?.status !== "tracking") {
-    return "";
+    return formatAccountTokenUsage(account, lang);
   }
-
-  return formatTokenUsageDetails(usage, lang);
+  const label = resolveTokenUsageLabel(lang);
+  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
+  const details = formatTokenUsageDetails(usage, lang);
+  if (lang === "zh") {
+    return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}\n${details}`;
+  }
+  if (lang === "zh-hant") {
+    return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}\n${details}`;
+  }
+  return `${label}: ${usage.totalTokens.toLocaleString()} tokens · ${price}\n${details}`;
 }
 
 function formatTokenUsageDetails(
@@ -754,22 +731,6 @@ function formatTokenUsageDetails(
         ? { input: "輸入", cached: "快取", output: "輸出" }
         : { input: "Input", cached: "Cached", output: "Output" };
   return `${labels.input}: ${formatCompactTokenCount(usage.inputTokens)} (${labels.cached}: ${formatCompactTokenCount(usage.cachedInputTokens)}) · ${labels.output}: ${formatCompactTokenCount(usage.outputTokens)}`;
-}
-
-function formatAccountTokenUsageTitle(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
-  const usage = account.tokenUsage;
-  if (usage?.status !== "tracking") {
-    return formatAccountTokenUsage(account, lang);
-  }
-  const label = resolveTokenUsageLabel(lang);
-  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
-  if (lang === "zh") {
-    return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}`;
-  }
-  if (lang === "zh-hant") {
-    return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}`;
-  }
-  return `${label}: ${usage.totalTokens.toLocaleString()} tokens · ${price}`;
 }
 
 function formatAccountTokenUsagePrice(

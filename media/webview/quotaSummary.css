@@ -90,11 +90,6 @@ html[data-theme="auto"] body.vscode-light .panel {
   background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
   color: var(--text-primary);
 }
-.account-health-filter-hint {
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.45;
-}
 .account-health-filter-options {
   display: grid;
   gap: 5px;
@@ -374,11 +369,6 @@ html[data-theme="auto"] body.vscode-light .panel {
   font-weight: 800;
   line-height: 1;
   white-space: nowrap;
-}
-.header-sub {
-  color: var(--muted);
-  font-size: 12px;
-  margin-top: 4px;
 }
 .settings-theme-block {
   padding-bottom: 10px;
@@ -1619,12 +1609,10 @@ html[data-theme="auto"] body.vscode-light .overview-empty-title {
 html[data-theme="light"] .overview-account-workspace,
 html[data-theme="light"] .saved-switch-reason,
 html[data-theme="light"] .saved-detail-value,
-html[data-theme="light"] .saved-back-hint,
 html[data-theme="light"] .overview-inline-note,
 html[data-theme="auto"] body.vscode-light .overview-account-workspace,
 html[data-theme="auto"] body.vscode-light .saved-switch-reason,
 html[data-theme="auto"] body.vscode-light .saved-detail-value,
-html[data-theme="auto"] body.vscode-light .saved-back-hint,
 html[data-theme="auto"] body.vscode-light .overview-inline-note {
   color: var(--text-secondary);
 }
@@ -2120,15 +2108,6 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.saved-token-usage-details {
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 10px;
-  line-height: 1.35;
-  padding-top: 1px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .saved-provider-usage {
   display: grid;
   gap: 3px;
@@ -2431,16 +2410,6 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
   min-width: 0;
   margin-top: auto;
   padding-top: 6px;
-}
-.saved-back-hint {
-  min-width: 0;
-  flex: 1 1 auto;
-  text-align: center;
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .saved-back-footer .saved-back-copy-action.action-btn.icon-only {
   flex: 0 0 auto;
@@ -3638,15 +3607,6 @@ html[data-theme="auto"] body.vscode-light .wakeup-form textarea {
   line-height: 1.55;
   font-weight: 800;
 }
-.about-subdesc {
-  width: 100%;
-  max-width: 640px;
-  margin: 8px auto 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.75;
-  text-align: left;
-}
 .about-section {
   padding: 18px 22px;
   border-bottom: 1px solid var(--border-muted);
@@ -4327,10 +4287,6 @@ html[data-theme="auto"] body.vscode-light .wakeup-form textarea {
   gap: 12px;
   flex-wrap: wrap;
 }
-.threshold-dual-copy {
-  display: grid;
-  gap: 4px;
-}
 .threshold-marker {
   display: grid;
   gap: 2px;
@@ -4344,11 +4300,6 @@ html[data-theme="auto"] body.vscode-light .wakeup-form textarea {
   font-size: 18px;
   font-weight: 800;
   color: var(--text);
-}
-.threshold-slider-copy {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
 }
 .threshold-slider-scale {
   display: flex;
@@ -6427,14 +6378,6 @@ html[data-theme="auto"] body.vscode-light {
   font-weight: 850;
   line-height: 1.25;
 }
-.settings-section-tab-sub {
-  color: var(--text-muted);
-  font-size: 9px;
-  line-height: 1.35;
-}
-.settings-section-tab.active .settings-section-tab-sub {
-  color: var(--text-secondary);
-}
 .settings-section-content {
   min-width: 0;
   overflow-y: auto;
@@ -6585,16 +6528,11 @@ html[data-theme="auto"] body.vscode-light {
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
-.advanced-command-eyebrow,
 .advanced-command-status {
   display: inline-flex;
   align-items: center;
   gap: 7px;
 }
-.advanced-command-eyebrow {
-  color: var(--advanced-cyan);
-}
-.advanced-command-live-dot,
 .advanced-command-status-dot {
   display: inline-block;
   width: 7px;
@@ -6603,9 +6541,6 @@ html[data-theme="auto"] body.vscode-light {
   border-radius: 50%;
   background: currentColor;
   box-shadow: 0 0 12px currentColor;
-}
-.advanced-command-live-dot {
-  animation: advanced-command-pulse 1.8s ease-in-out infinite;
 }
 .advanced-command-status {
   color: var(--advanced-lime);
@@ -6671,9 +6606,6 @@ html[data-theme="auto"] body.vscode-light {
   font-size: 16px;
   letter-spacing: 0.025em;
 }
-.panel.advanced-appearance .saved-accounts-section .header-sub {
-  color: color-mix(in srgb, var(--text-secondary) 86%, var(--advanced-cyan));
-}
 .panel.advanced-appearance .header-count-badge {
   border-color: color-mix(in srgb, var(--advanced-cyan) 42%, var(--border-default));
   background: color-mix(in srgb, var(--advanced-cyan) 11%, transparent);
@@ -6716,17 +6648,6 @@ html[data-theme="auto"] body.vscode-light {
   margin-top: 0;
 }
 
-@keyframes advanced-command-pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: scale(0.85);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.15);
-  }
-}
 @keyframes advanced-command-perimeter {
   to {
     stroke-dashoffset: -100;
@@ -6756,7 +6677,6 @@ html[data-theme="auto"] body.vscode-light {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .panel.advanced-appearance .advanced-command-live-dot,
   .panel.advanced-appearance .advanced-command-scanline rect,
   .advanced-solar-planet-text {
     animation: none;
@@ -7085,13 +7005,6 @@ html[data-theme="auto"] body.vscode-light {
   background: linear-gradient(90deg, transparent, var(--advanced-cyan), transparent);
   opacity: 0.7;
 }
-.advanced-account-focus .advanced-command-label {
-  color: var(--text-muted);
-  font-size: 9px;
-  font-weight: 850;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
 .advanced-account-focus-empty {
   align-content: center;
   min-height: 250px;
@@ -7278,15 +7191,6 @@ html[data-theme="auto"] body.vscode-light {
     transform: translateY(0) scale(1);
     filter: blur(0);
   }
-}
-.advanced-solar-hint {
-  position: relative;
-  z-index: 1;
-  margin-top: 2px;
-  color: var(--text-muted);
-  font-size: 9px;
-  letter-spacing: 0.04em;
-  text-align: center;
 }
 @keyframes advanced-solar-orbit {
   from {

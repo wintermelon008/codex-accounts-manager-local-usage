@@ -57,7 +57,38 @@ test("activation loads local state, registers a generic Manager card, and does n
   integration.dispose();
 });
 
-test("Mailbox and registration assistant expose independent feature toggles without deleting state", async () => {
+test("Mailbox defaults off and one unified setting controls both Dashboard entries", async () => {
+  const vscode = createVscode();
+  const context = createContext({ mailboxEnabled: null });
+  const registrations = [];
+  const api = {
+    registerDashboardIntegration(value) {
+      registrations.push(value);
+      return { dispose() {} };
+    }
+  };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+
+  const mailbox = registrations.find((registration) => registration.id === INTEGRATION_ID);
+  const registrationAssistant = registrations.find((registration) => registration.id === REGISTRATION_INTEGRATION_ID);
+  assert.equal(mailbox.setting.getEnabled(), false);
+  assert.equal(registrationAssistant.setting, undefined);
+  assert.equal(mailbox.getViewModel().status, "inactive");
+  assert.equal(registrationAssistant.getViewModel().status, "inactive");
+  assert.equal(integration.pool.isLoaded(), false);
+
+  await mailbox.setting.setEnabled(true);
+  assert.equal(mailbox.getViewModel().status, "ready");
+  assert.equal(registrationAssistant.getViewModel().status, "ready");
+  assert.equal(integration.pool.isLoaded(), true);
+  await mailbox.setting.setEnabled(false);
+  assert.equal(mailbox.getViewModel().status, "inactive");
+  assert.equal(registrationAssistant.getViewModel().status, "inactive");
+  integration.dispose();
+});
+
+test("Mailbox and registration assistant share one feature toggle without deleting state", async () => {
   const vscode = createVscode();
   const context = createContext();
   const registrations = [];
@@ -73,18 +104,13 @@ test("Mailbox and registration assistant expose independent feature toggles with
   const mailbox = registrations.find((registration) => registration.id === INTEGRATION_ID);
   const registrationAssistant = registrations.find((registration) => registration.id === REGISTRATION_INTEGRATION_ID);
   assert.equal(mailbox.setting.getEnabled(), true);
-  assert.equal(registrationAssistant.setting.getEnabled(), true);
+  assert.equal(registrationAssistant.setting, undefined);
 
   await mailbox.setting.setEnabled(false);
   assert.equal(mailbox.getViewModel().status, "inactive");
   await assert.rejects(mailbox.runAction("open"), /邮箱管理功能已关闭/u);
   await mailbox.setting.setEnabled(true);
   assert.equal(mailbox.getViewModel().status, "ready");
-
-  await registrationAssistant.setting.setEnabled(false);
-  assert.equal(registrationAssistant.getViewModel().status, "inactive");
-  await assert.rejects(registrationAssistant.runAction("open"), /注册助手功能已关闭/u);
-  await registrationAssistant.setting.setEnabled(true);
   assert.equal(registrationAssistant.getViewModel().status, "ready");
   integration.dispose();
 });
@@ -1650,6 +1676,28 @@ test("Miaoic registration redeems a CDK and keeps the internal account private",
   integration.dispose();
 });
 
+test("Miaoic registration can load an existing account Token without redeeming a CDK", async () => {
+  const vscode = createVscode();
+  const context = createContext();
+  const api = { registerDashboardIntegration() { return { dispose() {} }; } };
+  const integration = new MailboxIntegration(vscode, context, api);
+  await integration.initialize();
+  const sessionId = integration.registrationManager.createSession({ email: "miaoic-token@example.com", password: "password" });
+  let acquired;
+  integration.registrationManager.acquirePhoneNumber = async (_id, credential, options) => {
+    acquired = { credential, options };
+    return { phase: "polling", running: true };
+  };
+
+  await integration.saveMiaoicToken("0123456789abcdef0123456789abcdef");
+  await integration.acquireRegistrationPhone(sessionId, { sourceId: "miaoic" });
+
+  assert.equal(acquired.credential, "0123456789abcdef0123456789abcdef");
+  assert.deepEqual(acquired.options, { sourceId: "miaoic" });
+  assert.deepEqual((await integration.getPanelState()).registrationMiaoicToken, { configured: true, masked: "" });
+  integration.dispose();
+});
+
 test("Future registration redeems a CDK, stores the session token, and keeps the purchase source separate", async () => {
   const vscode = createVscode();
   const context = createContext();
@@ -1815,16 +1863,19 @@ function createPanel(vscode, column) {
   return panel;
 }
 
-function createContext() {
+function createContext({ mailboxEnabled = true } = {}) {
   const state = new Map();
   const secrets = new Map();
   const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-accounts-mailbox-test-"));
   testStorageRoots.add(storageRoot);
+  if (mailboxEnabled !== undefined) {
+    state.set("codexAccounts.mailbox.enabled.v1", mailboxEnabled);
+  }
   return {
     subscriptions: [],
     globalStorageUri: { fsPath: storageRoot },
     globalState: {
-      async get(key) { return state.get(key); },
+      get(key, defaultValue) { return state.has(key) ? state.get(key) : defaultValue; },
       async update(key, value) { state.set(key, structuredClone(value)); }
     },
     secrets: {

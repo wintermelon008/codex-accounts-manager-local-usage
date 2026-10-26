@@ -171,7 +171,7 @@ function normalizeMiaoicState(payload, fallbackMessage, action) {
     throw new MiaoicOrderError(fallbackMessage);
   }
   const phone = text(payload.phone || payload.phone_number || payload.phoneNumber);
-  const smsCode = text(payload.code || payload.sms_code || payload.smsCode);
+  const smsCode = extractMiaoicSmsCode(payload);
   const status = smsCode
     ? "code_received"
     : action === "release"
@@ -189,6 +189,15 @@ function normalizeMiaoicState(payload, fallbackMessage, action) {
     can_change: payload.can_switch === undefined ? payload.active === true : Boolean(payload.can_switch),
     can_release: payload.can_release === undefined ? payload.active === true : Boolean(payload.can_release)
   };
+}
+
+function extractMiaoicSmsCode(payload) {
+  const direct = text(payload?.code || payload?.sms_code || payload?.smsCode);
+  if (direct) return direct;
+  const codes = Array.isArray(payload?.codes) ? payload.codes : [];
+  return codes
+    .map((item) => text(item?.code || item?.sms_code || item?.smsCode || item?.otp_code))
+    .find(Boolean) || "";
 }
 
 function parsePayload(raw) {

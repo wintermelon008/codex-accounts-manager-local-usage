@@ -1,6 +1,8 @@
-# Mailbox 可选集成
+# Mailbox 内置模块
 
-`integrations/mailbox` 是 Manager 的独立可选 VSIX。它定义通用 Mailbox/provider 边界，当前内置远端 `tototo-outlook`、本地 `outlook-local`、`boya`、`cdns` 和 `tototo-icloud` provider；界面使用显示名称，内部 provider ID 保持兼容，后续第三方只需要实现同一 provider 合约。
+`integrations/mailbox` 是 Manager 内部保留的 Mailbox/provider 模块，不再作为主要交付的独立 VSIX。它随根目录 Manager VSIX 一起构建，当前内置远端 `tototo-outlook`、本地 `outlook-local`、`boya`、`cdns` 和 `tototo-icloud` provider；界面使用显示名称，内部 provider ID 保持兼容，后续第三方只需要实现同一 provider 合约。
+
+Dashboard 设置中的“邮箱管理”总开关默认关闭。关闭时不加载邮箱池和注册会话，不读取 provider secret，不启动 provider 网络、面板、注册助手或自动续期；开启后邮箱管理和注册助手两个入口一起可用。关闭不会删除邮箱凭据、邮件详情、注册历史或配置。
 
 ## 边界
 
@@ -8,7 +10,7 @@
 
 Manager 仅通过现有 `registerDashboardIntegration` API 渲染一个轻量入口卡片，并可选提供脱敏的账号邮箱目录、账号健康状态、账号删除、无界面 OAuth 导入能力和已标记为收到 OpenAI `account deactivated` 邮件的邮箱地址；Mailbox 不读取 Manager 账号 token、不读取 Sub2API SecretStorage，也不把邮件正文或邮箱凭据带入核心公共 API。邮箱列表和当前选中邮箱详情由扩展自有 Webview Panel 提供；从 Dashboard 打开时面板进入当前主编辑器组，与 Dashboard 使用同一标签栏。
 
-因此新设备可以只安装 Manager；未安装 Mailbox VSIX 时，核心账号管理、额度刷新、Sub2API 和无感切号路径不应该因为邮箱组件缺失而改变。
+因此新设备只需要安装 Manager；Mailbox 代码仍保留在独立内部目录中，但不再需要单独安装 Mailbox VSIX。已更新的兼容版独立 Mailbox 扩展在识别到内置 Manager 后会保持停用，避免重复注册和重复续期；仍在使用旧版 VSIX 的设备应先更新或卸载旧 VSIX。
 
 ## 本地 Outlook OAuth/IMAP 来源
 
@@ -124,9 +126,9 @@ provider 只要求 HTTPS、固定路径和非空 `key`，并校验 URL 路径中
 ## 构建和验证
 
 ```bash
-npm --prefix integrations/mailbox test
-npm --prefix integrations/mailbox run package:check
-npm --prefix integrations/mailbox run package
+npm test
+npm run compile
+npm run package
 ```
 
-当前测试使用占位行和 mock HTTP 响应；没有使用真实邮箱、private token 或 refresh token。运行时仅在用户手动执行查询/监听时请求 provider。
+Mailbox 的 CJS 模块由根目录 `npm run compile` 复制到 `out/mailbox`，随 Manager VSIX 一起交付；Mailbox 专用 Node 测试仍位于 `integrations/mailbox/test`，使用占位行和 mock HTTP 响应，不使用真实邮箱、private token 或 refresh token。运行时只有在 Dashboard 总开关开启且用户执行相应操作后才请求 provider；headless daemon 也遵守同一共享开关。

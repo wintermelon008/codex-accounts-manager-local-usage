@@ -1,8 +1,8 @@
 # Codex Accounts Mailbox
 
-这是一个可选的 VS Code 扩展，为 Codex Accounts Manager 提供通用 Mailbox 查询、验证码人工监听和人工凭据续期入口。当前内置远端 `tototo-outlook`、本地 `Outlook（本地 OAuth）`、`boya`、`cdns` 与 `tototo-icloud` 五个 provider；界面使用显示名称，内部 provider ID 保持兼容。
+这是 Manager 内部保留的 Mailbox 模块，为 Codex Accounts Manager 提供通用 Mailbox 查询、验证码人工监听和人工凭据续期入口。它随根目录 Manager VSIX 构建，不再需要单独安装；当前内置远端 `tototo-outlook`、本地 `Outlook（本地 OAuth）`、`boya`、`cdns` 与 `tototo-icloud` 五个 provider；界面使用显示名称，内部 provider ID 保持兼容。
 
-它是独立组件：邮箱池元数据、详情和凭据只由本扩展管理，并以 `CODEX_ACCOUNTS_PRIVATE_DIR` 指向的 Manager `private/` 目录为共享权威，分别写入 `0600` 的邮箱状态文件和秘密文件；旧版 VS Code `globalState/SecretStorage` 数据会按设备标识一次性合并迁移。未设置该变量时回退到扩展宿主存储目录。Manager 核心账号库、Sub2API 配置和其他 provider 不会被读取。Manager 只通过已有的 Dashboard integration API 显示一个轻量入口卡片，邮箱列表和当前选中邮箱详情由本扩展自己的 Webview 面板渲染；从 Dashboard 打开时使用当前主编辑器组，不再强制分裂到 `Beside` 侧栏。
+邮箱池元数据、详情和凭据只由本模块管理，并以 `CODEX_ACCOUNTS_PRIVATE_DIR` 指向的 Manager `private/` 目录为共享权威，分别写入 `0600` 的邮箱状态文件和秘密文件；旧版 VS Code `globalState/SecretStorage` 数据会按设备标识一次性合并迁移。Dashboard 设置中的“邮箱管理”总开关默认关闭；关闭时不会加载邮箱池、读取 provider secret、启动网络、面板、注册助手或自动续期。开启后邮箱管理和注册助手两个 Dashboard 入口一起可用。未设置该变量时回退到扩展宿主存储目录。Manager 核心账号库、Sub2API 配置和其他 provider 不会被读取。邮箱列表和当前选中邮箱详情由本模块自己的 Webview 面板渲染；从 Dashboard 打开时使用当前主编辑器组，不再强制分裂到 `Beside` 侧栏。
 
 这里的“共享”指多个设备连接到同一个远程 VS Code 扩展宿主服务器。连接到不同服务器时不会自动同步；活动浏览器注册流程也不会跨服务器迁移。
 
@@ -52,7 +52,7 @@
 
 也兼容 `邮箱----旧字段----client-id----refresh-token` 四段格式，但第二段不会被本地来源使用或保存。编辑已有 `tototo-outlook` 邮箱时，将来源切换为本地 Outlook 并留空凭据栏，会自动从已保存凭据迁移 client id 和 refresh token；其他来源切换仍需填写新格式。该来源不请求发送邮件权限，access token 不写入持久存储；refresh token 只保存在扩展宿主的受限私有凭据存储中。
 
-注册助手的手机号来源默认顺序为 `5SIM`、`Miaoic`、`Future`、`SMS688`；注册卡片可按会话切换来源。5SIM 使用单独保存的 API Token，Miaoic 使用购买的 CDK 兑换后的内部账户标识，Future 使用 CDK 兑换后的 Session Token，SMS688 使用账户专属 API Key。5SIM 面板通过账户资料显示余额/冻结余额/评分，并从公开价格接口加载 OpenAI 可选号区、运营商、库存、成功率和价格；地区列表默认按可用内部条目的最低价格递增，默认最高价格为 `0.1`，还可设置最低成功率筛选。面板将 API 的即时 `rate` 与 `rate1`、`rate3`、`rate24`、`rate72`、`rate168`、`rate720` 等窗口计算出的平均成功率分开显示；筛选使用平均成功率，低于 1% 或没有任何可用成功率数据的条目会自动剔除。Miaoic 的[接码页](http://miaoic.shop/?tab=recv&page=1&size=20)需要先在[商店](https://www.16688.com.cn/shop/S301395)购买 CDK，扩展通过 `POST /me/redeem` 的 `codes` 表单字段兑换，并把生成的内部账户标识保存在私有存储中，再通过 `/recv/open`、`/recv/state`、`/recv/switch` 和 `/recv/release` 接码；该站点当前只有 HTTP，使用前请确认你信任其服务。Future 按[接口文档](https://sms.futurepixelai.com/docs)先兑换 CDK，再对接 `manual-sms` 租约接口；面板同时提供[购买 CDK](https://www.16688.com.cn/shop/AIAISHARE)入口。SMS688 对接账户 API 的手动接码接口：`POST /api/v1/manual-sms/leases` 获取异步租约，轮询 `GET /api/v1/manual-sms/leases/{job_id}` 读取号码和短信，并通过 `/change`、`/release` 执行用户明确的换号和停止。四个来源均允许在当前订单可换号期间重新取号；取号界面打开且有可换号订单时，按 `N` 可重新取号并在新号码返回后自动复制。价格同时显示美元原价和人民币估算；人民币按每天首次打开注册助手时保存的 USD/CNY 汇率并额外乘以 `1.029`（2.9% 手续费）计算。缓存只保留一个当天记录，下一天成功查询后覆盖。各平台凭据只保存在扩展宿主的私有存储中，面板和日志只显示脱敏值。
+注册助手的手机号来源默认顺序为 `5SIM`、`Miaoic`、`Future`、`SMS688`；注册卡片可按会话切换来源。5SIM 直接使用单独保存的 API Token；Miaoic 既支持载入已有账户 Token，也支持购买次数 CDK 充入当前账户 Token 后取号，账户 Token 隐藏保存；Future 使用购买次数 CDK 兑换后的 Session Token；SMS688 当前集成使用账户中心生成的账户 API Key，不把购买次数 CDK 或 CDK 会话填入 API Key 入口。5SIM 面板通过账户资料显示余额/冻结余额/评分，并从公开价格接口加载 OpenAI 可选号区、运营商、库存、成功率和价格；地区列表默认按可用内部条目的最低价格递增，默认最高价格为 `0.1`，还可设置最低成功率筛选。面板将 API 的即时 `rate` 与 `rate1`、`rate3`、`rate24`、`rate72`、`rate168`、`rate720` 等窗口计算出的平均成功率分开显示；筛选使用平均成功率，低于 1% 或没有任何可用成功率数据的条目会自动剔除。Miaoic 的[接码页](http://miaoic.shop/?tab=recv&page=1&size=20)需要先在[商店](https://www.16688.com.cn/shop/S301395)购买次数 CDK，扩展通过 `POST /me/redeem` 的 `codes` 表单字段把次数充入当前账户 Token，并通过 `/recv/open`、`/recv/state`、`/recv/switch` 和 `/recv/release` 接码；该站点当前只有 HTTP，使用前请确认你信任其服务。Future 按[接口文档](https://sms.futurepixelai.com/docs)先兑换购买次数 CDK，再对接 `manual-sms` 租约接口；面板同时提供[购买 CDK](https://www.16688.com.cn/shop/AIAISHARE)入口。SMS688 对接账户 API 的手动接码接口：`POST /api/v1/manual-sms/leases` 获取异步租约，轮询 `GET /api/v1/manual-sms/leases/{job_id}` 读取号码和短信，并通过 `/change`、`/release` 执行用户明确的换号和停止。四个来源均允许在当前订单可换号期间重新取号；取号界面打开且有可换号订单时，按 `N` 可重新取号并在新号码返回后自动复制。价格同时显示美元原价和人民币估算；人民币按每天首次打开注册助手时保存的 USD/CNY 汇率并额外乘以 `1.029`（2.9% 手续费）计算。缓存只保留一个当天记录，下一天成功查询后覆盖。各平台凭据只保存在扩展宿主的私有存储中，面板和日志只显示脱敏值。
 
 ## 内置 boya 来源
 
@@ -100,19 +100,20 @@ provider 要求 HTTPS、固定接口路径、非空 `key`，并校验 URL 路径
 
 5SIM 使用[当前 REST v1 接口](https://5sim.net/docs)：`/v1/user/profile` 查询余额，`/v1/guest/prices?product=openai` 查询可选号区，`/v1/user/buy/activation/{country}/{operator}/openai` 购买，`/v1/user/check/{id}` 轮询短信，`/v1/user/finish/{id}` 完成订单，`/v1/user/cancel/{id}` 取消订单。目录解析同时保留即时 `rate` 和由 `rate1`/`rate3`/`rate24`/`rate72`/`rate168`/`rate720` 窗口计算的平均值，并按平均值的 1% 门槛过滤。5SIM 没有独立换号接口，注册助手的“重新取号”会先取消旧订单再购买新订单，当前订单可持续执行；短信到达与取消并发时会优先保留已收到的验证码。
 
-SMS688 使用[账户 API 接入指南](https://cdk.sms688.cc/api-guide)中的 Manual SMS API：凭据为账户中心生成的 API Key，使用 `Authorization: Bearer <ACCOUNT_API_KEY>`；`GET /api/v1/manual-sms/me` 查询可用次数和活动租约，`POST /api/v1/manual-sms/leases` 获取号码，`GET /api/v1/manual-sms/leases/{job_id}` 轮询租约，`POST .../{job_id}/change` 换号，`POST .../{job_id}/release` 释放号码。创建、换号和释放请求各使用新的 `Idempotency-Key`，刷新或断线时只查询已有 `job_id`，不会重复创建租约。
+SMS688 使用[账户 API 接入指南](https://cdk.sms688.cc/api-guide)中的 Manual SMS API：本集成凭据为账户中心生成的 API Key，使用 `Authorization: Bearer <ACCOUNT_API_KEY>`；`GET /api/v1/manual-sms/me` 查询可用次数和活动租约，`POST /api/v1/manual-sms/leases` 获取号码，`GET /api/v1/manual-sms/leases/{job_id}` 轮询租约，`POST .../{job_id}/change` 换号，`POST .../{job_id}/release` 释放号码。创建、换号和释放请求各使用新的 `Idempotency-Key`，刷新或断线时只查询已有 `job_id`，不会重复创建租约。SMS688 平台另有 CDK 兑换为专用会话令牌的入口；该令牌不能当作本集成的账户 API Key 保存。
 
-Miaoic 使用[接码页](http://miaoic.shop/?tab=recv&page=1&size=20)和[CDK 商店](https://www.16688.com.cn/shop/S301395)。输入 CDK 后通过 `POST http://miaoic.shop/me/redeem` 的 `codes` 表单字段兑换到当前内部账户标识；兑换成功后，内部账户标识单独保存在扩展宿主私有存储中，不在面板或日志中显示。接码时通过 `Cookie: bj_user=<内部账户标识>` 调用 `/recv/open` 取号，轮询 `/recv/state` 读取手机号和验证码；用户明确点击时调用 `/recv/switch` 换号或 `/recv/release` 释放。站点当前未提供 HTTPS，账户标识会以明文 HTTP 请求发送，请仅在信任网络和服务时使用。
+Miaoic 使用[接码页](http://miaoic.shop/?tab=recv&page=1&size=20)和[次数 CDK 商店](https://www.16688.com.cn/shop/S301395)。扩展为当前账户维护一个隐藏的内部 Token；可以直接载入已有 Token，也可以输入购买次数 CDK，通过 `POST http://miaoic.shop/me/redeem` 的 `codes` 表单字段把次数充入该 Token。账户 Token 单独保存在扩展宿主私有存储中，不在面板或日志中显示。接码时通过 `Cookie: bj_user=<账户 Token>` 调用 `/recv/open` 取号，轮询 `/recv/state` 读取手机号和验证码；当前响应同时兼容顶层 `code` 和 `codes[]` 历史列表，用户明确点击时调用 `/recv/switch` 换号或 `/recv/release` 释放。站点当前未提供 HTTPS，账户标识会以明文 HTTP 请求发送，请仅在信任网络和服务时使用。
 
 ## 安装
 
-在本目录执行：
+在仓库根目录执行：
 
 ```bash
 npm test
+npm run compile
 npm run package
 ```
 
-然后在 VS Code 使用 **Extensions: Install from VSIX…** 安装 `dist/codex-accounts-mailbox.vsix`。如果 Manager 未安装或 API 版本不兼容，该可选扩展会提示错误；Manager 核心本身不依赖它，未安装本扩展不影响核心账号、额度、Sub2API 或无感切号功能。
+然后在 VS Code 使用 **Extensions: Install from VSIX…** 安装根目录生成的 Manager VSIX。Mailbox CJS 模块会在 compile 阶段复制到 `out/mailbox` 并随 Manager 一起交付；旧版独立 Mailbox 扩展在识别到内置 Manager 后保持停用，避免重复注册和重复续期。
 
 测试使用 mock HTTP 响应，不会在打包或测试中使用真实邮箱凭据。运行时 provider 只会在用户主动查询或监听时访问对应第三方接口。

@@ -27,6 +27,7 @@ import { MailboxDaemonService } from "./mailboxDaemon";
 import { HeadlessQuotaCountdownScheduler } from "./quotaCountdownScheduler";
 import { configureHeadlessNetworkDebug } from "../utils/networkDebug";
 import { readManagerAutomationSettings } from "../infrastructure/config/managerAutomationSettings";
+import { readManagerMailboxEnabled } from "../infrastructure/config/managerMailboxSettings";
 
 const CONTROL_HOST = "127.0.0.1" as const;
 const DEFAULT_PORT = 43117;
@@ -110,14 +111,17 @@ export class ManagerDaemon {
   private readonly usage: LocalUsageAnalyticsService;
   private readonly localImportInbox: LocalImportInbox;
   private readonly tokenScheduler: HeadlessTokenRefreshScheduler;
-  private readonly mailbox: MailboxDaemonService;
+  private mailbox: MailboxDaemonService | undefined;
   private quotaCountdownScheduler: HeadlessQuotaCountdownScheduler | undefined;
   private quotaTimer: NodeJS.Timeout | undefined;
   private proxySelectionTimer: NodeJS.Timeout | undefined;
   private automationSettingsTimer: NodeJS.Timeout | undefined;
   private appliedProxySelection: string | undefined;
   private appliedQuotaCountdownAutomation: boolean | undefined;
+  private appliedMailboxEnabled: boolean | undefined;
+  private mailboxSyncPromise: Promise<void> | undefined;
   private started = false;
+  private stopping = false;
 
   constructor(private readonly config: ManagerDaemonConfig) {
     this.context = createNodeAccountsContext(config.privateRoot);
@@ -134,7 +138,6 @@ export class ManagerDaemon {
       refreshQuota: refreshImportedAccountQuotaHeadlessly
     });
     this.tokenScheduler = new HeadlessTokenRefreshScheduler(this.repo, config.tokenRefreshIntervalMs);
-    this.mailbox = new MailboxDaemonService(this.repo, config.privateRoot, config.mailboxScanIntervalMs);
     this.managerControlServer = new ManagerControlServer({
       repo: this.repo,
       usage: this.usage,
@@ -145,8 +148,7 @@ export class ManagerDaemon {
         const tokens = isSub2ApiAccount(account) ? undefined : await this.repo.getTokens(account.id);
         const accountEmail = account.email.trim().toLowerCase();
         const deactivatedMailboxEmails = new Set(
-          this.mailbox
-            .getDeactivatedMailboxEmails()
+          (this.mailbox?.getDeactivatedMailboxEmails() ?? [])
             .map((email) => email.trim().toLowerCase())
             .filter(Boolean)
         );
@@ -154,7 +156,7 @@ export class ManagerDaemon {
           mailboxDeactivated: deactivatedMailboxEmails.has(accountEmail)
         });
       },
-      getDeactivatedMailboxEmails: () => this.mailbox.getDeactivatedMailboxEmails(),
+      getDeactivatedMailboxEmails: () => this.mailbox?.getDeactivatedMailboxEmails() ?? [],
       switchAccount: async (accountId) => {
         const account = await this.repo.getAccount(accountId);
         if (!account) {
@@ -193,6 +195,7 @@ export class ManagerDaemon {
       throw new Error("Manager daemon is already running");
     }
     this.started = true;
+    this.stopping = false;
     try {
       configureHeadlessNetworkDebug(this.config.debugNetwork);
       await loadManagerControlEnvironment({ privateRoot: this.config.privateRoot });
@@ -201,7 +204,7 @@ export class ManagerDaemon {
       initAccountStatePersistence(this.accountStateStore);
       configureTokenAutomation(true, this.config.tokenRefreshIntervalMs, 5 * 60);
       await this.repo.init();
-      await this.mailbox.start();
+      await this.syncMailboxEnabled(true);
       await this.localImportInbox.start();
       await this.syncQuotaCountdownAutomation(true);
       this.tokenScheduler.start();
@@ -217,6 +220,7 @@ export class ManagerDaemon {
       }, PROXY_SELECTION_REFRESH_INTERVAL_MS);
       this.proxySelectionTimer.unref?.();
       this.automationSettingsTimer = setInterval(() => {
+        void this.syncMailboxEnabled();
         void this.syncQuotaCountdownAutomation();
       }, AUTOMATION_SETTINGS_REFRESH_INTERVAL_MS);
       this.automationSettingsTimer.unref?.();
@@ -229,6 +233,7 @@ export class ManagerDaemon {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     if (this.proxySelectionTimer) {
       clearInterval(this.proxySelectionTimer);
       this.proxySelectionTimer = undefined;
@@ -245,7 +250,9 @@ export class ManagerDaemon {
     this.quotaCountdownScheduler?.dispose();
     this.quotaCountdownScheduler = undefined;
     this.appliedQuotaCountdownAutomation = undefined;
-    this.mailbox.dispose();
+    this.mailbox?.dispose();
+    this.mailbox = undefined;
+    this.appliedMailboxEnabled = undefined;
     this.localImportInbox.dispose();
     this.managerControlServer.dispose();
     this.repo.dispose();
@@ -271,6 +278,61 @@ export class ManagerDaemon {
       if (!force) {
         console.info("[codexAccounts] manager daemon applied the Dashboard proxy selection");
       }
+    }
+  }
+
+  private syncMailboxEnabled(force = false): Promise<void> {
+    if (this.mailboxSyncPromise) {
+      return this.mailboxSyncPromise;
+    }
+    const task = this.applyMailboxEnabled(force);
+    let tracked: Promise<void>;
+    tracked = task.finally(() => {
+      if (this.mailboxSyncPromise === tracked) {
+        this.mailboxSyncPromise = undefined;
+      }
+    });
+    this.mailboxSyncPromise = tracked;
+    return tracked;
+  }
+
+  private async applyMailboxEnabled(force = false): Promise<void> {
+    if (this.stopping) {
+      return;
+    }
+    const sharedSetting = await readManagerMailboxEnabled(this.config.privateRoot);
+    const enabled = resolveManagerMailboxEnabled(sharedSetting);
+    if (!force && this.appliedMailboxEnabled === enabled) {
+      return;
+    }
+
+    if (!enabled) {
+      this.mailbox?.dispose();
+      this.mailbox = undefined;
+      this.appliedMailboxEnabled = false;
+      console.info("[codexAccounts] daemon Mailbox disabled");
+      return;
+    }
+
+    if (this.mailbox) {
+      this.appliedMailboxEnabled = true;
+      return;
+    }
+
+    const mailbox = new MailboxDaemonService(this.repo, this.config.privateRoot, this.config.mailboxScanIntervalMs);
+    try {
+      await mailbox.start();
+      if (this.stopping) {
+        mailbox.dispose();
+        return;
+      }
+      this.mailbox = mailbox;
+      this.appliedMailboxEnabled = true;
+      console.info("[codexAccounts] daemon Mailbox enabled");
+    } catch (error) {
+      mailbox.dispose();
+      this.appliedMailboxEnabled = false;
+      console.warn(`[codexAccounts] daemon Mailbox start failed: ${getErrorMessage(error)}`);
     }
   }
 
@@ -317,6 +379,10 @@ export function resolveQuotaCountdownAutomationEnabled(
   environmentSetting: boolean
 ): boolean {
   return sharedSetting ?? environmentSetting;
+}
+
+export function resolveManagerMailboxEnabled(sharedSetting: boolean | undefined): boolean {
+  return sharedSetting === true;
 }
 
 export async function main(): Promise<void> {

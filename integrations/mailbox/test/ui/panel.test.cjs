@@ -1500,7 +1500,18 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
       providers: [],
       phoneSources: [
         { id: "fivesim", displayName: "5SIM", credentialType: "api-token", websiteUrl: "https://5sim.net" },
-        { id: "sms688", displayName: "SMS688", credentialType: "api-key", websiteUrl: "https://cdk.sms688.cc" }
+        {
+          id: "sms688",
+          displayName: "SMS688",
+          credentialType: "account-api-key",
+          websiteUrl: "https://cdk.sms688.cc",
+          credentialFlow: {
+            kind: "account-api-key",
+            inputLabel: "账户 API Key",
+            storedLabel: "账户 API Key",
+            summary: "当前集成直接使用账户 API Key；不要把购买次数 CDK 填到此入口。"
+          }
+        }
       ],
       registrationFiveSimToken: { configured: true, masked: "five…oken" },
       registrationSms688Token: { configured: true, masked: "sms6…-key" },
@@ -1550,6 +1561,8 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   assert.match(renderedHtml, /registration-fivesim-country-list/u);
   assert.match(renderedHtml, /data-scroll-preserve="registration-fivesim-country-list-session:fivesim"/u);
   assert.match(renderedHtml, /data-scroll-preserve="registration-fivesim-operator-list-session:fivesim"/u);
+  assert.match(renderedHtml, /registrationMiaoicTokenInput-session:fivesim/u);
+  assert.match(renderedHtml, /载入账户 Token/u);
   assert.match(html, /\.registration-fivesim-country-list \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u);
   assert.match(html, /\.registration-fivesim-country-list \{ grid-template-columns: 1fr; \}/u);
   assert.match(renderedHtml, /registration-fivesim-operator-list/u);
@@ -1561,6 +1574,7 @@ test("5SIM registration panel shows balance, price-sorted offers and independent
   assert.ok(renderedHtml.indexOf("England") < renderedHtml.indexOf("USA"));
   assert.match(renderedHtml, /data-registration-phone-source-panel="fivesim"/u);
   assert.match(renderedHtml, /registrationSms688TokenInput-session:fivesim/u);
+  assert.match(renderedHtml, /账户 API Key（不是 CDK）/u);
   assert.match(renderedHtml, /Manual SMS（manual-sms）/u);
   const autoRefreshMessages = messages.filter((message) => message.action === "registrationRefreshFiveSim");
   assert.equal(autoRefreshMessages.length, 1);
@@ -1612,7 +1626,19 @@ test("Future registration panel exposes the docs and CDK purchase links", () => 
       providers: [],
       phoneSources: [
         { id: "fivesim", displayName: "5SIM", websiteUrl: "https://5sim.net", credentialType: "api-token" },
-        { id: "future", displayName: "Future", websiteUrl: "https://sms.futurepixelai.com/docs", purchaseUrl: "https://www.16688.com.cn/shop/AIAISHARE", credentialType: "cdk" },
+        {
+          id: "future",
+          displayName: "Future",
+          websiteUrl: "https://sms.futurepixelai.com/docs",
+          purchaseUrl: "https://www.16688.com.cn/shop/AIAISHARE",
+          credentialType: "cdk-session",
+          credentialFlow: {
+            kind: "purchase-cdk-to-session-token",
+            inputLabel: "购买次数 CDK",
+            storedLabel: "Session Token",
+            summary: "CDK 兑换 Session Token；取号时使用兑换结果。"
+          }
+        },
         { id: "sms688", displayName: "SMS688", websiteUrl: "https://cdk.sms688.cc", credentialType: "api-key" }
       ],
       registrationDefaultPhoneSource: "future",
@@ -1632,6 +1658,8 @@ test("Future registration panel exposes the docs and CDK purchase links", () => 
   assert.match(renderedHtml, /https:\/\/www\.16688\.com\.cn\/shop\/AIAISHARE/u);
   assert.match(renderedHtml, /购买 CDK/u);
   assert.match(renderedHtml, /registrationFutureTokenInput-session:future/u);
+  assert.match(renderedHtml, /购买次数 CDK/u);
+  assert.match(renderedHtml, /兑换并保存 Session Token/u);
   assert.match(renderedHtml, /兑换并保存/u);
   assert.ok(renderedHtml.indexOf('value="fivesim"') < renderedHtml.indexOf('value="future"'));
   assert.ok(renderedHtml.indexOf('value="future"') < renderedHtml.indexOf('value="sms688"'));

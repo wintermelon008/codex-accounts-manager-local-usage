@@ -339,7 +339,6 @@ function AdvancedAccountFocus(props: {
   if (!account) {
     return (
       <div class="advanced-account-focus advanced-account-focus-empty">
-        <span class="advanced-command-label">ACCOUNT FOCUS</span>
         <strong>{props.copy.noActiveAccountTitle}</strong>
       </div>
     );
@@ -406,9 +405,6 @@ function AdvancedAccountFocus(props: {
   return (
     <div class="advanced-account-focus">
       <div class="advanced-account-focus-heading">
-        <span class="advanced-command-label">
-          {props.lang === "zh" ? "选中账号" : props.lang === "zh-hant" ? "選取帳號" : "SELECTED ACCOUNT"}
-        </span>
         <span class="advanced-account-focus-status">{accountStatus}</span>
       </div>
       <strong class="advanced-account-focus-email">{emailDisplay}</strong>
@@ -677,10 +673,6 @@ export function AdvancedAppearanceSummary(props: {
     <div class="advanced-command-center" aria-label={labels.live}>
       <div class="advanced-command-grid" aria-hidden="true" />
       <div class="advanced-command-center-head">
-        <div class="advanced-command-eyebrow">
-          <span class="advanced-command-live-dot" />
-          <span>{labels.live}</span>
-        </div>
         <div class={`advanced-command-status ${isHealthy ? "is-online" : "is-recovery"}`}>
           <span class="advanced-command-status-dot" />
           <span>{isHealthy ? labels.online : labels.recovery}</span>
@@ -717,7 +709,6 @@ export function AdvancedAppearanceSummary(props: {
           </div>
         </div>
       </div>
-      <div class="advanced-solar-hint">{labels.orbitHint}</div>
       <div class="advanced-command-scanline" aria-hidden="true">
         <svg viewBox="0 0 100 100" preserveAspectRatio="none">
           <rect

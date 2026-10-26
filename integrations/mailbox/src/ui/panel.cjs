@@ -9,9 +9,6 @@ const REGISTRATION_PANEL_VIEW_TYPE = "codexAccounts.mailboxRegistration";
 function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
   const registrationOnly = mode === "registration";
   const panelTitle = registrationOnly ? "注册助手" : "邮箱管理";
-  const panelSubtitle = registrationOnly
-    ? "从邮箱库选择或输入新邮箱；GPT 注册在外部浏览器手动完成"
-    : "邮箱列表与当前选中邮箱详情";
   const headerActions = registrationOnly
     ? '<button type="button" data-action="refresh">刷新本地状态</button><button type="button" class="danger" data-action="registration-cleanup-all">清除所有记录</button>'
     : '<button type="button" class="primary" data-action="open-import">添加邮箱</button><button type="button" data-action="refresh">刷新本地状态</button>';
@@ -59,8 +56,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     h1 { font-size: 24px; letter-spacing: -.02em; }
     h2 { font-size: 17px; }
     h3 { font-size: 14px; }
-    .subtitle, .muted { color: var(--muted); }
-    .subtitle { margin-top: 4px; }
+    .muted { color: var(--muted); }
     .top-actions, .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     .notice { display: none; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-soft); }
     .notice.visible { display: flex; }
@@ -381,7 +377,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
     <header class="topbar">
       <div class="brand">
         <div class="logo">${registrationOnly ? "R" : "M"}</div>
-        <div><h1>${panelTitle}</h1><p class="subtitle">${panelSubtitle}</p></div>
+        <div><h1>${panelTitle}</h1></div>
       </div>
       <div class="top-actions">${headerActions}</div>
     </header>
@@ -434,6 +430,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       let registrationMaxRetries = 25;
       let registrationPhoneSourceSelections = {};
       let registrationFiveSimTokenInputs = {};
+      let registrationMiaoicTokenInputs = {};
       let registrationMiaoicCdkInputs = {};
       let registrationFutureTokenInputs = {};
       let registrationSms688TokenInputs = {};
@@ -809,7 +806,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           }
           if (sourceId === "miaoic") {
             if (!state.registrationMiaoicToken?.configured) {
-              showNotice("请先购买并兑换 Miaoic CDK", "warning");
+              showNotice("请先购买次数 CDK 并绑定 Miaoic 账户", "warning");
               return;
             }
             send("registrationAcquirePhone", { sessionId, sourceId });
@@ -817,7 +814,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           }
           if (sourceId === "sms688") {
             if (!state.registrationSms688Token?.configured) {
-              showNotice("请先保存 SMS688 API Key", "warning");
+              showNotice("请先保存 SMS688 账户 API Key；不要填购买次数 CDK", "warning");
               return;
             }
             send("registrationAcquirePhone", { sessionId, sourceId });
@@ -825,7 +822,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           }
           if (sourceId === "future") {
             if (!state.registrationFutureToken?.configured) {
-              showNotice("请先兑换并保存 Future CDK", "warning");
+              showNotice("请先用购买次数 CDK 兑换并保存 Future Session Token", "warning");
               return;
             }
             send("registrationAcquirePhone", { sessionId, sourceId });
@@ -851,11 +848,22 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const sessionId = target.dataset.sessionId || "";
           const input = document.getElementById("registrationMiaoicCdkInput-" + sessionId)?.value?.trim() || registrationMiaoicCdkInputs[sessionId] || "";
           if (!input) {
-            showNotice("请先粘贴 Miaoic CDK", "warning");
+            showNotice("请先粘贴 Miaoic 购买次数 CDK", "warning");
             return;
           }
           registrationMiaoicCdkInputs[sessionId] = "";
           send("registrationSaveMiaoicCdk", { cdk: input });
+          render();
+        }
+        else if (action === "registration-save-miaoic-token") {
+          const sessionId = target.dataset.sessionId || "";
+          const input = document.getElementById("registrationMiaoicTokenInput-" + sessionId)?.value?.trim() || registrationMiaoicTokenInputs[sessionId] || "";
+          if (!input) {
+            showNotice("请先粘贴 Miaoic 账户 Token", "warning");
+            return;
+          }
+          registrationMiaoicTokenInputs[sessionId] = "";
+          send("registrationSaveMiaoicToken", { token: input });
           render();
         }
         else if (action === "registration-clear-miaoic-account") {
@@ -865,7 +873,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const sessionId = target.dataset.sessionId || "";
           const input = document.getElementById("registrationSms688TokenInput-" + sessionId)?.value?.trim() || registrationSms688TokenInputs[sessionId] || "";
           if (!input) {
-            showNotice("请先粘贴 SMS688 API Key", "warning");
+            showNotice("请先粘贴 SMS688 账户 API Key，不要填购买次数 CDK", "warning");
             return;
           }
           registrationSms688TokenInputs[sessionId] = "";
@@ -879,7 +887,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           const sessionId = target.dataset.sessionId || "";
           const input = document.getElementById("registrationFutureTokenInput-" + sessionId)?.value?.trim() || registrationFutureTokenInputs[sessionId] || "";
           if (!input) {
-            showNotice("请先粘贴 Future CDK", "warning");
+            showNotice("请先粘贴 Future 购买次数 CDK", "warning");
             return;
           }
           registrationFutureTokenInputs[sessionId] = "";
@@ -1025,6 +1033,9 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         }
         if (event.target.id.startsWith("registrationMiaoicCdkInput-")) {
           registrationMiaoicCdkInputs[event.target.id.slice("registrationMiaoicCdkInput-".length)] = event.target.value || "";
+        }
+        if (event.target.id.startsWith("registrationMiaoicTokenInput-")) {
+          registrationMiaoicTokenInputs[event.target.id.slice("registrationMiaoicTokenInput-".length)] = event.target.value || "";
         }
         if (event.target.id.startsWith("registrationFutureTokenInput-")) {
           registrationFutureTokenInputs[event.target.id.slice("registrationFutureTokenInput-".length)] = event.target.value || "";
@@ -1184,7 +1195,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const selected = state.selected;
         const nextDetail = selected
           ? renderSelected(selected)
-          : '<div class="empty-detail"><div><h2>选择一个邮箱</h2><p class="muted" style="margin-top:8px">其他邮箱的邮件详情不会在未选中时渲染或查询。</p></div></div>';
+          : '<div class="empty-detail"><div><h2>选择一个邮箱</h2></div></div>';
         if (detailRegion.innerHTML !== nextDetail) detailRegion.innerHTML = nextDetail;
       }
 
@@ -1199,7 +1210,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sessions = [...(state.registrationSessions || [])].reverse();
         const nextSessions = sessions.length
           ? sessions.map(renderRegistrationSession).join("")
-          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱；进入 GPT 注册网页后会在后台持续查询邮箱验证码。</p>';
+          : '<p class="muted">还没有注册会话。</p>';
         if (sessionsRegion.innerHTML !== nextSessions) sessionsRegion.innerHTML = nextSessions;
       }
 
@@ -1439,7 +1450,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const input = document.querySelector('[data-role="import-credential-input"]');
         if (input) input.placeholder = schema.placeholder || "粘贴所选邮箱来源的凭据";
         const description = document.querySelector('[data-role="import-description"]');
-        if (description) description.textContent = schema.description || "来源决定导入和查询协议。";
+        if (description) {
+          description.textContent = schema.description || "";
+          description.hidden = !schema.description;
+        }
       }
 
       function refreshEditProviderFields() {
@@ -1550,21 +1564,21 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         ).join("");
         const statuses = sources.map((source) => {
           let configured = false;
-          let detail = "未配置";
           if (source.id === "fivesim") {
             configured = state.registrationFiveSimToken?.configured === true;
-            detail = configured ? "Token 已保存" : "未保存 Token";
           } else if (source.id === "miaoic") {
             configured = state.registrationMiaoicToken?.configured === true;
-            detail = configured ? "Token 已保存" : "未保存 Token";
           } else if (source.id === "future") {
             configured = state.registrationFutureToken?.configured === true;
-            detail = configured ? "Session Token 已保存" : "未兑换 CDK";
           } else if (source.id === "sms688") {
             configured = state.registrationSms688Token?.configured === true;
-            detail = configured ? "API Key 已保存" : "未保存 API Key";
           }
-          return '<div class="registration-channel-center-item"><strong>' + esc(source.displayName || source.id) + '</strong><span><span class="tag' + (configured ? ' success' : '') + '">' + (configured ? '已配置' : '待配置') + '</span><small> ' + esc(detail) + '</small></span></div>';
+          const flow = source.credentialFlow && typeof source.credentialFlow === "object" ? source.credentialFlow : {};
+          const detail = configured
+            ? (flow.configuredLabel || (flow.storedLabel ? flow.storedLabel + " 已保存" : "凭据已配置"))
+            : (flow.missingLabel || (flow.inputLabel ? "需配置 " + flow.inputLabel : "未配置"));
+          const summary = typeof flow.summary === "string" && flow.summary.trim() ? " · " + flow.summary.trim() : "";
+          return '<div class="registration-channel-center-item"><strong>' + esc(source.displayName || source.id) + '</strong><span><span class="tag' + (configured ? ' success' : '') + '">' + (configured ? '已配置' : '待配置') + '</span><small> ' + esc(detail + summary) + '</small></span></div>';
         }).join("");
         return '<section class="registration-channel-center" aria-label="接码渠道中心">' +
           '<div class="registration-channel-center-head"><div><h2>接码渠道中心</h2><p class="muted">集中查看渠道状态；具体凭据仍在注册卡片的渠道面板中维护。</p></div><div class="field"><label for="registrationDefaultPhoneSource">默认接码来源</label><select id="registrationDefaultPhoneSource" aria-label="选择默认接码来源">' + sourceOptions + '</select></div></div>' +
@@ -1598,11 +1612,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sessions = [...(state.registrationSessions || [])].reverse();
         const sessionsHtml = sessions.length
           ? sessions.map(renderRegistrationSession).join("")
-          : '<p class="muted">还没有注册会话。先从上方选择已导入邮箱，或直接输入新邮箱；进入 GPT 注册网页后会在后台持续查询邮箱验证码。</p>';
+          : '<p class="muted">还没有注册会话。</p>';
         return '<div class="registration-standalone">' +
           '<section class="registration-standalone-card">' +
             '<h2>选择注册邮箱</h2>' +
-            '<p class="muted">可按邮箱库筛选并点击选择，也可以在下方直接输入一个新邮箱。</p>' +
             '<div class="registration-mailbox-picker">' +
               '<div class="registration-mailbox-picker-head"><strong>已导入邮箱库</strong><span class="tag" data-role="registration-mailbox-count">' + mailboxes.length + '/' + allMailboxes.length + '</span></div>' +
               '<div class="registration-mailbox-picker-tools"><input id="registrationMailboxSearch" type="search" value="' + esc(registrationMailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索注册邮箱"><select id="registrationMailboxProviderFilter" aria-label="按邮箱来源筛选注册邮箱"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="注册邮箱排序"><label class="mailbox-sort-label" for="registrationMailboxSort">邮箱排序</label><select id="registrationMailboxSort" class="mailbox-sort-select" aria-label="选择注册邮箱排序字段"><option value="name" ' + (registrationMailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (registrationMailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="renewal" ' + (registrationMailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option><option value="gptRegistration" ' + (registrationMailboxSortKey === "gptRegistration" ? "selected" : "") + '>GPT注册时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-registration-mailbox-sort-direction" title="' + (registrationMailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (registrationMailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (registrationMailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div><label title="只显示尚未标记为已注册 GPT 的邮箱"><input id="registrationOnlyUnregisteredGpt" type="checkbox" ' + (registrationOnlyUnregisteredGpt ? "checked" : "") + '> 仅显示未注册 GPT</label><label title="只显示从第一封 OpenAI 邮件起已注册至少 7 天的邮箱"><input id="registrationOnlyGptSevenDays" type="checkbox" ' + (registrationOnlyGptSevenDays ? "checked" : "") + '> 仅 GPT 注册 ≥ 7 天</label></div>' +
@@ -1804,7 +1817,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
 
       function renderRegistrationTotp(session, registrationMailbox) {
         if (!registrationMailbox) {
-          return '<section class="registration-totp-card"><div class="registration-totp-card-head"><strong>2FA 新建条目与收码</strong><span class="tag neutral">需先导入邮箱</span></div><div class="field-note">请先把注册邮箱导入 Mailbox，再在这里创建并绑定新的 2FAuth 条目。</div></section>';
+          return '<section class="registration-totp-card"><div class="registration-totp-card-head"><strong>2FA 新建条目与收码</strong></div><div class="field-note">请先把注册邮箱导入 Mailbox，再在这里创建并绑定新的 2FAuth 条目。</div></section>';
         }
         const mailboxId = registrationMailbox.id;
         const fallbackLink = state.totpLinks?.[mailboxId];
@@ -1904,10 +1917,10 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             '<button type="button" data-action="registration-request-new-phone" data-session-id="' + esc(session.id) + '"' + newPhoneDisabled + '>手动重新填写号码</button>' +
             '<button type="button" data-action="registration-cancel" data-session-id="' + esc(session.id) + '">取消</button>' +
           '</div>';
-        return '<div class="registration-session-input"><label for="emailCodeInput-' + esc(session.id) + '">邮箱验证码（请确认后提交）</label><div class="registration-input-with-action"><input type="text" id="emailCodeInput-' + esc(session.id) + '" value="' + esc(values.emailCode || "") + '" placeholder="从上方识别结果复制或手动填写" autocomplete="one-time-code"' + inputDisabled + '>' + autoFillButton("registration-fill-email-code", recognizedEmailCode, "自动填入邮箱码") + '</div></div>' +
+        return '<div class="registration-session-input"><label for="emailCodeInput-' + esc(session.id) + '">邮箱验证码</label><div class="registration-input-with-action"><input type="text" id="emailCodeInput-' + esc(session.id) + '" value="' + esc(values.emailCode || "") + '" placeholder="从上方识别结果复制或手动填写" autocomplete="one-time-code"' + inputDisabled + '>' + autoFillButton("registration-fill-email-code", recognizedEmailCode, "自动填入邮箱码") + '</div></div>' +
         '<div class="registration-credential-grid">' +
-          '<div class="registration-session-input"><label for="phoneInput-' + esc(session.id) + '">手机号（请确认后提交）</label><div class="registration-input-with-action"><input type="text" id="phoneInput-' + esc(session.id) + '" value="' + esc(values.phone || "") + '" placeholder="+86 138..." autocomplete="off"' + inputDisabled + '>' + autoFillButton("registration-fill-phone", recognizedPhone, "自动填入手机号") + '</div></div>' +
-          '<div class="registration-session-input"><label for="otpInput-' + esc(session.id) + '">短信验证码（请确认后提交）</label><div class="registration-input-with-action"><input type="text" id="otpInput-' + esc(session.id) + '" value="' + esc(values.otp || "") + '" placeholder="6 位数字" autocomplete="off"' + inputDisabled + '>' + autoFillButton("registration-fill-code", recognizedOtp, "自动填入短信码") + '</div></div>' +
+          '<div class="registration-session-input"><label for="phoneInput-' + esc(session.id) + '">手机号</label><div class="registration-input-with-action"><input type="text" id="phoneInput-' + esc(session.id) + '" value="' + esc(values.phone || "") + '" placeholder="+86 138..." autocomplete="off"' + inputDisabled + '>' + autoFillButton("registration-fill-phone", recognizedPhone, "自动填入手机号") + '</div></div>' +
+          '<div class="registration-session-input"><label for="otpInput-' + esc(session.id) + '">短信验证码</label><div class="registration-input-with-action"><input type="text" id="otpInput-' + esc(session.id) + '" value="' + esc(values.otp || "") + '" placeholder="6 位数字" autocomplete="off"' + inputDisabled + '>' + autoFillButton("registration-fill-code", recognizedOtp, "自动填入短信码") + '</div></div>' +
         '</div>' +
         '<div class="field-note">进度会根据注册页面实时状态更新。自动填入按钮只把识别内容填入面板输入框；邮箱码、手机号、短信码和最后继续/授权仍需你点击对应确认按钮。</div>' +
         actionHtml;
@@ -1952,6 +1965,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const sourceOptions = sources.map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === source.id ? "selected" : "") + '>' + esc(item.displayName || item.id) + '</option>').join("");
         const configDisabled = active || terminal ? " disabled" : "";
         const miaoicToken = state.registrationMiaoicToken || { configured: false, masked: "" };
+        const miaoicTokenInput = registrationMiaoicTokenInputs[session.id] || "";
         const miaoicCdkInput = registrationMiaoicCdkInputs[session.id] || "";
         const futureToken = state.registrationFutureToken || { configured: false, masked: "" };
         const futureTokenInput = registrationFutureTokenInputs[session.id] || "";
@@ -2076,25 +2090,24 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
             ? Number(miaoicAccount.balance)
             : null;
         const miaoicCatalog = '<div class="registration-fivesim-account">' +
-          '<div class="registration-fivesim-token-row"><input id="registrationMiaoicCdkInput-' + esc(session.id) + '" type="password" value="' + esc(miaoicCdkInput) + '" placeholder="粘贴 Miaoic CDK" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-miaoic-cdk" data-session-id="' + esc(session.id) + '"' + configDisabled + '>兑换并保存</button><button type="button" class="secondary small danger" data-action="registration-clear-miaoic-account"' + (miaoicToken.configured && !active ? "" : " disabled") + '>清除账户</button></div>' +
-          '<div class="field-note">' + (miaoicToken.configured ? 'CDK 已兑换，账户已保存' : '尚未兑换 Miaoic CDK') + '。内部账户标识不会显示。</div>' +
+          '<div class="registration-fivesim-token-row"><input id="registrationMiaoicTokenInput-' + esc(session.id) + '" type="password" value="' + esc(miaoicTokenInput) + '" placeholder="粘贴已有账户 Token（16–64 位十六进制）" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-miaoic-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>载入账户 Token</button></div>' +
+          '<div class="registration-fivesim-token-row"><input id="registrationMiaoicCdkInput-' + esc(session.id) + '" type="password" value="' + esc(miaoicCdkInput) + '" placeholder="粘贴购买次数 CDK" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-miaoic-cdk" data-session-id="' + esc(session.id) + '"' + configDisabled + '>兑换并充入当前账户</button><button type="button" class="secondary small danger" data-action="registration-clear-miaoic-account"' + (miaoicToken.configured && !active ? "" : " disabled") + '>清除账户 Token</button></div>' +
+          '<div class="field-note">' + (miaoicToken.configured ? '账户 Token 已保存；购买次数 CDK 会充入该账户' : '尚未配置 Miaoic 账户 Token') + '。账户 Token 与购买次数 CDK 是两种不同输入，Token 不会显示。</div>' +
           '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>可用次数</label><strong>' + esc(formatSms688Uses(miaoicAvailableUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>接口</label><strong>/recv/*</strong></div><div class="registration-fivesim-account-item"><label>传输</label><strong>HTTP</strong></div></div>' +
           '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-miaoic" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingMiaoic || !miaoicToken.configured ? " disabled" : "") + '>刷新余额</button>' + (miaoicAccount.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(miaoicAccount.updatedAt)) + '</span>' : '') + '</div>' +
-          '<div class="field-note">购买 Miaoic CDK 后点击“兑换并保存”；接码时使用内部账户标识调用 /recv/open、/recv/state、/recv/switch 和 /recv/release。点击开始取号后自动轮询号码和短信，换号/取消仍需你点击。</div>' +
         '</div>';
         const futureCatalog = '<div class="registration-fivesim-account">' +
-          '<div class="registration-fivesim-token-row"><input id="registrationFutureTokenInput-' + esc(session.id) + '" type="password" value="' + esc(futureTokenInput) + '" placeholder="粘贴 Future CDK" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-future-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>兑换并保存</button><button type="button" class="secondary small danger" data-action="registration-clear-future-token"' + (futureToken.configured && !active ? "" : " disabled") + '>清除</button></div>' +
-          '<div class="field-note">' + (futureToken.configured ? '当前 Session Token：' + esc(futureToken.masked || "已配置") : '尚未配置 Future Session Token') + '。输入 CDK 后会先兑换 Session Token，Token 单独保存。</div>' +
+          '<div class="registration-fivesim-token-row"><input id="registrationFutureTokenInput-' + esc(session.id) + '" type="password" value="' + esc(futureTokenInput) + '" placeholder="粘贴购买次数 CDK" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-future-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>兑换并保存 Session Token</button><button type="button" class="secondary small danger" data-action="registration-clear-future-token"' + (futureToken.configured && !active ? "" : " disabled") + '>清除 Session Token</button></div>' +
+          '<div class="field-note">' + (futureToken.configured ? '当前 Session Token：' + esc(futureToken.masked || "已配置") : '尚未配置 Future Session Token') + '。输入的是购买次数 CDK；扩展先兑换，再只保存返回的 Session Token。</div>' +
           '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>可用次数</label><strong>' + esc(formatSms688Uses(futureAvailableUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>剩余次数</label><strong>' + esc(formatSms688Uses(futureAccount.remainingUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>接口</label><strong>manual-sms</strong></div></div>' +
           '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-future" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingFuture || !futureToken.configured ? " disabled" : "") + '>刷新余额</button>' + (futureAccount.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(futureAccount.updatedAt)) + '</span>' : '') + '</div>' +
-          '<div class="field-note">Future 使用文档中的 CDK 兑换 Session Token，再调用 manual-sms 接口；点击开始取号后自动轮询号码和短信，换号/取消仍需你点击。</div>' +
+          '<div class="field-note">Session Token 不能当作购买次数 CDK 重复兑换。</div>' +
         '</div>';
         const sms688Catalog = '<div class="registration-fivesim-account">' +
-          '<div class="registration-fivesim-token-row"><input id="registrationSms688TokenInput-' + esc(session.id) + '" type="password" value="' + esc(sms688TokenInput) + '" placeholder="粘贴 SMS688 账户 API Key" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-sms688-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>保存 Key</button><button type="button" class="secondary small danger" data-action="registration-clear-sms688-token"' + (sms688Token.configured && !active ? "" : " disabled") + '>清除</button></div>' +
-          '<div class="field-note">' + (sms688Token.configured ? '当前 Key：' + esc(sms688Token.masked || "已配置") : '尚未配置 SMS688 API Key') + '。Key 单独保存。</div>' +
+          '<div class="registration-fivesim-token-row"><input id="registrationSms688TokenInput-' + esc(session.id) + '" type="password" value="' + esc(sms688TokenInput) + '" placeholder="粘贴账户 API Key（不是 CDK）" autocomplete="off"' + configDisabled + '><button type="button" class="secondary small" data-action="registration-save-sms688-token" data-session-id="' + esc(session.id) + '"' + configDisabled + '>保存账户 Key</button><button type="button" class="secondary small danger" data-action="registration-clear-sms688-token"' + (sms688Token.configured && !active ? "" : " disabled") + '>清除账户 Key</button></div>' +
+          '<div class="field-note">' + (sms688Token.configured ? '当前账户 API Key：' + esc(sms688Token.masked || "已配置") : '尚未配置 SMS688 账户 API Key') + '。此入口使用账号中心生成的账户 Key，不是购买次数 CDK。</div>' +
           '<div class="registration-fivesim-account-grid"><div class="registration-fivesim-account-item"><label>可用次数</label><strong>' + esc(formatSms688Uses(sms688AvailableUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>剩余次数</label><strong>' + esc(formatSms688Uses(sms688Account.remainingUses)) + '</strong></div><div class="registration-fivesim-account-item"><label>接口</label><strong>manual-sms</strong></div></div>' +
           '<div class="registration-phone-order-actions"><button type="button" class="secondary small" data-action="registration-refresh-sms688" data-session-id="' + esc(session.id) + '"' + (active || terminal || refreshingSms688 || !sms688Token.configured ? " disabled" : "") + '>刷新余额</button>' + (sms688Account.updatedAt ? '<span class="field-note">更新于 ' + esc(formatDate(sms688Account.updatedAt)) + '</span>' : '') + '</div>' +
-          '<div class="field-note">SMS688 使用账户 API Key 调用手动接码接口；点击开始取号后会自动轮询号码和短信，换号/取消仍需你点击。</div>' +
         '</div>';
         const sourcePanel = (sourceId, content, hidden) => '<div data-registration-phone-source-panel="' + sourceId + '"' + (hidden ? ' hidden' : '') + '>' + content + '</div>';
         const fiveSimServiceField = '<div class="field"><label>服务</label><input value="OpenAI/ChatGPT（openai）" disabled></div>';
@@ -2229,8 +2242,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           ? '<button type="button" class="danger" data-role="deactivated-delete" data-action="delete-deactivated-mailboxes" ' + (deactivatedCandidates.length > 0 && !pendingBatchAction && !hasActiveMailboxOperation ? '' : 'disabled') + '>删除封禁账号（' + deactivatedCandidates.length + '）</button>'
           : '';
         return '<div class="layout">' +
-          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2><p class="muted">输入邮箱前缀实时筛选 · 完整地址作为标识</p></div><span class="tag" data-role="mailbox-count">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="邮箱排序"><label class="mailbox-sort-label" for="mailboxSort">邮箱排序</label><select id="mailboxSort" class="mailbox-sort-select" aria-label="选择邮箱排序字段"><option value="name" ' + (mailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (mailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="code" ' + (mailboxSortKey === "code" ? "selected" : "") + '>验证码状态</option><option value="renewal" ' + (mailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-mailbox-sort-direction" title="' + (mailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (mailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (mailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div>' + renderMailboxFilterMenu(codexFilterAvailable, reauthorizationFilterAvailable) + deactivatedSummary + '</div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button><button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button>' + deactivatedDeleteButton + '</div><div data-role="mailbox-operation-progress">' + renderMailboxOperationProgress() + '</div></div><div class="mailbox-list">' + rows + '</div>' + renderMailboxPagination(mailboxView.page, "mailbox-page-prev", "mailbox-page-next", "", "mailbox-pagination", "mailbox-page-jump-input", mailboxPageJumpInput, "mailbox-page-jump") + '</section>' +
-          '<section class="box detail"><div class="detail-region">' + (selected ? renderSelected(selected) : '<div class="empty-detail"><div><h2>选择一个邮箱</h2><p class="muted" style="margin-top:8px">其他邮箱的邮件详情不会在未选中时渲染或查询。</p></div></div>') + '</div></section>' +
+          '<section class="box"><div class="box-header mailbox-list-header"><div><h2>邮箱列表</h2></div><span class="tag" data-role="mailbox-count">' + (filterActive ? sortedMailboxes.length + '/' : '') + allMailboxes.length + '</span></div><div class="mailbox-list-toolbar"><div class="mailbox-list-tools"><input id="mailboxSearch" type="search" value="' + esc(mailboxSearch) + '" placeholder="输入邮箱前缀实时筛选" aria-label="按邮箱前缀搜索"><select id="mailboxProviderFilter" aria-label="按邮箱来源筛选"><option value="">全部来源</option>' + providerOptions + '</select><div class="mailbox-sort-controls" role="group" aria-label="邮箱排序"><label class="mailbox-sort-label" for="mailboxSort">邮箱排序</label><select id="mailboxSort" class="mailbox-sort-select" aria-label="选择邮箱排序字段"><option value="name" ' + (mailboxSortKey === "name" ? "selected" : "") + '>名称</option><option value="query" ' + (mailboxSortKey === "query" ? "selected" : "") + '>查询时间</option><option value="code" ' + (mailboxSortKey === "code" ? "selected" : "") + '>验证码状态</option><option value="renewal" ' + (mailboxSortKey === "renewal" ? "selected" : "") + '>续期时间</option></select><button type="button" class="mailbox-sort-direction" data-action="toggle-mailbox-sort-direction" title="' + (mailboxSortDirection === "asc" ? "升序，点击切换为降序" : "降序，点击切换为升序") + '" aria-label="' + (mailboxSortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序") + '"><span class="mailbox-sort-arrow" aria-hidden="true">' + (mailboxSortDirection === "desc" ? "▼" : "▲") + '</span></button></div>' + renderMailboxFilterMenu(codexFilterAvailable, reauthorizationFilterAvailable) + deactivatedSummary + '</div><div class="selection-tools"><span>已选 ' + selectedMailboxIds.size + ' / ' + sortedMailboxes.length + '</span><span><button type="button" data-action="select-visible">全选当前结果</button><button type="button" data-action="clear-selection">清空选择</button></span></div><div class="batch-tools"><button type="button" data-action="batch-query" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量查询</button><button type="button" data-action="batch-wait" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量监听</button><button type="button" data-action="batch-renewal" ' + (selectedHasRenewal && !pendingBatchAction ? "" : "disabled") + '>批量续期</button><button type="button" data-action="batch-stop" ' + (selectedMailboxIds.size && selectedHasActiveOperation && !pendingBatchAction ? "" : "disabled") + '>批量停止</button><button type="button" class="danger" data-action="batch-delete" ' + (selectedMailboxIds.size && !pendingBatchAction ? "" : "disabled") + '>批量删除</button>' + deactivatedDeleteButton + '</div><div data-role="mailbox-operation-progress">' + renderMailboxOperationProgress() + '</div></div><div class="mailbox-list">' + rows + '</div>' + renderMailboxPagination(mailboxView.page, "mailbox-page-prev", "mailbox-page-next", "", "mailbox-pagination", "mailbox-page-jump-input", mailboxPageJumpInput, "mailbox-page-jump") + '</section>' +
+          '<section class="box detail"><div class="detail-region">' + (selected ? renderSelected(selected) : '<div class="empty-detail"><div><h2>选择一个邮箱</h2></div></div>') + '</div></section>' +
           '</div>';
       }
 
@@ -2367,8 +2380,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         const deleteMailboxAndCodexButton = canDeleteMailboxAndCodex
           ? '<button class="danger" data-action="delete-mailbox-and-codex" data-mailbox-id="' + esc(mailbox.id) + '">删除邮箱与 Codex 账号</button>'
           : '';
+        const displayName = String(mailbox.displayName || "").trim();
+        const displayNameHtml = displayName && normalizeEmail(displayName) !== normalizeEmail(mailbox.address)
+          ? '<div class="detail-name">' + esc(displayName) + '</div>'
+          : '';
         const copyMailboxButton = '<button data-action="copy-mailbox-email" data-email="' + esc(mailbox.address) + '" title="复制账号">复制账号</button><button data-action="open-totp" data-mailbox-id="' + esc(mailbox.id) + '" title="打开 2FA 设置与查询">2FA 设置/查询</button>';
-        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div><div class="detail-name">' + esc(mailbox.displayName || mailbox.address) + '</div><div class="detail-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag neutral">' + capability + '</span><span class="tag neutral">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span><span class="tag ' + activityTagClass + '">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + accountStatusTag + totpTag + blockedTag + mailboxError + '</div></div>' +
+        return '<div class="detail-header"><div class="detail-address">' + esc(mailbox.address) + '</div>' + displayNameHtml + '<div class="detail-meta"><span class="tag source">' + esc(provider?.displayName || mailbox.providerId) + '</span><span class="tag neutral">' + capability + '</span><span class="tag neutral">' + (provider?.capabilities?.manualRenewal ? '支持人工续期' : '不支持续期') + '</span><span class="tag ' + activityTagClass + '">' + esc(mailboxActivityLabel(mailbox)) + '</span>' + accountStatusTag + totpTag + blockedTag + mailboxError + '</div></div>' +
           '<div class="detail-action-row"><div class="detail-header-actions">' + copyMailboxButton + codexImportButton + '<button data-action="edit-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">编辑账号</button><button class="danger" data-action="delete-mailbox" data-mailbox-id="' + esc(mailbox.id) + '">删除账号</button>' + deleteMailboxAndCodexButton + '</div>' +
           '<div class="detail-actions"><div class="actions">' +
           '<button class="' + (busyAction === "query" ? 'is-pending' : '') + '" data-action="submit-query" ' + (busyAction ? 'disabled' : '') + ' aria-busy="' + (busyAction === "query") + '">' + actionLabel("query", "查询邮件") + '</button>' +
@@ -2565,12 +2582,12 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
           return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>添加邮箱</h2><p class="muted">邮箱来源正在加载，请稍候；加载完成后此窗口会自动更新。</p><div class="modal-actions"><button type="button" data-action="close-import">关闭</button></div></section></div>';
         }
         const schema = provider.importSchema || {};
-        const description = schema.description || "来源决定导入和查询协议。";
+        const description = schema.description || "";
         const placeholder = schema.placeholder || "粘贴所选邮箱来源的凭据";
         const draft = modalFormValues.importForm || {};
         const displayName = draft.displayName?.value ?? "";
         const credentialInput = draft.input?.value ?? "";
-        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>添加邮箱</h2><form id="importForm"><div class="field"><label for="providerId">邮箱来源 / 格式</label><select id="providerId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider.id ? 'selected' : '') + '>' + esc(item.displayName) + '</option>').join('') + '</select><div class="field-note">来源决定导入和查询协议。</div></div><div class="field"><label for="displayName">显示名称（可选）</label><input id="displayName" name="displayName" value="' + esc(displayName) + '" placeholder="可选显示名称"></div><div class="field"><label for="input">来源凭据</label><textarea id="input" name="input" data-role="import-credential-input" required placeholder="' + esc(placeholder) + '">' + esc(credentialInput) + '</textarea><div class="field-note" data-role="import-description">' + esc(description) + '</div></div><div class="modal-actions"><button type="button" data-action="close-import">取消</button><button class="primary" type="submit">导入并加入列表</button></div></form></section></div>';
+        return '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>添加邮箱</h2><form id="importForm"><div class="field"><label for="providerId">邮箱来源 / 格式</label><select id="providerId" name="providerId">' + (state.providers || []).map((item) => '<option value="' + esc(item.id) + '" ' + (item.id === provider.id ? 'selected' : '') + '>' + esc(item.displayName) + '</option>').join('') + '</select></div><div class="field"><label for="displayName">显示名称（可选）</label><input id="displayName" name="displayName" value="' + esc(displayName) + '"></div><div class="field"><label for="input">来源凭据</label><textarea id="input" name="input" data-role="import-credential-input" required placeholder="' + esc(placeholder) + '">' + esc(credentialInput) + '</textarea><div class="field-note" data-role="import-description"' + (description ? '' : ' hidden') + '>' + esc(description) + '</div></div><div class="modal-actions"><button type="button" data-action="close-import">取消</button><button class="primary" type="submit">导入并加入列表</button></div></form></section></div>';
       }
 
       function renderEditModal() {
@@ -2590,6 +2607,7 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
         delete registrationInputValues[sessionId];
         delete registrationPhoneSourceSelections[sessionId];
         delete registrationFiveSimTokenInputs[sessionId];
+        delete registrationMiaoicTokenInputs[sessionId];
         delete registrationMiaoicCdkInputs[sessionId];
         delete registrationSms688TokenInputs[sessionId];
         delete registrationFiveSimSelections[sessionId];

@@ -313,6 +313,7 @@ class Sms688PhoneOrderSession {
 
   async cancelNumber() {
     this.requireOrder();
+    if (this.state.phase === "cancelling") return this.snapshot();
     if (!this.state.running || ["received", "completed", "cancelled", "error", "timed_out"].includes(this.state.phase) || this.order.can_release === false) {
       throw new this.errorClass("当前没有可取消的取号任务");
     }
@@ -324,6 +325,15 @@ class Sms688PhoneOrderSession {
     try {
       const result = await this.client.releaseLease(this.order);
       this.adoptOrder(result);
+      if (!orderHasCode(this.order)) {
+        try {
+          const finalState = await this.client.orderStatus(this.order.id);
+          this.adoptOrder(finalState, { resetTimer: false });
+        } catch {
+          // The release already succeeded; a best-effort final read must not
+          // turn a completed release into a false failure.
+        }
+      }
       if (orderHasCode(this.order)) return this.snapshot();
       this.state.running = false;
       this.state.humanConfirmed = false;

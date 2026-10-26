@@ -52,7 +52,6 @@ const REGISTRATION_INTEGRATION_ID = "mailbox-registration";
 const MAILBOX_DISPLAY_NAME = "邮箱管理";
 const SELECTED_MAILBOX_KEY = "codexAccounts.mailbox.selected.v1";
 const MAILBOX_ENABLED_KEY = "codexAccounts.mailbox.enabled.v1";
-const REGISTRATION_ENABLED_KEY = "codexAccounts.mailbox.registration.enabled.v1";
 const REGISTRATION_DEFAULT_PHONE_SOURCE_KEY = "codexAccounts.mailbox.registration.defaultPhoneSource.v1";
 const OPERATION_LABELS = {
   query: "查询邮件",
@@ -71,10 +70,11 @@ const REGISTRATION_CLIPBOARD_MESSAGES = {
 };
 
 class MailboxIntegration {
-  constructor(vscode, context, api, { providers, exchangeRateStore, exchangeRateFetch } = {}) {
+  constructor(vscode, context, api, { providers, exchangeRateStore, exchangeRateFetch, onEnabledChanged } = {}) {
     this.vscode = vscode;
     this.context = context;
     this.api = api;
+    this.onEnabledChanged = typeof onEnabledChanged === "function" ? onEnabledChanged : undefined;
     this.events = new vscode.EventEmitter();
     this.providerInstances = providers ?? [
       new Eight92Provider().asProvider(),
@@ -116,8 +116,7 @@ class MailboxIntegration {
     });
     this.registration = undefined;
     this.registrationAssistantRegistration = undefined;
-    this.mailboxEnabled = context.globalState.get(MAILBOX_ENABLED_KEY, true) !== false;
-    this.registrationEnabled = context.globalState.get(REGISTRATION_ENABLED_KEY, true) !== false;
+    this.mailboxEnabled = context.globalState.get(MAILBOX_ENABLED_KEY, false) === true;
     this.managerChangeSubscription = undefined;
     this.panel = undefined;
     this.registrationPanel = undefined;
@@ -126,6 +125,8 @@ class MailboxIntegration {
     this.registrationDefaultPhoneSource = "fivesim";
     this.automaticRenewalScanTimer = undefined;
     this.automaticRenewalScanPromise = undefined;
+    this.stateLoaded = false;
+    this.stateLoadPromise = undefined;
     // mailbox id -> opaque Manager OAuth operation id. Keeping this separate
     // from provider operations lets mailbox query/renewal continue in parallel
     // while still allowing the shared Stop action to cancel OAuth import.
@@ -244,30 +245,6 @@ class MailboxIntegration {
   }
 
   async initialize() {
-    try {
-      await this.sharedMailboxStores.migrateLegacy();
-      await this.pool.load();
-      try {
-        await this.twoFactor.load();
-      } catch (error) {
-        this.totpLoadError = safeError(error, "2FAuth 本地状态不可用");
-      }
-      this.selectedMailboxId = await this.sharedMailboxStores.metadataStore.get(SELECTED_MAILBOX_KEY);
-      if (!this.selectedMailboxId || !this.pool.listMetadata().some((mailbox) => mailbox.id === this.selectedMailboxId)) {
-        this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
-        await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
-      }
-      const savedPhoneSource = await this.sharedMailboxStores.metadataStore.get(REGISTRATION_DEFAULT_PHONE_SOURCE_KEY);
-      this.registrationDefaultPhoneSource = getRegistrationPhoneSource(savedPhoneSource)?.id || "fivesim";
-      const restored = this.registrationManager.restoreSessions(await this.registrationSessionStore.load());
-      if (restored.interrupted > 0) {
-        await this.persistRegistrationSessions();
-      }
-      await this.syncCompletedRegistrationMailboxStates();
-    } catch (error) {
-      this.loadError = safeError(error, "服务器邮箱池状态不可用");
-    }
-
     this.context.subscriptions.push(
       this.vscode.commands.registerCommand("codexAccountsMailbox.open", () => this.openPanel()),
       this.vscode.commands.registerCommand("codexAccountsMailbox.openRegistrationDiagnostics", () => {
@@ -292,13 +269,6 @@ class MailboxIntegration {
         id: REGISTRATION_INTEGRATION_ID,
         getViewModel: () => this.getRegistrationViewModel(),
         runAction: (actionId) => this.runRegistrationAction(actionId),
-        setting: {
-          id: REGISTRATION_INTEGRATION_ID,
-          title: "注册助手",
-          description: "关闭后隐藏注册助手入口并停止未完成的注册会话；不会删除邮箱池或历史记录。",
-          getEnabled: () => this.registrationEnabled,
-          setEnabled: (enabled) => this.setRegistrationEnabled(enabled)
-        },
         onDidChange: this.events.event
       });
       this.registration = this.api.registerDashboardIntegration({
@@ -311,17 +281,64 @@ class MailboxIntegration {
         setting: {
           id: INTEGRATION_ID,
           title: MAILBOX_DISPLAY_NAME,
-          description: `关闭后隐藏${MAILBOX_DISPLAY_NAME}入口并停止邮箱后台操作；不会删除邮箱凭据、邮件记录或配置。`,
+          description: `关闭后隐藏${MAILBOX_DISPLAY_NAME}和注册助手入口，并停止邮箱后台操作；不会删除邮箱凭据、邮件记录或配置。`,
           getEnabled: () => this.mailboxEnabled,
           setEnabled: (enabled) => this.setMailboxEnabled(enabled)
         },
         onDidChange: this.events.event
       });
     }
-    if (this.pool.isLoaded()) {
+    if (this.mailboxEnabled) {
+      await this.ensureMailboxStateLoaded();
       this.scheduleAutomaticRenewalScan();
     }
+    await this.onEnabledChanged?.(this.mailboxEnabled);
     this.publish();
+  }
+
+  async ensureMailboxStateLoaded() {
+    if (this.stateLoaded) {
+      return;
+    }
+    if (this.stateLoadPromise) {
+      return this.stateLoadPromise;
+    }
+
+    const load = (async () => {
+      try {
+        await this.sharedMailboxStores.migrateLegacy();
+        await this.pool.load();
+        try {
+          await this.twoFactor.load();
+        } catch (error) {
+          this.totpLoadError = safeError(error, "2FAuth 本地状态不可用");
+        }
+        this.selectedMailboxId = await this.sharedMailboxStores.metadataStore.get(SELECTED_MAILBOX_KEY);
+        if (!this.selectedMailboxId || !this.pool.listMetadata().some((mailbox) => mailbox.id === this.selectedMailboxId)) {
+          this.selectedMailboxId = this.pool.listMetadata()[0]?.id;
+          await this.sharedMailboxStores.metadataStore.update(SELECTED_MAILBOX_KEY, this.selectedMailboxId);
+        }
+        const savedPhoneSource = await this.sharedMailboxStores.metadataStore.get(REGISTRATION_DEFAULT_PHONE_SOURCE_KEY);
+        this.registrationDefaultPhoneSource = getRegistrationPhoneSource(savedPhoneSource)?.id || "fivesim";
+        const restored = this.registrationManager.restoreSessions(await this.registrationSessionStore.load());
+        if (restored.interrupted > 0) {
+          await this.persistRegistrationSessions();
+        }
+        await this.syncCompletedRegistrationMailboxStates();
+      } catch (error) {
+        this.loadError = safeError(error, "服务器邮箱池状态不可用");
+      } finally {
+        this.stateLoaded = true;
+      }
+    })();
+    this.stateLoadPromise = load;
+    try {
+      return await load;
+    } finally {
+      if (this.stateLoadPromise === load) {
+        this.stateLoadPromise = undefined;
+      }
+    }
   }
 
   isMailboxEnabled() {
@@ -329,7 +346,7 @@ class MailboxIntegration {
   }
 
   isRegistrationEnabled() {
-    return this.registrationEnabled;
+    return this.mailboxEnabled;
   }
 
   async setMailboxEnabled(enabled) {
@@ -342,29 +359,26 @@ class MailboxIntegration {
         this.automaticRenewalScanTimer = undefined;
       }
       await this.stopAllMailboxOperations();
+      await this.cancelAllRegistrationSessions();
       this.panel?.dispose?.();
       this.panel = undefined;
+      this.registrationPanel?.dispose?.();
+      this.registrationPanel = undefined;
     }
     this.mailboxEnabled = enabled;
     await this.context.globalState.update(MAILBOX_ENABLED_KEY, enabled);
+    await this.onEnabledChanged?.(enabled);
     if (enabled) {
+      await this.ensureMailboxStateLoaded();
       this.scheduleAutomaticRenewalScan();
     }
     this.publish();
   }
 
   async setRegistrationEnabled(enabled) {
-    if (this.registrationEnabled === enabled) {
-      return;
-    }
-    if (!enabled) {
-      await this.cancelAllRegistrationSessions();
-      this.registrationPanel?.dispose?.();
-      this.registrationPanel = undefined;
-    }
-    this.registrationEnabled = enabled;
-    await this.context.globalState.update(REGISTRATION_ENABLED_KEY, enabled);
-    this.publish();
+    // Compatibility shim for older hosts that exposed a separate registration
+    // toggle. The built-in Manager intentionally has one Mailbox switch.
+    return this.setMailboxEnabled(enabled);
   }
 
   async stopAllMailboxOperations() {
@@ -378,7 +392,7 @@ class MailboxIntegration {
   }
 
   getRegistrationViewModel() {
-    if (!this.registrationEnabled) {
+    if (!this.mailboxEnabled) {
       return {
         id: REGISTRATION_INTEGRATION_ID,
         title: "注册助手",
@@ -433,9 +447,10 @@ class MailboxIntegration {
   }
 
   async refresh() {
-    if (this.disposed || (!this.mailboxEnabled && !this.registrationEnabled)) {
+    if (this.disposed || !this.mailboxEnabled) {
       return;
     }
+    await this.ensureMailboxStateLoaded();
     if (this.pool.isLoaded()) {
       await this.pool.reload();
     }
@@ -578,7 +593,7 @@ class MailboxIntegration {
   }
 
   async runRegistrationAction(actionId) {
-    if (!this.registrationEnabled) {
+    if (!this.mailboxEnabled) {
       throw new Error("注册助手功能已关闭，请先在 Manager 设置中重新开启");
     }
     if (actionId !== "open") {
@@ -591,6 +606,7 @@ class MailboxIntegration {
     if (this.disposed || !this.mailboxEnabled) {
       return;
     }
+    await this.ensureMailboxStateLoaded();
     if (this.panel) {
       this.panel.reveal(this.vscode.ViewColumn.Active, false);
       await this.publishPanelState();
@@ -613,9 +629,10 @@ class MailboxIntegration {
   }
 
   async openRegistrationPanel() {
-    if (this.disposed || !this.registrationEnabled) {
+    if (this.disposed || !this.mailboxEnabled) {
       return;
     }
+    await this.ensureMailboxStateLoaded();
     const exchangeRateRefresh = this.ensureRegistrationExchangeRate();
     if (this.registrationPanel) {
       this.registrationPanel.reveal(this.vscode.ViewColumn.Active, false);
@@ -825,7 +842,7 @@ class MailboxIntegration {
           await this.saveMiaoicCdk(message.cdk);
           return;
         case "registrationSaveMiaoicToken":
-          await this.saveMiaoicCdk(message.cdk ?? message.token);
+          await this.saveMiaoicToken(message.token);
           return;
         case "registrationClearMiaoicAccount":
         case "registrationClearMiaoicToken":
@@ -1590,7 +1607,7 @@ class MailboxIntegration {
     }
     if (source.id === "sms688") {
       const token = await this.sms688TokenStore.get();
-      if (!token) throw new Error("请先保存 SMS688 API Key");
+      if (!token) throw new Error("请先保存 SMS688 账户 API Key；不要填购买次数 CDK");
       const result = await this.registrationManager.acquirePhoneNumber(id, token, {
         sourceId: source.id
       });
@@ -1600,7 +1617,7 @@ class MailboxIntegration {
     }
     if (source.id === "miaoic") {
       const token = await this.miaoicTokenStore.get();
-      if (!token) throw new Error("请先购买并兑换 Miaoic CDK");
+      if (!token) throw new Error("请先购买次数 CDK 并绑定 Miaoic 账户");
       const result = await this.registrationManager.acquirePhoneNumber(id, token, {
         sourceId: source.id
       });
@@ -1610,7 +1627,7 @@ class MailboxIntegration {
     }
     if (source.id === "future") {
       const token = await this.futureTokenStore.get();
-      if (!token) throw new Error("请先兑换并保存 Future CDK");
+      if (!token) throw new Error("请先用购买次数 CDK 兑换并保存 Future Session Token");
       const result = await this.registrationManager.acquirePhoneNumber(id, token, {
         sourceId: source.id
       });
@@ -1680,13 +1697,23 @@ class MailboxIntegration {
       type: "toast",
       level: "success",
       action: "registrationSaveMiaoicCdk",
-      message: "Miaoic CDK 已兑换，账户已保存"
+      message: "Miaoic 购买次数 CDK 已兑换到账户 Token"
     });
     await this.publishPanelState();
   }
 
   async saveMiaoicToken(value) {
-    return this.saveMiaoicCdk(value);
+    const token = String(value ?? "").trim();
+    if (!token) throw new Error("请填写 Miaoic 账户 Token");
+    const result = await this.miaoicTokenStore.set(token);
+    this.postPanelMessage({
+      type: "toast",
+      level: "success",
+      action: "registrationSaveMiaoicToken",
+      message: "Miaoic 账户 Token 已载入；后续 CDK 将充入该账户"
+    });
+    await this.publishPanelState();
+    return result;
   }
 
   async clearMiaoicToken() {
@@ -1713,7 +1740,7 @@ class MailboxIntegration {
       type: "toast",
       level: "success",
       action: "registrationSaveFutureToken",
-      message: `Future CDK 已兑换并保存 Session Token（${result.masked}）`
+      message: `Future 购买次数 CDK 已兑换并保存 Session Token（${result.masked}）`
     });
     await this.publishPanelState();
   }
@@ -1746,7 +1773,7 @@ class MailboxIntegration {
   async refreshRegistrationSms688(sessionId) {
     const id = this.requireRegistrationSessionId(sessionId);
     const token = await this.sms688TokenStore.get();
-    if (!token) throw new Error("请先保存 SMS688 API Key");
+    if (!token) throw new Error("请先保存 SMS688 账户 API Key；不要填购买次数 CDK");
     const result = await this.registrationManager.refreshPhoneInfo(id, token, {
       sourceId: "sms688"
     });
@@ -1757,7 +1784,7 @@ class MailboxIntegration {
   async refreshRegistrationMiaoic(sessionId) {
     const id = this.requireRegistrationSessionId(sessionId);
     const token = await this.miaoicTokenStore.get();
-    if (!token) throw new Error("请先购买并兑换 Miaoic CDK");
+    if (!token) throw new Error("请先购买次数 CDK 并绑定 Miaoic 账户");
     const result = await this.registrationManager.refreshPhoneInfo(id, token, {
       sourceId: "miaoic"
     });
@@ -1768,7 +1795,7 @@ class MailboxIntegration {
   async refreshRegistrationFuture(sessionId) {
     const id = this.requireRegistrationSessionId(sessionId);
     const token = await this.futureTokenStore.get();
-    if (!token) throw new Error("请先兑换并保存 Future CDK");
+    if (!token) throw new Error("请先用购买次数 CDK 兑换并保存 Future Session Token");
     const result = await this.registrationManager.refreshPhoneInfo(id, token, {
       sourceId: "future"
     });

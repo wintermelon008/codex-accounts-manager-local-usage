@@ -119,6 +119,38 @@ test("SMS688 sessions use explicit actions for replacement and release", async (
   await session.dispose();
 });
 
+test("phone cancellation performs a final status read and preserves a code returned during release", async () => {
+  let released = false;
+  let statusCalls = 0;
+  const client = {
+    async profile() { return { quota: { available_uses: 2 } }; },
+    async createLease() { return { job_id: "job-race", status: "waiting_code", phone: "+8613800000000" }; },
+    async orderStatus() {
+      statusCalls += 1;
+      return released
+        ? { job_id: "job-race", status: "code_received", phone: "+8613800000000", sms_code: "654321" }
+        : { job_id: "job-race", status: "waiting_code", phone: "+8613800000000" };
+    },
+    async releaseLease() {
+      released = true;
+      return { job_id: "job-race", status: "cancelled", phone: "+8613800000000" };
+    }
+  };
+  const session = new Sms688PhoneOrderSession({
+    clientFactory: () => client,
+    pollIntervalMs: 30000,
+    orderTimeoutMs: 1000
+  });
+
+  await session.start("sms688-secret-key");
+  const cancelled = await session.cancelNumber();
+
+  assert.equal(cancelled.phase, "received");
+  assert.equal(cancelled.order.smsCode, "654321");
+  assert.equal(statusCalls >= 1, true);
+  await session.dispose();
+});
+
 function response(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,

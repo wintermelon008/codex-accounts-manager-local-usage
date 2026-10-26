@@ -1,6 +1,7 @@
-import * as path from "node:path";
 import { createRequire } from "node:module";
+import * as path from "node:path";
 import type { AccountsRepository } from "../storage";
+import { resolveMailboxRuntimeRoot } from "../integrations/mailboxRuntimePath";
 import { fetchWithConfiguredProxy } from "../utils/network";
 import { withRenewingSchedulerLease } from "./schedulerLease";
 
@@ -208,10 +209,9 @@ export class MailboxDaemonService {
 }
 
 function loadMailboxModules(): MailboxModules {
-  // The daemon is compiled into out/runtime; keep the provider implementation
-  // in the existing Mailbox integration so the VS Code and daemon paths share
-  // exactly the same provider behavior and storage schema.
-  const root = path.resolve(__dirname, "../../integrations/mailbox/src");
+  // The provider implementation is copied into the Manager artifact during
+  // compile so the VS Code and daemon paths share exactly one runtime module.
+  const root = resolveMailboxRuntimeRoot();
   const storage = loadModule<Pick<MailboxModules, "createServerMailboxStores">>(
     path.join(root, "mailbox/server-storage.cjs")
   );

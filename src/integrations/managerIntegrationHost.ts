@@ -206,6 +206,8 @@ export type AccountImportOperations = {
 
 export type CodexAccountsIntegrationApi = {
   readonly apiVersion: typeof MANAGER_INTEGRATION_API_VERSION;
+  /** True when Mailbox is built into this Manager and must not be loaded again. */
+  readonly mailboxBuiltIn?: true;
   registerDashboardIntegration: (registration: DashboardIntegrationRegistration) => vscode.Disposable;
   registerGateway: (integrationId: string) => GatewayRuntimeLease;
   registerVirtualAccount: (registration: VirtualAccountRegistration) => Promise<vscode.Disposable>;
@@ -288,6 +290,7 @@ export class ManagerIntegrationHost implements vscode.Disposable {
   ) {
     this.api = {
       apiVersion: MANAGER_INTEGRATION_API_VERSION,
+      mailboxBuiltIn: true,
       registerDashboardIntegration: (registration) => this.registerDashboardIntegration(registration),
       registerGateway: (integrationId) => this.registerGateway(integrationId),
       registerVirtualAccount: (registration) => this.registerVirtualAccount(registration),

@@ -74,6 +74,8 @@ import {
   type RegistrationBrowserOptions,
   type RegistrationBrowserResult
 } from "../../integrations";
+import { createMailboxIntegration, type MailboxIntegrationHandle } from "../../integrations/mailbox";
+import { writeManagerMailboxEnabled } from "../../infrastructure/config/managerMailboxSettings";
 import { launchIncognitoBrowser } from "../../integrations/registrationBrowser";
 import { extractClaims } from "../../utils/jwt";
 import { refreshQuotaSummaryPanel } from "../dashboard/panel";
@@ -119,6 +121,7 @@ export class AccountsWorkbench {
   private readonly managerControlClient: ManagerControlClient;
   private readonly sessionHub: SessionHub | undefined;
   private readonly integrationHost: ManagerIntegrationHost;
+  private readonly mailboxIntegration: MailboxIntegrationHandle;
   private readonly accountSharingSetting: vscode.Disposable;
   private readonly accountSharing: AccountSharingService;
   /** Mailbox only needs to reread credentials for new or changed accounts. */
@@ -241,6 +244,11 @@ export class AccountsWorkbench {
         importSharedAccountsToBalancePool: (input) => this.importSharedAccountsToBalancePool(input),
         fetchWithManagerProxy: (input, init) => fetchWithConfiguredProxy(input, init)
       }
+    );
+    this.mailboxIntegration = createMailboxIntegration(
+      context,
+      this.integrationHost.api,
+      (enabled) => writeManagerMailboxEnabled(this.privateStatePaths.root, enabled)
     );
     this.accountSharingSetting = this.integrationHost.registerFeatureSetting({
       id: "account-sharing",
@@ -368,6 +376,7 @@ export class AccountsWorkbench {
     await measureStep("repo.init", async () => {
       await this.repo.init();
     });
+    await measureStep("mailbox.init", () => this.mailboxIntegration.initialize());
     await measureStep("accountSharing.init", async () => {
       await this.accountSharing.initialize();
       if (this.accountSharing.isEnabled()) {
@@ -558,6 +567,7 @@ export class AccountsWorkbench {
     this.hotSwitchRuntime.dispose();
     this.accountSharing.dispose();
     this.accountSharingSetting.dispose();
+    this.mailboxIntegration.dispose();
     this.localImportInbox?.dispose();
     this.managerControlServer.dispose();
     setActiveManagerIntegrationHost(undefined);

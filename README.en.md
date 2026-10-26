@@ -61,6 +61,7 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 ## Optional local integrations
 
+- **Built-in Mailbox**: shipped with the Manager VSIX. The Dashboard **Mailbox** master switch is off by default; enabling it shows both the mailbox and registration-assistant entries and enables mailbox queries, registration helpers, and background renewal. Disabling it stops the feature without deleting mailbox credentials, messages, or configuration.
 - [Standalone Sub2API Gateway](docs/integrations/sub2api-gateway.md): the Gateway VSIX and core Manager install and stop independently; the Gateway appears as a manual-only saved virtual account with card-local actions and tracker usage, but never becomes an OAuth account or normal pool member.
 - [Manager Gateway](integrations/manager-gateway/README.md): an independent task/session companion for browser entry points, parallel Codex exec, and quota-batch recovery; the Workbench data service remains separate and Manager must be online.
 - [Manager account sharing and friend setup](docs/ACCOUNT_SHARING.md): cross-device sharing through Manager user IDs, friend acceptance, encrypted Relay envelopes, lease expiry, automatic return, and troubleshooting guidance.
@@ -93,11 +94,10 @@ Optional components are built separately:
 ```bash
 npm --prefix integrations/feishu-assistant run package
 npm --prefix integrations/sub2api-gateway run package
-npm --prefix integrations/mailbox run package
 npm --prefix integrations/manager-gateway run package
 ```
 
-Optional packages are not bundled in the core VSIX. Build and configure `integrations/feishu-assistant`, `integrations/sub2api-gateway`, `integrations/mailbox`, or `integrations/manager-gateway` from their own READMEs; none copies existing services, credentials, accounts, or machine paths automatically.
+Mailbox is built into the core Manager VSIX; the other optional packages are built and configured separately from `integrations/feishu-assistant`, `integrations/sub2api-gateway`, or `integrations/manager-gateway`. None copies existing services, credentials, accounts, or machine paths automatically.
 
 ## Documentation index
 

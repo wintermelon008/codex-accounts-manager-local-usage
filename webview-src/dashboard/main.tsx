@@ -587,7 +587,6 @@ function App() {
                 <h1>
                   Codex Accounts Manager <span class="brand-version">v{packageJson.version}</span>
                 </h1>
-                <p>{snapshot.brandSub}</p>
               </div>
             </div>
             <div class="hero-settings">
@@ -834,7 +833,6 @@ function App() {
                     )}
                   </span>
                 </div>
-                <div class="header-sub">{snapshot.copy.savedAccountsSub}</div>
               </div>
               <div class="saved-accounts-header-actions">
                 <div class="account-sort-controls" role="group" aria-label={resolveAccountControlsLabel(snapshot.lang)}>
@@ -931,7 +929,6 @@ function App() {
                           ×
                         </button>
                       </div>
-                      <div class="account-health-filter-hint">{resolveHealthFilterPanelHint(snapshot.lang)}</div>
                       <div class="account-filter-section">
                         <div class="account-health-filter-subtitle">
                           {resolveAccountFilterSectionTitle(snapshot.lang)}
@@ -1505,12 +1502,12 @@ function resolveHiddenAccountsToggleLabel(lang: string, visible: boolean, count:
 
 function resolveHiddenAccountsEmptyLabel(lang: string): string {
   if (lang === "zh") {
-    return "所有账号均已隐藏。使用右上角眼睛按钮显示它们。";
+    return "所有账号均已隐藏。";
   }
   if (lang === "zh-hant") {
-    return "所有帳號均已隱藏。使用右上角眼睛按鈕顯示它們。";
+    return "所有帳號均已隱藏。";
   }
-  return "All accounts are hidden. Use the eye button above to show them.";
+  return "All accounts are hidden.";
 }
 
 function resolveHealthFilterToggleLabel(
@@ -1538,16 +1535,6 @@ function resolveHealthFilterPanelTitle(lang: string): string {
     return "帳號篩選";
   }
   return "Account filters";
-}
-
-function resolveHealthFilterPanelHint(lang: string): string {
-  if (lang === "zh") {
-    return "可组合分组、套餐和状态；未选择时显示所有账号。";
-  }
-  if (lang === "zh-hant") {
-    return "可組合分組、方案與狀態；未選擇時顯示所有帳號。";
-  }
-  return "Combine group, plan, and status filters. With none selected, all accounts are shown.";
 }
 
 function resolveAccountFilterSectionTitle(lang: string): string {
@@ -1616,20 +1603,20 @@ function resolveSharingFilterOptionCopy(
 ): { label: string; description: string } {
   if (filter === "shared") {
     if (lang === "zh") {
-      return { label: "靛青 · 已共享", description: "已主动共享给好友，账号暂时隐藏。" };
+      return { label: "已共享", description: "已主动共享给好友，账号暂时隐藏。" };
     }
     if (lang === "zh-hant") {
-      return { label: "靛青 · 已共享", description: "已主動共享給好友，帳號暫時隱藏。" };
+      return { label: "已共享", description: "已主動共享給好友，帳號暫時隱藏。" };
     }
-    return { label: "Indigo · Shared", description: "Explicitly shared with a friend and temporarily hidden." };
+    return { label: "Shared", description: "Explicitly shared with a friend and temporarily hidden." };
   }
   if (lang === "zh") {
-    return { label: "青绿 · 借入", description: "好友主动共享给本机的临时账号。" };
+    return { label: "借入", description: "好友主动共享给本机的临时账号。" };
   }
   if (lang === "zh-hant") {
-    return { label: "青綠 · 借入", description: "好友主動共享給本機的臨時帳號。" };
+    return { label: "借入", description: "好友主動共享給本機的臨時帳號。" };
   }
-  return { label: "Teal · Received", description: "A temporary account explicitly shared by a friend." };
+  return { label: "Received", description: "A temporary account explicitly shared by a friend." };
 }
 
 function resolveSharingFilterEmptyLabel(lang: string, filters: readonly DashboardSharingFilter[]): string {
@@ -1687,22 +1674,22 @@ function resolveHealthFilterOptionCopy(
     switch (filter) {
       case "unknown":
         return {
-          label: "黄色 · 状态未知",
+          label: "状态未知",
           description: "续期验证尚未建立，当前会话是否可用还未确认。"
         };
       case "usable_no_renewal":
         return {
-          label: "青色 · 仍可使用",
+          label: "仍可使用",
           description: "自动续期不可用，但当前访问令牌仍可能正常工作。"
         };
       case "usable":
         return {
-          label: "绿色 · 正常可用",
+          label: "正常可用",
           description: "当前访问令牌可用，额度受限也不会改变这个认证状态。"
         };
       case "auth_invalid":
         return {
-          label: "红色 · 账号失效",
+          label: "账号失效",
           description: "需要重新授权、访问令牌无效或工作区已停用。"
         };
     }
@@ -1711,22 +1698,22 @@ function resolveHealthFilterOptionCopy(
     switch (filter) {
       case "unknown":
         return {
-          label: "黃色 · 狀態未知",
+          label: "狀態未知",
           description: "尚未建立續期驗證，目前會話是否可用仍未確認。"
         };
       case "usable_no_renewal":
         return {
-          label: "青色 · 仍可使用",
+          label: "仍可使用",
           description: "自動續期不可用，但目前存取權杖仍可能正常工作。"
         };
       case "usable":
         return {
-          label: "綠色 · 正常可用",
+          label: "正常可用",
           description: "目前存取權杖可用，額度受限也不會改變這個認證狀態。"
         };
       case "auth_invalid":
         return {
-          label: "紅色 · 帳號失效",
+          label: "帳號失效",
           description: "需要重新授權、存取權杖無效或工作區已停用。"
         };
     }
@@ -1735,22 +1722,22 @@ function resolveHealthFilterOptionCopy(
   switch (filter) {
     case "unknown":
       return {
-        label: "Yellow · Status unknown",
+        label: "Status unknown",
         description: "Renewal evidence is not established, so session usability is unconfirmed."
       };
     case "usable_no_renewal":
       return {
-        label: "Cyan · Still usable",
+        label: "Still usable",
         description: "Automatic renewal is unavailable, but the current access token may still work."
       };
     case "usable":
       return {
-        label: "Green · Usable",
+        label: "Usable",
         description: "The current access token works; quota limits do not change this authentication state."
       };
     case "auth_invalid":
       return {
-        label: "Red · Account invalid",
+        label: "Account invalid",
         description: "Reauthorization is required, the access token is invalid, or the workspace is disabled."
       };
   }
