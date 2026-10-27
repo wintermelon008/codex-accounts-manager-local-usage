@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-10-codex-accounts-0-1-21-dev-ui-copy",
+      "id": "ann-2026-10-codex-accounts-0-1-21-l4-terra-pricing",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.21-dev",
-      "title": "Codex Accounts Manager 0.1.21-dev — Dashboard copy cleanup",
-      "summary": "Simplifies Dashboard and settings copy while keeping state, actions, risks, and token details available.",
-      "content": "This development build reduces visual repetition across the Dashboard, settings, account details, About panel, and advanced appearance.\n1. Layout: remove secondary labels and descriptions that duplicate section structure, controls, colors, or values.\n2. Account cards: keep token input, cached-input, and output details in the existing tooltip instead of the visual card face.\n3. Compatibility: preserve the existing extension identity, private-state boundaries, account formats, and local integrations.",
+      "releaseVersion": "0.1.21-l4",
+      "title": "Codex Accounts Manager 0.1.21-l4 — GPT-6.1 Terra pricing",
+      "summary": "Adds correct local usage pricing for GPT-6.1 Terra and keeps the Dashboard copy cleanup.",
+      "content": "This stable local build adds GPT-6.1 Terra to the local Codex usage price estimator using the standard API rates.\n1. Pricing: recognize gpt-6.1-terra input, cached-input, and output tokens.\n2. Dashboard: retain the recent copy cleanup across the Dashboard, settings, account details, About panel, and advanced appearance.\n3. Compatibility: preserve the existing extension identity, private-state boundaries, account formats, and local integrations.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-10-22T00:00:00Z",
+      "createdAt": "2026-10-27T00:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.21-dev — Dashboard 文案精简",
-          "summary": "精简 Dashboard 和设置页文案，同时保留状态、动作、风险与 Token 明细。",
-          "content": "本开发构建减少 Dashboard、设置、账号详情、About 和高级外观中的重复说明。\n1. 布局：移除可由区块结构、控件、颜色或数值表达的次要标签和描述。\n2. 账号卡片：Token 输入、缓存输入和输出明细移入现有 tooltip，保留信息但不占用卡片视觉空间。\n3. 兼容性：保留既有扩展 ID、私有状态边界、账号格式和本地集成功能。"
+          "title": "Codex Accounts Manager 0.1.21-l4 — GPT-6.1 Terra 计费",
+          "summary": "新增 GPT-6.1 Terra 的本机用量计费识别，并保留 Dashboard 文案精简。",
+          "content": "本稳定本地版本为本机 Codex 用量价格估算加入 GPT-6.1 Terra 的标准 API 费率。\n1. 计费：识别 gpt-6.1-terra 的输入、缓存输入和输出 Token。\n2. Dashboard：保留 Dashboard、设置、账号详情、About 和高级外观的近期文案精简。\n3. 兼容性：保留既有扩展 ID、私有状态边界、账号格式和本地集成功能。"
         }
       }
     }

@@ -168,6 +168,21 @@ describe("estimateStandardApiCost", () => {
     expect(price.unpricedTokens).toBe(0);
   });
 
+  it("charges GPT-6.1 Terra with its lower cached-input rate", () => {
+    const price = estimateStandardApiCost([
+      modelUsage("gpt-6.1-terra", {
+        inputTokens: 1_000_000,
+        cachedInputTokens: 500_000,
+        outputTokens: 1_000_000,
+        totalTokens: 2_000_000
+      })
+    ]);
+
+    expect(price.amountUsd).toBeCloseTo(5.525, 8);
+    expect(price.pricedTokens).toBe(2_000_000);
+    expect(price.unpricedTokens).toBe(0);
+  });
+
   it("covers the remaining standard and specialized token-priced rows", () => {
     const rows = [
       "gpt-5.5-pro",
@@ -197,6 +212,7 @@ describe("estimateStandardApiCost", () => {
   it("covers every standard token-only model listed on the pricing page", () => {
     const models = [
       "gpt-6-astra",
+      "gpt-6.1-terra",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",

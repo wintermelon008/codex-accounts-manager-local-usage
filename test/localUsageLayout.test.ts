@@ -398,4 +398,13 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain(".saved-card.is-hidden-account");
     expect(stylesheet).toContain(".pill.hidden");
   });
+
+  it("anchors the account filter menu to the right in wrapped header layouts", () => {
+    const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
+    const responsiveStyles = stylesheet.slice(stylesheet.indexOf("@media (max-width: 920px) {\n  .header"));
+
+    expect(responsiveStyles).toContain(".account-health-filter-menu");
+    expect(responsiveStyles).toContain("left: 0;");
+    expect(responsiveStyles).toContain("right: auto;");
+  });
 });

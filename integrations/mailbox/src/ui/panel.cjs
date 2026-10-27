@@ -364,7 +364,8 @@ function createMailboxPanelHtml({ mode = "mailbox" } = {}) {
       .registration-fivesim-account-grid { grid-template-columns: 1fr; }
       .registration-fivesim-offer { grid-template-columns: minmax(80px, 1.1fr) minmax(50px, .7fr) repeat(3, minmax(42px, .6fr)); gap: 4px; padding: 7px 5px; }
       .registration-fivesim-operator-card { grid-template-columns: minmax(0, 1fr) auto; padding-inline: 8px; }
-      .registration-standalone { padding-inline: 0; }
+      .registration-standalone { overscroll-behavior-y: auto; padding-inline: 0; }
+      .registration-fivesim-offers, .registration-fivesim-country-list, .registration-fivesim-operator-list { overscroll-behavior-y: auto; }
       .registration-mailbox-list { grid-template-columns: 1fr; }
     }
     @media (max-width: 560px) {

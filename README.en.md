@@ -4,13 +4,13 @@
 
 A VS Code extension for managing multiple Codex accounts: add or import accounts, inspect quota, switch the active `auth.json`, and optionally use local usage analytics, experimental seamless switching, and local integrations.
 
-> This is the independent local build from this repository. This guide describes the `0.1.21-dev` development build and the `0.1.21-l3` local release build.
+> This is the independent local build from this repository. This guide describes the `0.1.21-l4` local release build.
 
 This build includes proxy, quota parsing, authenticated retry, ChatGPT desktop, and subscription-consistency fixes, together with the Dashboard, Mailbox, Gateway, and local usage features.
 
 ## Start in three minutes
 
-1. Install a `0.1.21-dev`/`0.1.21-l3` `.vsix` supplied by, or built from, this repository.
+1. Install a `0.1.21-l4` `.vsix` supplied by, or built from, this repository.
 2. Run `Codex Accounts: Add Account via OAuth`, or `Codex Accounts: Import Current auth.json`.
 3. Run `Codex Accounts: Show Quota Summary` to refresh quota, switch accounts, and manage backups from the Dashboard.
 
@@ -70,7 +70,7 @@ The local usage panel shows at most eight rows: `24h` uses eight 3-hour buckets,
 
 ### Use the local build
 
-Obtain `codex-account-manager-<version>.vsix` from this repository (`0.1.21-dev` for development or `0.1.21-l3` for the current local release), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
+Obtain `codex-account-manager-<version>.vsix` from this repository (`0.1.21-l4` for the current local release), then use **Extensions: Install from VSIX…** in the target VS Code window, or run:
 
 ```bash
 code --install-extension codex-account-manager-<version>.vsix --force

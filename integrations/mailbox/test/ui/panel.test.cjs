@@ -678,6 +678,13 @@ test("standalone registration panel preserves scroll position when selecting a m
   assert.equal(messages.at(-1).action, "ready");
 });
 
+test("single-column registration layout lets the page own the outer scroll", () => {
+  const html = createRegistrationPanelHtml();
+  const mobileStyles = html.match(/@media \(max-width: 820px\) \{([\s\S]*?)\n    \}/u)?.[1] || "";
+
+  assert.match(mobileStyles, /\.registration-standalone \{[^}]*overscroll-behavior-y: auto;/u);
+});
+
 test("Mailbox provider filter refreshes rows without replacing the active controls", () => {
   const html = createMailboxPanelHtml();
   const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)?.[1];

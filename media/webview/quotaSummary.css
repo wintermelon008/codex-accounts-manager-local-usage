@@ -6255,6 +6255,10 @@ html[data-theme="auto"] body.vscode-light {
     width: 100%;
     justify-content: flex-start;
   }
+  .account-health-filter-menu {
+    left: 0;
+    right: auto;
+  }
   .batch-bar {
     align-items: flex-start;
     flex-direction: column;
