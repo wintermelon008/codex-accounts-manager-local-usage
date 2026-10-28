@@ -6,9 +6,25 @@ log_file=${1:?usage: reload-manager-extension-host.sh LOG_FILE}
 manager_service=manager-daemon.service
 control_port=43117
 control_env=/home/melon/.config/codex-accounts-manager/manager-control.env
-extension_dir=/home/melon/.vscode-server/extensions/wintermelon.codex-account-manager-0.1.21-dev
+extensions_manifest=/home/melon/.vscode-server/extensions/extensions.json
 node_bin=/home/melon/.local/node-v22.23.2-linux-x64/bin/node
 current_user=$(id -un)
+
+extension_record=$($node_bin - "$extensions_manifest" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+const manifestPath = process.argv[2];
+const entries = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const entry = entries.find((candidate) => candidate.identifier?.id === "wintermelon.codex-account-manager");
+const location = entry?.location?.fsPath ?? entry?.location?.path;
+if (!entry || typeof location !== "string" || typeof entry.version !== "string") {
+  process.exit(1);
+}
+process.stdout.write(`${path.resolve(location)}\t${entry.version}`);
+NODE
+)
+IFS=$'\t' read -r extension_dir expected_version <<<"$extension_record"
 
 mkdir -p "$(dirname "$log_file")"
 exec >>"$log_file" 2>&1
@@ -46,6 +62,7 @@ case "$server_command" in
 esac
 
 test -x "$node_bin"
+test -r "$extensions_manifest"
 test -d "$extension_dir"
 test -f "$extension_dir/out/application/accounts/quotaCountdownCore.js"
 test -f "$extension_dir/out/runtime/quotaCountdownScheduler.js"
@@ -88,8 +105,8 @@ health_code=$(curl --noproxy '*' --max-time 6 -sS -o /dev/null -w '%{http_code}'
 [ "$health_code" = 200 ]
 
 manifest_version=$("$node_bin" -e \
-  'const p=require(process.argv[1]); if(p.name!=="codex-account-manager"||p.publisher!=="wintermelon"||p.version!=="0.1.21-dev") process.exit(2); process.stdout.write(p.version)' \
+  'const p=require(process.argv[1]); if(p.name!=="codex-account-manager"||p.publisher!=="wintermelon") process.exit(2); process.stdout.write(p.version)' \
   "$extension_dir/package.json")
-[ "$manifest_version" = 0.1.21-dev ]
+[ "$manifest_version" = "$expected_version" ]
 
-log "reload completed daemon=$daemon_pid server=$server_pid old_extension_host=$old_extension_host new_extension_host=$new_extension_host health=$health_code version=$manifest_version"
+log "reload completed daemon=$daemon_pid server=$server_pid old_extension_host=$old_extension_host new_extension_host=$new_extension_host health=$health_code version=$manifest_version extension_dir=$extension_dir"

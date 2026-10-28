@@ -376,7 +376,6 @@ export class AccountsWorkbench {
     await measureStep("repo.init", async () => {
       await this.repo.init();
     });
-    await measureStep("mailbox.init", () => this.mailboxIntegration.initialize());
     await measureStep("accountSharing.init", async () => {
       await this.accountSharing.initialize();
       if (this.accountSharing.isEnabled()) {
@@ -520,9 +519,6 @@ export class AccountsWorkbench {
     if (localImportInbox) {
       await measureStep("localImportInbox.start", () => localImportInbox.start());
     }
-    await measureStep("promptImportCurrentAccountIfNeeded", async () => {
-      await this.refreshCoordinator.promptImportCurrentAccountIfNeeded(refreshers);
-    });
     await measureStep("statusBar.refresh", async () => {
       await this.statusBar.refresh();
     });
@@ -549,6 +545,18 @@ export class AccountsWorkbench {
       `[codexAccounts] activation completed in ${Date.now() - activationStartedAt}ms`,
       activationSteps.map((step) => `${step.name}=${step.durationMs}ms`).join(", ")
     );
+    // An optional import prompt must not hold the Extension Host activation
+    // open while it waits for a user choice. Keeping it outside the critical
+    // path also lets the official Codex extension finish its own startup.
+    void this.refreshCoordinator.promptImportCurrentAccountIfNeeded(refreshers).catch((error) => {
+      console.warn(`[codexAccounts] startup account import prompt failed: ${getErrorMessage(error)}`);
+    });
+    // Mailbox state is optional for Manager startup and can be several
+    // megabytes on a long-lived installation. Do not keep the Extension Host
+    // activation pending while it parses and restores that state.
+    void this.mailboxIntegration.initialize().catch((error) => {
+      console.warn(`[codexAccounts] mailbox initialization failed: ${getErrorMessage(error)}`);
+    });
     void this.verifyPendingRestartRecovery();
   }
 

@@ -232,21 +232,35 @@ async function acquireFileLease(lockPath, leaseMs, waitMs) {
       };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
-      if (await reapExpiredFileLease(lockPath)) continue;
+      if (await reapExpiredFileLease(lockPath, leaseMs)) continue;
     }
     if (Date.now() >= deadline) return undefined;
     await new Promise((resolve) => setTimeout(resolve, Math.min(FILE_LEASE_RETRY_MS, Math.max(1, deadline - Date.now()))));
   }
 }
 
-async function reapExpiredFileLease(lockPath) {
+async function reapExpiredFileLease(lockPath, leaseMs) {
   try {
     const owner = JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"));
     if (typeof owner?.expiresAt !== "number" || owner.expiresAt > Date.now()) return false;
     await fs.rm(lockPath, { recursive: true, force: true });
     return true;
   } catch (error) {
-    if (error?.code === "ENOENT") return true;
+    if (error?.code !== "ENOENT") return false;
+
+    // A crashed writer can leave the lease directory behind before its
+    // owner.json is written. Do not spin forever on that directory, but give
+    // a live writer enough time to finish creating its owner record.
+    try {
+      const lockStats = await fs.stat(lockPath);
+      if (!Number.isFinite(lockStats.mtimeMs) || Date.now() - lockStats.mtimeMs < leaseMs) {
+        return false;
+      }
+      await fs.rm(lockPath, { recursive: true, force: true });
+      return true;
+    } catch (statError) {
+      if (statError?.code === "ENOENT") return true;
+    }
     return false;
   }
 }

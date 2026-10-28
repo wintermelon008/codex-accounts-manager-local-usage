@@ -121,6 +121,28 @@ test("registration assistant records are shared without persisting passwords", a
   }
 });
 
+test("reclaims a stale registration write lock whose owner record is missing", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-registration-stale-lock-"));
+  const lockPath = path.join(root, `${REGISTRATION_SESSION_FILE}.write-lock`);
+  try {
+    await fs.mkdir(lockPath, { recursive: true });
+    const staleAt = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, staleAt, staleAt);
+
+    const store = createServerRegistrationSessionStore({ storageUri: { fsPath: root } });
+    await store.save([{ id: "session-1", email: "one@example.com", state: "idle" }]);
+
+    const records = await store.load();
+    assert.equal(records.length, 1);
+    assert.equal(records[0].id, "session-1");
+    assert.equal(records[0].email, "one@example.com");
+    assert.equal(records[0].state, "idle");
+    await assert.rejects(fs.stat(lockPath), { code: "ENOENT" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 function createLegacyStorePair() {
   return { metadata: createLegacyStore(), secrets: createLegacyStore() };
 }

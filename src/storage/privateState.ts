@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/
 import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { tryAcquireSharedFileLease } from "./accountsWriteCoordinator";
 
 export const PRIVATE_STATE_DIRECTORY_NAME = "private";
 export const PRIVATE_STATE_DIRECTORY_ENV = "CODEX_ACCOUNTS_PRIVATE_DIR";
@@ -20,6 +21,21 @@ export const PRIVATE_STATE_FILE_NAMES = {
   sharingState: "sharing-local-state-v1.json",
   sharingHealth: "sharing-health.json"
 } as const;
+
+/**
+ * Presence of any canonical Manager state is enough to treat the current
+ * global-storage directory as initialized. This is deliberately a
+ * presence-based check: a malformed current file must not cause an automatic
+ * rename of the legacy directory over potentially recoverable new state.
+ */
+const CURRENT_MANAGER_STATE_MARKER_FILES = [
+  PRIVATE_STATE_FILE_NAMES.accountsIndex,
+  PRIVATE_STATE_FILE_NAMES.accountsSecrets,
+  PRIVATE_STATE_FILE_NAMES.hostPolicy,
+  PRIVATE_STATE_FILE_NAMES.hostState
+] as const;
+const LEGACY_STORAGE_MIGRATION_LEASE_MS = 30_000;
+const LEGACY_STORAGE_MIGRATION_WAIT_MS = 5_000;
 
 export type PrivateStateContext = {
   extensionUri?: { fsPath?: string };
@@ -179,31 +195,63 @@ export async function migrateLegacyGlobalStorage(
     return;
   }
 
+  if (hasCurrentManagerState(currentRoot)) {
+    return;
+  }
+
   const legacyRoot = path.join(globalStorageRoot, LEGACY_MANAGER_EXTENSION_ID);
   if (path.resolve(legacyRoot) === path.resolve(currentRoot) || !existsSync(legacyRoot)) {
     return;
   }
 
-  let currentEntries: string[] | undefined;
-  try {
-    currentEntries = await readdir(currentRoot);
-  } catch (error) {
-    if (!isMissingFileError(error)) {
-      throw error;
+  const migrationLease = await tryAcquireSharedFileLease(
+    path.join(globalStorageRoot, `.${MANAGER_EXTENSION_ID}-migration.lease`),
+    LEGACY_STORAGE_MIGRATION_LEASE_MS,
+    LEGACY_STORAGE_MIGRATION_WAIT_MS
+  );
+  if (!migrationLease) {
+    if (hasCurrentManagerState(currentRoot) || !existsSync(legacyRoot)) {
+      return;
     }
+    throw new Error("Another Manager storage migration is in progress; try again shortly.");
   }
 
-  if (currentEntries && currentEntries.length > 0) {
-    throw new Error(
-      `Cannot migrate legacy Manager storage because the new directory is not empty: ${currentRoot}`
-    );
-  }
-  if (currentEntries) {
-    await rm(currentRoot, { recursive: false });
-  }
+  try {
+    // Re-check after acquiring the lease so a second Extension Host can
+    // observe the first host's completed rename and return cleanly.
+    if (hasCurrentManagerState(currentRoot) || !existsSync(legacyRoot)) {
+      return;
+    }
 
-  await rename(legacyRoot, currentRoot);
-  await chmod(currentRoot, 0o700).catch(() => undefined);
+    let currentEntries: string[] | undefined;
+    try {
+      currentEntries = await readdir(currentRoot);
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+    }
+
+    if (currentEntries && currentEntries.length > 0) {
+      throw new Error(
+        `Cannot migrate legacy Manager storage because the new directory is not empty: ${currentRoot}`
+      );
+    }
+    if (currentEntries) {
+      await rm(currentRoot, { recursive: false });
+    }
+
+    await rename(legacyRoot, currentRoot);
+    await chmod(currentRoot, 0o700).catch(() => undefined);
+  } finally {
+    await migrationLease.release();
+  }
+}
+
+function hasCurrentManagerState(currentRoot: string): boolean {
+  return CURRENT_MANAGER_STATE_MARKER_FILES.some((fileName) =>
+    existsSync(path.join(currentRoot, fileName))
+  );
 }
 
 /** Create only non-sensitive host policy/state files; never overwrite them. */
