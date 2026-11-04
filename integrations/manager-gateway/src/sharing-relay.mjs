@@ -9,6 +9,7 @@ const MAX_ENVELOPE_BYTES = 4 * 1024 * 1024;
 const MAX_REQUESTS_PER_USER = 256;
 const MAX_TRANSFERS_PER_USER = 256;
 const MAX_RETURN_ENVELOPES = 50;
+const SYNC_ID_PATTERN = /^[A-Za-z0-9_-]{16,80}$/u;
 
 /**
  * Small persistence-backed rendezvous service for Manager account sharing.
@@ -161,6 +162,18 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
         request.state = "revoked";
         request.updatedAt = updatedAt;
       }
+      for (const sync of state.credentialSyncs) {
+        if (
+          sync.state === "active" &&
+          ((sync.fromUserId === userId && sync.toUserId === normalizedPeerUserId) ||
+            (sync.fromUserId === normalizedPeerUserId && sync.toUserId === userId))
+        ) {
+          sync.state = "stopped";
+          sync.stoppedBy = userId;
+          sync.stopAcknowledgedBy = [userId];
+          sync.updatedAt = updatedAt;
+        }
+      }
       await persist();
       return { removed: true, peerUserId: normalizedPeerUserId };
     },
@@ -202,6 +215,155 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
       pruneState();
       await persist();
       return publicTransfer(transfer);
+    },
+
+    async createCredentialSync(fromUserId, payload, token) {
+      await ensureInitialized();
+      assertUserToken(fromUserId, token);
+      const syncId = normalizeSyncId(payload?.syncId);
+      const recipientUserId = normalizeUserId(payload?.recipientUserId);
+      requireTrustedPeer(fromUserId, recipientUserId);
+      const duplicate = state.credentialSyncs.find((sync) => sync.syncId === syncId);
+      if (duplicate) {
+        if (duplicate.fromUserId !== fromUserId || duplicate.toUserId !== recipientUserId) {
+          throw httpError(409, "credential sync ID is already in use");
+        }
+        if (
+          duplicate.version !== Number(payload?.version) ||
+          duplicate.eventId !== normalizeEventId(payload?.eventId) ||
+          JSON.stringify(duplicate.envelope) !== JSON.stringify(normalizeCredentialEnvelope(payload?.envelope))
+        ) {
+          throw httpError(409, "credential sync creation is not idempotent");
+        }
+        return publicCredentialSync(duplicate);
+      }
+      const version = Number(payload?.version);
+      const eventId = normalizeEventId(payload?.eventId);
+      const envelope = normalizeCredentialEnvelope(payload?.envelope);
+      if (version !== 1) {
+        throw httpError(400, "initial credential sync version must be 1");
+      }
+      const sync = {
+        syncId,
+        fromUserId,
+        toUserId: recipientUserId,
+        version,
+        eventId,
+        envelope,
+        state: "active",
+        acknowledgedVersion: 0,
+        createdAt: now(),
+        updatedAt: now()
+      };
+      state.credentialSyncs.push(sync);
+      await persist();
+      return publicCredentialSync(sync);
+    },
+
+    async listIncomingCredentialSyncs(userId, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      return state.credentialSyncs
+        .filter(
+          (sync) =>
+            sync.toUserId === userId &&
+            (sync.state === "active" || !(sync.stopAcknowledgedBy ?? []).includes(userId))
+        )
+        .map(publicCredentialSync);
+    },
+
+    async listSentCredentialSyncs(userId, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      return state.credentialSyncs
+        .filter(
+          (sync) =>
+            sync.fromUserId === userId &&
+            (sync.state === "active" || !(sync.stopAcknowledgedBy ?? []).includes(userId))
+        )
+        .map(publicCredentialSync);
+    },
+
+    async getCredentialSync(syncId, userId, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      const sync = state.credentialSyncs.find((candidate) => candidate.syncId === normalizeSyncId(syncId));
+      if (!sync || (sync.fromUserId !== userId && sync.toUserId !== userId)) {
+        throw httpError(404, "credential sync not found");
+      }
+      return publicCredentialSync(sync);
+    },
+
+    async updateCredentialSync(syncId, userId, payload, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      const sync = state.credentialSyncs.find((candidate) => candidate.syncId === normalizeSyncId(syncId));
+      if (!sync || sync.fromUserId !== userId) {
+        throw httpError(404, "credential sync not found");
+      }
+      if (sync.state !== "active") {
+        throw httpError(409, "credential sync is stopped");
+      }
+      const version = Number(payload?.version);
+      const eventId = normalizeEventId(payload?.eventId);
+      const envelope = normalizeCredentialEnvelope(payload?.envelope);
+      if (version === sync.version && eventId === sync.eventId) {
+        if (JSON.stringify(envelope) !== JSON.stringify(sync.envelope)) {
+          throw httpError(409, "credential sync event ID was reused with different content");
+        }
+        return publicCredentialSync(sync);
+      }
+      if (!Number.isSafeInteger(version) || version <= sync.version) {
+        throw httpError(409, "credential sync version is stale");
+      }
+      sync.version = version;
+      sync.eventId = eventId;
+      sync.envelope = envelope;
+      sync.updatedAt = now();
+      await persist();
+      return publicCredentialSync(sync);
+    },
+
+    async acknowledgeCredentialSync(syncId, userId, payload, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      const sync = state.credentialSyncs.find((candidate) => candidate.syncId === normalizeSyncId(syncId));
+      if (!sync || (sync.toUserId !== userId && sync.fromUserId !== userId)) {
+        throw httpError(404, "credential sync not found");
+      }
+      if (userId === sync.toUserId) {
+        const version = Number(payload?.version);
+        if (!Number.isSafeInteger(version) || version < 0 || version > sync.version) {
+          throw httpError(400, "credential sync acknowledgement version is invalid");
+        }
+        sync.acknowledgedVersion = Math.max(sync.acknowledgedVersion, version);
+      } else if (sync.state !== "stopped") {
+        throw httpError(403, "only the recipient can acknowledge an active credential snapshot");
+      }
+      if (sync.state === "stopped") {
+        sync.stopAcknowledgedBy = Array.from(new Set([...(sync.stopAcknowledgedBy ?? []), userId]));
+        pruneStoppedCredentialSyncs();
+      }
+      sync.updatedAt = now();
+      await persist();
+      return publicCredentialSync(sync);
+    },
+
+    async stopCredentialSync(syncId, userId, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      const sync = state.credentialSyncs.find((candidate) => candidate.syncId === normalizeSyncId(syncId));
+      if (!sync || (sync.fromUserId !== userId && sync.toUserId !== userId)) {
+        throw httpError(404, "credential sync not found");
+      }
+      if (sync.state !== "stopped") {
+        sync.state = "stopped";
+        sync.stoppedBy = userId;
+        sync.stopAcknowledgedBy = [userId];
+        sync.updatedAt = now();
+        await persist();
+      }
+      return publicCredentialSync(sync);
     },
 
     async listIncomingTransfers(userId, token) {
@@ -381,6 +543,25 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
     return user;
   }
 
+  function requireTrustedPeer(userId, peerUserId) {
+    requireUser(peerUserId);
+    const accepted = state.requests.some(
+      (request) =>
+        request.state === "accepted" &&
+        ((request.fromUserId === userId && request.toUserId === peerUserId) ||
+          (request.fromUserId === peerUserId && request.toUserId === userId))
+    );
+    if (!accepted) {
+      throw httpError(403, "credential sync requires an accepted sharing peer");
+    }
+  }
+
+  function pruneStoppedCredentialSyncs() {
+    state.credentialSyncs = state.credentialSyncs.filter(
+      (sync) => sync.state !== "stopped" || new Set(sync.stopAcknowledgedBy ?? []).size < 2
+    );
+  }
+
   function pruneState() {
     const requestIdsByUser = new Map();
     const transferIdsByUser = new Map();
@@ -451,6 +632,48 @@ function publicTransfer(transfer) {
     createdAt: transfer.createdAt,
     updatedAt: transfer.updatedAt
   };
+}
+
+function publicCredentialSync(sync) {
+  return {
+    syncId: sync.syncId,
+    fromUserId: sync.fromUserId,
+    toUserId: sync.toUserId,
+    version: sync.version,
+    eventId: sync.eventId,
+    envelope: sync.envelope,
+    state: sync.state,
+    stoppedBy: sync.stoppedBy,
+    acknowledgedVersion: sync.acknowledgedVersion,
+    createdAt: sync.createdAt,
+    updatedAt: sync.updatedAt
+  };
+}
+
+function normalizeSyncId(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!SYNC_ID_PATTERN.test(normalized)) {
+    throw httpError(400, "credential sync ID is invalid");
+  }
+  return normalized;
+}
+
+function normalizeEventId(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!/^[A-Za-z0-9_-]{16,100}$/u.test(normalized)) {
+    throw httpError(400, "credential sync event ID is invalid");
+  }
+  return normalized;
+}
+
+function normalizeCredentialEnvelope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw httpError(400, "encrypted credential sync envelope is invalid");
+  }
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENVELOPE_BYTES) {
+    throw httpError(400, "encrypted credential sync envelope is too large");
+  }
+  return value;
 }
 
 function normalizeReturnEnvelope(value, accountIds) {
@@ -541,7 +764,7 @@ function normalizeTransferResult(value) {
 }
 
 function emptyState() {
-  return { version: STATE_VERSION, users: {}, requests: [], transfers: [] };
+  return { version: STATE_VERSION, users: {}, requests: [], transfers: [], credentialSyncs: [] };
 }
 
 function parseState(value) {
@@ -552,7 +775,8 @@ function parseState(value) {
     version: STATE_VERSION,
     users: value.users,
     requests: value.requests,
-    transfers: value.transfers
+    transfers: value.transfers,
+    credentialSyncs: Array.isArray(value.credentialSyncs) ? value.credentialSyncs : []
   };
 }
 

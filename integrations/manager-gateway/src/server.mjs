@@ -359,6 +359,58 @@ async function handleSharingRequest(request, response, url, sharingRelay, config
       return;
     }
 
+    if (pathname === "/v1/sharing/credential-syncs" && request.method === "POST") {
+      const body = await readJsonBody(request, 4 * 1024 * 1024);
+      sendJson(response, 201, await sharingRelay.createCredentialSync(auth.userId, body, token), config);
+      return;
+    }
+    if (pathname === "/v1/sharing/credential-syncs/inbox" && request.method === "GET") {
+      sendJson(
+        response,
+        200,
+        { credentialSyncs: await sharingRelay.listIncomingCredentialSyncs(auth.userId, token) },
+        config
+      );
+      return;
+    }
+    if (pathname === "/v1/sharing/credential-syncs/sent" && request.method === "GET") {
+      sendJson(
+        response,
+        200,
+        { credentialSyncs: await sharingRelay.listSentCredentialSyncs(auth.userId, token) },
+        config
+      );
+      return;
+    }
+    const credentialSyncMatch = /^\/v1\/sharing\/credential-syncs\/([^/]+)(?:\/(snapshot|ack|stop))?$/u.exec(pathname);
+    if (credentialSyncMatch?.[1]) {
+      const syncId = decodeURIComponent(credentialSyncMatch[1]);
+      const operation = credentialSyncMatch[2];
+      if (!operation && request.method === "GET") {
+        sendJson(response, 200, await sharingRelay.getCredentialSync(syncId, auth.userId, token), config);
+        return;
+      }
+      if (operation === "snapshot" && request.method === "PUT") {
+        const body = await readJsonBody(request, 4 * 1024 * 1024);
+        sendJson(response, 200, await sharingRelay.updateCredentialSync(syncId, auth.userId, body, token), config);
+        return;
+      }
+      if (operation === "ack" && request.method === "POST") {
+        const body = await readJsonBody(request, 32 * 1024);
+        sendJson(
+          response,
+          200,
+          await sharingRelay.acknowledgeCredentialSync(syncId, auth.userId, body, token),
+          config
+        );
+        return;
+      }
+      if (operation === "stop" && request.method === "POST") {
+        sendJson(response, 200, await sharingRelay.stopCredentialSync(syncId, auth.userId, token), config);
+        return;
+      }
+    }
+
     if (pathname === "/v1/sharing/transfers" && request.method === "POST") {
       const body = await readJsonBody(request, 4 * 1024 * 1024);
       sendJson(response, 201, await sharingRelay.createTransfer(auth.userId, body, token), config);
@@ -728,7 +780,7 @@ function corsHeaders(config) {
     ? {
         "access-control-allow-origin": config.server.corsOrigin,
         "access-control-allow-headers": "authorization, content-type, x-manager-filename",
-        "access-control-allow-methods": "GET, POST, DELETE, OPTIONS"
+        "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS"
       }
     : {};
 }

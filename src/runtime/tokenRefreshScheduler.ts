@@ -77,7 +77,13 @@ export class HeadlessTokenRefreshScheduler {
   }
 
   private async refreshIfDue(account: CodexAccountRecord, leaseIsActive: () => boolean): Promise<void> {
-    if (account.sharing?.direction === "outgoing") {
+    if (
+      account.sharing?.direction === "outgoing" ||
+      account.credentialSync?.role === "follower" ||
+      account.credentialSync?.role === "primary"
+    ) {
+      // Credential-sync roles are managed by the Extension Host publisher;
+      // the headless daemon must not rotate a primary token without publishing it.
       return;
     }
 

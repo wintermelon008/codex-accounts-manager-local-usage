@@ -122,7 +122,12 @@ export class HeadlessQuotaCountdownScheduler {
 }
 
 function needsCountdownCheck(account: CodexAccountRecord, nowMs = Date.now()): boolean {
-  if (isSub2ApiAccount(account) || !isAutomaticAccount(account) || account.sharing?.direction === "outgoing") {
+  if (
+    isSub2ApiAccount(account) ||
+    !isAutomaticAccount(account) ||
+    account.sharing?.direction === "outgoing" ||
+    account.credentialSync?.role === "primary"
+  ) {
     return false;
   }
   if (isQuotaCountdownStartEligible(account.quotaSummary, nowMs)) {

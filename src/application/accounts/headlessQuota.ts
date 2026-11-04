@@ -37,6 +37,9 @@ export async function refreshImportedAccountQuotaHeadlessly(
   if (!account) {
     throw new Error("account not found");
   }
+  if (account.credentialSync?.role === "primary") {
+    return { stale: true };
+  }
   if (isSub2ApiAccount(account) || !isAutomaticAccount(account)) {
     return {};
   }
@@ -71,6 +74,9 @@ export async function refreshAccountQuotaHeadlessly(
   const account = await repo.getAccount(accountId);
   if (!account) {
     return { accountId, status: "failed", message: "account not found" };
+  }
+  if (account.credentialSync?.role === "primary") {
+    return { accountId, status: "skipped", message: "credential sync is managed by the primary extension host" };
   }
   if (isSub2ApiAccount(account) || !isAutomaticAccount(account)) {
     return { accountId, status: "skipped", message: "account does not expose ChatGPT quota" };
@@ -109,7 +115,9 @@ export async function refreshAllQuotasHeadlessly(
   const requestedAccounts = requestedIds === undefined
     ? allAccounts
     : allAccounts.filter((account) => requestedIds.has(account.id));
-  const refreshable = requestedAccounts.filter(isAutomaticAccount);
+  const refreshable = requestedAccounts.filter(
+    (account) => isAutomaticAccount(account) && account.credentialSync?.role !== "primary"
+  );
   const failedAccountIds = requestedAccounts.filter(isSub2ApiAccount).map((account) => account.id);
   let succeeded = 0;
 

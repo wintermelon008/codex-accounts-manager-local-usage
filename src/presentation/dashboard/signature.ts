@@ -31,6 +31,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
         account.accountGroup ?? "",
         account.balancePoolEnabled ? "1" : "0",
         account.sharingState ?? "",
+        account.credentialSyncRole ?? "",
         account.sharingPeerUserId ?? "",
         account.sharingPeerDisplayName ?? "",
         account.sharingExpiresAt ?? "",

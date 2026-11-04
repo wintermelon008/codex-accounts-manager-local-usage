@@ -47,6 +47,15 @@ export type CodexAccountGroup = "A" | "B" | "C";
 export type CodexAccountSharingDirection = "outgoing" | "incoming";
 export type CodexAccountSharingState = "shared" | "received" | "return_pending";
 
+/** Local role for a durable cross-device credential sync. */
+export interface CodexAccountCredentialSyncInfo {
+  syncId: string;
+  role: "primary" | "follower";
+  peerUserId: string;
+  peerDisplayName?: string;
+  since: number;
+}
+
 /** Non-secret lease metadata for an explicitly shared account. */
 export interface CodexAccountSharingInfo {
   leaseId: string;
@@ -251,6 +260,8 @@ export interface CodexAccountRecord {
   balancePoolEnabled?: boolean;
   /** Explicit owner-approved account-sharing lease metadata; never contains credentials. */
   sharing?: CodexAccountSharingInfo;
+  /** Durable primary/follower relationship; credentials are kept in the secret store. */
+  credentialSync?: CodexAccountCredentialSyncInfo;
   /** 忽略中的健康问题键 */
   dismissedHealthIssueKey?: string;
   /** 最后刷新配额的时间戳 (毫秒) */

@@ -51,7 +51,7 @@ describe("manager gateway HTTP API", () => {
       }
     });
     assert.equal(preflight.status, 204);
-    assert.equal(preflight.headers.get("access-control-allow-methods"), "GET, POST, DELETE, OPTIONS");
+    assert.equal(preflight.headers.get("access-control-allow-methods"), "GET, POST, PUT, DELETE, OPTIONS");
 
     const capabilities = await fetch(`${baseUrl}/v1/capabilities`, {
       headers: { authorization: "Bearer gateway-secret" }

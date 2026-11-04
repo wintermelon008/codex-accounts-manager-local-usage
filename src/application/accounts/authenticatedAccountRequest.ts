@@ -16,7 +16,13 @@ export async function runAuthenticatedAccountRequest<T>(
   }
 
   let effectiveTokens = storedTokens;
-  if (!initialTokens && storedTokens.refreshToken && needsRefresh(storedTokens.accessToken)) {
+  const account = await repo.getAccount?.(accountId);
+  const canRefreshStoredTokens = Boolean(storedTokens.refreshToken) || account?.credentialSync?.role === "follower";
+  if (
+    !initialTokens &&
+    canRefreshStoredTokens &&
+    needsRefresh(storedTokens.accessToken)
+  ) {
     effectiveTokens = await refreshAndPersistTokens(repo, accountId, storedTokens);
   }
 
@@ -39,6 +45,16 @@ async function refreshAndPersistTokens(
   forceRefresh = false
 ): Promise<CodexTokens> {
   if (!tokens.refreshToken) {
+    const account = await repo.getAccount?.(accountId);
+    if (account?.credentialSync?.role === "follower") {
+      return (
+        (await ensureFreshAccountTokens(repo, accountId, {
+          fallbackTokens: tokens,
+          providerAccountId: tokens.accountId,
+          forceRefresh
+        })) ?? tokens
+      );
+    }
     return tokens;
   }
 

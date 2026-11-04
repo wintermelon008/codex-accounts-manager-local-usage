@@ -1738,7 +1738,8 @@ export function registerTokenRefreshScheduler(params: {
       (account) =>
         isAutomaticAccount(account) &&
         account.quotaMode !== "none" &&
-        account.sharing?.direction !== "outgoing"
+        account.sharing?.direction !== "outgoing" &&
+        account.credentialSync?.role !== "follower"
     );
     const eligibleById = new Map(eligibleAccounts.map((account) => [account.id, account]));
 
@@ -1844,7 +1845,11 @@ export function registerTokenRefreshScheduler(params: {
       // already queued before the share cannot refresh or rotate it.
       const latestAccount =
         typeof params.repo.getAccount === "function" ? await params.repo.getAccount(account.id) : account;
-      if (!latestAccount || latestAccount.sharing?.direction === "outgoing") {
+      if (
+        !latestAccount ||
+        latestAccount.sharing?.direction === "outgoing" ||
+        latestAccount.credentialSync?.role === "follower"
+      ) {
         setTokenSchedule(account.id, {});
         return;
       }

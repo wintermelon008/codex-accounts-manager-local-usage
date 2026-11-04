@@ -1,4 +1,4 @@
-import type { CodexTokens } from "../core/types";
+import type { CodexAccountRecord, CodexTokens } from "../core/types";
 import { needsTokenRefresh, refreshTokens } from "./oauth";
 import { classifyRenewalFailure, readRenewal, recordRenewal } from "../application/accounts/accountState";
 import { isTokenExpired } from "../utils/jwt";
@@ -28,6 +28,7 @@ export type TokenRefreshAccountRepository = TokenRefreshLeaseRepository & {
     tokens: CodexTokens,
     options?: { notifyTokenChange?: boolean; expectedTokens?: CodexTokens }
   ): Promise<unknown>;
+  getAccount?(accountId: string): Promise<CodexAccountRecord | undefined>;
 };
 
 type CoordinatedTokenSource = {
@@ -76,6 +77,30 @@ export function ensureFreshAccountTokens(
     forceRefresh?: boolean;
     allowValidAccessTokenFallback?: boolean;
   } = {}
+): Promise<CodexTokens | undefined> {
+  const account = repo.getAccount ? repo.getAccount(accountId) : Promise.resolve(undefined);
+  return account.then(async (record) => {
+    if (record?.credentialSync?.role === "follower") {
+      const current = (await repo.getTokens(accountId, { forceReload: true })) ?? options.fallbackTokens;
+      if (current?.accessToken && !isTokenExpired(current.accessToken, 0)) {
+        return current;
+      }
+      throw new CredentialSyncWaitingError();
+    }
+    return ensureManagedAccountTokens(repo, accountId, options);
+  });
+}
+
+function ensureManagedAccountTokens(
+  repo: TokenRefreshAccountRepository,
+  accountId: string,
+  options: {
+    fallbackTokens?: CodexTokens;
+    notifyTokenChange?: boolean;
+    providerAccountId?: string;
+    forceRefresh?: boolean;
+    allowValidAccessTokenFallback?: boolean;
+  }
 ): Promise<CodexTokens | undefined> {
   return ensureFreshTokensWithLease(repo, {
     key: `account:${accountId}`,
@@ -265,6 +290,13 @@ export class TokenRefreshCoordinationError extends Error {
   constructor() {
     super("Another process is refreshing this account token; try again shortly");
     this.name = "TokenRefreshCoordinationError";
+  }
+}
+
+export class CredentialSyncWaitingError extends Error {
+  constructor() {
+    super("This device is waiting for the primary device to sync fresh credentials");
+    this.name = "CredentialSyncWaitingError";
   }
 }
 

@@ -159,7 +159,9 @@ async function runDashboardAction(
       }
       {
         const accountIds = payload?.accountIds ?? (account ? [account.id] : []);
-        if (payload?.sharingPeerUserId && Number.isFinite(payload.sharingDeadlineMs)) {
+        if (payload?.sharingMode === "renewalSync" && payload.sharingPeerUserId) {
+          await ctx.accountSharing.startCredentialSyncWithPeer(accountIds, payload.sharingPeerUserId);
+        } else if (payload?.sharingPeerUserId && Number.isFinite(payload.sharingDeadlineMs)) {
           await ctx.accountSharing.shareAccountsWithPeer(
             accountIds,
             payload.sharingPeerUserId,
@@ -177,6 +179,13 @@ async function runDashboardAction(
       }
       if (!account) {
         throw new Error("找不到要归还的共享账号");
+      }
+      if (account.credentialSync) {
+        if (!(await ctx.accountSharing.stopCredentialSyncForAccount(account.id))) {
+          throw new Error("该账号已停止续期同步");
+        }
+        ctx.schedulePublishState();
+        return undefined;
       }
       if (!(await ctx.accountSharing.returnAccount(account.id))) {
         throw new Error("该账号已归还或不属于当前借入租约");
@@ -706,8 +715,8 @@ async function handleCopyAccountImportJson(
     if (!account || isSub2ApiAccount(account)) {
       throw new Error(resolveCopyAccountImportJsonUnavailableMessage(language));
     }
-    if (account.sharing) {
-      throw new Error("共享租约中的账号不能再次导出凭据，请先完成归还");
+    if (account.sharing || account.credentialSync) {
+      throw new Error("共享或续期同步中的账号不能再次导出凭据，请先停止同步");
     }
 
     const tokens = await repo.getTokens(account.id);

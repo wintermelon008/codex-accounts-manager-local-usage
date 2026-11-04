@@ -79,22 +79,22 @@ curl.exe --max-time 5 http://100.114.125.9:43120/healthz
 
 ### 2. 安装最新核心 Manager
 
-向好友提供同一份已审阅的 `0.1.19-l5` VSIX，例如：
+向好友提供同一份已审阅的 `0.1.21-l5` VSIX，例如：
 
 ```text
-codex-account-manager-0.1.19-l5.vsix
+codex-account-manager-0.1.21-l5.vsix
 ```
 
 Ubuntu：
 
 ```bash
-code --install-extension codex-account-manager-0.1.19-l5.vsix --force
+code --install-extension codex-account-manager-0.1.21-l5.vsix --force
 ```
 
 Windows PowerShell：
 
 ```powershell
-code --install-extension .\codex-account-manager-0.1.19-l5.vsix --force
+code --install-extension .\codex-account-manager-0.1.21-l5.vsix --force
 ```
 
 也可以在 VS Code 中执行 **Extensions: Install from VSIX…**。安装后必须 reload；如果使用 Remote-SSH，VSIX 必须安装在真正运行 Manager、Codex `auth.json` 和扩展状态的远端扩展宿主，而不是只安装在本地窗口。
@@ -146,6 +146,16 @@ code
 4. owner 给好友添加备注，例如 `Alice-Ubuntu` 或 `Alice-Windows`，然后先共享一个测试账号，期限选 `10 分钟`。
 5. 接收端 Manager 在线时会自动解密并导入已保存账号池，不需要二次确认。
 6. 归还时翻转借入账号卡片，在左下角点击归还；借端会等待 owner 写回最新凭据并自动确认，确认后自动移除本地账号。
+
+### 主设备续期同步
+
+在共享弹窗中选择 **主设备续期同步**。主设备保留账号可见、可用和无感池状态，不会因发起同步而切出账号；主设备仍是唯一持有并使用 refresh token 的设备。从设备可以继续使用收到的 access/id token，但不保存 refresh token，也不会自行续期。
+
+Relay 为每个同步关系保留一个端到端加密的最新凭据快照和单调版本号。从设备按 10 秒轮询接收新版本并确认；断线期间主设备会保留待发送更新，恢复连接后发送最新快照。重复确认和旧版本会被忽略，不会为每轮轮询创建新 transfer。账号卡片或共享弹窗中的 **停止同步** 会结束该关系；从设备保留最后一组凭据，后续需要重新认证才能恢复本地独立续期。
+
+续期同步要求主设备的 Manager Extension Host 在线，并且两端 Manager 都包含本 Relay 的 `credential-syncs` API。Headless daemon 不会单独刷新已加入续期同步的主设备账号，避免它轮换 token 后没有共享 Relay publisher 发布更新。升级客户端前，应先部署并 reload 仓库中的新版 `integrations/manager-gateway`；旧 Relay 不支持该 API 时，主设备会保留账号和待发送状态，但从设备不会收到新同步关系。主设备离线期间，从设备可继续使用尚未过期的 access token；过期后需等待主设备恢复或重新认证。自动接管不会启用，以免原主设备仍在线时两端同时使用旧 refresh token。
+
+**限时借出** 保留原有归还期限与 owner 隐藏/移出无感池的行为，适合把账号临时交给其他设备使用。
 
 如果同一个好友同时使用 Ubuntu 和 Windows，两台设备必须分别注册、分别生成 ID、分别添加好友。两台设备显示相同 ID 通常意味着复制了同一个 `sharing-local-state-v1.json`；不要这样修复，应在没有活动租约时为其中一台重新生成 ID 并重新建立好友关系。
 
@@ -212,10 +222,9 @@ volumes:
 1. 顶部的“账号共享”按钮打开共享弹窗，显示本机唯一用户 ID，也可以复制 ID；弹窗还支持立即同步、Relay 配置和好友备注。
 2. 搜索并添加对方 ID；对方必须在自己的 Manager 中接受好友请求。
 3. 选中账号后点击“共享账号”，或翻转账号卡片后点击左下角快捷共享。
-4. owner 选择共享对象和归还期限。共享账号立即移出 owner 的无感池并隐藏，显示为靛青色“已共享”。
-5. 共享创建后进入 1 分钟握手期；接收方 Manager 自动解密并导入到已保存账号池后才确认，不弹第二次确认。
-6. 1 分钟内没有确认时，Relay 撤销待处理共享，owner 账号恢复共享前的隐藏/无感状态；接收端在撤销竞态中导入的账号也会回滚。
-7. 期限到达、共享账号配额耗尽或接收方主动归还时，接收方 Manager 会删除本地共享账号并回报归还状态；借入账号卡片背面可单独提前归还。
+4. 选择好友和共享方式。**主设备续期同步** 是默认方式；**限时借出** 保留原有归还期限流程。
+5. 限时借出创建后进入 1 分钟握手期；接收方 Manager 自动解密并导入账号后才确认。握手超时会撤销待处理 transfer 并恢复 owner 共享前的隐藏/无感状态。
+6. 限时借出到期、配额耗尽或接收方主动归还时，接收方 Manager 会删除本地共享账号并回报归还状态；借入账号卡片背面可单独提前归还。
 
 共享筛选使用青绿色表示“借入”、靛青色表示“已共享”；选择“已共享”筛选时会自动显示被共享后隐藏的账号。
 

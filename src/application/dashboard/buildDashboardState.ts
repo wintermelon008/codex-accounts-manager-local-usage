@@ -237,6 +237,7 @@ function mapAccount(
     isCurrentWindowAccount: virtual ? Boolean(account.providerActive) : account.id === currentWindowAccountId,
     balancePoolEnabled: virtual ? false : Boolean(account.balancePoolEnabled),
     sharingState: virtual ? undefined : account.sharing?.state,
+    credentialSyncRole: virtual ? undefined : account.credentialSync?.role,
     sharingPeerUserId: virtual ? undefined : account.sharing?.peerUserId,
     sharingPeerDisplayName: virtual ? undefined : account.sharing?.peerDisplayName,
     sharingExpiresAt: virtual ? undefined : account.sharing?.expiresAt,

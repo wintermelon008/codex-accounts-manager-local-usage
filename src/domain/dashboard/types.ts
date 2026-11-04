@@ -435,6 +435,16 @@ export interface DashboardSharingRequestViewModel {
   fromDisplayName: string;
 }
 
+export interface DashboardCredentialSyncViewModel {
+  syncId: string;
+  role: "primary" | "follower";
+  state: "pending" | "active";
+  peerUserId: string;
+  peerDisplayName?: string;
+  accountIds: string[];
+  version: number;
+}
+
 export interface DashboardSharingViewModel {
   userId: string;
   displayName: string;
@@ -443,6 +453,7 @@ export interface DashboardSharingViewModel {
   lastSyncError?: string;
   peers: DashboardSharingPeerViewModel[];
   pendingRequests: DashboardSharingRequestViewModel[];
+  credentialSyncs?: DashboardCredentialSyncViewModel[];
 }
 
 export interface DashboardMetricViewModel {
@@ -498,6 +509,7 @@ export interface DashboardAccountViewModel {
   isCurrentWindowAccount: boolean;
   balancePoolEnabled: boolean;
   sharingState?: "shared" | "received" | "return_pending";
+  credentialSyncRole?: "primary" | "follower";
   sharingPeerUserId?: string;
   sharingPeerDisplayName?: string;
   sharingExpiresAt?: number;
@@ -851,6 +863,7 @@ export interface DashboardActionPayload {
   sharingRelayUrl?: string;
   sharingPeerUserId?: string;
   sharingDeadlineMs?: number;
+  sharingMode?: "renewalSync" | "lease";
 }
 
 export interface DashboardActionResultPayload {

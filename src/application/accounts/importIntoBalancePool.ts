@@ -1,5 +1,9 @@
 import { getBalanceQuotaCapability } from "./balanceScheduler";
-import type { CodexAccountRecord, SharedCodexAccountJson } from "../../core/types";
+import type {
+  CodexAccountCredentialSyncInfo,
+  CodexAccountRecord,
+  SharedCodexAccountJson
+} from "../../core/types";
 import { getQuotaIssueKind } from "../../utils/quotaIssue";
 import type { AccountsRepository } from "../../storage";
 import type { refreshImportedAccountQuota } from "./quota";
@@ -45,7 +49,8 @@ export type BalancePoolAccountSummary = {
 export async function importSharedAccountsIntoBalancePool(
   repo: AccountsRepository,
   input: SharedCodexAccountJson | SharedCodexAccountJson[],
-  refreshQuotaForAccount?: BalancePoolQuotaRefresher
+  refreshQuotaForAccount?: BalancePoolQuotaRefresher,
+  credentialSync?: CodexAccountCredentialSyncInfo
 ): Promise<BalancePoolImportSummary> {
   const entries = Array.isArray(input) ? input : [input];
   if (entries.length === 0 || entries.length > MAX_BALANCE_POOL_IMPORT_ACCOUNTS) {
@@ -64,7 +69,9 @@ export async function importSharedAccountsIntoBalancePool(
   for (const entry of entries) {
     let account: CodexAccountRecord;
     try {
-      const accounts = await repo.importSharedAccountsForLocalInbox(entry);
+      const accounts = credentialSync
+        ? await repo.importSharedAccountsForCredentialSync(entry, credentialSync)
+        : await repo.importSharedAccountsForLocalInbox(entry);
       const importedAccount = accounts[0];
       if (!importedAccount) {
         throw new Error("empty import result");

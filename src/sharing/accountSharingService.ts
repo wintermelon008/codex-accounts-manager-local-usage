@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { DashboardLanguage } from "../localization/languages";
-import type { DashboardSharingViewModel } from "../domain/dashboard/types";
+import type { DashboardCredentialSyncViewModel, DashboardSharingViewModel } from "../domain/dashboard/types";
 import {
   fetchWithTimeout,
   isRetriableHttpStatus,
@@ -12,8 +12,15 @@ import {
 import { importSharedAccountsIntoBalancePool } from "../application/accounts/importIntoBalancePool";
 import type { AccountsRepository } from "../storage";
 import { getPrivateStatePaths } from "../storage";
-import { restoreSharedTokens } from "../storage/sharedAccounts";
-import type { CodexAccountRecord, SharedCodexAccountJson } from "../core/types";
+import { previewSharedEntry, restoreSharedTokens } from "../storage/sharedAccounts";
+import { ensureFreshAccountTokens } from "../auth/tokenRefreshCoordinator";
+import { withRenewingSchedulerLease } from "../runtime/schedulerLease";
+import type {
+  CodexAccountCredentialSyncInfo,
+  CodexAccountRecord,
+  SharedCodexAccountJson
+} from "../core/types";
+import { isSub2ApiAccount } from "../core/types";
 import {
   decryptSharingPayload,
   deriveSharingUserId,
@@ -24,7 +31,12 @@ import {
 import {
   SHARING_PACKAGE_SCHEMA,
   SHARING_RETURN_PACKAGE_SCHEMA,
+  CREDENTIAL_SYNC_PACKAGE_SCHEMA,
   sharingInfoForLease,
+  type CredentialSyncPackage,
+  type CredentialSyncPendingUpdate,
+  type CredentialSyncRecord,
+  type CredentialSyncRelayRecord,
   type SharingLease,
   type SharingPackage,
   type SharingReturnPackage,
@@ -57,6 +69,7 @@ const SHARING_REGISTRATION_VALIDATION_TTL_MS = 5 * 60 * 1_000;
 // never needed just to trigger the next confirmation read. The regular
 // sharing poll remains the long-lived fallback after these targeted checks.
 const SHARING_RETURN_CONFIRMATION_RETRY_DELAYS_MS = [500, 1_500, 3_000, 5_000, 10_000] as const;
+const CREDENTIAL_SYNC_RETRY_MAX_MS = 5 * 60 * 1_000;
 
 type SwitchAway = (accountId: string) => Promise<boolean>;
 
@@ -87,6 +100,7 @@ export class AccountSharingService implements vscode.Disposable {
   private initialized = false;
   private lastSyncAt: number | undefined;
   private lastSyncError: string | undefined;
+  private credentialSyncEndpointRetryAt = 0;
   private localStatePath: string | undefined;
   private readonly returnConfirmationTimers = new Map<string, NodeJS.Timeout>();
   private readonly returnConfirmationAttempts = new Map<string, number>();
@@ -126,7 +140,12 @@ export class AccountSharingService implements vscode.Disposable {
     this.relayToken = localState.relayToken?.trim() || undefined;
     this.initialized = true;
     this.accountChangeSubscription = this.repo.onDidChangeAccounts((accountIds) => {
-      if (!accountIds || accountIds.some((accountId) => this.isIncomingLeaseAccount(accountId))) {
+      if (
+        !accountIds ||
+        accountIds.some(
+          (accountId) => this.isIncomingLeaseAccount(accountId) || this.isCredentialSyncAccount(accountId)
+        )
+      ) {
         void this.poll();
       }
     });
@@ -181,8 +200,18 @@ export class AccountSharingService implements vscode.Disposable {
     if (this.enabled === enabled) {
       return;
     }
-    if (!enabled && this.state!.leases.some((lease) => isActiveSharingLease(lease))) {
-      throw new Error("当前存在活动共享租约，请先归还账号后再关闭账号共享");
+    if (!enabled) {
+      const hasActiveLease = this.state!.leases.some((lease) => isActiveSharingLease(lease));
+      const hasCredentialSync = this.state!.credentialSyncs.length > 0;
+      if (hasActiveLease || hasCredentialSync) {
+        throw new Error(
+          hasActiveLease
+            ? hasCredentialSync
+              ? "当前存在活动共享租约或续期同步，请先停止后再关闭账号共享"
+              : "当前存在活动共享租约，请先归还账号后再关闭账号共享"
+            : "当前存在活动续期同步，请先停止后再关闭账号共享"
+        );
+      }
     }
     this.enabled = enabled;
     await this.context.globalState.update(SHARING_ENABLED_KEY, enabled);
@@ -220,6 +249,15 @@ export class AccountSharingService implements vscode.Disposable {
     return this.state!.leases.map((lease) => ({ ...lease, accountIds: [...lease.accountIds] }));
   }
 
+  getCredentialSyncs(): readonly CredentialSyncRecord[] {
+    this.assertInitialized();
+    return this.state!.credentialSyncs.map((sync) => ({
+      ...sync,
+      accountIds: [...sync.accountIds],
+      pendingUpdate: sync.pendingUpdate ? { ...sync.pendingUpdate } : undefined
+    }));
+  }
+
   getDashboardView(): DashboardSharingViewModel {
     this.assertInitialized();
     this.assertEnabled();
@@ -236,6 +274,15 @@ export class AccountSharingService implements vscode.Disposable {
         id: request.id,
         fromUserId: request.fromUserId,
         fromDisplayName: request.fromProfile?.displayName ?? request.fromUserId
+      })),
+      credentialSyncs: this.state!.credentialSyncs.map((sync): DashboardCredentialSyncViewModel => ({
+        syncId: sync.syncId,
+        role: sync.role,
+        state: sync.state,
+        peerUserId: sync.peerUserId,
+        peerDisplayName: sync.peerDisplayName,
+        accountIds: [...sync.accountIds],
+        version: sync.version
       }))
     };
   }
@@ -328,6 +375,9 @@ export class AccountSharingService implements vscode.Disposable {
     if (activeLease) {
       throw new Error("该好友仍有活动共享租约，请先归还账号后再删除好友");
     }
+    if (this.state!.credentialSyncs.some((sync) => sync.peerUserId === userId)) {
+      throw new Error("该好友仍有续期同步，请先停止同步后再删除好友");
+    }
     const choice = await vscode.window.showWarningMessage(
       `删除好友 ${peer.note?.trim() || peer.displayName}？删除后双方需要重新发送并接受好友请求才能共享账号。`,
       { modal: true },
@@ -394,8 +444,8 @@ export class AccountSharingService implements vscode.Disposable {
     const activeLeases = this.state!.leases.filter(
       (lease) => lease.state !== "returned" && lease.state !== "failed" && lease.state !== "expired"
     );
-    if (activeLeases.length > 0) {
-      void vscode.window.showWarningMessage("当前存在活动共享租约，请先归还账号后再重新生成共享 ID。 ");
+    if (activeLeases.length > 0 || this.state!.credentialSyncs.length > 0) {
+      void vscode.window.showWarningMessage("当前存在活动共享或续期同步，请先停止后再重新生成共享 ID。 ");
       return;
     }
     const choice = await vscode.window.showWarningMessage(
@@ -447,21 +497,7 @@ export class AccountSharingService implements vscode.Disposable {
     if (!selectedPeer) {
       return;
     }
-    const deadline = await vscode.window.showQuickPick(
-      [
-        { label: "10 分钟", value: 10 * 60 * 1_000 },
-        { label: "30 分钟", value: 30 * 60 * 1_000 },
-        { label: "1 小时", value: 60 * 60 * 1_000 },
-        { label: "6 小时", value: 6 * 60 * 60 * 1_000 },
-        { label: "24 小时（默认）", value: 24 * 60 * 60 * 1_000 },
-        { label: "3 天", value: 3 * 24 * 60 * 60 * 1_000 }
-      ],
-      { placeHolder: "设置归还期限" }
-    );
-    if (!deadline) {
-      return;
-    }
-    await this.shareAccounts(accountIds, selectedPeer.peer, this.now() + deadline.value);
+    await this.startCredentialSyncWithPeer(accountIds, selectedPeer.peer.userId);
   }
 
   async shareAccountsWithPeer(
@@ -481,6 +517,120 @@ export class AccountSharingService implements vscode.Disposable {
     await this.shareAccounts(accountIds, peer, expiresAt);
   }
 
+  async startCredentialSyncWithPeer(accountIds: readonly string[], peerUserId: string): Promise<void> {
+    this.assertInitialized();
+    this.assertEnabled();
+    await this.ensureRelayRegistration();
+    const uniqueIds = [...new Set(accountIds)].filter(Boolean);
+    if (uniqueIds.length === 0 || uniqueIds.length > MAX_SHARED_ACCOUNTS) {
+      throw new Error(`一次最多同步 ${MAX_SHARED_ACCOUNTS} 个账号`);
+    }
+    if (this.state!.credentialSyncs.some((sync) => sync.accountIds.some((id) => uniqueIds.includes(id)))) {
+      throw new Error("所选账号已经加入续期同步");
+    }
+    const peer = this.getTrustedPeers().find((candidate) => candidate.userId === peerUserId.trim());
+    if (!peer) {
+      throw new Error("同步对象尚未接受好友请求");
+    }
+    await this.request<{ credentialSyncs: CredentialSyncRelayRecord[] }>(
+      "/v1/sharing/credential-syncs/inbox"
+    );
+    this.credentialSyncEndpointRetryAt = 0;
+    const accounts = await Promise.all(uniqueIds.map((id) => this.repo.getAccount(id)));
+    for (const account of accounts) {
+      if (!account || isSub2ApiAccount(account)) {
+        throw new Error("续期同步只支持已保存的 ChatGPT OAuth 账号");
+      }
+      if (account.sharing || account.credentialSync) {
+        throw new Error(`账号 ${account.email} 已处于共享或续期同步状态`);
+      }
+      const tokens = await this.repo.getTokens(account.id, { forceReload: true });
+      if (!tokens?.accessToken || !tokens.idToken) {
+        throw new Error(`账号 ${account.email} 缺少可用 OAuth 凭据`);
+      }
+      const fresh = await ensureFreshAccountTokens(this.repo, account.id, {
+        fallbackTokens: tokens,
+        providerAccountId: account.accountId
+      });
+      if (!fresh?.accessToken || !fresh.idToken) {
+        throw new Error(`账号 ${account.email} 尚未取得可同步的当前凭据`);
+      }
+    }
+
+    const exported = await this.repo.exportSharedAccounts(uniqueIds);
+    if (exported.length !== uniqueIds.length) {
+      throw new Error("部分账号缺少可同步的 OAuth 凭据");
+    }
+    const syncId = randomUUID();
+    const followerAccounts = exported.map(withoutRefreshToken);
+    const eventId = randomUUID();
+    const snapshot: CredentialSyncPackage = {
+      schema: CREDENTIAL_SYNC_PACKAGE_SCHEMA,
+      syncId,
+      version: 1,
+      eventId,
+      accounts: followerAccounts
+    };
+    const envelope = encryptSharingPayload(
+      snapshot,
+      this.keys!,
+      this.getProfile().userId,
+      peer.userId,
+      peer.encryptionPublicKey,
+      this.now()
+    );
+    const record: CredentialSyncRecord = {
+      syncId,
+      role: "primary",
+      state: "pending",
+      peerUserId: peer.userId,
+      peerDisplayName: peer.displayName,
+      accountIds: uniqueIds,
+      version: 0,
+      pendingUpdate: {
+        initial: true,
+        version: 1,
+        eventId,
+        envelope,
+        credentialFingerprint: credentialSnapshotFingerprint(exported),
+        attempts: 0
+      },
+      createdAt: this.now()
+    };
+    this.state!.credentialSyncs = [...this.state!.credentialSyncs, record];
+    await this.persistState();
+    for (const accountId of uniqueIds) {
+      await this.repo.setAccountCredentialSyncInfo(accountId, {
+        syncId,
+        role: "primary",
+        peerUserId: peer.userId,
+        peerDisplayName: peer.displayName,
+        since: record.createdAt
+      });
+    }
+
+    try {
+      await this.publishCredentialSyncRecord(record, exported);
+    } catch (error) {
+      console.warn(`[codexAccounts] credential sync is queued for retry: ${describeError(error)}`);
+    }
+    this.onChanged();
+  }
+
+  async stopCredentialSyncForAccount(accountId: string): Promise<boolean> {
+    this.assertInitialized();
+    this.assertEnabled();
+    await this.ensureRelayRegistration();
+    const sync = this.state!.credentialSyncs.find((candidate) => candidate.accountIds.includes(accountId));
+    if (!sync) {
+      return false;
+    }
+    await this.request(`/v1/sharing/credential-syncs/${encodeURIComponent(sync.syncId)}/stop`, { method: "POST" });
+    await this.clearCredentialSyncLocally(sync);
+    this.onChanged();
+    return true;
+  }
+
   async shareAccounts(accountIds: readonly string[], peer: SharingPeer, expiresAt: number): Promise<void> {
     this.assertInitialized();
     this.assertEnabled();
@@ -496,7 +646,9 @@ export class AccountSharingService implements vscode.Disposable {
       throw new Error("部分账号缺少可共享的 OAuth 凭据");
     }
     const existing = await Promise.all(uniqueIds.map((id) => this.repo.getAccount(id)));
-    const alreadyShared = existing.find((account) => account?.sharing);
+    const alreadyShared = existing.find(
+      (account) => account?.sharing !== undefined || account?.credentialSync !== undefined
+    );
     if (alreadyShared) {
       throw new Error(`账号 ${alreadyShared.email} 已处于共享租约中`);
     }
@@ -737,6 +889,449 @@ export class AccountSharingService implements vscode.Disposable {
     await this.pollSentTransfers();
     await this.reconcileTerminalOutgoingLeases();
     await this.pollLeaseConditions();
+    await this.pollCredentialSyncs();
+  }
+
+  private async pollCredentialSyncs(): Promise<void> {
+    if (this.credentialSyncEndpointRetryAt > this.now()) {
+      return;
+    }
+    let changed = false;
+    let publishError: unknown;
+    let incoming: { credentialSyncs: CredentialSyncRelayRecord[] };
+    try {
+      incoming = await this.request<{ credentialSyncs: CredentialSyncRelayRecord[] }>(
+        "/v1/sharing/credential-syncs/inbox"
+      );
+      this.credentialSyncEndpointRetryAt = 0;
+    } catch (error) {
+      if (readStatusCode(error) === 404) {
+        this.credentialSyncEndpointRetryAt = this.now() + 60_000;
+        if (this.state!.credentialSyncs.length === 0) {
+          return;
+        }
+      }
+      throw error;
+    }
+    for (const remote of incoming.credentialSyncs ?? []) {
+      const local = this.state!.credentialSyncs.find((candidate) => candidate.syncId === remote.syncId);
+      if (remote.state === "stopped") {
+        if (local?.role === "follower") {
+          await this.clearCredentialSyncLocally(local);
+          changed = true;
+        }
+        await this.acknowledgeCredentialSyncStop(remote);
+        continue;
+      }
+
+      const peer = this.state!.peers.find(
+        (candidate) => candidate.userId === remote.fromUserId && candidate.relationship === "trusted"
+      );
+      if (!peer) {
+        const stopped = await this.request<CredentialSyncRelayRecord>(
+          `/v1/sharing/credential-syncs/${encodeURIComponent(remote.syncId)}/stop`,
+          { method: "POST" }
+        );
+        await this.acknowledgeCredentialSyncStop(stopped);
+        continue;
+      }
+      if (local?.role === "primary") {
+        continue;
+      }
+      if (local && remote.version <= local.version) {
+        if ((local.acknowledgedVersion ?? 0) < local.version) {
+          await this.acknowledgeCredentialSyncVersion(local, local.version);
+          changed = true;
+        }
+        continue;
+      }
+
+      const packageValue = this.decryptCredentialSyncSnapshot(remote, peer);
+      const accountIds = await this.applyCredentialSyncSnapshot(packageValue, remote.syncId, peer);
+      if (local) {
+        local.version = remote.version;
+        local.acknowledgedVersion = local.acknowledgedVersion ?? 0;
+        local.accountIds = accountIds;
+      } else {
+        const record: CredentialSyncRecord = {
+          syncId: remote.syncId,
+          role: "follower",
+          state: "active",
+          peerUserId: peer.userId,
+          peerDisplayName: peer.displayName,
+          accountIds,
+          version: remote.version,
+          acknowledgedVersion: 0,
+          createdAt: remote.createdAt
+        };
+        this.state!.credentialSyncs.push(record);
+      }
+      await this.persistState();
+      await this.acknowledgeCredentialSyncVersion(
+        local ?? this.state!.credentialSyncs.find((candidate) => candidate.syncId === remote.syncId)!,
+        remote.version
+      );
+      changed = true;
+    }
+
+    for (const pending of this.state!.credentialSyncs.filter(
+      (sync) => sync.role === "primary" && sync.state === "pending"
+    )) {
+      try {
+        const before = JSON.stringify(pending);
+        await this.publishCredentialSyncRecord(pending);
+        changed ||= before !== JSON.stringify(pending);
+      } catch (error) {
+        console.warn(`[codexAccounts] initial credential sync queued: ${describeError(error)}`);
+        publishError ??= error;
+      }
+    }
+
+    const sent = await this.request<{ credentialSyncs: CredentialSyncRelayRecord[] }>(
+      "/v1/sharing/credential-syncs/sent"
+    );
+    for (const remote of sent.credentialSyncs ?? []) {
+      const local = this.state!.credentialSyncs.find(
+        (candidate) => candidate.syncId === remote.syncId && candidate.role === "primary"
+      );
+      if (!local) {
+        if (remote.state === "stopped") {
+          await this.acknowledgeCredentialSyncStop(remote);
+        }
+        continue;
+      }
+      if (remote.state === "stopped") {
+        await this.clearCredentialSyncLocally(local);
+        await this.acknowledgeCredentialSyncStop(remote);
+        changed = true;
+        continue;
+      }
+      try {
+        const before = JSON.stringify(local);
+        const latest = await this.repo.exportSharedAccounts(local.accountIds);
+        await this.publishCredentialSyncRecord(local, latest, remote);
+        changed ||= before !== JSON.stringify(local);
+      } catch (error) {
+        console.warn(`[codexAccounts] credential sync update queued: ${describeError(error)}`);
+        publishError ??= error;
+      }
+    }
+    if (changed) {
+      await this.persistState();
+      this.onChanged();
+    }
+    if (publishError) {
+      throw new Error(`Credential sync update failed: ${describeError(publishError)}`);
+    }
+  }
+
+  private async publishCredentialSyncRecord(
+    sync: CredentialSyncRecord,
+    exported?: SharedCodexAccountJson[],
+    relaySnapshot?: CredentialSyncRelayRecord
+  ): Promise<void> {
+    await withRenewingSchedulerLease(
+      this.repo,
+      `credential-sync-${sync.syncId}`,
+      60_000,
+      0,
+      async (leaseIsActive) => {
+        if (leaseIsActive()) {
+          await this.publishCredentialSyncRecordLocked(sync, exported, relaySnapshot);
+        }
+      }
+    );
+  }
+
+  private async publishCredentialSyncRecordLocked(
+    sync: CredentialSyncRecord,
+    exported?: SharedCodexAccountJson[],
+    relaySnapshot?: CredentialSyncRelayRecord
+  ): Promise<void> {
+    const currentExport = exported ?? (await this.repo.exportSharedAccounts(sync.accountIds));
+    if (currentExport.length !== sync.accountIds.length) {
+      throw new Error("A primary sync account is no longer available locally");
+    }
+    const credentialFingerprint = credentialSnapshotFingerprint(currentExport);
+    if (sync.state === "pending") {
+      const pending = sync.pendingUpdate;
+      if (!pending?.initial) {
+        throw new Error("Initial credential sync snapshot is missing");
+      }
+      if (pending.nextAttemptAt && pending.nextAttemptAt > this.now()) {
+        return;
+      }
+      try {
+        const created = await this.request<CredentialSyncRelayRecord>("/v1/sharing/credential-syncs", {
+          method: "POST",
+          body: JSON.stringify({
+            syncId: sync.syncId,
+            recipientUserId: sync.peerUserId,
+            version: pending.version,
+            eventId: pending.eventId,
+            envelope: pending.envelope
+          })
+        });
+        sync.state = "active";
+        sync.version = created.version;
+        sync.credentialFingerprint = pending.credentialFingerprint;
+        sync.pendingUpdate = undefined;
+        await this.persistState();
+        return;
+      } catch (error) {
+        await this.scheduleCredentialSyncRetry(sync, pending);
+        throw error;
+      }
+    }
+
+    if (
+      relaySnapshot?.state === "active" &&
+      !sync.pendingUpdate &&
+      sync.credentialFingerprint === credentialFingerprint &&
+      relaySnapshot.version >= sync.version
+    ) {
+      if (relaySnapshot.version !== sync.version) {
+        sync.version = relaySnapshot.version;
+        await this.persistState();
+      }
+      return;
+    }
+    const remote = await this.request<CredentialSyncRelayRecord>(
+      `/v1/sharing/credential-syncs/${encodeURIComponent(sync.syncId)}`
+    );
+    if (remote.state === "stopped") {
+      await this.clearCredentialSyncLocally(sync);
+      await this.acknowledgeCredentialSyncStop(remote);
+      return;
+    }
+    let pending = sync.pendingUpdate;
+    if (pending?.version === remote.version && pending?.eventId === remote.eventId) {
+      sync.version = remote.version;
+      sync.credentialFingerprint = pending.credentialFingerprint;
+      sync.pendingUpdate = undefined;
+      pending = undefined;
+      await this.persistState();
+    } else if (remote.version > sync.version) {
+      sync.version = remote.version;
+      if (pending && pending.version <= remote.version) {
+        sync.pendingUpdate = undefined;
+        pending = undefined;
+      }
+    }
+
+    if (pending && pending.credentialFingerprint !== credentialFingerprint) {
+      pending = this.createPendingCredentialSyncUpdate(
+        sync,
+        currentExport,
+        credentialFingerprint,
+        Math.max(sync.version, pending.version) + 1
+      );
+      sync.pendingUpdate = pending;
+      await this.persistState();
+    } else if (!pending && sync.credentialFingerprint !== credentialFingerprint) {
+      pending = this.createPendingCredentialSyncUpdate(
+        sync,
+        currentExport,
+        credentialFingerprint,
+        Math.max(sync.version, remote.version) + 1
+      );
+      sync.pendingUpdate = pending;
+      await this.persistState();
+    }
+    if (!pending || (pending.nextAttemptAt && pending.nextAttemptAt > this.now())) {
+      return;
+    }
+    try {
+      const updated = await this.request<CredentialSyncRelayRecord>(
+        `/v1/sharing/credential-syncs/${encodeURIComponent(sync.syncId)}/snapshot`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            version: pending.version,
+            eventId: pending.eventId,
+            envelope: pending.envelope
+          })
+        }
+      );
+      sync.version = updated.version;
+      sync.credentialFingerprint = pending.credentialFingerprint;
+      sync.pendingUpdate = undefined;
+      await this.persistState();
+    } catch (error) {
+      await this.scheduleCredentialSyncRetry(sync, pending);
+      throw error;
+    }
+  }
+
+  private createPendingCredentialSyncUpdate(
+    sync: CredentialSyncRecord,
+    exported: SharedCodexAccountJson[],
+    credentialFingerprint: string,
+    version: number
+  ): CredentialSyncPendingUpdate {
+    const peer = this.state!.peers.find(
+      (candidate) => candidate.userId === sync.peerUserId && candidate.relationship === "trusted"
+    );
+    if (!peer) {
+      throw new Error("Credential sync peer is no longer trusted");
+    }
+    const eventId = randomUUID();
+    const snapshot: CredentialSyncPackage = {
+      schema: CREDENTIAL_SYNC_PACKAGE_SCHEMA,
+      syncId: sync.syncId,
+      version,
+      eventId,
+      accounts: exported.map(withoutRefreshToken)
+    };
+    return {
+      version,
+      eventId,
+      envelope: encryptSharingPayload(
+        snapshot,
+        this.keys!,
+        this.getProfile().userId,
+        peer.userId,
+        peer.encryptionPublicKey,
+        this.now()
+      ),
+      credentialFingerprint,
+      attempts: 0
+    };
+  }
+
+  private async scheduleCredentialSyncRetry(
+    sync: CredentialSyncRecord,
+    pending: CredentialSyncPendingUpdate
+  ): Promise<void> {
+    pending.attempts += 1;
+    const backoff = Math.min(CREDENTIAL_SYNC_RETRY_MAX_MS, 1_000 * 2 ** Math.min(pending.attempts, 8));
+    pending.nextAttemptAt = this.now() + Math.floor(backoff * (0.8 + Math.random() * 0.4));
+    sync.pendingUpdate = pending;
+    await this.persistState();
+  }
+
+  private decryptCredentialSyncSnapshot(
+    remote: CredentialSyncRelayRecord,
+    peer: SharingPeer
+  ): CredentialSyncPackage {
+    const value = decryptSharingPayload(
+      remote.envelope,
+      this.keys!,
+      this.getProfile().userId,
+      { userId: peer.userId, identityPublicKey: peer.identityPublicKey }
+    ) as CredentialSyncPackage;
+    validateCredentialSyncPackage(value, remote.syncId, remote.version, remote.eventId);
+    return value;
+  }
+
+  private async applyCredentialSyncSnapshot(
+    snapshot: CredentialSyncPackage,
+    syncId: string,
+    peer: SharingPeer
+  ): Promise<string[]> {
+    await this.assertNoCredentialSyncConflict(snapshot.accounts, syncId);
+    const existingAccounts = await this.repo.listAccounts();
+    const newEntries: SharedCodexAccountJson[] = [];
+    const accountIds: string[] = [];
+    const syncInfo: CodexAccountCredentialSyncInfo = {
+      syncId,
+      role: "follower",
+      peerUserId: peer.userId,
+      peerDisplayName: peer.displayName,
+      since: this.now()
+    };
+    for (const entry of snapshot.accounts) {
+      const storageId = previewSharedEntry(entry).storageId;
+      if (!storageId) {
+        throw new Error("credential sync account identity is invalid");
+      }
+      const existing = existingAccounts.find((account) => account.id === storageId);
+      if (!existing) {
+        newEntries.push(withoutRefreshToken(entry));
+        accountIds.push(storageId);
+        continue;
+      }
+      if (
+        existing.sharing ||
+        (existing.credentialSync &&
+          (existing.credentialSync.syncId !== syncId || existing.credentialSync.role !== "follower"))
+      ) {
+        throw new Error(`account ${existing.email} is already assigned to another sharing relationship`);
+      }
+      const tokens = restoreSharedTokens(entry);
+      tokens.refreshToken = undefined;
+      if (existing.credentialSync?.syncId !== syncId || existing.credentialSync.role !== "follower") {
+        await this.repo.setAccountCredentialSyncInfo(existing.id, syncInfo);
+      }
+      await this.repo.updateTokens(existing.id, tokens);
+      accountIds.push(existing.id);
+    }
+
+    if (newEntries.length > 0) {
+      const summary = await importSharedAccountsIntoBalancePool(this.repo, newEntries, undefined, syncInfo);
+      if (summary.imported !== newEntries.length) {
+        throw new Error("some credential sync accounts could not be imported");
+      }
+      accountIds.push(
+        ...summary.accounts
+          .map((account) => account.accountId)
+          .filter((accountId): accountId is string => Boolean(accountId))
+      );
+    }
+    return [...new Set(accountIds)];
+  }
+
+  private async assertNoCredentialSyncConflict(
+    entries: readonly SharedCodexAccountJson[],
+    syncId: string
+  ): Promise<void> {
+    const existing = await this.repo.listAccounts();
+    for (const entry of entries) {
+      const preview = previewSharedEntry(entry);
+      const providerAccountId = typeof entry.account_id === "string" ? entry.account_id.trim() : undefined;
+      const conflict = existing.find(
+        (account) =>
+          account.email.trim().toLowerCase() === preview.email?.trim().toLowerCase() ||
+          (providerAccountId !== undefined && account.accountId === providerAccountId)
+      );
+      if (conflict && conflict.id !== preview.storageId) {
+        throw new Error(`接收端的账号 ${conflict.email} 与同步账号身份不匹配`);
+      }
+      if (
+        conflict &&
+        (conflict.sharing ||
+          (conflict.credentialSync && conflict.credentialSync.syncId !== syncId))
+      ) {
+        throw new Error(`账号 ${conflict.email} 已处于其他共享或续期同步中`);
+      }
+    }
+  }
+
+  private async acknowledgeCredentialSyncVersion(sync: CredentialSyncRecord, version: number): Promise<void> {
+    await this.request(`/v1/sharing/credential-syncs/${encodeURIComponent(sync.syncId)}/ack`, {
+      method: "POST",
+      body: JSON.stringify({ version })
+    });
+    sync.acknowledgedVersion = Math.max(sync.acknowledgedVersion ?? 0, version);
+    await this.persistState();
+  }
+
+  private async acknowledgeCredentialSyncStop(remote: CredentialSyncRelayRecord): Promise<void> {
+    await this.request(`/v1/sharing/credential-syncs/${encodeURIComponent(remote.syncId)}/ack`, {
+      method: "POST",
+      body: JSON.stringify({ version: remote.version })
+    });
+  }
+
+  private async clearCredentialSyncLocally(sync: CredentialSyncRecord): Promise<void> {
+    for (const accountId of sync.accountIds) {
+      const account = await this.repo.getAccount(accountId).catch(() => undefined);
+      if (account?.credentialSync?.syncId === sync.syncId) {
+        await this.repo.setAccountCredentialSyncInfo(accountId, undefined);
+      }
+    }
+    this.state!.credentialSyncs = this.state!.credentialSyncs.filter((candidate) => candidate.syncId !== sync.syncId);
+    await this.persistState();
   }
 
   /**
@@ -1211,6 +1806,10 @@ export class AccountSharingService implements vscode.Disposable {
         (lease) => lease.direction === "incoming" && lease.state !== "returned" && lease.accountIds.includes(accountId)
       )
     );
+  }
+
+  private isCredentialSyncAccount(accountId: string): boolean {
+    return Boolean(this.state?.credentialSyncs.some((sync) => sync.accountIds.includes(accountId)));
   }
 
   private async cancelUnconfirmedShare(lease: SharingLease): Promise<void> {
@@ -1715,6 +2314,9 @@ function normalizeState(
     peers: Array.isArray(value?.peers) ? value.peers.filter(isPeer) : [],
     pendingRequests: Array.isArray(value?.pendingRequests) ? value.pendingRequests.filter(isRequest) : [],
     leases: Array.isArray(value?.leases) ? value.leases.filter(isLease) : [],
+    credentialSyncs: Array.isArray(value?.credentialSyncs)
+      ? value.credentialSyncs.filter(isCredentialSyncRecord)
+      : [],
     processedTransferIds: Array.isArray(value?.processedTransferIds)
       ? value.processedTransferIds.filter((id): id is string => typeof id === "string").slice(-MAX_PROCESSED_TRANSFERS)
       : []
@@ -1733,6 +2335,7 @@ function stateSeedWithDisplayName(displayName?: string): Partial<SharingState> {
     peers: [],
     pendingRequests: [],
     leases: [],
+    credentialSyncs: [],
     processedTransferIds: []
   };
 }
@@ -1816,6 +2419,104 @@ function isLease(value: unknown): value is SharingLease {
             typeof entry.balancePoolEnabled === "boolean"
         )))
   );
+}
+
+function isCredentialSyncRecord(value: unknown): value is CredentialSyncRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const sync = value as Partial<CredentialSyncRecord>;
+  return Boolean(
+    typeof sync.syncId === "string" &&
+      (sync.role === "primary" || sync.role === "follower") &&
+      (sync.state === "pending" || sync.state === "active") &&
+      typeof sync.peerUserId === "string" &&
+      Array.isArray(sync.accountIds) &&
+      sync.accountIds.every((id) => typeof id === "string") &&
+      Number.isSafeInteger(sync.version) &&
+      (sync.acknowledgedVersion === undefined || Number.isSafeInteger(sync.acknowledgedVersion)) &&
+      typeof sync.createdAt === "number" &&
+      (sync.pendingUpdate === undefined || isCredentialSyncPendingUpdate(sync.pendingUpdate))
+  );
+}
+
+function isCredentialSyncPendingUpdate(value: unknown): value is CredentialSyncPendingUpdate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const update = value as Partial<CredentialSyncPendingUpdate>;
+  return Boolean(
+    (update.initial === undefined || typeof update.initial === "boolean") &&
+    Number.isSafeInteger(update.version) &&
+      typeof update.eventId === "string" &&
+      update.envelope &&
+      typeof update.envelope === "object" &&
+      typeof update.credentialFingerprint === "string" &&
+      Number.isSafeInteger(update.attempts) &&
+      (update.nextAttemptAt === undefined || typeof update.nextAttemptAt === "number")
+  );
+}
+
+function withoutRefreshToken(account: SharedCodexAccountJson): SharedCodexAccountJson {
+  return {
+    id: account.id,
+    email: account.email,
+    auth_mode: "chatgpt",
+    user_id: account.user_id,
+    plan_type: account.plan_type,
+    account_id: account.account_id,
+    organization_id: account.organization_id,
+    account_name: account.account_name,
+    account_structure: account.account_structure,
+    added_via: account.added_via,
+    added_at: account.added_at,
+    tokens: {
+      id_token: account.tokens?.id_token,
+      access_token: account.tokens?.access_token,
+      account_id: account.tokens?.account_id ?? account.account_id
+    }
+  };
+}
+
+function credentialSnapshotFingerprint(accounts: readonly SharedCodexAccountJson[]): string {
+  const snapshot = accounts
+    .map((account) => [
+      account.id ?? "",
+      account.tokens?.id_token ?? "",
+      account.tokens?.access_token ?? "",
+      account.tokens?.refresh_token ?? "",
+      account.tokens?.account_id ?? account.account_id ?? ""
+    ])
+    .sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+}
+
+function validateCredentialSyncPackage(
+  value: CredentialSyncPackage,
+  expectedSyncId: string,
+  expectedVersion: number,
+  expectedEventId: string
+): void {
+  if (
+    value?.schema !== CREDENTIAL_SYNC_PACKAGE_SCHEMA ||
+    value.syncId !== expectedSyncId ||
+    value.version !== expectedVersion ||
+    value.eventId !== expectedEventId ||
+    !Array.isArray(value.accounts) ||
+    value.accounts.length === 0 ||
+    value.accounts.length > MAX_SHARED_ACCOUNTS
+  ) {
+    throw new Error("credential sync package is invalid");
+  }
+  for (const account of value.accounts) {
+    if (
+      !account.tokens?.id_token ||
+      !account.tokens.access_token ||
+      account.tokens.refresh_token !== undefined
+    ) {
+      throw new Error("credential sync package must contain access credentials only");
+    }
+  }
 }
 
 function validateSharingPackage(value: SharingPackage, transfer: SharingTransfer): void {

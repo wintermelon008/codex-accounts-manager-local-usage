@@ -348,8 +348,10 @@ function AdvancedAccountFocus(props: {
   const busy = props.isAccountBusy(account.id);
   const emailDisplay = getSensitiveDisplayValue(account.email || account.displayName, props.privacyMode, "email");
   const sharingFilter = getDashboardSharingFilter(account);
-  const incomingSharedAccount = sharingFilter === "received";
-  const outgoingSharedAccount = sharingFilter === "shared";
+  const syncFollower = account.credentialSyncRole === "follower";
+  const syncPrimary = account.credentialSyncRole === "primary";
+  const incomingSharedAccount = sharingFilter === "received" || syncFollower;
+  const outgoingSharedAccount = sharingFilter === "shared" || syncPrimary;
   const healthFilter = getDashboardHealthFilter(account);
   const hasUsableRenewalWarning = healthFilter === "usable_no_renewal";
   const hasUnknownHealth = healthFilter === "unknown";
@@ -384,10 +386,14 @@ function AdvancedAccountFocus(props: {
         : "Add to seamless pool";
   const shareLabel =
     props.lang === "zh" || props.lang === "zh-hant"
-      ? incomingSharedAccount
+      ? account.credentialSyncRole
+        ? "停止同步"
+        : incomingSharedAccount
         ? "归还账号"
         : "共享账号"
-      : incomingSharedAccount
+      : account.credentialSyncRole
+        ? "Stop sync"
+        : incomingSharedAccount
         ? "Return account"
         : "Share account";
   const copyEmailLabel =
@@ -546,7 +552,7 @@ function AdvancedAccountFocus(props: {
                 ? props.copy.copySuccess
                 : props.copy.copyAccountImportJsonBtn
             }
-            disabled={busy || Boolean(account.sharingState)}
+            disabled={busy || Boolean(account.sharingState) || Boolean(account.credentialSyncRole)}
             pending={props.isActionPending("copyAccountImportJson", account.id)}
             onClick={() => props.onAction("copyAccountImportJson", account.id)}
           />
@@ -562,7 +568,17 @@ function AdvancedAccountFocus(props: {
             onClick={() => props.onAction("consumeResetCredit", account.id)}
           />
         ) : null}
-        {props.sharingEnabled !== false && !virtual && incomingSharedAccount ? (
+        {props.sharingEnabled !== false && !virtual && account.credentialSyncRole ? (
+          <ActionButton
+            class="advanced-account-action"
+            icon={<SharingIcon />}
+            iconOnly
+            label={shareLabel}
+            disabled={busy}
+            pending={props.isActionPending("returnSharedAccount", account.id)}
+            onClick={() => props.onAction("returnSharedAccount", account.id)}
+          />
+        ) : props.sharingEnabled !== false && !virtual && incomingSharedAccount ? (
           <ActionButton
             class="advanced-account-action"
             icon={<SharingIcon />}

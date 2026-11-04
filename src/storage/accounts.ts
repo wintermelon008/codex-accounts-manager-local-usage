@@ -72,6 +72,7 @@ import {
 import { createKeyedMutex } from "../utils/concurrency";
 import {
   CodexAccountRecord,
+  CodexAccountCredentialSyncInfo,
   CodexAccountGroup,
   CodexAccountsIndex,
   CodexAccountsRestoreResult,
@@ -622,24 +623,34 @@ export class AccountsRepository {
       }
 
       const storedTokens = await this.secretStore.getTokens(accountId);
-      this.tokenCache.set(accountId, { tokens: storedTokens, cachedAt: Date.now(), mirrorRevision });
+      let localTokens = storedTokens;
+      if (account?.credentialSync?.role === "follower" && storedTokens?.refreshToken) {
+        localTokens = { ...storedTokens, refreshToken: undefined };
+        await this.secretStore.setTokens(accountId, localTokens);
+        await mirrorAideckCodexAccount(account, localTokens);
+      }
+      this.tokenCache.set(accountId, { tokens: localTokens, cachedAt: Date.now(), mirrorRevision });
 
       if (!syncExternal) {
-        return storedTokens;
+        return localTokens;
       }
 
       if (!account) {
-        return storedTokens;
+        return localTokens;
       }
 
       const aideckTokens = await readAideckCodexTokens(accountId);
-      const mergedTokens = mergeExternalTokens(storedTokens, aideckTokens, account);
+      const mergedRawTokens = mergeExternalTokens(localTokens, aideckTokens, account);
+      const mergedTokens =
+        account.credentialSync?.role === "follower" && mergedRawTokens
+          ? { ...mergedRawTokens, refreshToken: undefined }
+          : mergedRawTokens;
 
       if (!mergedTokens) {
-        return storedTokens;
+        return localTokens;
       }
 
-      const credentialsChanged = !storedTokens || shouldSyncTokensFromAuthFile(storedTokens, mergedTokens);
+      const credentialsChanged = !localTokens || shouldSyncTokensFromAuthFile(localTokens, mergedTokens);
       if (credentialsChanged) {
         resetAccountHealthEvidenceForCredentialChange(accountId);
         await this.secretStore.setTokens(accountId, mergedTokens);
@@ -706,6 +717,7 @@ export class AccountsRepository {
       const hadAuthQuotaError = getQuotaIssueKind(account.quotaError) === "auth";
       const effectiveTokens = {
         ...tokens,
+        refreshToken: account.credentialSync?.role === "follower" ? undefined : tokens.refreshToken,
         accountId: tokens.accountId ?? account.accountId
       };
 
@@ -960,6 +972,7 @@ export class AccountsRepository {
       registrationAt?: number;
       disableBalancePool?: boolean;
       flushImmediately?: boolean;
+      credentialSync?: CodexAccountCredentialSyncInfo;
     } = {}
   ): Promise<CodexAccountRecord> {
     const claims = extractClaims(tokens.idToken, tokens.accessToken);
@@ -1008,6 +1021,14 @@ export class AccountsRepository {
     const previousProviderRoute = index.currentProviderRoute;
     const previousProviderAccountId = index.currentProviderAccountId;
     const existing = index.accounts.find((item) => item.id === id);
+    if (
+      existing?.credentialSync?.role === "follower" &&
+      options.credentialSync?.syncId !== existing.credentialSync.syncId
+    ) {
+      throw new AccountError("Follower credentials are controlled by the primary device; stop sync before reauthenticating", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
+    }
     const now = Date.now();
     const account = buildAccountRecordDraft({
       storageId: id,
@@ -1024,6 +1045,8 @@ export class AccountsRepository {
     if (options.disableBalancePool) {
       account.balancePoolEnabled = false;
     }
+    const effectiveCredentialSync = options.credentialSync ?? existing?.credentialSync;
+    account.credentialSync = effectiveCredentialSync ? { ...effectiveCredentialSync } : undefined;
 
     // 替换或添加账号
     index.accounts = index.accounts.filter((item) => item.id !== id);
@@ -1166,6 +1189,25 @@ export class AccountsRepository {
     });
   }
 
+  /** Import a synced account while marking it as a follower before observers can schedule renewal. */
+  async importSharedAccountsForCredentialSync(
+    input: SharedCodexAccountJson | SharedCodexAccountJson[],
+    credentialSync: CodexAccountCredentialSyncInfo
+  ): Promise<CodexAccountRecord[]> {
+    const entries = toSharedEntries(input).map((entry) => ({
+      ...entry,
+      tokens: {
+        ...entry.tokens,
+        refresh_token: undefined
+      }
+    }));
+    return this.importSharedAccountsInternal(entries, {
+      disableBalancePool: true,
+      flushImmediately: true,
+      credentialSync
+    });
+  }
+
   async importSharedAccountsWithSummary(
     input: SharedCodexAccountJson | SharedCodexAccountJson[]
   ): Promise<CodexImportResultSummary> {
@@ -1208,6 +1250,7 @@ export class AccountsRepository {
       restoreSource?: CodexAccountsRestoreResult["source"];
       disableBalancePool?: boolean;
       flushImmediately?: boolean;
+      credentialSync?: CodexAccountCredentialSyncInfo;
     } = {}
   ): Promise<CodexAccountRecord[]> {
     const entries = toSharedEntries(input);
@@ -1220,7 +1263,8 @@ export class AccountsRepository {
         persistImmediately: false,
         addedVia: "json",
         disableBalancePool: options.disableBalancePool,
-        flushImmediately: options.flushImmediately
+        flushImmediately: options.flushImmediately,
+        credentialSync: options.credentialSync
       });
       const index = options.allowRecoveryWrite ? await this.readIndexForRecovery() : await this.readIndex();
       const account = index.accounts.find((item) => item.id === created.id);
@@ -1329,6 +1373,7 @@ export class AccountsRepository {
     // 切号前按需刷新 token，避免写入过期 token 导致 codex 登录失败（对齐 cockpit switch_account_managed）
     let effectiveTokens: CodexTokens = {
       ...tokens,
+      refreshToken: account.credentialSync?.role === "follower" ? undefined : tokens.refreshToken,
       accountId: account.accountId ?? tokens.accountId
     };
 
@@ -1362,6 +1407,11 @@ export class AccountsRepository {
   async removeAccount(accountId: string): Promise<void> {
     const index = await this.readIndex();
     const removed = index.accounts.find((item) => item.id === accountId);
+    if (removed?.credentialSync) {
+      throw new AccountError("Stop credential sync before removing this account", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
+    }
     if (!removeAccountFromIndex(index, accountId)) {
       return;
     }
@@ -1497,6 +1547,35 @@ export class AccountsRepository {
     this.writeIndex(index);
     this.notifyAccountsChanged([accountId]);
     return { ...account, sharing: account.sharing ? { ...account.sharing } : undefined };
+  }
+
+  async setAccountCredentialSyncInfo(
+    accountId: string,
+    credentialSync: CodexAccountCredentialSyncInfo | undefined
+  ): Promise<CodexAccountRecord> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      throw createError.accountNotFound(accountId);
+    }
+    if (credentialSync && (!credentialSync.syncId.trim() || !credentialSync.peerUserId.trim())) {
+      throw new AccountError("Credential sync metadata is invalid", { code: ErrorCode.ACCOUNT_INVALID_DATA });
+    }
+    account.credentialSync = credentialSync ? { ...credentialSync } : undefined;
+    account.updatedAt = Date.now();
+    this.invalidateTokenCache(accountId);
+    this.writeIndex(index);
+    this.notifyAccountsChanged([accountId]);
+    this.notifyAccountDirectoryChanged([accountId]);
+
+    if (credentialSync?.role === "follower") {
+      invalidateFreshAccountTokenRefresh(accountId);
+      const current = await this.secretStore.getTokens(accountId);
+      if (current?.accessToken && current.idToken) {
+        await this.updateTokens(accountId, { ...current, refreshToken: undefined });
+      }
+    }
+    return { ...account, credentialSync: account.credentialSync ? { ...account.credentialSync } : undefined };
   }
 
   /**
@@ -1815,9 +1894,12 @@ export class AccountsRepository {
         const nextTokens: CodexTokens = {
           idToken: auth.tokens.id_token,
           accessToken: auth.tokens.access_token,
-          refreshToken: auth.tokens.refresh_token,
+          refreshToken: account.credentialSync?.role === "follower" ? undefined : auth.tokens.refresh_token,
           accountId: auth.tokens.account_id ?? claims?.accountId ?? account.accountId
         };
+        if (account.credentialSync?.role === "follower" && auth.tokens.refresh_token) {
+          await this.writeAuthFile(nextTokens);
+        }
         const storedTokens = await this.secretStore.getTokens(derivedId);
 
         if (shouldSyncTokensFromAuthFile(storedTokens, nextTokens)) {

@@ -107,8 +107,10 @@ export function SavedAccountCard(props: {
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const healthFilter = getDashboardHealthFilter(account);
   const sharingFilter = getDashboardSharingFilter(account);
-  const incomingSharedAccount = sharingFilter === "received";
-  const outgoingSharedAccount = sharingFilter === "shared";
+  const syncFollower = account.credentialSyncRole === "follower";
+  const syncPrimary = account.credentialSyncRole === "primary";
+  const incomingSharedAccount = sharingFilter === "received" || syncFollower;
+  const outgoingSharedAccount = sharingFilter === "shared" || syncPrimary;
   const hasErrorHealth = healthFilter === "auth_invalid";
   const hasUsableRenewalWarning = healthFilter === "usable_no_renewal";
   const hasWarningHealth =
@@ -239,6 +241,17 @@ export function SavedAccountCard(props: {
                         : props.lang === "zh" || props.lang === "zh-hant"
                           ? "已共享"
                           : "Shared"}
+                  </span>
+                ) : null}
+                {!virtual && account.credentialSyncRole ? (
+                  <span class={`pill sharing-pill ${syncFollower ? "sharing-incoming" : "sharing-outgoing"}`}>
+                    {syncFollower
+                      ? props.lang === "zh" || props.lang === "zh-hant"
+                        ? "从设备"
+                        : "Follower"
+                      : props.lang === "zh" || props.lang === "zh-hant"
+                        ? "主设备"
+                        : "Primary"}
                   </span>
                 ) : null}
                 {!virtual ? renderHealthPill(account, props.lang) : null}
@@ -394,7 +407,7 @@ export function SavedAccountCard(props: {
                 iconOnly
                 label={props.copyImportJsonSucceeded ? copy.copySuccess : copy.copyAccountImportJsonBtn}
                 pending={props.copyImportJsonPending}
-                disabled={props.busy || Boolean(account.sharingState)}
+                disabled={props.busy || Boolean(account.sharingState) || Boolean(account.credentialSyncRole)}
                 onClick={() => onAction("copyAccountImportJson", account.id)}
               />
             ) : null}
@@ -491,7 +504,17 @@ export function SavedAccountCard(props: {
               </div>
             )}
             <div class="saved-back-footer" onClick={stopFlip} onKeyDown={stopFlip}>
-              {props.sharingEnabled !== false && !virtual && incomingSharedAccount ? (
+              {props.sharingEnabled !== false && !virtual && account.credentialSyncRole ? (
+                <ActionButton
+                  class="saved-back-share-action saved-back-return-action"
+                  icon={<span aria-hidden="true">↩</span>}
+                  iconOnly
+                  label={props.lang === "zh" || props.lang === "zh-hant" ? "停止同步" : "Stop sync"}
+                  pending={props.returnSharedAccountPending}
+                  disabled={props.busy}
+                  onClick={() => onAction("returnSharedAccount", account.id)}
+                />
+              ) : props.sharingEnabled !== false && !virtual && incomingSharedAccount ? (
                 <ActionButton
                   class="saved-back-share-action saved-back-return-action"
                   icon={<span aria-hidden="true">↩</span>}

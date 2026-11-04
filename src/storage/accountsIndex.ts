@@ -136,6 +136,7 @@ function isValidAccountsIndex(value: unknown): value is CodexAccountsIndex {
         record.accountGroup === "C") &&
       (record.balancePoolEnabled === undefined || typeof record.balancePoolEnabled === "boolean") &&
       (record.sharing === undefined || isValidAccountSharingInfo(record.sharing)) &&
+      (record.credentialSync === undefined || isValidCredentialSyncInfo(record.credentialSync)) &&
       (record.accountKind === undefined || record.accountKind === "chatgpt" || record.accountKind === "sub2api") &&
       (record.manualOnly === undefined || typeof record.manualOnly === "boolean") &&
       (record.quotaMode === undefined || record.quotaMode === "chatgpt" || record.quotaMode === "none") &&
@@ -144,6 +145,23 @@ function isValidAccountsIndex(value: unknown): value is CodexAccountsIndex {
       (record.tags === undefined || (Array.isArray(record.tags) && record.tags.every((tag) => typeof tag === "string")))
     );
   });
+}
+
+function isValidCredentialSyncInfo(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const sync = value as NonNullable<CodexAccountRecord["credentialSync"]>;
+  return (
+    typeof sync.syncId === "string" &&
+    Boolean(sync.syncId.trim()) &&
+    (sync.role === "primary" || sync.role === "follower") &&
+    typeof sync.peerUserId === "string" &&
+    Boolean(sync.peerUserId.trim()) &&
+    (sync.peerDisplayName === undefined || typeof sync.peerDisplayName === "string") &&
+    typeof sync.since === "number" &&
+    Number.isFinite(sync.since)
+  );
 }
 
 function isValidAccountSharingInfo(value: unknown): boolean {

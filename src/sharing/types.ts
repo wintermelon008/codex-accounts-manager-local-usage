@@ -3,6 +3,7 @@ import type { SharingEnvelope, SharingKeyMaterial } from "./crypto";
 
 export const SHARING_PACKAGE_SCHEMA = "codex-account-sharing-package/v1";
 export const SHARING_RETURN_PACKAGE_SCHEMA = "codex-account-sharing-return/v1";
+export const CREDENTIAL_SYNC_PACKAGE_SCHEMA = "codex-account-credential-sync/v1";
 
 export type SharingPublicProfile = {
   userId: string;
@@ -29,6 +30,53 @@ export type SharingRequest = {
   createdAt: number;
   updatedAt: number;
   fromProfile?: SharingPublicProfile;
+};
+
+export type CredentialSyncPackage = {
+  schema: typeof CREDENTIAL_SYNC_PACKAGE_SCHEMA;
+  syncId: string;
+  version: number;
+  eventId: string;
+  accounts: SharedCodexAccountJson[];
+};
+
+export type CredentialSyncPendingUpdate = {
+  initial?: boolean;
+  version: number;
+  eventId: string;
+  envelope: SharingEnvelope;
+  credentialFingerprint: string;
+  attempts: number;
+  nextAttemptAt?: number;
+};
+
+export type CredentialSyncRecord = {
+  syncId: string;
+  role: "primary" | "follower";
+  state: "pending" | "active";
+  peerUserId: string;
+  peerDisplayName?: string;
+  accountIds: string[];
+  version: number;
+  acknowledgedVersion?: number;
+  credentialFingerprint?: string;
+  pendingUpdate?: CredentialSyncPendingUpdate;
+  createdAt: number;
+};
+
+/** Encrypted latest-state record returned by the Relay. */
+export type CredentialSyncRelayRecord = {
+  syncId: string;
+  fromUserId: string;
+  toUserId: string;
+  version: number;
+  eventId: string;
+  envelope: SharingEnvelope;
+  state: "active" | "stopped";
+  stoppedBy?: string;
+  acknowledgedVersion: number;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type SharingLease = {
@@ -66,6 +114,7 @@ export type SharingState = {
   peers: SharingPeer[];
   pendingRequests: SharingRequest[];
   leases: SharingLease[];
+  credentialSyncs: CredentialSyncRecord[];
   processedTransferIds: string[];
 };
 
