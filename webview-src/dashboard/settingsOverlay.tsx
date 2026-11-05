@@ -24,6 +24,8 @@ import { CodeIcon } from "./icons";
 const AUTO_REFRESH_VALUES = Array.from({ length: 60 }, (_, index) => index + 1);
 const AUTO_REFRESH_SCALE_VALUES = [1, 15, 30, 45, 60];
 const HOT_SWITCH_GRACE_VALUES = [10, 30, 60, 90, 120, 180, 300];
+const SHARED_USAGE_SYNC_INTERVAL_VALUES = Array.from({ length: 51 }, (_, index) => index + 10);
+const SHARED_USAGE_SYNC_INTERVAL_SCALE_VALUES = [10, 15, 30, 60];
 const WARNING_VALUES = Array.from({ length: 18 }, (_, index) => 5 + index * 5);
 const WARNING_SCALE_VALUES = [5, 20, 35, 50, 65, 80, 90];
 type SettingsSectionId = "base" | "operations" | "switching" | "quota" | "advanced";
@@ -147,6 +149,32 @@ function resolveOperationsCopy(lang: DashboardState["lang"]): {
   };
 }
 
+function resolveSharedUsageSyncCopy(lang: DashboardState["lang"]): {
+  title: string;
+  sub: string;
+  value: (minutes: number) => string;
+} {
+  if (lang === "zh") {
+    return {
+      title: "从设备用量同步间隔",
+      sub: "从设备缓存有新版本时，至少按此间隔自动同步到主设备。",
+      value: (minutes) => `${minutes} 分钟`
+    };
+  }
+  if (lang === "zh-hant") {
+    return {
+      title: "從設備用量同步間隔",
+      sub: "從設備快取有新版本時，至少按此間隔自動同步到主設備。",
+      value: (minutes) => `${minutes} 分鐘`
+    };
+  }
+  return {
+    title: "Follower usage sync interval",
+    sub: "When follower usage changes, wait at least this long before publishing it to the primary.",
+    value: (minutes) => `${minutes} minutes`
+  };
+}
+
 export function SettingsOverlay(props: {
   open: boolean;
   copy: DashboardCopy;
@@ -175,6 +203,7 @@ export function SettingsOverlay(props: {
   };
   const quotaCountdownAutoStartCopy = resolveQuotaCountdownAutoStartCopy(props.lang);
   const operationsCopy = resolveOperationsCopy(props.lang);
+  const sharedUsageSyncCopy = resolveSharedUsageSyncCopy(props.lang);
 
   const toggleUsageRange = (range: (typeof LOCAL_USAGE_RANGE_OPTIONS)[number]): void => {
     const enabled = new Set(props.settings.localUsageEnabledRanges);
@@ -315,6 +344,22 @@ export function SettingsOverlay(props: {
                   >
                     <div class="settings-note">{props.copy.localUsagePriceSettingsNote}</div>
                   </SettingsToggleBlock>
+                  <div class="settings-block">
+                    <div class="settings-block-head">
+                      <div class="settings-block-title">{sharedUsageSyncCopy.title}</div>
+                      <div class="settings-block-sub">{sharedUsageSyncCopy.sub}</div>
+                    </div>
+                    <SettingsDiscreteSlider
+                      value={props.settings.sharedUsageSyncIntervalMinutes ?? 10}
+                      values={SHARED_USAGE_SYNC_INTERVAL_VALUES}
+                      accent="violet"
+                      scaleValues={SHARED_USAGE_SYNC_INTERVAL_SCALE_VALUES}
+                      valueLabel={sharedUsageSyncCopy.value}
+                      description={sharedUsageSyncCopy.value}
+                      onPreview={(value) => props.onPatchSettings({ sharedUsageSyncIntervalMinutes: value })}
+                      onCommit={(value) => patchAndSend("sharedUsageSyncIntervalMinutes", value)}
+                    />
+                  </div>
                 </section>
               ) : null}
               {activeSection === "operations" ? (

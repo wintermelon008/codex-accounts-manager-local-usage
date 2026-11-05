@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-11-codex-accounts-0-1-21-l5-credential-sync",
+      "id": "ann-2026-11-codex-accounts-0-1-21-l6-usage-sync",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.21-l5",
-      "title": "Codex Accounts Manager 0.1.21-l5 — Credential renewal sync",
-      "summary": "Keep shared account credentials current across a primary device and its followers.",
-      "content": "This stable local build adds primary-led credential renewal sync for shared accounts.\n1. The primary device remains active and visible while it renews and publishes the latest credentials.\n2. Follower devices use the shared account and accept credential updates without initiating renewal.\n3. The Relay stores only the latest end-to-end encrypted snapshot; retries, version checks, and acknowledgments handle transient delivery failures.",
+      "releaseVersion": "0.1.21-l6",
+      "title": "Codex Accounts Manager 0.1.21-l6 — Automatic usage sync",
+      "summary": "Keep shared account usage current without an on-demand follower read.",
+      "content": "This stable local build adds automatic cached usage synchronization for shared accounts.\n1. The Dashboard refresh button refreshes local usage and reads the primary device's cached follower data; it no longer starts an immediate follower read.\n2. Follower devices publish a new cached usage snapshot during normal sharing communication.\n3. The minimum automatic sync interval defaults to 10 minutes and can be configured from 10 to 60 minutes. The Relay stores only the latest end-to-end encrypted update until the primary acknowledges it.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -20,9 +20,9 @@
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.21-l5 — 账号续期同步",
-          "summary": "在主设备和从设备之间保持共享账号凭据最新。",
-          "content": "本稳定本地版本为共享账号增加由主设备负责的凭据续期同步。\n1. 主设备会继续保持活动和可见，并负责续期和发布最新凭据。\n2. 从设备可以使用共享账号并接收凭据更新，不主动发起续期。\n3. Relay 只保存端到端加密的最新快照，并通过重试、版本检查和确认应对临时传输失败。"
+          "title": "Codex Accounts Manager 0.1.21-l6 — 自动同步用量",
+          "summary": "无需即时读取请求，也能保持共享账号用量更新。",
+          "content": "本稳定本地版本为共享账号增加自动用量同步。\n1. Dashboard 的“刷新用量”只刷新本机用量并读取主设备已有的从设备缓存，不再发起即时读取。\n2. 从设备在普通共享通信中检测到新的本地缓存后自动发布用量快照。\n3. 自动同步最小间隔默认为 10 分钟，可在设置中调整为 10–60 分钟；Relay 只在主设备确认前保存最新的端到端加密更新。"
         }
       }
     }

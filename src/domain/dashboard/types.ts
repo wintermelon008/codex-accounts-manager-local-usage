@@ -26,6 +26,7 @@ export type DashboardSettingKey =
   | "localUsageDefaultRange"
   | "localUsageEnabledRanges"
   | "localUsageShowEquivalentPrice"
+  | "sharedUsageSyncIntervalMinutes"
   | "codexAppRestartEnabled"
   | "codexAppRestartMode"
   | "backgroundTokenRefreshEnabled"
@@ -64,6 +65,8 @@ export interface DashboardSettings {
   localUsageDefaultRange: DashboardLocalUsageRange;
   localUsageEnabledRanges: DashboardLocalUsageRange[];
   localUsageShowEquivalentPrice: boolean;
+  /** Minimum spacing, in minutes, between automatic follower usage publishes. */
+  sharedUsageSyncIntervalMinutes?: number;
   codexAppRestartEnabled: boolean;
   codexAppRestartMode: "auto" | "manual";
   backgroundTokenRefreshEnabled: boolean;
@@ -454,6 +457,11 @@ export interface DashboardSharingViewModel {
   peers: DashboardSharingPeerViewModel[];
   pendingRequests: DashboardSharingRequestViewModel[];
   credentialSyncs?: DashboardCredentialSyncViewModel[];
+  usageReadAvailable?: boolean;
+  usageReadPending?: boolean;
+  usageReadLastAt?: number;
+  usageReadError?: string;
+  accountUsageSources?: DashboardAccountUsageSourceViewModel[];
 }
 
 export interface DashboardMetricViewModel {
@@ -537,9 +545,23 @@ export interface DashboardAccountViewModel {
   quotaCountdownStartAvailable: boolean;
   tokenUsage?: DashboardAccountTokenUsageViewModel;
   autoSwitchLockedUntil?: number;
+  tokenUsageSources?: DashboardAccountUsageSourceViewModel[];
   /** Optional provider-owned presentation data for virtual accounts. */
   providerCard?: DashboardProviderAccountCardViewModel;
   metrics: DashboardMetricViewModel[];
+}
+
+export interface DashboardAccountUsageSourceViewModel {
+  accountId?: string;
+  sourceUserId: string;
+  sourceLabel: string;
+  sourceRole: "primary" | "follower";
+  syncId?: string;
+  calculatedAt?: number;
+  receivedAt?: number;
+  stale?: boolean;
+  tokenUsage?: DashboardAccountTokenUsageViewModel;
+  lifetimeTokenUsage?: DashboardAccountLifetimeTokenUsageViewModel;
 }
 
 /**
@@ -800,6 +822,7 @@ export type DashboardActionName =
   | "repairRuntime"
   | "restartServices"
   | "refreshLocalUsage"
+  | "refreshSharedUsage"
   | "unlockCodexSessionLocks"
   | "resetSeamlessSwitchRuntime"
   | "integrationAction"

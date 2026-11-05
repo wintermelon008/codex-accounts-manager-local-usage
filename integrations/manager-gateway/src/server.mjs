@@ -365,22 +365,84 @@ async function handleSharingRequest(request, response, url, sharingRelay, config
       return;
     }
     if (pathname === "/v1/sharing/credential-syncs/inbox" && request.method === "GET") {
+      const credentialSyncs = await sharingRelay.listIncomingCredentialSyncs(auth.userId, token);
+      const usageRequests = await sharingRelay.listIncomingUsageReadRequests(auth.userId, token);
+      const usageUpdates = await sharingRelay.listIncomingUsageUpdates(auth.userId, token);
       sendJson(
         response,
         200,
-        { credentialSyncs: await sharingRelay.listIncomingCredentialSyncs(auth.userId, token) },
+        { credentialSyncs, usageRequests, usageUpdates },
         config
       );
       return;
     }
     if (pathname === "/v1/sharing/credential-syncs/sent" && request.method === "GET") {
+      const credentialSyncs = await sharingRelay.listSentCredentialSyncs(auth.userId, token);
+      const usageRequests = await sharingRelay.listSentUsageReadRequests(auth.userId, token);
       sendJson(
         response,
         200,
-        { credentialSyncs: await sharingRelay.listSentCredentialSyncs(auth.userId, token) },
+        { credentialSyncs, usageRequests },
         config
       );
       return;
+    }
+
+    if (pathname === "/v1/sharing/usage-updates" && request.method === "POST") {
+      const body = await readJsonBody(request, 1024 * 1024);
+      sendJson(response, 201, await sharingRelay.publishUsageUpdate(auth.userId, body, token), config);
+      return;
+    }
+    const usageUpdateAckMatch = /^\/v1\/sharing\/usage-updates\/([^/]+)\/ack$/u.exec(pathname);
+    if (usageUpdateAckMatch?.[1] && request.method === "POST") {
+      const body = await readJsonBody(request, 32 * 1024);
+      sendJson(
+        response,
+        200,
+        await sharingRelay.acknowledgeUsageUpdate(
+          decodeURIComponent(usageUpdateAckMatch[1]),
+          body?.revision,
+          auth.userId,
+          token
+        ),
+        config
+      );
+      return;
+    }
+
+    if (pathname === "/v1/sharing/usage-requests" && request.method === "POST") {
+      const body = await readJsonBody(request, 32 * 1024);
+      sendJson(
+        response,
+        201,
+        { requests: await sharingRelay.createUsageReadRequests(auth.userId, body, token) },
+        config
+      );
+      return;
+    }
+    const usageRequestMatch = /^\/v1\/sharing\/usage-requests\/([^/]+)(?:\/(response|ack))?$/u.exec(pathname);
+    if (usageRequestMatch?.[1]) {
+      const requestId = decodeURIComponent(usageRequestMatch[1]);
+      const operation = usageRequestMatch[2];
+      if (operation === "response" && request.method === "POST") {
+        const body = await readJsonBody(request, 1024 * 1024);
+        sendJson(
+          response,
+          200,
+          await sharingRelay.respondToUsageReadRequest(requestId, auth.userId, body, token),
+          config
+        );
+        return;
+      }
+      if (operation === "ack" && request.method === "POST") {
+        sendJson(
+          response,
+          200,
+          await sharingRelay.acknowledgeUsageReadRequest(requestId, auth.userId, token),
+          config
+        );
+        return;
+      }
     }
     const credentialSyncMatch = /^\/v1\/sharing\/credential-syncs\/([^/]+)(?:\/(snapshot|ack|stop))?$/u.exec(pathname);
     if (credentialSyncMatch?.[1]) {

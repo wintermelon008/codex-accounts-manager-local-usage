@@ -14,11 +14,12 @@ vi.mock("../src/utils/network", async () => {
 
 import { AccountSharingService } from "../src/sharing/accountSharingService";
 import type { CodexAccountRecord, SharedCodexAccountJson } from "../src/core/types";
-import type { SharingLease, SharingTransfer } from "../src/sharing/types";
+import type { CredentialSyncRecord, SharingLease, SharingTransfer } from "../src/sharing/types";
 
 const directories: string[] = [];
 
 afterEach(async () => {
+  fetchWithTimeoutMock.mockReset();
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -64,9 +65,14 @@ describe("AccountSharingService local identity state", () => {
     const first = new AccountSharingService(createContext(firstDirectory) as never, firstRepository as never, vi.fn(), {
       now: () => 200
     });
-    const second = new AccountSharingService(createContext(secondDirectory) as never, secondRepository as never, vi.fn(), {
-      now: () => 200
-    });
+    const second = new AccountSharingService(
+      createContext(secondDirectory) as never,
+      secondRepository as never,
+      vi.fn(),
+      {
+        now: () => 200
+      }
+    );
 
     await first.initialize();
     await second.initialize();
@@ -76,14 +82,16 @@ describe("AccountSharingService local identity state", () => {
     expect(firstRepository.unhideAccounts).toHaveBeenCalledWith(["account-expired"]);
     expect(firstRepository.removeFromBalancePool).toHaveBeenCalledWith(["account-expired"]);
 
-    const localState = JSON.parse(
-      await readFile(path.join(firstDirectory, "sharing-local-state-v1.json"), "utf8")
-    ) as { version: number; keys: Record<string, string>; state: { profile: { userId: string } } };
+    const localState = JSON.parse(await readFile(path.join(firstDirectory, "sharing-local-state-v1.json"), "utf8")) as {
+      version: number;
+      keys: Record<string, string>;
+      state: { profile: { userId: string } };
+    };
     expect(localState.version).toBe(1);
     expect(localState.state.profile.userId).toBe(first.getProfile().userId);
-    expect((await stat(path.join(firstDirectory, "sharing-local-state-v1.json")).then((item) => item.mode)) & 0o777).toBe(
-      0o600
-    );
+    expect(
+      (await stat(path.join(firstDirectory, "sharing-local-state-v1.json")).then((item) => item.mode)) & 0o777
+    ).toBe(0o600);
   });
 
   it("repairs owner metadata after a terminal return outlives the sent-transfer listing", async () => {
@@ -217,6 +225,93 @@ describe("AccountSharingService feature toggle compatibility", () => {
     expect(globalState.update).toHaveBeenCalledWith("codexAccounts.accountSharing.enabled.v1", false);
     await service.setEnabled(true);
     expect(service.isEnabled()).toBe(true);
+    service.dispose();
+  });
+});
+
+describe("AccountSharingService manual remote usage reads", () => {
+  it("stores request metadata separately and leaves credential sync state unchanged", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codex-sharing-usage-request-"));
+    directories.push(directory);
+    const repo = {
+      listAccounts: vi.fn(async () => []),
+      onDidChangeAccounts: vi.fn(() => ({ dispose: vi.fn() }))
+    };
+    const context = {
+      globalStorageUri: { fsPath: directory },
+      globalState: { get: vi.fn(), update: vi.fn(async () => undefined) },
+      secrets: { delete: vi.fn(async () => undefined) }
+    };
+    const service = new AccountSharingService(context as never, repo as never, vi.fn(), {
+      now: () => 1_000,
+      relayUrl: () => "https://relay.example.invalid",
+      bootstrapToken: () => "bootstrap-token"
+    });
+    await service.initialize();
+
+    const sync: CredentialSyncRecord = {
+      syncId: "sync-primary-1234567890",
+      role: "primary",
+      state: "active",
+      peerUserId: "rw_peer_1234567890",
+      peerDisplayName: "U280",
+      accountIds: ["account-1"],
+      version: 4,
+      createdAt: 900
+    };
+    const internals = service as unknown as { state: { credentialSyncs: CredentialSyncRecord[] } };
+    internals.state.credentialSyncs = [sync];
+    await (service as unknown as { persistState: () => Promise<void> }).persistState();
+    const sharingStatePath = path.join(directory, "sharing-local-state-v1.json");
+    const before = JSON.parse(await readFile(sharingStatePath, "utf8")) as { state: unknown };
+    const poll = vi.spyOn(service, "poll").mockResolvedValue(undefined);
+    const calls: Array<{ url: string; body?: string }> = [];
+    fetchWithTimeoutMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
+      if (url.endsWith("/v1/sharing/register")) {
+        return new Response(JSON.stringify({ mailboxToken: "mailbox-token" }), { status: 200 });
+      }
+      if (url.endsWith("/v1/sharing/usage-requests")) {
+        return new Response(
+          JSON.stringify({
+            requests: [
+              {
+                id: "usage-request-1",
+                syncId: sync.syncId,
+                fromUserId: service.getProfile().userId,
+                toUserId: sync.peerUserId,
+                state: "pending",
+                createdAt: 1_000,
+                expiresAt: 61_000
+              }
+            ]
+          }),
+          { status: 201 }
+        );
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    await service.refreshRemoteAccountUsage();
+
+    expect(poll).toHaveBeenCalledOnce();
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://relay.example.invalid/v1/sharing/register",
+      "https://relay.example.invalid/v1/sharing/usage-requests"
+    ]);
+    expect(JSON.parse(calls[1]?.body ?? "{}")).toEqual({ syncIds: [sync.syncId] });
+
+    const after = JSON.parse(await readFile(sharingStatePath, "utf8")) as { state: unknown };
+    expect(after.state).toEqual(before.state);
+    await expect(readFile(path.join(directory, "shared-account-usage-v1.json"), "utf8")).resolves.toContain(
+      '"requestId":"usage-request-1"'
+    );
+    expect(service.getDashboardView()).toMatchObject({
+      usageReadAvailable: true,
+      usageReadPending: true,
+      accountUsageSources: []
+    });
     service.dispose();
   });
 });

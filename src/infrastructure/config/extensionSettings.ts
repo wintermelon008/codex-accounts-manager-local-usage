@@ -38,6 +38,9 @@ export class ExtensionSettingsStore {
       advancedAppearanceEnabled: config.get<boolean>("advancedAppearanceEnabled", false),
       ...resolveLocalUsageRanges(config),
       localUsageShowEquivalentPrice: config.get<boolean>("localUsageShowEquivalentPrice", true),
+      sharedUsageSyncIntervalMinutes: normalizeSharedUsageSyncIntervalMinutes(
+        config.get<number>("sharedUsageSyncIntervalMinutes", 10)
+      ),
       codexAppRestartEnabled: config.get<boolean>("codexAppRestartEnabled", false),
       codexAppRestartMode: config.get<"auto" | "manual">("codexAppRestartMode") ?? "manual",
       backgroundTokenRefreshEnabled: config.get<boolean>("backgroundTokenRefreshEnabled", true),
@@ -232,6 +235,13 @@ export function normalizeAutoRefreshMinutes(value: number): number {
   }
 
   return Math.max(1, Math.min(60, Math.round(value)));
+}
+
+export function normalizeSharedUsageSyncIntervalMinutes(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 10;
+  }
+  return Math.min(60, Math.max(10, Math.round(value)));
 }
 
 export function normalizeHotSwitchGraceSeconds(value: number): number {

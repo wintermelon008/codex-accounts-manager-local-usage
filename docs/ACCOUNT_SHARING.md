@@ -79,22 +79,22 @@ curl.exe --max-time 5 http://100.114.125.9:43120/healthz
 
 ### 2. 安装最新核心 Manager
 
-向好友提供同一份已审阅的 `0.1.21-l5` VSIX，例如：
+向好友提供同一份已审阅的 `0.1.21-l6` VSIX，例如：
 
 ```text
-codex-account-manager-0.1.21-l5.vsix
+codex-account-manager-0.1.21-l6.vsix
 ```
 
 Ubuntu：
 
 ```bash
-code --install-extension codex-account-manager-0.1.21-l5.vsix --force
+code --install-extension codex-account-manager-0.1.21-l6.vsix --force
 ```
 
 Windows PowerShell：
 
 ```powershell
-code --install-extension .\codex-account-manager-0.1.21-l5.vsix --force
+code --install-extension .\codex-account-manager-0.1.21-l6.vsix --force
 ```
 
 也可以在 VS Code 中执行 **Extensions: Install from VSIX…**。安装后必须 reload；如果使用 Remote-SSH，VSIX 必须安装在真正运行 Manager、Codex `auth.json` 和扩展状态的远端扩展宿主，而不是只安装在本地窗口。
@@ -154,6 +154,12 @@ code
 Relay 为每个同步关系保留一个端到端加密的最新凭据快照和单调版本号。从设备按 10 秒轮询接收新版本并确认；断线期间主设备会保留待发送更新，恢复连接后发送最新快照。重复确认和旧版本会被忽略，不会为每轮轮询创建新 transfer。账号卡片或共享弹窗中的 **停止同步** 会结束该关系；从设备保留最后一组凭据，后续需要重新认证才能恢复本地独立续期。
 
 续期同步要求主设备的 Manager Extension Host 在线，并且两端 Manager 都包含本 Relay 的 `credential-syncs` API。Headless daemon 不会单独刷新已加入续期同步的主设备账号，避免它轮换 token 后没有共享 Relay publisher 发布更新。升级客户端前，应先部署并 reload 仓库中的新版 `integrations/manager-gateway`；旧 Relay 不支持该 API 时，主设备会保留账号和待发送状态，但从设备不会收到新同步关系。主设备离线期间，从设备可继续使用尚未过期的 access token；过期后需等待主设备恢复或重新认证。自动接管不会启用，以免原主设备仍在线时两端同时使用旧 refresh token。
+
+### 主设备查看从设备用量
+
+续期同步账号的卡片用量会按来源分行显示：主设备显示“主设备（本机）”和每个从设备，从设备只显示“从设备（本机）”。卡片背面同样按来源显示累计用量，不会把来源相加成一个无法区分的数字。
+
+主设备点击本机用量面板的 **刷新用量** 时只刷新本机统计和主设备已经缓存的从设备数据。从设备在普通共享轮询中检测到本地用量缓存的新 `calculatedAt` 后，按设置的最小间隔自动向主设备发布一次端到端加密快照；主设备收到后写入独立的 `shared-account-usage-v1.json` 缓存并刷新面板。默认最小同步间隔为 10 分钟，可在设置面板调整。旧版一次性读取请求仍保留用于兼容，但新界面不再触发它。
 
 **限时借出** 保留原有归还期限与 owner 隐藏/移出无感池的行为，适合把账号临时交给其他设备使用。
 

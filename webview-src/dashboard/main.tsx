@@ -100,7 +100,8 @@ function App() {
   const [sharingAccountIds, setSharingAccountIds] = useState<string[]>([]);
   const [wakeupOpen, setWakeupOpen] = useState(false);
   const [wakeupAccountId, setWakeupAccountId] = useState<string>();
-  const [wakeupResult, setWakeupResult] = useState<Extract<DashboardHostMessage, { type: "dashboard:action-result" }>>();
+  const [wakeupResult, setWakeupResult] =
+    useState<Extract<DashboardHostMessage, { type: "dashboard:action-result" }>>();
   const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
   const [selectedHealthFilters, setSelectedHealthFilters] = useState<DashboardHealthFilter[]>([]);
   const [selectedSharingFilters, setSelectedSharingFilters] = useState<DashboardSharingFilter[]>([]);
@@ -487,7 +488,9 @@ function App() {
   const hideAccountsPending = isActionPending("hideAccounts");
   const unhideAccountsPending = isActionPending("unhideAccounts");
   const setAccountGroupPending = isActionPending("setAccountGroup");
-  const localUsageRefreshPending = isActionPending("refreshLocalUsage");
+  const localUsageRefreshPending =
+    isActionPending("refreshLocalUsage") ||
+    snapshot.sharing?.usageReadPending === true;
   const unlockCodexSessionLocksPending = isActionPending("unlockCodexSessionLocks");
   const repairRuntimePending = isActionPending("repairRuntime");
   const integrationActionPending = isActionPending("integrationAction");
@@ -1155,172 +1158,174 @@ function App() {
               </div>
             </div>
             {!snapshot.settings.advancedAppearanceEnabled ? (
-            <div class="saved-account-cards-content">
-            {selectedCount > 0 ? (
-              <BatchSelectionBar
-                copy={snapshot.copy}
-                lang={snapshot.lang}
-                selectedCount={selectedCount}
-                onClearSelection={() => dispatch({ type: "clear-selection" })}
-                refreshPending={batchRefreshPending}
-                resyncPending={batchResyncPending}
-                removePending={batchRemovePending}
-                sharePending={sharePending}
-                shareAccountsPending={shareAccountsPending}
-                sharingEnabled={sharingEnabled}
-                hidePending={hideAccountsPending}
-                unhidePending={unhideAccountsPending}
-                groupPending={setAccountGroupPending}
-                onRefresh={() => sendAction("batchRefresh", undefined, { accountIds: state.selectedAccountIds })}
-                onResync={() => sendAction("batchResyncProfile", undefined, { accountIds: state.selectedAccountIds })}
-                onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
-                onShare={handleShareTokens}
-                onShareAccounts={() => openSharingForAccounts(state.selectedAccountIds)}
-                onSetBalancePool={() =>
-                  sendAction("setBalancePool", undefined, { accountIds: state.selectedAccountIds })
-                }
-                onRemoveFromBalancePool={() =>
-                  sendAction("removeFromBalancePool", undefined, { accountIds: state.selectedAccountIds })
-                }
-                onHide={() => sendAction("hideAccounts", undefined, { accountIds: state.selectedAccountIds })}
-                onUnhide={() => sendAction("unhideAccounts", undefined, { accountIds: state.selectedAccountIds })}
-                onSetAccountGroup={(accountGroup) =>
-                  sendAction("setAccountGroup", undefined, { accountIds: state.selectedAccountIds, accountGroup })
-                }
-              />
-            ) : null}
-            <div class="accounts-grid">
-              {pageAccounts.map((account) => (
-                <SavedAccountCard
-                  key={account.id}
-                  account={account}
-                  lang={snapshot.lang}
-                  copy={snapshot.copy}
-                  settings={snapshot.settings}
-                  now={state.now}
-                  privacyMode={state.privacyMode}
-                  busy={isAccountBusy(account.id)}
-                  reloadPromptPending={isActionPending("reloadPrompt", account.id)}
-                  switchPending={isActionPending("switch", account.id)}
-                  reauthorizePending={isActionPending("reauthorize", account.id)}
-                  refreshPending={isActionPending("refresh", account.id)}
-                  copyImportJsonPending={isActionPending("copyAccountImportJson", account.id)}
-                  copyImportJsonSucceeded={modals.copyFeedbackKey === `account-import-json:${account.id}`}
-                  shareAccountsPending={isActionPending("shareAccounts", account.id)}
-                  returnSharedAccountPending={isActionPending("returnSharedAccount", account.id)}
-                  sharingEnabled={sharingEnabled}
-                  accountNameCopyPending={isActionPending("copyText", account.id)}
-                  accountNameCopySucceeded={modals.copyFeedbackKey === `account-name:${account.id}`}
-                  removePending={isActionPending("remove", account.id)}
-                  poolTogglePending={isActionPending("toggleBalancePool", account.id)}
-                  consumeResetCreditPending={isActionPending("consumeResetCredit", account.id)}
-                  providerActionPending={state.pendingActions.some(
-                    (request) => request.action === "integrationAction" && request.accountId === account.id
-                  )}
-                  selected={selectedAccountIds.has(account.id)}
-                  onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
-                  onConfigureWakeup={() => {
-                    setWakeupAccountId(account.id);
-                    setWakeupResult(undefined);
-                    setWakeupOpen(true);
-                  }}
-                  onAction={sendAction}
-                  onRequestShare={() => openSharingForAccounts([account.id])}
-                />
-              ))}
-            </div>
-            {displayedAccounts.length > 0 ? (
-              <nav
-                class="saved-accounts-pagination"
-                aria-label={resolveAccountPaginationLabel(snapshot.lang, displayedAccountPage)}
-              >
-                <div class="account-page-control">
-                  <label class="account-page-label" for="account-page-size">
-                    {resolveAccountPageSizeLabel(snapshot.lang)}
-                  </label>
-                  <select
-                    id="account-page-size"
-                    class="account-page-select"
-                    aria-label={resolveAccountPageSizeLabel(snapshot.lang)}
-                    value={accountsPageSize}
-                    onChange={(event) => handleAccountPageSizeChange(Number(event.currentTarget.value))}
-                  >
-                    {DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS.map((pageSize) => (
-                      <option key={pageSize} value={pageSize}>
-                        {pageSize}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div class="account-page-navigation">
-                  <button
-                    class="account-page-btn"
-                    type="button"
-                    disabled={displayedAccountPage.page <= 1}
-                    onClick={() => {
-                      setAccountsPage(displayedAccountPage.page - 1);
-                      setAccountPageJumpInput("");
-                    }}
-                  >
-                    {resolvePreviousPageLabel(snapshot.lang)}
-                  </button>
-                  <span class="account-page-status" aria-live="polite">
-                    {resolveAccountPaginationLabel(snapshot.lang, displayedAccountPage)}
-                  </span>
-                  <button
-                    class="account-page-btn"
-                    type="button"
-                    disabled={displayedAccountPage.page >= displayedAccountPage.pageCount}
-                    onClick={() => {
-                      setAccountsPage(displayedAccountPage.page + 1);
-                      setAccountPageJumpInput("");
-                    }}
-                  >
-                    {resolveNextPageLabel(snapshot.lang)}
-                  </button>
-                </div>
-                <form
-                  class="account-page-jump"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    handleAccountPageJump();
-                  }}
-                >
-                  <label class="account-page-label" for="account-page-jump-input">
-                    {resolveAccountPageJumpLabel(snapshot.lang)}
-                  </label>
-                  <input
-                    id="account-page-jump-input"
-                    class="account-page-input"
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    max={displayedAccountPage.pageCount}
-                    value={accountPageJumpInput}
-                    placeholder={String(displayedAccountPage.page)}
-                    aria-label={resolveAccountPageJumpLabel(snapshot.lang)}
-                    onInput={(event) => setAccountPageJumpInput(event.currentTarget.value)}
+              <div class="saved-account-cards-content">
+                {selectedCount > 0 ? (
+                  <BatchSelectionBar
+                    copy={snapshot.copy}
+                    lang={snapshot.lang}
+                    selectedCount={selectedCount}
+                    onClearSelection={() => dispatch({ type: "clear-selection" })}
+                    refreshPending={batchRefreshPending}
+                    resyncPending={batchResyncPending}
+                    removePending={batchRemovePending}
+                    sharePending={sharePending}
+                    shareAccountsPending={shareAccountsPending}
+                    sharingEnabled={sharingEnabled}
+                    hidePending={hideAccountsPending}
+                    unhidePending={unhideAccountsPending}
+                    groupPending={setAccountGroupPending}
+                    onRefresh={() => sendAction("batchRefresh", undefined, { accountIds: state.selectedAccountIds })}
+                    onResync={() =>
+                      sendAction("batchResyncProfile", undefined, { accountIds: state.selectedAccountIds })
+                    }
+                    onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
+                    onShare={handleShareTokens}
+                    onShareAccounts={() => openSharingForAccounts(state.selectedAccountIds)}
+                    onSetBalancePool={() =>
+                      sendAction("setBalancePool", undefined, { accountIds: state.selectedAccountIds })
+                    }
+                    onRemoveFromBalancePool={() =>
+                      sendAction("removeFromBalancePool", undefined, { accountIds: state.selectedAccountIds })
+                    }
+                    onHide={() => sendAction("hideAccounts", undefined, { accountIds: state.selectedAccountIds })}
+                    onUnhide={() => sendAction("unhideAccounts", undefined, { accountIds: state.selectedAccountIds })}
+                    onSetAccountGroup={(accountGroup) =>
+                      sendAction("setAccountGroup", undefined, { accountIds: state.selectedAccountIds, accountGroup })
+                    }
                   />
-                  <button class="account-page-btn" type="submit">
-                    {resolveAccountPageJumpButtonLabel(snapshot.lang)}
-                  </button>
-                </form>
-              </nav>
-            ) : null}
-            {displayedAccounts.length === 0 ? (
-              <div class="saved-accounts-hidden-empty">
-                {selectedSharingFilters.length > 0
-                  ? resolveSharingFilterEmptyLabel(snapshot.lang, selectedSharingFilters)
-                  : selectedHealthFilters.length > 0
-                    ? resolveHealthFilterEmptyLabel(snapshot.lang, selectedHealthFilters)
-                    : selectedPlanFilters.length > 0
-                      ? resolveAccountPlanFilterEmptyLabel(snapshot.lang)
-                      : hiddenAccountCount > 0 && !showHiddenAccounts
-                        ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
-                        : resolveAccountGroupEmptyLabel(snapshot.lang)}
+                ) : null}
+                <div class="accounts-grid">
+                  {pageAccounts.map((account) => (
+                    <SavedAccountCard
+                      key={account.id}
+                      account={account}
+                      lang={snapshot.lang}
+                      copy={snapshot.copy}
+                      settings={snapshot.settings}
+                      now={state.now}
+                      privacyMode={state.privacyMode}
+                      busy={isAccountBusy(account.id)}
+                      reloadPromptPending={isActionPending("reloadPrompt", account.id)}
+                      switchPending={isActionPending("switch", account.id)}
+                      reauthorizePending={isActionPending("reauthorize", account.id)}
+                      refreshPending={isActionPending("refresh", account.id)}
+                      copyImportJsonPending={isActionPending("copyAccountImportJson", account.id)}
+                      copyImportJsonSucceeded={modals.copyFeedbackKey === `account-import-json:${account.id}`}
+                      shareAccountsPending={isActionPending("shareAccounts", account.id)}
+                      returnSharedAccountPending={isActionPending("returnSharedAccount", account.id)}
+                      sharingEnabled={sharingEnabled}
+                      accountNameCopyPending={isActionPending("copyText", account.id)}
+                      accountNameCopySucceeded={modals.copyFeedbackKey === `account-name:${account.id}`}
+                      removePending={isActionPending("remove", account.id)}
+                      poolTogglePending={isActionPending("toggleBalancePool", account.id)}
+                      consumeResetCreditPending={isActionPending("consumeResetCredit", account.id)}
+                      providerActionPending={state.pendingActions.some(
+                        (request) => request.action === "integrationAction" && request.accountId === account.id
+                      )}
+                      selected={selectedAccountIds.has(account.id)}
+                      onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
+                      onConfigureWakeup={() => {
+                        setWakeupAccountId(account.id);
+                        setWakeupResult(undefined);
+                        setWakeupOpen(true);
+                      }}
+                      onAction={sendAction}
+                      onRequestShare={() => openSharingForAccounts([account.id])}
+                    />
+                  ))}
+                </div>
+                {displayedAccounts.length > 0 ? (
+                  <nav
+                    class="saved-accounts-pagination"
+                    aria-label={resolveAccountPaginationLabel(snapshot.lang, displayedAccountPage)}
+                  >
+                    <div class="account-page-control">
+                      <label class="account-page-label" for="account-page-size">
+                        {resolveAccountPageSizeLabel(snapshot.lang)}
+                      </label>
+                      <select
+                        id="account-page-size"
+                        class="account-page-select"
+                        aria-label={resolveAccountPageSizeLabel(snapshot.lang)}
+                        value={accountsPageSize}
+                        onChange={(event) => handleAccountPageSizeChange(Number(event.currentTarget.value))}
+                      >
+                        {DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS.map((pageSize) => (
+                          <option key={pageSize} value={pageSize}>
+                            {pageSize}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div class="account-page-navigation">
+                      <button
+                        class="account-page-btn"
+                        type="button"
+                        disabled={displayedAccountPage.page <= 1}
+                        onClick={() => {
+                          setAccountsPage(displayedAccountPage.page - 1);
+                          setAccountPageJumpInput("");
+                        }}
+                      >
+                        {resolvePreviousPageLabel(snapshot.lang)}
+                      </button>
+                      <span class="account-page-status" aria-live="polite">
+                        {resolveAccountPaginationLabel(snapshot.lang, displayedAccountPage)}
+                      </span>
+                      <button
+                        class="account-page-btn"
+                        type="button"
+                        disabled={displayedAccountPage.page >= displayedAccountPage.pageCount}
+                        onClick={() => {
+                          setAccountsPage(displayedAccountPage.page + 1);
+                          setAccountPageJumpInput("");
+                        }}
+                      >
+                        {resolveNextPageLabel(snapshot.lang)}
+                      </button>
+                    </div>
+                    <form
+                      class="account-page-jump"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        handleAccountPageJump();
+                      }}
+                    >
+                      <label class="account-page-label" for="account-page-jump-input">
+                        {resolveAccountPageJumpLabel(snapshot.lang)}
+                      </label>
+                      <input
+                        id="account-page-jump-input"
+                        class="account-page-input"
+                        type="number"
+                        inputMode="numeric"
+                        min="1"
+                        max={displayedAccountPage.pageCount}
+                        value={accountPageJumpInput}
+                        placeholder={String(displayedAccountPage.page)}
+                        aria-label={resolveAccountPageJumpLabel(snapshot.lang)}
+                        onInput={(event) => setAccountPageJumpInput(event.currentTarget.value)}
+                      />
+                      <button class="account-page-btn" type="submit">
+                        {resolveAccountPageJumpButtonLabel(snapshot.lang)}
+                      </button>
+                    </form>
+                  </nav>
+                ) : null}
+                {displayedAccounts.length === 0 ? (
+                  <div class="saved-accounts-hidden-empty">
+                    {selectedSharingFilters.length > 0
+                      ? resolveSharingFilterEmptyLabel(snapshot.lang, selectedSharingFilters)
+                      : selectedHealthFilters.length > 0
+                        ? resolveHealthFilterEmptyLabel(snapshot.lang, selectedHealthFilters)
+                        : selectedPlanFilters.length > 0
+                          ? resolveAccountPlanFilterEmptyLabel(snapshot.lang)
+                          : hiddenAccountCount > 0 && !showHiddenAccounts
+                            ? resolveHiddenAccountsEmptyLabel(snapshot.lang)
+                            : resolveAccountGroupEmptyLabel(snapshot.lang)}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-            </div>
             ) : null}
           </section>
         ) : null}
@@ -1343,11 +1348,10 @@ function App() {
           privacyMode={state.privacyMode}
           onClose={() => setWakeupOpen(false)}
           sendAction={sendAction}
-          pending={state.pendingActions.some(
-            (request) =>
-              ["saveWakeupTask", "removeWakeupTask", "toggleWakeupTask", "sendQuotaCountdownOnce"].includes(
-                request.action
-              )
+          pending={state.pendingActions.some((request) =>
+            ["saveWakeupTask", "removeWakeupTask", "toggleWakeupTask", "sendQuotaCountdownOnce"].includes(
+              request.action
+            )
           )}
           result={wakeupResult}
         />

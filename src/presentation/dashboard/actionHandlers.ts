@@ -317,6 +317,12 @@ async function runDashboardAction(
     case "refreshLocalUsage":
       await ctx.refreshLocalUsage?.();
       return undefined;
+    case "refreshSharedUsage":
+      if (!ctx.accountSharing) {
+        throw new Error("账号共享服务尚未启动");
+      }
+      await ctx.accountSharing.refreshRemoteAccountUsage();
+      return undefined;
     case "repairRuntime": {
       const lockCleanup = await clearStaleCodexSessionLocks();
       const repairResult = await vscode.commands.executeCommand<HotSwitchRuntimeRepairResult>(
@@ -356,7 +362,9 @@ async function runDashboardAction(
               console.error(
                 `[codexAccounts] runtime repair reload failed: ${error instanceof Error ? error.message : String(error)}`
               );
-              void vscode.window.showErrorMessage("运行时已回收，但无法自动重载窗口，请手动执行 Developer: Reload Window。");
+              void vscode.window.showErrorMessage(
+                "运行时已回收，但无法自动重载窗口，请手动执行 Developer: Reload Window。"
+              );
             }
           );
         }
@@ -1330,13 +1338,16 @@ async function handleBatchRemove(
       requested: removedMailboxEmails.length,
       removed: 0,
       failed: removedMailboxEmails.length,
-      failures: [{
-        message: language === "zh"
-          ? "邮箱管理未提供封禁邮箱清理能力，请更新邮箱管理扩展"
-          : language === "zh-hant"
-            ? "郵箱管理未提供封禁郵箱清理能力，請更新郵箱管理擴充功能"
-            : "The installed mailbox manager extension does not provide blocked-mailbox cleanup"
-      }]
+      failures: [
+        {
+          message:
+            language === "zh"
+              ? "邮箱管理未提供封禁邮箱清理能力，请更新邮箱管理扩展"
+              : language === "zh-hant"
+                ? "郵箱管理未提供封禁郵箱清理能力，請更新郵箱管理擴充功能"
+                : "The installed mailbox manager extension does not provide blocked-mailbox cleanup"
+        }
+      ]
     };
   }
   schedulePublishState();

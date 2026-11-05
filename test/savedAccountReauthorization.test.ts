@@ -64,7 +64,68 @@ function renderCard(
   return { tree, button: buttons.find((node) => node.props.label === "重新认证"), onAction };
 }
 
+function collectText(node: ComponentChildren): string {
+  if (node == null || typeof node === "boolean") {
+    return "";
+  }
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map(collectText).join("");
+  }
+  if (typeof node === "object" && "props" in node) {
+    return collectText(node.props.children);
+  }
+  return "";
+}
+
 describe("saved account reauthorization key", () => {
+  it("renders primary and follower usage as separate card rows", () => {
+    const { tree } = renderCard("healthy", {
+      credentialSyncRole: "primary",
+      tokenUsageSources: [
+        {
+          sourceUserId: "rw_primary_1234567890",
+          sourceLabel: "主设备（本机）",
+          sourceRole: "primary",
+          tokenUsage: {
+            status: "tracking",
+            window: "hourly",
+            resetAt: 1_800_000_000,
+            byModel: [],
+            inputTokens: 100,
+            cachedInputTokens: 0,
+            outputTokens: 20,
+            reasoningOutputTokens: 0,
+            totalTokens: 120
+          }
+        },
+        {
+          sourceUserId: "rw_follower_1234567890",
+          sourceLabel: "U280",
+          sourceRole: "follower",
+          tokenUsage: {
+            status: "tracking",
+            window: "hourly",
+            resetAt: 1_800_000_000,
+            byModel: [],
+            inputTokens: 50,
+            cachedInputTokens: 0,
+            outputTokens: 10,
+            reasoningOutputTokens: 0,
+            totalTokens: 60
+          }
+        }
+      ]
+    });
+
+    const text = collectText(tree);
+    expect(text).toContain("主设备（本机）");
+    expect(text).toContain("U280");
+    expect(text).not.toContain("本轮窗口 Token: 180");
+  });
+
   it.each<AccountHealthKind>(["refresh_failed", "refresh_token_invalid"])(
     "offers the existing key on yellow %s cards without making them red",
     (kind) => {

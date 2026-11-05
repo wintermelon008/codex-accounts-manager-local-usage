@@ -10,6 +10,7 @@ import {
   normalizeHotSwitchLongTurnPolicy,
   normalizeLocalUsageRange,
   normalizeLocalUsageRanges,
+  normalizeSharedUsageSyncIntervalMinutes,
   normalizeProxyAddresses,
   normalizeSeamlessQuotaBandSize,
   normalizeSeamlessSwitchThreshold,
@@ -64,6 +65,12 @@ export async function handleDashboardSettingUpdate(
         ) {
           resetSeamlessSwitchRuntimeState();
         }
+        updated = true;
+      }
+      break;
+    case "sharedUsageSyncIntervalMinutes":
+      if (typeof value === "number") {
+        await updateDashboardConfiguration(config, key, normalizeSharedUsageSyncIntervalMinutes(value));
         updated = true;
       }
       break;

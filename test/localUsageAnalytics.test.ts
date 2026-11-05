@@ -10,6 +10,7 @@ import {
   LocalUsageAnalyticsService,
   findAccountTokenUsageWindow,
   isSnapshotFresh,
+  readCachedAccountTokenUsage,
   scanLocalUsageAndAccountTokenUsage,
   scanLocalUsageSessions
 } from "../src/services/localUsageAnalytics";
@@ -27,6 +28,32 @@ const tempDirectories: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(tempDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+describe("readCachedAccountTokenUsage", () => {
+  it("reads the persisted account snapshot without requiring session files", async () => {
+    const root = await createTempDirectory();
+    const window = buildTestAccountUsageWindow(1_800_000_000, 42, NOW);
+    await writeFile(
+      path.join(root, ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME),
+      JSON.stringify({
+        schemaVersion: 5,
+        snapshot: {
+          status: "ready",
+          isRefreshing: false,
+          calculatedAt: NOW,
+          windowsByAccount: { "account-cached": [window] },
+          lifetimeWindowsByAccount: { "account-cached": [window] }
+        }
+      })
+    );
+
+    await expect(readCachedAccountTokenUsage(root)).resolves.toMatchObject({
+      status: "ready",
+      windowsByAccount: { "account-cached": [expect.objectContaining({ totalTokens: 42 })] },
+      lifetimeByAccount: { "account-cached": expect.objectContaining({ totalTokens: 42 }) }
+    });
+  });
 });
 
 describe("scanLocalUsageSessions", () => {

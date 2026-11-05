@@ -292,7 +292,22 @@ export function SavedAccountCard(props: {
                 : ""}
             </div>
           ) : null}
-          {account.tokenUsage ? (
+          {account.tokenUsageSources?.length ? (
+            <div class="saved-token-usage-sources">
+              {account.tokenUsageSources.map((source) => (
+                <div
+                  class={`saved-token-usage-source ${source.stale ? "is-stale" : ""}`}
+                  key={`${source.sourceUserId}:${source.syncId ?? "local"}`}
+                  title={formatAccountTokenUsageSourceTitle(source, props.lang)}
+                >
+                  <span class="saved-token-usage-source-label">{source.sourceLabel}</span>
+                  <span class="saved-token-usage-source-value">
+                    {formatAccountTokenUsageSource(source, props.lang)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : account.tokenUsage ? (
             <>
               <div class="saved-token-usage-line" title={formatAccountTokenUsageTitle(account, props.lang)}>
                 {formatAccountTokenUsage(account, props.lang)}
@@ -483,10 +498,20 @@ export function SavedAccountCard(props: {
                   value={account.accountTimeLabel}
                 />
                 {!virtual ? (
-                  <CardDetailRow
-                    label={resolveBackLabel("lifetimeUsage", props.lang)}
-                    value={formatLifetimeTokenUsage(account.lifetimeTokenUsage, props.lang)}
-                  />
+                  account.tokenUsageSources?.length ? (
+                    account.tokenUsageSources.map((source) => (
+                      <CardDetailRow
+                        key={`lifetime:${source.sourceUserId}:${source.syncId ?? "local"}`}
+                        label={resolveBackLabel("lifetimeUsage", props.lang)}
+                        value={`${source.sourceLabel}: ${formatLifetimeTokenUsage(source.lifetimeTokenUsage, props.lang)}`}
+                      />
+                    ))
+                  ) : (
+                    <CardDetailRow
+                      label={resolveBackLabel("lifetimeUsage", props.lang)}
+                      value={formatLifetimeTokenUsage(account.lifetimeTokenUsage, props.lang)}
+                    />
+                  )
                 ) : null}
                 <CardDetailRow
                   label={resolveBackLabel("maxConcurrency", props.lang)}
@@ -708,6 +733,57 @@ function formatAccountTokenUsage(account: DashboardAccountViewModel, lang: Dashb
   if (!usage) {
     return "";
   }
+  return formatTokenUsageSummary(usage, lang);
+}
+
+function formatAccountTokenUsageSource(
+  source: NonNullable<DashboardAccountViewModel["tokenUsageSources"]>[number],
+  lang: DashboardState["lang"]
+): string {
+  if (!source.tokenUsage) {
+    return source.stale
+      ? lang === "zh"
+        ? "暂未同步"
+        : lang === "zh-hant"
+          ? "暫未同步"
+          : "Not synced"
+      : lang === "zh"
+        ? "暂无记录"
+        : lang === "zh-hant"
+          ? "暫無記錄"
+          : "No record";
+  }
+  if (source.tokenUsage.status === "loading") {
+    return lang === "zh" ? "统计中" : lang === "zh-hant" ? "統計中" : "Calculating";
+  }
+  if (source.tokenUsage.status === "waiting") {
+    return lang === "zh" ? "待启用" : lang === "zh-hant" ? "待啟用" : "Pending";
+  }
+  const price = formatAccountTokenUsagePrice(source.tokenUsage.byModel, lang);
+  return `${formatCompactTokenCount(source.tokenUsage.totalTokens)} · ${price}`;
+}
+
+function formatAccountTokenUsageSourceTitle(
+  source: NonNullable<DashboardAccountViewModel["tokenUsageSources"]>[number],
+  lang: DashboardState["lang"]
+): string {
+  if (!source.tokenUsage) {
+    return formatAccountTokenUsageSource(source, lang);
+  }
+  const suffix = source.stale
+    ? lang === "zh"
+      ? "\n从设备数据可能已过期"
+      : lang === "zh-hant"
+        ? "\n從設備資料可能已過期"
+        : "\nFollower data may be stale"
+    : "";
+  return `${formatTokenUsageTitle(source.tokenUsage, lang)}${suffix}`;
+}
+
+function formatTokenUsageSummary(
+  usage: NonNullable<DashboardAccountViewModel["tokenUsage"]>,
+  lang: DashboardState["lang"]
+): string {
   const label = resolveTokenUsageLabel(lang);
   if (usage.status === "loading") {
     return `${label}: ${lang === "zh" ? "统计中" : lang === "zh-hant" ? "統計中" : "Calculating"}`;
@@ -726,21 +802,26 @@ function formatAccountTokenUsage(account: DashboardAccountViewModel, lang: Dashb
   return `${label}: ${formatCompactTokenCount(usage.totalTokens)} · ${price}`;
 }
 
+function formatTokenUsageTitle(
+  usage: NonNullable<DashboardAccountViewModel["tokenUsage"]>,
+  lang: DashboardState["lang"]
+): string {
+  if (usage.status !== "tracking") {
+    return formatTokenUsageSummary(usage, lang);
+  }
+  const label = resolveTokenUsageLabel(lang);
+  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
+  const details = formatTokenUsageDetails(usage, lang);
+  const suffix = lang === "zh" ? " Token" : lang === "zh-hant" ? " Token" : " tokens";
+  return `${label}: ${usage.totalTokens.toLocaleString()}${suffix} · ${price}\n${details}`;
+}
+
 function formatAccountTokenUsageTitle(account: DashboardAccountViewModel, lang: DashboardState["lang"]): string {
   const usage = account.tokenUsage;
   if (usage?.status !== "tracking") {
     return formatAccountTokenUsage(account, lang);
   }
-  const label = resolveTokenUsageLabel(lang);
-  const price = formatAccountTokenUsagePrice(usage.byModel, lang);
-  const details = formatTokenUsageDetails(usage, lang);
-  if (lang === "zh") {
-    return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}\n${details}`;
-  }
-  if (lang === "zh-hant") {
-    return `${label}: ${usage.totalTokens.toLocaleString()} Token · ${price}\n${details}`;
-  }
-  return `${label}: ${usage.totalTokens.toLocaleString()} tokens · ${price}\n${details}`;
+  return formatTokenUsageTitle(usage, lang);
 }
 
 function formatTokenUsageDetails(

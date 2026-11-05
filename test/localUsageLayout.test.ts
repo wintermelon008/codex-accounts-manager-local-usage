@@ -313,6 +313,23 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain("text-overflow: ellipsis");
   });
 
+  it("renders shared account usage as source rows and binds its read to the local refresh button", () => {
+    const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
+    const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
+    const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
+
+    expect(card).toContain("tokenUsageSources?.length");
+    expect(card).toContain("saved-token-usage-source");
+    expect(main).toContain('sendAction("refreshLocalUsage")');
+    expect(main).not.toContain('sendAction("refreshSharedUsage")');
+    expect(main).not.toContain("snapshot.sharing?.usageReadAvailable");
+    expect(
+      fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/localUsageSection.tsx"), "utf8")
+    ).not.toContain("onRefreshSharedUsage");
+    expect(stylesheet).toContain(".saved-token-usage-sources");
+    expect(stylesheet).not.toContain(".local-usage-header-actions");
+  });
+
   it("lets saved cards grow when multiple quota windows are visible", () => {
     const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
     const cardLayout = stylesheet.slice(
@@ -321,7 +338,7 @@ describe("local usage dashboard placement and responsive guards", () => {
     );
     const savedCard = stylesheet.slice(stylesheet.indexOf(".saved-card {"), stylesheet.indexOf(".saved-card::before"));
 
-    expect(cardLayout).toContain("--saved-card-min-height: 238px");
+    expect(cardLayout).toContain("--saved-card-min-height: 276px");
     expect(cardLayout).toContain("min-height: var(--saved-card-min-height)");
     expect(cardLayout).toContain("grid-template-rows: minmax(var(--saved-card-min-height), auto)");
     expect(cardLayout).not.toContain("height: var(--saved-card-height)");

@@ -82,7 +82,8 @@ const en: DashboardCopy = {
   localUsageSettingsTitle: "Local Usage Dashboard",
   localUsageSettingsSub: "Choose which cached time categories are available in the local Codex usage dashboard.",
   localUsageEnabledRangesTitle: "Enabled Usage Ranges",
-  localUsageEnabledRangesSub: "Select multiple categories. If none is selected, 24h is used automatically; changing this list does not rescan sessions.",
+  localUsageEnabledRangesSub:
+    "Select multiple categories. If none is selected, 24h is used automatically; changing this list does not rescan sessions.",
   localUsageRange24HoursDesc: "Eight aligned 3-hour buckets.",
   localUsageRange3DaysDesc: "Six half-day buckets, each merged from four 3-hour buckets.",
   localUsageRange7DaysDesc: "Show the most recent 7 days.",
@@ -173,7 +174,8 @@ const en: DashboardCopy = {
   hourlyQuotaControlTitle: "5-hour Quota Control",
   hourlyQuotaControlSub: "Control the 5-hour quota in the status bar, automatic switching, and warning notifications.",
   hourlyQuotaControlOnDesc: "Show the 5-hour status bar metric and use valid data for automation.",
-  hourlyQuotaControlOffDesc: "Hide the 5-hour status bar metric and ignore it for automation; dashboard display remains available.",
+  hourlyQuotaControlOffDesc:
+    "Hide the 5-hour status bar metric and ignore it for automation; dashboard display remains available.",
   tokenAutomationTitle: "Background Token Refresh",
   tokenAutomationSub: "Keep saved account tokens refreshed before they expire while VS Code stays open.",
   tokenAutomationOn: "Enable background token refresh",
@@ -378,7 +380,8 @@ export const dashboardCopyResources = defineLocaleResources(en, {
     localUsageEvents: "用量事件",
     localUsageModelUnknown: "未知模型",
     localUsageNote: "仅来自本机会话记录，不代表账号配额或账单。",
-    localUsagePriceNote: "按 OpenAI 标准短上下文 Token 单价估算；本地记录无法准确计算音频、图像、视频、转写和工具等按模态/时间/调用次数计价的项目。",
+    localUsagePriceNote:
+      "按 OpenAI 标准短上下文 Token 单价估算；本地记录无法准确计算音频、图像、视频、转写和工具等按模态/时间/调用次数计价的项目。",
     localUsageRange24Hours: "24h",
     localUsageRange3Days: "3d",
     localUsageRange7Days: "7d",

@@ -21,10 +21,7 @@ import { getActiveManagerIntegrationHost } from "../../integrations";
 import { isQuotaCountdownStartAvailable } from "../accounts/quotaCountdown";
 import { isFreePlanType, resolveLongQuotaLabel } from "../../utils/quotaLabels";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
-import {
-  accountConcurrencyTracker,
-  getPersistedAccountConcurrencySnapshot
-} from "../accounts/accountConcurrency";
+import { accountConcurrencyTracker, getPersistedAccountConcurrencySnapshot } from "../accounts/accountConcurrency";
 
 const DASHBOARD_TOKEN_READ_CONCURRENCY = 4;
 
@@ -72,9 +69,7 @@ export async function buildDashboardState(
   const indexHealth = await repo.getIndexHealthSummary();
   const accounts = (await repo.listAccounts()).filter(
     (account) =>
-      !isSub2ApiAccount(account) ||
-      visibleVirtualAccountIds === undefined ||
-      visibleVirtualAccountIds.has(account.id)
+      !isSub2ApiAccount(account) || visibleVirtualAccountIds === undefined || visibleVirtualAccountIds.has(account.id)
   );
   const accountViewStateById = new Map<string, DashboardAccountViewState>();
   await runWithConcurrencyLimit(accounts, DASHBOARD_TOKEN_READ_CONCURRENCY, async (account) => {
@@ -125,6 +120,7 @@ export async function buildDashboardState(
         currentWindowAccountId,
         autoSwitchRuntime,
         accountTokenUsage,
+        sharing,
         providerCards.get(account.id),
         deactivatedMailboxEmails
       )
@@ -159,27 +155,29 @@ function mapAccount(
   currentWindowAccountId?: string,
   autoSwitchRuntime?: ReturnType<typeof getAutoSwitchRuntimeSnapshot>,
   accountTokenUsage?: AccountTokenUsageSnapshot,
+  sharing?: DashboardSharingViewModel,
   providerCard?: DashboardAccountViewModel["providerCard"],
   deactivatedMailboxEmails?: ReadonlySet<string>
 ): DashboardAccountViewModel {
   const virtual = isSub2ApiAccount(account);
   const mailboxDeactivated =
     !virtual && deactivatedMailboxEmails?.has(normalizeDashboardEmail(account.email) ?? "") === true;
-  const canToggleStatusBar = account.isActive || account.providerActive
-    ? false
-    : Boolean(account.showInStatusBar) || extraSelectedCount < 2;
+  const canToggleStatusBar =
+    account.isActive || account.providerActive ? false : Boolean(account.showInStatusBar) || extraSelectedCount < 2;
   const health: ReturnType<typeof resolveAccountHealth> = virtual
     ? { kind: "healthy", issueKey: "virtual" }
-    : viewState?.health ??
-      resolveAccountHealth(account, viewState?.tokens, getTokenAutomationSnapshot(), { mailboxDeactivated });
+    : (viewState?.health ??
+      resolveAccountHealth(account, viewState?.tokens, getTokenAutomationSnapshot(), { mailboxDeactivated }));
   const dismissedHealth = mailboxDeactivated
     ? false
-    : viewState?.dismissedHealth ?? isHealthDismissed(account, health);
+    : (viewState?.dismissedHealth ?? isHealthDismissed(account, health));
   const automationState = viewState?.automationState;
+  const tokenUsage = virtual ? undefined : resolveAccountTokenUsage(account, accountTokenUsage);
+  const lifetimeTokenUsage = virtual ? undefined : resolveAccountLifetimeTokenUsage(account, accountTokenUsage);
   const subscription = virtual
     ? { text: "", title: "" }
     : resolveSubscriptionDisplay(account, viewState?.tokens, copy, lang);
-  const authMode = virtual ? undefined : account.authMode === "oauth" ? "chatgpt" : account.authMode ?? "chatgpt";
+  const authMode = virtual ? undefined : account.authMode === "oauth" ? "chatgpt" : (account.authMode ?? "chatgpt");
   const resetCreditsAvailable = virtual ? undefined : account.quotaSummary?.resetCreditsAvailable;
   const resetCreditsNextExpiresAt = virtual ? undefined : account.quotaSummary?.resetCreditsNextExpiresAt;
   if ((resetCreditsAvailable ?? 0) > 0 && resetCreditsNextExpiresAt == null) {
@@ -198,7 +196,7 @@ function mapAccount(
     accountKind: account.accountKind,
     manualOnly: virtual || account.manualOnly,
     providerActive: account.providerActive,
-    displayName: virtual ? "Sub2API Gateway" : account.accountName?.trim() ?? account.email,
+    displayName: virtual ? "Sub2API Gateway" : (account.accountName?.trim() ?? account.email),
     email: account.email,
     authMode,
     accountName: account.accountName,
@@ -210,7 +208,9 @@ function mapAccount(
     subscriptionText: subscription.text,
     subscriptionTitle: subscription.title,
     subscriptionColor: subscription.color,
-    addMethodLabel: virtual ? "Gateway | 手动" : `${formatAddMethod(account.addedVia, lang)} | ${formatAuthProvider(account.authProvider, lang)}`,
+    addMethodLabel: virtual
+      ? "Gateway | 手动"
+      : `${formatAddMethod(account.addedVia, lang)} | ${formatAuthProvider(account.authProvider, lang)}`,
     createdAt: account.createdAt,
     addedAtLabel: formatAddedAt(account.createdAt, copy.never),
     accountTimeLabel: formatAddedAt(account.registrationAt ?? account.importedAt ?? account.createdAt, copy.never),
@@ -265,13 +265,50 @@ function mapAccount(
     resetCreditsAvailable,
     resetCreditsNextExpiresAt,
     quotaCountdownStartAvailable: virtual ? false : isQuotaCountdownStartAvailable(account),
-    tokenUsage: virtual ? undefined : resolveAccountTokenUsage(account, accountTokenUsage),
-    lifetimeTokenUsage: virtual ? undefined : resolveAccountLifetimeTokenUsage(account, accountTokenUsage),
+    tokenUsage,
+    lifetimeTokenUsage,
+    tokenUsageSources: resolveAccountUsageSources(account, tokenUsage, lifetimeTokenUsage, sharing, lang),
     autoSwitchLockedUntil:
       autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
     providerCard: virtual ? providerCard : undefined,
     metrics: virtual ? [] : buildMetrics(account, copy, lang)
   };
+}
+
+export function resolveAccountUsageSources(
+  account: CodexAccountRecord,
+  tokenUsage: DashboardAccountViewModel["tokenUsage"],
+  lifetimeTokenUsage: DashboardAccountViewModel["lifetimeTokenUsage"],
+  sharing: DashboardSharingViewModel | undefined,
+  lang: DashboardState["lang"]
+): DashboardAccountViewModel["tokenUsageSources"] {
+  if (!account.credentialSync || !sharing) {
+    return undefined;
+  }
+  const localLabel =
+    account.credentialSync.role === "primary"
+      ? lang === "zh" || lang === "zh-hant"
+        ? "主设备（本机）"
+        : "Primary (local)"
+      : lang === "zh" || lang === "zh-hant"
+        ? "从设备（本机）"
+        : "Follower (local)";
+  const remote =
+    account.credentialSync.role === "primary"
+      ? (sharing.accountUsageSources ?? []).filter(
+          (source) => source.accountId === account.id && source.syncId === account.credentialSync?.syncId
+        )
+      : [];
+  return [
+    {
+      sourceUserId: sharing.userId,
+      sourceLabel: localLabel,
+      sourceRole: account.credentialSync.role,
+      tokenUsage,
+      lifetimeTokenUsage
+    },
+    ...remote
+  ];
 }
 
 function resolveAccountConcurrencySnapshot(account: CodexAccountRecord) {

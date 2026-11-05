@@ -66,6 +66,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
               JSON.stringify(account.lifetimeTokenUsage.byModel)
             ].join(",")
           : "",
+        account.tokenUsageSources ? JSON.stringify(account.tokenUsageSources) : "",
         account.healthKind,
         account.availability ?? "",
         account.renewal ?? "",
@@ -131,6 +132,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.settings.localUsageDefaultRange,
     (state.settings.localUsageEnabledRanges ?? [state.settings.localUsageDefaultRange ?? "24h"]).join(","),
     state.settings.localUsageShowEquivalentPrice ? "1" : "0",
+    state.settings.sharedUsageSyncIntervalMinutes ?? 10,
     state.settings.autoRefreshMinutes,
     state.settings.autoStartQuotaCountdownEnabled ? "1" : "0",
     state.settings.autoSwitchEnabled ? "1" : "0",

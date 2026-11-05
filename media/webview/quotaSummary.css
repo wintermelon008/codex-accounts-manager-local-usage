@@ -1245,7 +1245,7 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
   }
 }
 .saved-card-container {
-  --saved-card-min-height: 238px;
+  --saved-card-min-height: 276px;
   perspective: 1200px;
   position: relative;
   display: flex;
@@ -2107,6 +2107,35 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
   padding-top: 3px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.saved-token-usage-sources {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 3px;
+}
+.saved-token-usage-source {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.saved-token-usage-source-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saved-token-usage-source-value {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.saved-token-usage-source.is-stale {
+  color: var(--text-muted);
 }
 .saved-provider-usage {
   display: grid;
@@ -6620,7 +6649,7 @@ html[data-theme="auto"] body.vscode-light {
   gap: 16px;
 }
 .panel.advanced-appearance .saved-card-container {
-  --saved-card-min-height: 246px;
+  --saved-card-min-height: 284px;
 }
 .panel.advanced-appearance .saved-card {
   border-radius: 18px;

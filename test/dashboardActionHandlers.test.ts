@@ -201,8 +201,9 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
-  it("runs a forced local usage aggregation from the Dashboard action", async () => {
+  it("runs only local usage aggregation from the single Dashboard refresh action", async () => {
     const refreshLocalUsage = vi.fn().mockResolvedValue(undefined);
+    const refreshRemoteAccountUsage = vi.fn().mockResolvedValue(undefined);
     const result = await executeDashboardActionMessage(
       {
         context: {} as DashboardActionContext["context"],
@@ -211,6 +212,7 @@ describe("executeDashboardActionMessage", () => {
         schedulePublishState: vi.fn(),
         publishState: vi.fn(),
         refreshLocalUsage,
+        accountSharing: { refreshRemoteAccountUsage } as unknown as DashboardActionContext["accountSharing"],
         oauth: {} as DashboardActionContext["oauth"],
         announcements: {} as DashboardActionContext["announcements"],
         getAnnouncementOptions: () => ({ version: "0.1.16", locale: "zh" })
@@ -223,6 +225,32 @@ describe("executeDashboardActionMessage", () => {
     );
 
     expect(refreshLocalUsage).toHaveBeenCalledOnce();
+    expect(refreshRemoteAccountUsage).not.toHaveBeenCalled();
+    expect(result.status).toBe("completed");
+  });
+
+  it("starts a manual remote usage read without waiting for follower data", async () => {
+    const refreshRemoteAccountUsage = vi.fn().mockResolvedValue(undefined);
+    const result = await executeDashboardActionMessage(
+      {
+        context: {} as DashboardActionContext["context"],
+        repo: {} as DashboardActionContext["repo"],
+        resolveLanguage: () => "zh",
+        schedulePublishState: vi.fn(),
+        publishState: vi.fn(),
+        accountSharing: { refreshRemoteAccountUsage } as unknown as DashboardActionContext["accountSharing"],
+        oauth: {} as DashboardActionContext["oauth"],
+        announcements: {} as DashboardActionContext["announcements"],
+        getAnnouncementOptions: () => ({ version: "0.1.21-l6", locale: "zh" })
+      },
+      {
+        type: "dashboard:action",
+        action: "refreshSharedUsage",
+        requestId: "req-shared-usage-refresh"
+      }
+    );
+
+    expect(refreshRemoteAccountUsage).toHaveBeenCalledOnce();
     expect(result.status).toBe("completed");
   });
 
@@ -445,9 +473,7 @@ describe("executeDashboardActionMessage", () => {
   it("reloads once when the reset command reclaims an orphan runtime", async () => {
     const executeCommandMock = vi.mocked(vscode.commands.executeCommand);
     executeCommandMock.mockClear();
-    executeCommandMock
-      .mockResolvedValueOnce({ requiresReload: true })
-      .mockResolvedValueOnce(undefined);
+    executeCommandMock.mockResolvedValueOnce({ requiresReload: true }).mockResolvedValueOnce(undefined);
 
     const result = await executeDashboardActionMessage(
       {

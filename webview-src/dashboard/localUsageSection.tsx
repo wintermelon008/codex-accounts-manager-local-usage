@@ -187,9 +187,7 @@ function UsageChart(props: {
               <div class="local-usage-chart-track">
                 <div class="local-usage-chart-fill" style={{ height: `${barHeight}%` }} />
               </div>
-              <span class="local-usage-chart-label">
-                {formatLocalUsageAxisLabel(row, props.range, props.timeZone)}
-              </span>
+              <span class="local-usage-chart-label">{formatLocalUsageAxisLabel(row, props.range, props.timeZone)}</span>
             </div>
           );
         })}
@@ -258,7 +256,10 @@ function UsageBars(props: {
         {props.control}
       </div>
       {props.rows.length > 0 ? (
-        <div key={props.animationKey} class={`local-usage-bars is-range-transition ${props.scrollable ? "is-scrollable" : ""}`}>
+        <div
+          key={props.animationKey}
+          class={`local-usage-bars is-range-transition ${props.scrollable ? "is-scrollable" : ""}`}
+        >
           {props.rows.map((row) => {
             const value = formatTokenAndPrice(row.value, row.price, props.showPrice);
             return (
@@ -297,11 +298,7 @@ function rangeLabel(copy: DashboardCopy, range: DashboardLocalUsageRange): strin
   }
 }
 
-function formatTokenAndPrice(
-  tokens: number,
-  price: LocalUsagePriceEstimate | undefined,
-  showPrice: boolean
-): string {
+function formatTokenAndPrice(tokens: number, price: LocalUsagePriceEstimate | undefined, showPrice: boolean): string {
   const tokenText = formatTokenMillions(tokens);
   if (!showPrice || !price) {
     return tokenText;

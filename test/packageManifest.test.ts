@@ -111,6 +111,12 @@ describe("extension manifest configuration", () => {
     expect(properties?.["codexAccounts.localUsageShowEquivalentPrice"]?.markdownDescription).toContain(
       "Codex subscription bill"
     );
+    expect(properties?.["codexAccounts.sharedUsageSyncIntervalMinutes"]).toMatchObject({
+      type: "number",
+      default: 10,
+      minimum: 10,
+      maximum: 60
+    });
   });
 
   it("declares configurable proxy choices with a non-overriding default", () => {

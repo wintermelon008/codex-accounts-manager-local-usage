@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMetrics,
+  resolveAccountUsageSources,
   resolveAccountLifetimeTokenUsage,
   resolveAccountTokenUsage,
   resolveWorkspaceDisplay,
@@ -133,8 +134,75 @@ describe("buildMetrics", () => {
   });
 });
 
-
 describe("resolveAccountTokenUsage", () => {
+  it("keeps follower cards local even when a shared usage source is present in state", () => {
+    const account = {
+      id: "account",
+      email: "account@example.com",
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1,
+      credentialSync: {
+        syncId: "sync-follower",
+        role: "follower" as const,
+        peerUserId: "rw_primary_1234567890",
+        since: 1
+      }
+    };
+    const sources = resolveAccountUsageSources(
+      account,
+      undefined,
+      undefined,
+      {
+        userId: "rw_follower_1234567890",
+        displayName: "Follower",
+        relayConfigured: true,
+        peers: [],
+        pendingRequests: [],
+        accountUsageSources: [
+          {
+            accountId: "account",
+            syncId: "sync-follower",
+            sourceUserId: "rw_other_1234567890",
+            sourceLabel: "Other",
+            sourceRole: "follower",
+            receivedAt: 2
+          }
+        ]
+      },
+      "zh"
+    );
+
+    expect(sources).toHaveLength(1);
+    expect(sources?.[0]).toMatchObject({ sourceRole: "follower", sourceUserId: "rw_follower_1234567890" });
+
+    const primarySources = resolveAccountUsageSources(
+      { ...account, credentialSync: { ...account.credentialSync, role: "primary" as const } },
+      undefined,
+      undefined,
+      {
+        userId: "rw_primary_1234567890",
+        displayName: "Primary",
+        relayConfigured: true,
+        peers: [],
+        pendingRequests: [],
+        accountUsageSources: [
+          {
+            accountId: "account",
+            syncId: "sync-follower",
+            sourceUserId: "rw_follower_1234567890",
+            sourceLabel: "U280",
+            sourceRole: "follower",
+            receivedAt: 2
+          }
+        ]
+      },
+      "zh"
+    );
+    expect(primarySources).toHaveLength(2);
+    expect(primarySources?.[1]).toMatchObject({ sourceLabel: "U280", sourceRole: "follower" });
+  });
+
   it("falls back to and aggregates the current weekly window when reset timestamps drift", () => {
     const weeklyResetAt = 1_800_604_800;
     const snapshot: AccountTokenUsageSnapshot = {

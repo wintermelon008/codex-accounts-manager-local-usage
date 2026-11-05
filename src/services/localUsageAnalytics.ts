@@ -95,6 +95,21 @@ export type LocalUsageSnapshots = {
   accountTokenUsage: AccountTokenUsageSnapshot;
 };
 
+/** Read the last persisted per-account usage snapshot without scanning session logs. */
+export async function readCachedAccountTokenUsage(
+  globalStoragePath: string
+): Promise<AccountTokenUsageSnapshot | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(globalStoragePath, ACCOUNT_TOKEN_USAGE_CACHE_FILE_NAME), "utf8");
+    return parseAccountTokenUsageCache(raw)?.snapshot;
+  } catch (error) {
+    if (!isErrorCode(error, "ENOENT")) {
+      console.warn("[codexAccounts] cached account token usage ignored", error);
+    }
+    return undefined;
+  }
+}
+
 export type LocalUsageCombinedScanInput = LocalUsageScanInput & {
   usageAttributionDirectory: string;
 };
@@ -2266,8 +2281,7 @@ function isAccountTokenUsageSnapshot(value: unknown): value is AccountTokenUsage
         Array.isArray(windows) &&
         windows.every(isAccountTokenUsageWindow)
     ) &&
-    (candidate["lifetimeWindowsByAccount"] == null ||
-      isAccountUsageWindowMap(candidate["lifetimeWindowsByAccount"])) &&
+    (candidate["lifetimeWindowsByAccount"] == null || isAccountUsageWindowMap(candidate["lifetimeWindowsByAccount"])) &&
     (candidate["lifetimeByAccount"] == null || isAccountLifetimeUsageMap(candidate["lifetimeByAccount"]))
   );
 }
@@ -2276,13 +2290,13 @@ function isAccountUsageWindowMap(value: unknown): value is Record<string, Accoun
   const candidate = asRecord(value);
   return Boolean(
     candidate &&
-      Object.entries(candidate).every(
-        ([accountId, windows]) =>
-          accountId.length > 0 &&
-          accountId.length <= MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH &&
-          Array.isArray(windows) &&
-          windows.every(isAccountTokenUsageWindow)
-      )
+    Object.entries(candidate).every(
+      ([accountId, windows]) =>
+        accountId.length > 0 &&
+        accountId.length <= MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH &&
+        Array.isArray(windows) &&
+        windows.every(isAccountTokenUsageWindow)
+    )
   );
 }
 
@@ -2292,12 +2306,12 @@ function isAccountLifetimeUsageMap(
   const candidate = asRecord(value);
   return Boolean(
     candidate &&
-      Object.entries(candidate).every(
-        ([accountId, lifetime]) =>
-          accountId.length > 0 &&
-          accountId.length <= MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH &&
-          isAccountLifetimeUsage(lifetime)
-      )
+    Object.entries(candidate).every(
+      ([accountId, lifetime]) =>
+        accountId.length > 0 &&
+        accountId.length <= MAX_USAGE_ATTRIBUTION_THREAD_ID_LENGTH &&
+        isAccountLifetimeUsage(lifetime)
+    )
   );
 }
 
@@ -2305,12 +2319,12 @@ function isAccountLifetimeUsage(value: unknown): value is DashboardAccountLifeti
   const candidate = asRecord(value);
   return Boolean(
     candidate &&
-      isTokenTotals(candidate) &&
-      isFiniteNumber(candidate["windowCount"]) &&
-      candidate["windowCount"] >= 0 &&
-      (candidate["lastObservedAt"] == null || isFiniteNumber(candidate["lastObservedAt"])) &&
-      Array.isArray(candidate["byModel"]) &&
-      candidate["byModel"].every(isUsageModel)
+    isTokenTotals(candidate) &&
+    isFiniteNumber(candidate["windowCount"]) &&
+    candidate["windowCount"] >= 0 &&
+    (candidate["lastObservedAt"] == null || isFiniteNumber(candidate["lastObservedAt"])) &&
+    Array.isArray(candidate["byModel"]) &&
+    candidate["byModel"].every(isUsageModel)
   );
 }
 

@@ -76,6 +76,8 @@ function resolveActionLabel(lang: DashboardState["lang"], action: FailedDashboar
         return "刷新 Dashboard";
       case "refreshLocalUsage":
         return "刷新本地用量";
+      case "refreshSharedUsage":
+        return "刷新用量";
       case "refresh":
         return "刷新账号";
       case "resyncProfile":
@@ -100,6 +102,8 @@ function resolveActionLabel(lang: DashboardState["lang"], action: FailedDashboar
         return "重新整理 Dashboard";
       case "refreshLocalUsage":
         return "重新整理本機用量";
+      case "refreshSharedUsage":
+        return "重新整理用量";
       case "refresh":
         return "重新整理帳號";
       case "resyncProfile":
@@ -123,6 +127,8 @@ function resolveActionLabel(lang: DashboardState["lang"], action: FailedDashboar
       return "Refresh Dashboard";
     case "refreshLocalUsage":
       return "Refresh local usage";
+    case "refreshSharedUsage":
+      return "Refresh usage";
     case "refresh":
       return "Refresh account";
     case "resyncProfile":

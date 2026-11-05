@@ -182,6 +182,7 @@ export function isRetryableDashboardAction(action: DashboardActionName): boolean
     case "batchResyncProfile":
     case "refreshView":
     case "refreshLocalUsage":
+    case "refreshSharedUsage":
     case "refresh":
     case "resyncProfile":
     case "details":

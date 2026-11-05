@@ -281,4 +281,133 @@ describe("Manager sharing Relay", () => {
     assert.equal(transfer.state, "cancelled");
     assert.equal(transfer.result.message, "sharing lease expired before confirmation");
   });
+
+  it("routes one-shot reads and automatic usage updates through an active credential sync", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "manager-sharing-relay-usage-"));
+    directories.push(directory);
+    const relay = createSharingRelay({ stateDir: directory, bootstrapToken: "enroll-secret" });
+    const server = createGatewayServer({
+      sessions: { maxSessions: 1 },
+      config: { server: { host: "127.0.0.1", port: 0, token: undefined, corsOrigin: "*" } },
+      sharingRelay: relay
+    });
+    servers.push(server);
+    const address = await listen(server, "127.0.0.1", 0);
+    const baseUrl = `http://${address.host}:${address.port}`;
+    const profiles = [
+      {
+        userId: "rw_usage_a_1234567890",
+        displayName: "Primary",
+        identityPublicKey: "identity-a",
+        encryptionPublicKey: "encryption-a"
+      },
+      {
+        userId: "rw_usage_b_1234567890",
+        displayName: "Follower",
+        identityPublicKey: "identity-b",
+        encryptionPublicKey: "encryption-b"
+      }
+    ];
+    const auth = [];
+    for (const profile of profiles) {
+      const response = await fetch(`${baseUrl}/v1/sharing/register`, {
+        method: "POST",
+        headers: { authorization: "Bearer enroll-secret", "content-type": "application/json" },
+        body: JSON.stringify(profile)
+      });
+      assert.equal(response.status, 201);
+      auth.push({ authorization: `Bearer ${(await response.json()).mailboxToken}` });
+    }
+
+    const friendRequest = await fetch(`${baseUrl}/v1/sharing/requests`, {
+      method: "POST",
+      headers: { ...auth[0], "content-type": "application/json" },
+      body: JSON.stringify({ toUserId: profiles[1].userId })
+    });
+    const friendRequestId = (await friendRequest.json()).id;
+    const accepted = await fetch(`${baseUrl}/v1/sharing/requests/${friendRequestId}/accept`, {
+      method: "POST",
+      headers: auth[1]
+    });
+    assert.equal(accepted.status, 200);
+
+    const sync = await fetch(`${baseUrl}/v1/sharing/credential-syncs`, {
+      method: "POST",
+      headers: { ...auth[0], "content-type": "application/json" },
+      body: JSON.stringify({
+        syncId: "usage-sync-12345678",
+        recipientUserId: profiles[1].userId,
+        version: 1,
+        eventId: "credential-event-1234",
+        envelope: { ciphertext: "credentials-opaque" }
+      })
+    });
+    assert.equal(sync.status, 201);
+
+    const created = await fetch(`${baseUrl}/v1/sharing/usage-requests`, {
+      method: "POST",
+      headers: { ...auth[0], "content-type": "application/json" },
+      body: JSON.stringify({ syncIds: ["usage-sync-12345678"] })
+    });
+    assert.equal(created.status, 201);
+    const request = (await created.json()).requests[0];
+
+    const followerInbox = await fetch(`${baseUrl}/v1/sharing/credential-syncs/inbox`, { headers: auth[1] });
+    const inboxBody = await followerInbox.json();
+    assert.equal(inboxBody.usageRequests[0].id, request.id);
+    assert.equal(inboxBody.usageRequests[0].toUserId, profiles[1].userId);
+
+    const response = await fetch(`${baseUrl}/v1/sharing/usage-requests/${request.id}/response`, {
+      method: "POST",
+      headers: { ...auth[1], "content-type": "application/json" },
+      body: JSON.stringify({
+        revision: 3,
+        eventId: "usage-event-123456",
+        envelope: { ciphertext: "usage-opaque" }
+      })
+    });
+    assert.equal(response.status, 200);
+
+    const primarySent = await fetch(`${baseUrl}/v1/sharing/credential-syncs/sent`, { headers: auth[0] });
+    const sentBody = await primarySent.json();
+    assert.equal(sentBody.usageRequests[0].response.revision, 3);
+    assert.equal(sentBody.usageRequests[0].response.envelope.ciphertext, "usage-opaque");
+
+    const acknowledged = await fetch(`${baseUrl}/v1/sharing/usage-requests/${request.id}/ack`, {
+      method: "POST",
+      headers: auth[0]
+    });
+    assert.equal(acknowledged.status, 200);
+    const afterAck = await fetch(`${baseUrl}/v1/sharing/credential-syncs/sent`, { headers: auth[0] });
+    assert.deepEqual((await afterAck.json()).usageRequests, []);
+
+    const update = await fetch(`${baseUrl}/v1/sharing/usage-updates`, {
+      method: "POST",
+      headers: { ...auth[1], "content-type": "application/json" },
+      body: JSON.stringify({
+        syncId: "usage-sync-12345678",
+        revision: 7,
+        eventId: "usage-update-event-123456",
+        envelope: { ciphertext: "usage-update-opaque" }
+      })
+    });
+    assert.equal(update.status, 201);
+
+    const primaryInboxWithUpdate = await fetch(`${baseUrl}/v1/sharing/credential-syncs/inbox`, { headers: auth[0] });
+    const inboxWithUpdateBody = await primaryInboxWithUpdate.json();
+    assert.equal(inboxWithUpdateBody.usageUpdates[0].revision, 7);
+    assert.equal(inboxWithUpdateBody.usageUpdates[0].envelope.ciphertext, "usage-update-opaque");
+
+    const updateAcknowledged = await fetch(
+      `${baseUrl}/v1/sharing/usage-updates/usage-sync-12345678/ack`,
+      {
+        method: "POST",
+        headers: { ...auth[0], "content-type": "application/json" },
+        body: JSON.stringify({ revision: 7 })
+      }
+    );
+    assert.equal(updateAcknowledged.status, 200);
+    const afterUpdateAck = await fetch(`${baseUrl}/v1/sharing/credential-syncs/inbox`, { headers: auth[0] });
+    assert.deepEqual((await afterUpdateAck.json()).usageUpdates, []);
+  });
 });

@@ -9,6 +9,10 @@ const MAX_ENVELOPE_BYTES = 4 * 1024 * 1024;
 const MAX_REQUESTS_PER_USER = 256;
 const MAX_TRANSFERS_PER_USER = 256;
 const MAX_RETURN_ENVELOPES = 50;
+const MAX_USAGE_REQUESTS_PER_USER = 64;
+const MAX_USAGE_UPDATES_PER_USER = 64;
+const USAGE_REQUEST_TTL_MS = 60 * 1000;
+const MAX_USAGE_ENVELOPE_BYTES = 512 * 1024;
 const SYNC_ID_PATTERN = /^[A-Za-z0-9_-]{16,80}$/u;
 
 /**
@@ -174,6 +178,20 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
           sync.updatedAt = updatedAt;
         }
       }
+      state.usageRequests = state.usageRequests.filter(
+        (usageRequest) =>
+          !(
+            (usageRequest.fromUserId === userId && usageRequest.toUserId === normalizedPeerUserId) ||
+            (usageRequest.fromUserId === normalizedPeerUserId && usageRequest.toUserId === userId)
+          )
+      );
+      state.usageUpdates = state.usageUpdates.filter(
+        (usageUpdate) =>
+          !(
+            (usageUpdate.fromUserId === userId && usageUpdate.toUserId === normalizedPeerUserId) ||
+            (usageUpdate.fromUserId === normalizedPeerUserId && usageUpdate.toUserId === userId)
+          )
+      );
       await persist();
       return { removed: true, peerUserId: normalizedPeerUserId };
     },
@@ -284,6 +302,162 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
         .map(publicCredentialSync);
     },
 
+    async createUsageReadRequests(fromUserId, payload, token) {
+      await ensureInitialized();
+      assertUserToken(fromUserId, token);
+      await expireUsageReadRequests();
+      const syncIds = normalizeSyncIds(payload?.syncIds);
+      const requests = [];
+      for (const syncId of syncIds) {
+        const sync = requireActiveCredentialSync(syncId, fromUserId);
+        const duplicate = state.usageRequests.find(
+          (request) =>
+            request.syncId === syncId &&
+            request.fromUserId === fromUserId &&
+            request.state === "pending" &&
+            request.expiresAt > now()
+        );
+        if (duplicate) {
+          requests.push(publicUsageReadRequest(duplicate));
+          continue;
+        }
+        const request = {
+          id: randomUUID(),
+          syncId,
+          fromUserId,
+          toUserId: sync.toUserId,
+          state: "pending",
+          createdAt: now(),
+          expiresAt: now() + USAGE_REQUEST_TTL_MS
+        };
+        state.usageRequests.push(request);
+        requests.push(publicUsageReadRequest(request));
+      }
+      pruneUsageReadRequests();
+      await persist();
+      return requests;
+    },
+
+    async listIncomingUsageReadRequests(userId, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      await expireUsageReadRequests();
+      return state.usageRequests
+        .filter((request) => request.toUserId === userId && request.state === "pending")
+        .map(publicUsageReadRequest);
+    },
+
+    async listSentUsageReadRequests(userId, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      await expireUsageReadRequests();
+      return state.usageRequests
+        .filter((request) => request.fromUserId === userId)
+        .map(publicUsageReadRequest);
+    },
+
+    async publishUsageUpdate(userId, payload, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      const syncId = normalizeSyncId(payload?.syncId);
+      const sync = requireActiveCredentialSyncForFollower(syncId, userId);
+      const revision = Number(payload?.revision);
+      const eventId = normalizeEventId(payload?.eventId);
+      const envelope = normalizeUsageEnvelope(payload?.envelope);
+      if (!Number.isSafeInteger(revision) || revision < 0) {
+        throw httpError(400, "account usage update revision is invalid");
+      }
+      const existing = state.usageUpdates.find((candidate) => candidate.syncId === syncId);
+      if (existing && existing.revision >= revision) {
+        return publicUsageUpdate(existing);
+      }
+      const update = {
+        syncId,
+        fromUserId: userId,
+        toUserId: sync.fromUserId,
+        revision,
+        eventId,
+        envelope,
+        updatedAt: now()
+      };
+      state.usageUpdates = state.usageUpdates.filter((candidate) => candidate.syncId !== syncId);
+      state.usageUpdates.push(update);
+      pruneUsageUpdates();
+      await persist();
+      return publicUsageUpdate(update);
+    },
+
+    async listIncomingUsageUpdates(userId, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      return state.usageUpdates.filter((update) => update.toUserId === userId).map(publicUsageUpdate);
+    },
+
+    async acknowledgeUsageUpdate(syncId, revision, userId, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      const normalizedSyncId = normalizeSyncId(syncId);
+      const normalizedRevision = Number(revision);
+      if (!Number.isSafeInteger(normalizedRevision) || normalizedRevision < 0) {
+        throw httpError(400, "account usage update acknowledgement revision is invalid");
+      }
+      const index = state.usageUpdates.findIndex(
+        (update) =>
+          update.syncId === normalizedSyncId &&
+          update.toUserId === userId &&
+          update.revision <= normalizedRevision
+      );
+      if (index >= 0) {
+        state.usageUpdates.splice(index, 1);
+        await persist();
+      }
+      return { acknowledged: true, syncId: normalizedSyncId, revision: normalizedRevision };
+    },
+
+    async respondToUsageReadRequest(requestId, userId, payload, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      await expireUsageReadRequests();
+      const request = state.usageRequests.find((candidate) => candidate.id === requestId);
+      if (!request || request.toUserId !== userId) {
+        throw httpError(404, "usage read request not found");
+      }
+      const revision = Number(payload?.revision);
+      const eventId = normalizeEventId(payload?.eventId);
+      const envelope = normalizeUsageEnvelope(payload?.envelope);
+      if (!Number.isSafeInteger(revision) || revision < 0) {
+        throw httpError(400, "usage read revision is invalid");
+      }
+      if (request.state === "responded") {
+        if (
+          request.response?.revision !== revision ||
+          request.response?.eventId !== eventId ||
+          JSON.stringify(request.response.envelope) !== JSON.stringify(envelope)
+        ) {
+          throw httpError(409, "usage read response is not idempotent");
+        }
+        return publicUsageReadRequest(request);
+      }
+      request.state = "responded";
+      request.response = { revision, eventId, envelope, updatedAt: now() };
+      await persist();
+      return publicUsageReadRequest(request);
+    },
+
+    async acknowledgeUsageReadRequest(requestId, userId, token) {
+      await ensureInitialized();
+      assertUserToken(userId, token);
+      const index = state.usageRequests.findIndex(
+        (candidate) => candidate.id === requestId && candidate.fromUserId === userId
+      );
+      if (index < 0) {
+        throw httpError(404, "usage read request not found");
+      }
+      state.usageRequests.splice(index, 1);
+      await persist();
+      return { acknowledged: true, requestId };
+    },
+
     async getCredentialSync(syncId, userId, token) {
       await ensureInitialized();
       assertUserToken(userId, token);
@@ -361,6 +535,8 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
         sync.stoppedBy = userId;
         sync.stopAcknowledgedBy = [userId];
         sync.updatedAt = now();
+        state.usageRequests = state.usageRequests.filter((request) => request.syncId !== sync.syncId);
+        state.usageUpdates = state.usageUpdates.filter((update) => update.syncId !== sync.syncId);
         await persist();
       }
       return publicCredentialSync(sync);
@@ -516,6 +692,17 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
     await persist();
   }
 
+  async function expireUsageReadRequests() {
+    const current = now();
+    const retained = state.usageRequests.filter(
+      (request) => request.state === "pending" ? request.expiresAt > current : request.expiresAt + USAGE_REQUEST_TTL_MS > current
+    );
+    if (retained.length !== state.usageRequests.length) {
+      state.usageRequests = retained;
+      await persist();
+    }
+  }
+
   function assertBootstrapToken(token) {
     if (!secretsEqual(normalizedBootstrapToken, token)) {
       throw httpError(401, "sharing relay enrollment token is invalid");
@@ -556,6 +743,28 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
     }
   }
 
+  function requireActiveCredentialSync(syncId, fromUserId) {
+    const sync = state.credentialSyncs.find(
+      (candidate) => candidate.syncId === syncId && candidate.fromUserId === fromUserId && candidate.state === "active"
+    );
+    if (!sync) {
+      throw httpError(404, "active credential sync not found");
+    }
+    requireTrustedPeer(fromUserId, sync.toUserId);
+    return sync;
+  }
+
+  function requireActiveCredentialSyncForFollower(syncId, toUserId) {
+    const sync = state.credentialSyncs.find(
+      (candidate) => candidate.syncId === syncId && candidate.toUserId === toUserId && candidate.state === "active"
+    );
+    if (!sync) {
+      throw httpError(404, "active credential sync not found");
+    }
+    requireTrustedPeer(toUserId, sync.fromUserId);
+    return sync;
+  }
+
   function pruneStoppedCredentialSyncs() {
     state.credentialSyncs = state.credentialSyncs.filter(
       (sync) => sync.state !== "stopped" || new Set(sync.stopAcknowledgedBy ?? []).size < 2
@@ -565,6 +774,8 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
   function pruneState() {
     const requestIdsByUser = new Map();
     const transferIdsByUser = new Map();
+    const usageRequestIdsByUser = new Map();
+    const usageUpdateIdsByUser = new Map();
     for (const request of state.requests) {
       appendBounded(requestIdsByUser, request.toUserId, request.id, MAX_REQUESTS_PER_USER);
       appendBounded(requestIdsByUser, request.fromUserId, request.id, MAX_REQUESTS_PER_USER);
@@ -573,12 +784,37 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
       appendBounded(transferIdsByUser, transfer.toUserId, transfer.id, MAX_TRANSFERS_PER_USER);
       appendBounded(transferIdsByUser, transfer.fromUserId, transfer.id, MAX_TRANSFERS_PER_USER);
     }
+    for (const request of state.usageRequests) {
+      appendBounded(usageRequestIdsByUser, request.toUserId, request.id, MAX_USAGE_REQUESTS_PER_USER);
+      appendBounded(usageRequestIdsByUser, request.fromUserId, request.id, MAX_USAGE_REQUESTS_PER_USER);
+    }
+    for (const update of state.usageUpdates) {
+      appendBounded(usageUpdateIdsByUser, update.toUserId, update.syncId, MAX_USAGE_UPDATES_PER_USER);
+      appendBounded(usageUpdateIdsByUser, update.fromUserId, update.syncId, MAX_USAGE_UPDATES_PER_USER);
+    }
     state.requests = state.requests.filter((request) =>
       requestIdsByUser.get(request.toUserId)?.includes(request.id) || requestIdsByUser.get(request.fromUserId)?.includes(request.id)
     );
     state.transfers = state.transfers.filter((transfer) =>
       transferIdsByUser.get(transfer.toUserId)?.includes(transfer.id) || transferIdsByUser.get(transfer.fromUserId)?.includes(transfer.id)
     );
+    state.usageRequests = state.usageRequests.filter((request) =>
+      usageRequestIdsByUser.get(request.toUserId)?.includes(request.id) ||
+      usageRequestIdsByUser.get(request.fromUserId)?.includes(request.id)
+    );
+    state.usageUpdates = state.usageUpdates.filter(
+      (update) =>
+        usageUpdateIdsByUser.get(update.toUserId)?.includes(update.syncId) ||
+        usageUpdateIdsByUser.get(update.fromUserId)?.includes(update.syncId)
+    );
+  }
+
+  function pruneUsageReadRequests() {
+    pruneState();
+  }
+
+  function pruneUsageUpdates() {
+    pruneState();
   }
 
   function appendBounded(map, key, value, maximum) {
@@ -650,6 +886,31 @@ function publicCredentialSync(sync) {
   };
 }
 
+function publicUsageReadRequest(request) {
+  return {
+    id: request.id,
+    syncId: request.syncId,
+    fromUserId: request.fromUserId,
+    toUserId: request.toUserId,
+    state: request.state,
+    createdAt: request.createdAt,
+    expiresAt: request.expiresAt,
+    response: request.response
+  };
+}
+
+function publicUsageUpdate(update) {
+  return {
+    syncId: update.syncId,
+    fromUserId: update.fromUserId,
+    toUserId: update.toUserId,
+    revision: update.revision,
+    eventId: update.eventId,
+    envelope: update.envelope,
+    updatedAt: update.updatedAt
+  };
+}
+
 function normalizeSyncId(value) {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!SYNC_ID_PATTERN.test(normalized)) {
@@ -674,6 +935,23 @@ function normalizeCredentialEnvelope(value) {
     throw httpError(400, "encrypted credential sync envelope is too large");
   }
   return value;
+}
+
+function normalizeUsageEnvelope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw httpError(400, "encrypted account usage envelope is invalid");
+  }
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_USAGE_ENVELOPE_BYTES) {
+    throw httpError(400, "encrypted account usage envelope is too large");
+  }
+  return value;
+}
+
+function normalizeSyncIds(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 50) {
+    throw httpError(400, "usage read sync IDs are invalid");
+  }
+  return Array.from(new Set(value.map(normalizeSyncId)));
 }
 
 function normalizeReturnEnvelope(value, accountIds) {
@@ -764,7 +1042,15 @@ function normalizeTransferResult(value) {
 }
 
 function emptyState() {
-  return { version: STATE_VERSION, users: {}, requests: [], transfers: [], credentialSyncs: [] };
+  return {
+    version: STATE_VERSION,
+    users: {},
+    requests: [],
+    transfers: [],
+    credentialSyncs: [],
+    usageRequests: [],
+    usageUpdates: []
+  };
 }
 
 function parseState(value) {
@@ -776,7 +1062,9 @@ function parseState(value) {
     users: value.users,
     requests: value.requests,
     transfers: value.transfers,
-    credentialSyncs: Array.isArray(value.credentialSyncs) ? value.credentialSyncs : []
+    credentialSyncs: Array.isArray(value.credentialSyncs) ? value.credentialSyncs : [],
+    usageRequests: Array.isArray(value.usageRequests) ? value.usageRequests : [],
+    usageUpdates: Array.isArray(value.usageUpdates) ? value.usageUpdates : []
   };
 }
 

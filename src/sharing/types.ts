@@ -1,9 +1,14 @@
 import type { CodexAccountSharingInfo, SharedCodexAccountJson } from "../core/types";
+import type {
+  DashboardAccountLifetimeTokenUsageViewModel,
+  DashboardAccountTokenUsageViewModel
+} from "../domain/dashboard/types";
 import type { SharingEnvelope, SharingKeyMaterial } from "./crypto";
 
 export const SHARING_PACKAGE_SCHEMA = "codex-account-sharing-package/v1";
 export const SHARING_RETURN_PACKAGE_SCHEMA = "codex-account-sharing-return/v1";
 export const CREDENTIAL_SYNC_PACKAGE_SCHEMA = "codex-account-credential-sync/v1";
+export const ACCOUNT_USAGE_PACKAGE_SCHEMA = "codex-account-usage-package/v1";
 
 export type SharingPublicProfile = {
   userId: string;
@@ -76,6 +81,50 @@ export type CredentialSyncRelayRecord = {
   stoppedBy?: string;
   acknowledgedVersion: number;
   createdAt: number;
+  updatedAt: number;
+};
+
+export type AccountUsagePackage = {
+  schema: typeof ACCOUNT_USAGE_PACKAGE_SCHEMA;
+  syncId: string;
+  /** Present for one-shot reads; omitted for automatic follower updates. */
+  requestId?: string;
+  revision: number;
+  calculatedAt?: number;
+  accounts: AccountUsagePackageEntry[];
+};
+
+export type AccountUsagePackageEntry = {
+  accountId: string;
+  tokenUsage?: DashboardAccountTokenUsageViewModel;
+  lifetimeTokenUsage?: DashboardAccountLifetimeTokenUsageViewModel;
+};
+
+/** A one-shot request for a follower's already-cached account usage. */
+export type AccountUsageReadRequest = {
+  id: string;
+  syncId: string;
+  fromUserId: string;
+  toUserId: string;
+  state: "pending" | "responded";
+  createdAt: number;
+  expiresAt: number;
+  response?: {
+    revision: number;
+    eventId: string;
+    envelope: SharingEnvelope;
+    updatedAt: number;
+  };
+};
+
+/** Latest cached usage published by a follower during normal sync polling. */
+export type AccountUsageUpdate = {
+  syncId: string;
+  fromUserId: string;
+  toUserId: string;
+  revision: number;
+  eventId: string;
+  envelope: SharingEnvelope;
   updatedAt: number;
 };
 

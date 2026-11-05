@@ -168,6 +168,38 @@ describe("buildDashboardStateSignature", () => {
     expect(buildDashboardStateSignature(groupFilterChanged)).not.toBe(buildDashboardStateSignature(base));
   });
 
+  it("changes when a shared account usage source changes", () => {
+    const before = createState();
+    const after: DashboardState = {
+      ...before,
+      accounts: [
+        {
+          ...before.accounts[0],
+          tokenUsageSources: [
+            {
+              sourceUserId: "rw_follower_1234567890",
+              sourceLabel: "U280",
+              sourceRole: "follower",
+              tokenUsage: {
+                status: "tracking",
+                window: "hourly",
+                resetAt: 1_800_000_000,
+                byModel: [],
+                inputTokens: 40,
+                cachedInputTokens: 0,
+                outputTokens: 10,
+                reasoningOutputTokens: 0,
+                totalTokens: 50
+              }
+            }
+          ]
+        }
+      ]
+    };
+
+    expect(buildDashboardStateSignature(after)).not.toBe(buildDashboardStateSignature(before));
+  });
+
   it("changes when an account's raw plan type changes", () => {
     expect(buildDashboardStateSignature(createState({ planType: "free" }))).not.toBe(
       buildDashboardStateSignature(createState({ planType: "pro_20x" }))

@@ -31,6 +31,7 @@ describe("handleDashboardSettingUpdate", () => {
     expect(settings.unhideWeeklyQuotaThreshold).toBe(87.5);
     expect(settings.advancedAppearanceEnabled).toBe(false);
     expect(settings.autoStartQuotaCountdownEnabled).toBe(false);
+    expect(settings.sharedUsageSyncIntervalMinutes).toBe(10);
     expect(isAutoStartQuotaCountdownEnabled()).toBe(false);
 
     get.mockImplementation((key: string, fallback: unknown) => {
@@ -247,6 +248,19 @@ describe("handleDashboardSettingUpdate", () => {
     await expect(handleDashboardSettingUpdate("localUsageShowEquivalentPrice", false)).resolves.toBe(true);
 
     expect(update).toHaveBeenCalledWith("localUsageShowEquivalentPrice", false, vscode.ConfigurationTarget.Global);
+  });
+
+  it("persists and clamps the automatic shared-usage sync interval", async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: vi.fn(),
+      update,
+      inspect: vi.fn(() => undefined)
+    } as never);
+
+    await expect(handleDashboardSettingUpdate("sharedUsageSyncIntervalMinutes", 5)).resolves.toBe(true);
+
+    expect(update).toHaveBeenCalledWith("sharedUsageSyncIntervalMinutes", 10, vscode.ConfigurationTarget.Global);
   });
 
   it("persists and normalizes hot-switch grace and long-turn policy settings", async () => {
