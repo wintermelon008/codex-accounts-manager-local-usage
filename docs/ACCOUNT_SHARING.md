@@ -79,22 +79,22 @@ curl.exe --max-time 5 http://100.114.125.9:43120/healthz
 
 ### 2. 安装最新核心 Manager
 
-向好友提供同一份已审阅的 `0.1.21-l6` VSIX，例如：
+向好友提供同一份已审阅的 `0.1.21-l7` VSIX，例如：
 
 ```text
-codex-account-manager-0.1.21-l6.vsix
+codex-account-manager-0.1.21-l7.vsix
 ```
 
 Ubuntu：
 
 ```bash
-code --install-extension codex-account-manager-0.1.21-l6.vsix --force
+code --install-extension codex-account-manager-0.1.21-l7.vsix --force
 ```
 
 Windows PowerShell：
 
 ```powershell
-code --install-extension .\codex-account-manager-0.1.21-l6.vsix --force
+code --install-extension .\codex-account-manager-0.1.21-l7.vsix --force
 ```
 
 也可以在 VS Code 中执行 **Extensions: Install from VSIX…**。安装后必须 reload；如果使用 Remote-SSH，VSIX 必须安装在真正运行 Manager、Codex `auth.json` 和扩展状态的远端扩展宿主，而不是只安装在本地窗口。
@@ -159,7 +159,7 @@ Relay 为每个同步关系保留一个端到端加密的最新凭据快照和�
 
 续期同步账号的卡片用量会按来源分行显示：主设备显示“主设备（本机）”和每个从设备，从设备只显示“从设备（本机）”。卡片背面同样按来源显示累计用量，不会把来源相加成一个无法区分的数字。
 
-主设备点击本机用量面板的 **刷新用量** 时会刷新本机统计，并向所有活动同步关系发起一次性读取请求；从设备在普通共享轮询中检测到本地用量缓存的新 `calculatedAt` 后，按设置的最小间隔异步向主设备发布一次端到端加密快照。主设备按同步关系分别缓存并展示各从设备来源，不会把多个来源合并成一个数字，也不会等待某个从设备的网络请求完成后才继续共享轮询。默认最小同步间隔为 10 分钟，可在设置面板调整。
+主设备点击本机用量面板的 **刷新用量** 时会刷新本机统计，并读取已经收到的从设备缓存；从设备在普通共享轮询中检测到本地用量缓存的新 `calculatedAt` 后，按设置的最小间隔异步向主设备发布一次端到端加密快照。主设备按同步关系分别缓存并展示各从设备来源，不会把多个来源合并成一个数字，也不会等待某个从设备的网络请求完成后才继续共享轮询。默认最小同步间隔为 10 分钟，可在设置面板调整为 10–60 分钟。
 
 **限时借出** 保留原有归还期限与 owner 隐藏/移出无感池的行为，适合把账号临时交给其他设备使用。
 

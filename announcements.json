@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-11-codex-accounts-0-1-21-l6-usage-sync",
+      "id": "ann-2026-11-codex-accounts-0-1-21-l7-priority-refresh",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.21-l6",
-      "title": "Codex Accounts Manager 0.1.21-l6 — Automatic usage sync",
-      "summary": "Keep shared account usage current without an on-demand follower read.",
-      "content": "This stable local build adds automatic cached usage synchronization for shared accounts.\n1. The Dashboard refresh button refreshes local usage and reads the primary device's cached follower data; it no longer starts an immediate follower read.\n2. Follower devices publish a new cached usage snapshot during normal sharing communication.\n3. The minimum automatic sync interval defaults to 10 minutes and can be configured from 10 to 60 minutes. The Relay stores only the latest end-to-end encrypted update until the primary acknowledges it.",
+      "releaseVersion": "0.1.21-l7",
+      "title": "Codex Accounts Manager 0.1.21-l7 — Priority and refresh updates",
+      "summary": "Multi-device sharing, account priorities, and persistent login across reloads.",
+      "content": "This stable local build includes the l6 sharing updates and the l7 account and startup improvements.\n1. Share one primary account with multiple followers, report cached usage asynchronously, and remove follower credentials when an account is returned.\n2. Dashboard, quota scheduling, and Gateway fallback honor the same account priority order.\n3. Quota exhaustion is tracked separately from authentication health, and renewal sync displays device notes.\n4. Reload restores the current account and preserves login for access-only follower credentials.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-10-27T00:00:00Z",
+      "createdAt": "2026-11-06T05:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.21-l6 — 自动同步用量",
-          "summary": "无需即时读取请求，也能保持共享账号用量更新。",
-          "content": "本稳定本地版本为共享账号增加自动用量同步。\n1. Dashboard 的“刷新用量”只刷新本机用量并读取主设备已有的从设备缓存，不再发起即时读取。\n2. 从设备在普通共享通信中检测到新的本地缓存后自动发布用量快照。\n3. 自动同步最小间隔默认为 10 分钟，可在设置中调整为 10–60 分钟；Relay 只在主设备确认前保存最新的端到端加密更新。"
+          "title": "Codex Accounts Manager 0.1.21-l7 — 优先级与刷新改进",
+          "summary": "多设备共享、账号优先顺序，以及 reload 后账号与登录态恢复。",
+          "content": "本稳定本地版本包含 l6 的共享扩展与 l7 的账号、启动改进。\n1. 同一主设备账号可同步给多个从设备，用量缓存异步汇报，归还时自动删除从设备凭证。\n2. Dashboard、额度调度和 Gateway fallback 使用一致的账号优先顺序。\n3. 额度耗尽与认证健康状态分开处理，续期同步显示设备备注名。\n4. reload 后恢复当前账号，并保留无续期凭据从设备的登录态。"
         }
       }
     }
