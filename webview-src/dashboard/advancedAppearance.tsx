@@ -158,10 +158,7 @@ function formatPlanetQuota(account: DashboardAccountViewModel): string {
   return percentage == null ? "—" : `${Math.round(Math.max(0, Math.min(100, percentage)))}%`;
 }
 
-function resolvePlanetLabel(
-  account: DashboardAccountViewModel,
-  privacyMode: boolean
-): string {
+function resolvePlanetLabel(account: DashboardAccountViewModel, privacyMode: boolean): string {
   const name = getSensitiveDisplayValue(account.email || account.displayName, privacyMode, "email");
   const quota = formatPlanetQuota(account);
   return `${name} · ${quota}`;
@@ -387,17 +384,20 @@ function AdvancedAccountFocus(props: {
   const shareLabel =
     props.lang === "zh" || props.lang === "zh-hant"
       ? account.credentialSyncRole
-        ? "停止同步"
+        ? account.credentialSyncRole === "follower"
+          ? "归还账号"
+          : "共享账号"
         : incomingSharedAccount
-        ? "归还账号"
-        : "共享账号"
+          ? "归还账号"
+          : "共享账号"
       : account.credentialSyncRole
-        ? "Stop sync"
+        ? account.credentialSyncRole === "follower"
+          ? "Return account"
+          : "Share account"
         : incomingSharedAccount
-        ? "Return account"
-        : "Share account";
-  const copyEmailLabel =
-    props.lang === "zh" ? "复制邮箱" : props.lang === "zh-hant" ? "複製郵箱" : "Copy email";
+          ? "Return account"
+          : "Share account";
+  const copyEmailLabel = props.lang === "zh" ? "复制邮箱" : props.lang === "zh-hant" ? "複製郵箱" : "Copy email";
   const accountStatus = account.isCurrentWindowAccount
     ? props.copy.current
     : account.isActive || account.providerActive
@@ -421,9 +421,7 @@ function AdvancedAccountFocus(props: {
             Group {account.accountGroup}
           </span>
         ) : null}
-        {account.isHidden ? (
-          <span class="pill hidden">{props.lang === "zh" ? "已隐藏" : "Hidden"}</span>
-        ) : null}
+        {account.isHidden ? <span class="pill hidden">{props.lang === "zh" ? "已隐藏" : "Hidden"}</span> : null}
       </div>
       <div class="advanced-account-focus-metrics">
         {quotaMetrics.map((metric) => (
@@ -568,7 +566,7 @@ function AdvancedAccountFocus(props: {
             onClick={() => props.onAction("consumeResetCredit", account.id)}
           />
         ) : null}
-        {props.sharingEnabled !== false && !virtual && account.credentialSyncRole ? (
+        {props.sharingEnabled !== false && !virtual && account.credentialSyncRole === "follower" ? (
           <ActionButton
             class="advanced-account-action"
             icon={<SharingIcon />}
@@ -588,7 +586,7 @@ function AdvancedAccountFocus(props: {
             pending={props.isActionPending("returnSharedAccount", account.id)}
             onClick={() => props.onAction("returnSharedAccount", account.id)}
           />
-        ) : props.sharingEnabled !== false && !virtual && !outgoingSharedAccount ? (
+        ) : props.sharingEnabled !== false && !virtual && (!outgoingSharedAccount || syncPrimary) ? (
           <ActionButton
             class="advanced-account-action"
             icon={<SharingIcon />}
@@ -704,10 +702,7 @@ export function AdvancedAppearanceSummary(props: {
         />
         <div class="advanced-solar-telemetry">
           <div class="advanced-solar-focus-panel" aria-live="polite">
-            <div
-              key={`${selectedAccount?.id ?? "empty"}:${focusRevision}`}
-              class="advanced-solar-focus-content"
-            >
+            <div key={`${selectedAccount?.id ?? "empty"}:${focusRevision}`} class="advanced-solar-focus-content">
               <AdvancedAccountFocus
                 account={selectedAccount}
                 copy={props.copy}

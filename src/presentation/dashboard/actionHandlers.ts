@@ -181,7 +181,7 @@ async function runDashboardAction(
         throw new Error("找不到要归还的共享账号");
       }
       if (account.credentialSync) {
-        if (!(await ctx.accountSharing.stopCredentialSyncForAccount(account.id))) {
+        if (!(await ctx.accountSharing.stopCredentialSyncForAccount(account.id, payload?.sharingSyncId))) {
           throw new Error("该账号已停止续期同步");
         }
         ctx.schedulePublishState();

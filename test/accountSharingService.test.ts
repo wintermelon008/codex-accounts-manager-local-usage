@@ -12,6 +12,12 @@ vi.mock("../src/utils/network", async () => {
   return { ...actual, fetchWithTimeout: fetchWithTimeoutMock };
 });
 
+vi.mock("../src/auth/tokenRefreshCoordinator", () => ({
+  ensureFreshAccountTokens: vi.fn(
+    async (_repo: unknown, _accountId: string, options: { fallbackTokens?: unknown }) => options.fallbackTokens
+  )
+}));
+
 import { AccountSharingService } from "../src/sharing/accountSharingService";
 import type { CodexAccountRecord, SharedCodexAccountJson } from "../src/core/types";
 import type { CredentialSyncRecord, SharingLease, SharingTransfer } from "../src/sharing/types";
@@ -316,6 +322,260 @@ describe("AccountSharingService manual remote usage reads", () => {
   });
 });
 
+describe("AccountSharingService multi-device credential sync", () => {
+  it("allows one primary account to create independent syncs for different followers", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codex-sharing-multi-follower-"));
+    directories.push(directory);
+    const account: CodexAccountRecord = {
+      id: "account-shared-many",
+      email: "shared-many@example.invalid",
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const shared: SharedCodexAccountJson = {
+      id: account.id,
+      email: account.email,
+      tokens: { id_token: "id-token", access_token: "access-token", refresh_token: "refresh-token" }
+    };
+    const repo = {
+      listAccounts: vi.fn(async () => [account]),
+      onDidChangeAccounts: vi.fn(() => ({ dispose: vi.fn() })),
+      getAccount: vi.fn(async (accountId: string) => (accountId === account.id ? account : undefined)),
+      getTokens: vi.fn(async () => ({
+        idToken: "id-token",
+        accessToken: "access-token",
+        refreshToken: "refresh-token"
+      })),
+      exportSharedAccounts: vi.fn(async () => [shared]),
+      setAccountCredentialSyncInfo: vi.fn(async (_accountId: string, value: CodexAccountRecord["credentialSync"]) => {
+        account.credentialSync = value;
+        return account;
+      })
+    };
+    const context = {
+      globalStorageUri: { fsPath: directory },
+      globalState: { get: vi.fn(), update: vi.fn(async () => undefined) },
+      secrets: { delete: vi.fn(async () => undefined) }
+    };
+    const service = new AccountSharingService(context as never, repo as never, vi.fn(), {
+      now: () => 1_000,
+      relayUrl: () => "https://relay.example.invalid",
+      bootstrapToken: () => "bootstrap-token"
+    });
+    await service.initialize();
+    const profile = service.getProfile();
+    const internals = service as unknown as {
+      state: { peers: Array<typeof profile & { relationship: "trusted"; addedAt: number }> };
+      relayToken: string;
+      relayRegistrationValidatedAt: number;
+    };
+    internals.relayToken = "relay-token";
+    internals.relayRegistrationValidatedAt = 1_000;
+    internals.state.peers = [
+      { ...profile, userId: "rw_follower_a1234567890", displayName: "Follower A", relationship: "trusted", addedAt: 1 },
+      { ...profile, userId: "rw_follower_b1234567890", displayName: "Follower B", relationship: "trusted", addedAt: 1 }
+    ];
+    vi.spyOn(
+      service as unknown as { publishCredentialSyncRecord: (...args: unknown[]) => Promise<void> },
+      "publishCredentialSyncRecord"
+    ).mockImplementation(async (value) => {
+      const sync = value as CredentialSyncRecord;
+      sync.state = "active";
+      sync.version = 1;
+      sync.pendingUpdate = undefined;
+    });
+    fetchWithTimeoutMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/v1/sharing/credential-syncs/inbox")) {
+        return new Response(JSON.stringify({ credentialSyncs: [] }), { status: 200 });
+      }
+      if (url.includes("/v1/sharing/credential-syncs/") && url.endsWith("/stop")) {
+        return new Response(JSON.stringify({ state: "stopped" }), { status: 200 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    await service.startCredentialSyncWithPeer([account.id], "rw_follower_a1234567890");
+    await service.startCredentialSyncWithPeer([account.id], "rw_follower_b1234567890");
+
+    const syncs = service.getCredentialSyncs();
+    expect(syncs).toHaveLength(2);
+    expect(syncs.map((sync) => sync.peerUserId)).toEqual(["rw_follower_a1234567890", "rw_follower_b1234567890"]);
+    expect(account.credentialSync).toMatchObject({
+      role: "primary",
+      peerUserId: "rw_follower_a1234567890"
+    });
+    expect(service.getDashboardView().usageReadAvailable).toBe(true);
+
+    await expect(service.stopCredentialSyncForAccount(account.id, syncs[0]?.syncId)).resolves.toBe(true);
+    expect(service.getCredentialSyncs()).toHaveLength(1);
+    expect(account.credentialSync).toMatchObject({
+      role: "primary",
+      peerUserId: "rw_follower_b1234567890"
+    });
+    service.dispose();
+  });
+
+  it("deletes follower accounts and credentials when the follower returns a sync", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codex-sharing-follower-return-"));
+    directories.push(directory);
+    const account: CodexAccountRecord = {
+      id: "account-follower-return",
+      email: "follower-return@example.invalid",
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1,
+      credentialSync: {
+        syncId: "sync-follower-return",
+        role: "follower",
+        peerUserId: "rw_primary_1234567890",
+        since: 1
+      }
+    };
+    let removed = false;
+    const repo = {
+      listAccounts: vi.fn(async () => (removed ? [] : [account])),
+      onDidChangeAccounts: vi.fn(() => ({ dispose: vi.fn() })),
+      getAccount: vi.fn(async (accountId: string) => (accountId === account.id && !removed ? account : undefined)),
+      setAccountCredentialSyncInfo: vi.fn(async (_accountId: string, value: CodexAccountRecord["credentialSync"]) => {
+        account.credentialSync = value;
+        return account;
+      }),
+      removeAccount: vi.fn(async () => {
+        removed = true;
+      })
+    };
+    const context = {
+      globalStorageUri: { fsPath: directory },
+      globalState: { get: vi.fn(), update: vi.fn(async () => undefined) },
+      secrets: { delete: vi.fn(async () => undefined) }
+    };
+    const service = new AccountSharingService(context as never, repo as never, vi.fn(), {
+      now: () => 1_000,
+      relayUrl: () => "https://relay.example.invalid",
+      bootstrapToken: () => "bootstrap-token"
+    });
+    await service.initialize();
+    const internals = service as unknown as {
+      state: { credentialSyncs: CredentialSyncRecord[] };
+      relayToken: string;
+      relayRegistrationValidatedAt: number;
+    };
+    internals.relayToken = "relay-token";
+    internals.relayRegistrationValidatedAt = 1_000;
+    internals.state.credentialSyncs = [
+      {
+        syncId: "sync-follower-return",
+        role: "follower",
+        state: "active",
+        peerUserId: "rw_primary_1234567890",
+        accountIds: [account.id],
+        version: 1,
+        createdAt: 1
+      }
+    ];
+    fetchWithTimeoutMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/v1/sharing/credential-syncs/sync-follower-return/stop")) {
+        return new Response(JSON.stringify({ state: "stopped" }), { status: 200 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    await expect(service.stopCredentialSyncForAccount(account.id, "sync-follower-return")).resolves.toBe(true);
+
+    expect(repo.setAccountCredentialSyncInfo).toHaveBeenCalledWith(account.id, undefined);
+    expect(repo.removeAccount).toHaveBeenCalledWith(account.id);
+    expect(removed).toBe(true);
+    expect(service.getCredentialSyncs()).toEqual([]);
+    service.dispose();
+  });
+
+  it("does not wait for follower usage reports before completing the sharing poll", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codex-sharing-usage-async-"));
+    directories.push(directory);
+    const repo = {
+      listAccounts: vi.fn(async () => []),
+      onDidChangeAccounts: vi.fn(() => ({ dispose: vi.fn() }))
+    };
+    const context = {
+      globalStorageUri: { fsPath: directory },
+      globalState: { get: vi.fn(), update: vi.fn(async () => undefined) },
+      secrets: { delete: vi.fn(async () => undefined) }
+    };
+    const service = new AccountSharingService(context as never, repo as never, vi.fn(), {
+      now: () => 1_000,
+      relayUrl: () => "https://relay.example.invalid",
+      bootstrapToken: () => "bootstrap-token"
+    });
+    await service.initialize();
+    const internals = service as unknown as {
+      state: { credentialSyncs: CredentialSyncRecord[] };
+      relayToken: string;
+      relayRegistrationValidatedAt: number;
+      pollCredentialSyncs: () => Promise<void>;
+    };
+    internals.relayToken = "relay-token";
+    internals.relayRegistrationValidatedAt = 1_000;
+    internals.state.credentialSyncs = [
+      {
+        syncId: "sync-follower-a",
+        role: "follower",
+        state: "active",
+        peerUserId: "rw_primary_a1234567890",
+        accountIds: ["account-a"],
+        version: 1,
+        createdAt: 1
+      },
+      {
+        syncId: "sync-follower-b",
+        role: "follower",
+        state: "active",
+        peerUserId: "rw_primary_b1234567890",
+        accountIds: ["account-b"],
+        version: 1,
+        createdAt: 1
+      }
+    ];
+    fetchWithTimeoutMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/v1/sharing/credential-syncs/inbox") || url.endsWith("/v1/sharing/credential-syncs/sent")) {
+        return new Response(JSON.stringify({ credentialSyncs: [], usageRequests: [], usageUpdates: [] }), {
+          status: 200
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = 0;
+    vi.spyOn(
+      service as unknown as { publishFollowerAccountUsageUpdate: (sync: CredentialSyncRecord) => Promise<void> },
+      "publishFollowerAccountUsageUpdate"
+    ).mockImplementation(async () => {
+      started += 1;
+      await gate;
+    });
+
+    const pollPromise = internals.pollCredentialSyncs();
+    while (started < 2) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    let pollSettled = false;
+    void pollPromise.then(() => {
+      pollSettled = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(pollSettled).toBe(true);
+    release();
+    await pollPromise;
+    service.dispose();
+  });
+});
+
 describe("AccountSharingService return confirmation", () => {
   it("polls the owner acknowledgement after one return action", async () => {
     vi.useFakeTimers();
@@ -434,7 +694,8 @@ describe("AccountSharingService return confirmation", () => {
     fetchWithTimeoutMock.mockImplementation(fetchMock);
 
     await expect(service.returnLease(leaseId)).resolves.toBe(true);
-    expect(removed).toBe(false);
+    expect(repo.removeAccount).toHaveBeenCalledWith(accountId);
+    expect(removed).toBe(true);
     expect(service.getLeases()[0]?.state).toBe("return_pending");
 
     await vi.advanceTimersByTimeAsync(500);
@@ -444,7 +705,6 @@ describe("AccountSharingService return confirmation", () => {
         ([input]) => String(input) === "https://relay.example.invalid/v1/sharing/transfers/transfer-return"
       )
     ).toBe(true);
-    expect(repo.removeAccount).toHaveBeenCalledWith(accountId);
     expect(removed).toBe(true);
     expect(service.getLeases()[0]?.state).toBe("returned");
     expect(service.getLeases()[0]?.accountIds).toEqual([]);

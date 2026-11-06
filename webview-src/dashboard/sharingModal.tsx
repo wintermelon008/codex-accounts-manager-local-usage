@@ -7,11 +7,7 @@ import type {
 import type { DashboardLanguage } from "../../src/localization/languages";
 import { ModalShell } from "./primitives";
 
-type SharingAction = (
-  action: DashboardActionName,
-  accountId?: string,
-  payload?: DashboardActionPayload
-) => void;
+type SharingAction = (action: DashboardActionName, accountId?: string, payload?: DashboardActionPayload) => void;
 
 export function SharingModal(props: {
   open: boolean;
@@ -88,7 +84,9 @@ export function SharingModal(props: {
       onClose={props.onClose}
     >
       {!props.sharing ? (
-        <div class="modal-note">{localized("共享服务尚未启动。", "共享服務尚未啟動。", "Sharing is not ready yet.")}</div>
+        <div class="modal-note">
+          {localized("共享服务尚未启动。", "共享服務尚未啟動。", "Sharing is not ready yet.")}
+        </div>
       ) : (
         <div class="sharing-modal-stack">
           <section class="sharing-panel-section sharing-identity-section">
@@ -194,7 +192,9 @@ export function SharingModal(props: {
                     value={sharingMode}
                     onChange={(event) => setSharingMode(event.currentTarget.value as "renewalSync" | "lease")}
                   >
-                    <option value="renewalSync">{localized("主设备续期同步", "主設備續期同步", "Primary renewal sync")}</option>
+                    <option value="renewalSync">
+                      {localized("主设备续期同步", "主設備續期同步", "Primary renewal sync")}
+                    </option>
                     <option value="lease">{localized("限时借出", "限時借出", "Timed loan")}</option>
                   </select>
                 </label>
@@ -210,7 +210,9 @@ export function SharingModal(props: {
                       <option value={String(30 * 60 * 1_000)}>{localized("30 分钟", "30 分鐘", "30 minutes")}</option>
                       <option value={String(60 * 60 * 1_000)}>{localized("1 小时", "1 小時", "1 hour")}</option>
                       <option value={String(6 * 60 * 60 * 1_000)}>{localized("6 小时", "6 小時", "6 hours")}</option>
-                      <option value={String(24 * 60 * 60 * 1_000)}>{localized("24 小时", "24 小時", "24 hours")}</option>
+                      <option value={String(24 * 60 * 60 * 1_000)}>
+                        {localized("24 小时", "24 小時", "24 hours")}
+                      </option>
                       <option value={String(3 * 24 * 60 * 60 * 1_000)}>{localized("3 天", "3 天", "3 days")}</option>
                     </select>
                   </label>
@@ -231,9 +233,7 @@ export function SharingModal(props: {
 
           {(props.sharing.credentialSyncs?.length ?? 0) > 0 ? (
             <section class="sharing-panel-section">
-              <div class="sharing-section-title">
-                {localized("续期同步", "續期同步", "Renewal sync")}
-              </div>
+              <div class="sharing-section-title">{localized("续期同步", "續期同步", "Renewal sync")}</div>
               <div class="sharing-peer-list">
                 {(props.sharing.credentialSyncs ?? []).map((sync) => (
                   <div class="sharing-peer-row" key={sync.syncId}>
@@ -248,7 +248,11 @@ export function SharingModal(props: {
                       <span class="sharing-peer-state">
                         {sync.state === "pending"
                           ? localized("等待 Relay", "等待 Relay", "Waiting for Relay")
-                          : localized(`账号 ${sync.accountIds.length} · 版本 ${sync.version}`, `帳號 ${sync.accountIds.length} · 版本 ${sync.version}`, `${sync.accountIds.length} account(s) · version ${sync.version}`)}
+                          : localized(
+                              `账号 ${sync.accountIds.length} · 版本 ${sync.version}`,
+                              `帳號 ${sync.accountIds.length} · 版本 ${sync.version}`,
+                              `${sync.accountIds.length} account(s) · version ${sync.version}`
+                            )}
                       </span>
                     </div>
                     <button
@@ -256,10 +260,14 @@ export function SharingModal(props: {
                       type="button"
                       disabled={props.pending || sync.accountIds.length === 0}
                       onClick={() =>
-                        props.onAction("returnSharedAccount", sync.accountIds[0], undefined)
+                        props.onAction("returnSharedAccount", sync.accountIds[0], {
+                          sharingSyncId: sync.syncId
+                        })
                       }
                     >
-                      {localized("停止同步", "停止同步", "Stop sync")}
+                      {sync.role === "follower"
+                        ? localized("归还账号", "歸還帳號", "Return account")
+                        : localized("停止同步", "停止同步", "Stop sync")}
                     </button>
                   </div>
                 ))}
@@ -348,7 +356,9 @@ export function SharingModal(props: {
                       <strong>{peer.displayName}</strong>
                       <code>{peer.userId}</code>
                       {peer.relationship === "pending_outgoing" ? (
-                        <span class="sharing-peer-state">{localized("等待接受", "等待接受", "Awaiting acceptance")}</span>
+                        <span class="sharing-peer-state">
+                          {localized("等待接受", "等待接受", "Awaiting acceptance")}
+                        </span>
                       ) : null}
                     </div>
                     <div class="sharing-note-row">

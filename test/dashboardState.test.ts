@@ -203,6 +203,73 @@ describe("resolveAccountTokenUsage", () => {
     expect(primarySources?.[1]).toMatchObject({ sourceLabel: "U280", sourceRole: "follower" });
   });
 
+  it("renders every follower source when one primary account is synced to multiple devices", () => {
+    const account = {
+      id: "account",
+      email: "account@example.com",
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1,
+      credentialSync: {
+        syncId: "sync-follower-a",
+        role: "primary" as const,
+        peerUserId: "rw_follower_a1234567890",
+        since: 1
+      }
+    };
+    const sources = resolveAccountUsageSources(
+      account,
+      undefined,
+      undefined,
+      {
+        userId: "rw_primary_1234567890",
+        displayName: "Primary",
+        relayConfigured: true,
+        peers: [],
+        pendingRequests: [],
+        credentialSyncs: [
+          {
+            syncId: "sync-follower-a",
+            role: "primary",
+            state: "active",
+            peerUserId: "rw_follower_a1234567890",
+            accountIds: [account.id],
+            version: 2
+          },
+          {
+            syncId: "sync-follower-b",
+            role: "primary",
+            state: "active",
+            peerUserId: "rw_follower_b1234567890",
+            accountIds: [account.id],
+            version: 3
+          }
+        ],
+        accountUsageSources: [
+          {
+            accountId: account.id,
+            syncId: "sync-follower-a",
+            sourceUserId: "rw_follower_a1234567890",
+            sourceLabel: "U280",
+            sourceRole: "follower",
+            receivedAt: 2
+          },
+          {
+            accountId: account.id,
+            syncId: "sync-follower-b",
+            sourceUserId: "rw_follower_b1234567890",
+            sourceLabel: "Lab502",
+            sourceRole: "follower",
+            receivedAt: 3
+          }
+        ]
+      },
+      "zh"
+    );
+
+    expect(sources?.map((source) => source.sourceLabel)).toEqual(["主设备（本机）", "U280", "Lab502"]);
+  });
+
   it("falls back to and aggregates the current weekly window when reset timestamps drift", () => {
     const weeklyResetAt = 1_800_604_800;
     const snapshot: AccountTokenUsageSnapshot = {

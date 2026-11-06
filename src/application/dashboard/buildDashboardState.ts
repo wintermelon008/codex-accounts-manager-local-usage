@@ -160,6 +160,12 @@ function mapAccount(
   deactivatedMailboxEmails?: ReadonlySet<string>
 ): DashboardAccountViewModel {
   const virtual = isSub2ApiAccount(account);
+  const credentialSyncRole: DashboardAccountViewModel["credentialSyncRole"] = virtual
+    ? undefined
+    : (account.credentialSync?.role ??
+      ((sharing?.credentialSyncs ?? []).some((sync) => sync.role === "primary" && sync.accountIds.includes(account.id))
+        ? "primary"
+        : undefined));
   const mailboxDeactivated =
     !virtual && deactivatedMailboxEmails?.has(normalizeDashboardEmail(account.email) ?? "") === true;
   const canToggleStatusBar =
@@ -237,7 +243,7 @@ function mapAccount(
     isCurrentWindowAccount: virtual ? Boolean(account.providerActive) : account.id === currentWindowAccountId,
     balancePoolEnabled: virtual ? false : Boolean(account.balancePoolEnabled),
     sharingState: virtual ? undefined : account.sharing?.state,
-    credentialSyncRole: virtual ? undefined : account.credentialSync?.role,
+    credentialSyncRole,
     sharingPeerUserId: virtual ? undefined : account.sharing?.peerUserId,
     sharingPeerDisplayName: virtual ? undefined : account.sharing?.peerDisplayName,
     sharingExpiresAt: virtual ? undefined : account.sharing?.expiresAt,
@@ -282,11 +288,30 @@ export function resolveAccountUsageSources(
   sharing: DashboardSharingViewModel | undefined,
   lang: DashboardState["lang"]
 ): DashboardAccountViewModel["tokenUsageSources"] {
-  if (!account.credentialSync || !sharing) {
+  if (!sharing) {
     return undefined;
   }
+  const accountSyncRole =
+    account.credentialSync?.role ??
+    ((sharing.credentialSyncs ?? []).some((sync) => sync.role === "primary" && sync.accountIds.includes(account.id))
+      ? "primary"
+      : undefined);
+  if (!accountSyncRole) {
+    return undefined;
+  }
+  const primarySyncIds =
+    accountSyncRole === "primary"
+      ? new Set(
+          (sharing.credentialSyncs ?? [])
+            .filter((sync) => sync.role === "primary" && sync.accountIds.includes(account.id))
+            .map((sync) => sync.syncId)
+        )
+      : undefined;
+  if (accountSyncRole === "primary" && primarySyncIds?.size === 0 && account.credentialSync?.syncId) {
+    primarySyncIds.add(account.credentialSync.syncId);
+  }
   const localLabel =
-    account.credentialSync.role === "primary"
+    accountSyncRole === "primary"
       ? lang === "zh" || lang === "zh-hant"
         ? "主设备（本机）"
         : "Primary (local)"
@@ -294,16 +319,17 @@ export function resolveAccountUsageSources(
         ? "从设备（本机）"
         : "Follower (local)";
   const remote =
-    account.credentialSync.role === "primary"
+    accountSyncRole === "primary"
       ? (sharing.accountUsageSources ?? []).filter(
-          (source) => source.accountId === account.id && source.syncId === account.credentialSync?.syncId
+          (source) =>
+            source.accountId === account.id && source.syncId !== undefined && primarySyncIds?.has(source.syncId)
         )
       : [];
   return [
     {
       sourceUserId: sharing.userId,
       sourceLabel: localLabel,
-      sourceRole: account.credentialSync.role,
+      sourceRole: accountSyncRole,
       tokenUsage,
       lifetimeTokenUsage
     },

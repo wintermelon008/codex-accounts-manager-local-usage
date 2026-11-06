@@ -113,6 +113,10 @@ export class AccountSharingService implements vscode.Disposable {
   private accountUsageState: AccountUsageState = createEmptyAccountUsageState();
   private accountUsageLastError: string | undefined;
   private readonly accountUsagePublishedRevisions = new Map<string, { revision: number; publishedAt: number }>();
+  private readonly accountUsagePublishInFlight = new Map<string, Promise<void>>();
+  private readonly accountUsageResponseInFlight = new Map<string, Promise<void>>();
+  private readonly accountUsageAckInFlight = new Map<string, Promise<void>>();
+  private accountUsageStateWriteInFlight: Promise<void> = Promise.resolve();
   private credentialSyncEndpointRetryAt = 0;
   private localStatePath: string | undefined;
   private readonly returnConfirmationTimers = new Map<string, NodeJS.Timeout>();
@@ -582,12 +586,16 @@ export class AccountSharingService implements vscode.Disposable {
     if (uniqueIds.length === 0 || uniqueIds.length > MAX_SHARED_ACCOUNTS) {
       throw new Error(`一次最多同步 ${MAX_SHARED_ACCOUNTS} 个账号`);
     }
-    if (this.state!.credentialSyncs.some((sync) => sync.accountIds.some((id) => uniqueIds.includes(id)))) {
-      throw new Error("所选账号已经加入续期同步");
-    }
     const peer = this.getTrustedPeers().find((candidate) => candidate.userId === peerUserId.trim());
     if (!peer) {
       throw new Error("同步对象尚未接受好友请求");
+    }
+    if (
+      this.state!.credentialSyncs.some(
+        (sync) => sync.peerUserId === peer.userId && sync.accountIds.some((id) => uniqueIds.includes(id))
+      )
+    ) {
+      throw new Error("所选账号已经同步给该设备");
     }
     await this.request<{ credentialSyncs: CredentialSyncRelayRecord[] }>("/v1/sharing/credential-syncs/inbox");
     this.credentialSyncEndpointRetryAt = 0;
@@ -596,7 +604,10 @@ export class AccountSharingService implements vscode.Disposable {
       if (!account || isSub2ApiAccount(account)) {
         throw new Error("续期同步只支持已保存的 ChatGPT OAuth 账号");
       }
-      if (account.sharing || account.credentialSync) {
+      const followerSync = this.state!.credentialSyncs.some(
+        (sync) => sync.role === "follower" && sync.accountIds.includes(account.id)
+      );
+      if (account.sharing || account.credentialSync?.role === "follower" || followerSync) {
         throw new Error(`账号 ${account.email} 已处于共享或续期同步状态`);
       }
       const tokens = await this.repo.getTokens(account.id, { forceReload: true });
@@ -654,15 +665,7 @@ export class AccountSharingService implements vscode.Disposable {
     };
     this.state!.credentialSyncs = [...this.state!.credentialSyncs, record];
     await this.persistState();
-    for (const accountId of uniqueIds) {
-      await this.repo.setAccountCredentialSyncInfo(accountId, {
-        syncId,
-        role: "primary",
-        peerUserId: peer.userId,
-        peerDisplayName: peer.displayName,
-        since: record.createdAt
-      });
-    }
+    await Promise.all(uniqueIds.map((accountId) => this.reconcileAccountCredentialSyncMarker(accountId)));
 
     try {
       await this.publishCredentialSyncRecord(record, exported);
@@ -672,16 +675,21 @@ export class AccountSharingService implements vscode.Disposable {
     this.onChanged();
   }
 
-  async stopCredentialSyncForAccount(accountId: string): Promise<boolean> {
+  async stopCredentialSyncForAccount(accountId: string, syncId?: string): Promise<boolean> {
     this.assertInitialized();
     this.assertEnabled();
     await this.ensureRelayRegistration();
-    const sync = this.state!.credentialSyncs.find((candidate) => candidate.accountIds.includes(accountId));
+    const normalizedSyncId = syncId?.trim();
+    const sync = this.state!.credentialSyncs.find(
+      (candidate) =>
+        candidate.accountIds.includes(accountId) &&
+        (normalizedSyncId === undefined || normalizedSyncId.length === 0 || candidate.syncId === normalizedSyncId)
+    );
     if (!sync) {
       return false;
     }
     await this.request(`/v1/sharing/credential-syncs/${encodeURIComponent(sync.syncId)}/stop`, { method: "POST" });
-    await this.clearCredentialSyncLocally(sync);
+    await this.clearCredentialSyncLocally(sync, sync.role === "follower");
     this.onChanged();
     return true;
   }
@@ -860,6 +868,10 @@ export class AccountSharingService implements vscode.Disposable {
       this.onChanged();
       throw error;
     }
+    // The encrypted return package is already durable in Relay. Remove the
+    // follower-side account immediately after the server accepts the return;
+    // owner acknowledgement only completes the local lease bookkeeping.
+    await this.removeIncomingLeaseAccounts(lease, targetIds);
     await this.applyIncomingReturnConfirmation(lease, transfer.ownerConfirmedAccountIds);
     await this.persistState();
     this.onChanged();
@@ -975,13 +987,13 @@ export class AccountSharingService implements vscode.Disposable {
       }
       throw error;
     }
-    await this.processIncomingAccountUsageRequests(incoming.usageRequests ?? []);
+    this.processIncomingAccountUsageRequests(incoming.usageRequests ?? []);
     usageChanged = await this.processIncomingAccountUsageUpdates(incoming.usageUpdates ?? []);
     for (const remote of incoming.credentialSyncs ?? []) {
       const local = this.state!.credentialSyncs.find((candidate) => candidate.syncId === remote.syncId);
       if (remote.state === "stopped") {
         if (local?.role === "follower") {
-          await this.clearCredentialSyncLocally(local);
+          await this.clearCredentialSyncLocally(local, true);
           changed = true;
         }
         await this.acknowledgeCredentialSyncStop(remote);
@@ -1083,7 +1095,7 @@ export class AccountSharingService implements vscode.Disposable {
         publishError ??= error;
       }
     }
-    await this.publishFollowerAccountUsageUpdates();
+    this.scheduleFollowerAccountUsageUpdates();
     if (changed || usageChanged) {
       await this.persistState();
       this.onChanged();
@@ -1093,7 +1105,7 @@ export class AccountSharingService implements vscode.Disposable {
     }
   }
 
-  private async processIncomingAccountUsageRequests(requests: readonly AccountUsageReadRequest[]): Promise<void> {
+  private processIncomingAccountUsageRequests(requests: readonly AccountUsageReadRequest[]): void {
     const followerSyncs = this.state!.credentialSyncs.filter(
       (sync) => sync.role === "follower" && sync.state === "active"
     );
@@ -1105,39 +1117,62 @@ export class AccountSharingService implements vscode.Disposable {
       if (!sync || request.state !== "pending") {
         continue;
       }
-      try {
-        const peer = this.state!.peers.find(
-          (candidate) => candidate.userId === sync.peerUserId && candidate.relationship === "trusted"
-        );
-        if (!peer) {
-          continue;
-        }
-        const packageValue = await this.buildAccountUsagePackage(sync, request.id);
-        const eventId = randomUUID();
-        const envelope = encryptSharingPayload(
-          packageValue,
-          this.keys!,
-          this.getProfile().userId,
-          peer.userId,
-          peer.encryptionPublicKey,
-          this.now()
-        );
-        await this.request(`/v1/sharing/usage-requests/${encodeURIComponent(request.id)}/response`, {
-          method: "POST",
-          body: JSON.stringify({
-            revision: packageValue.revision,
-            eventId,
-            envelope
-          })
-        });
-      } catch (error) {
-        console.warn(`[codexAccounts] account usage response queued: ${describeError(error)}`);
+      if (this.accountUsageResponseInFlight.has(request.id)) {
+        continue;
       }
+      const peer = this.state!.peers.find(
+        (candidate) => candidate.userId === sync.peerUserId && candidate.relationship === "trusted"
+      );
+      if (!peer) {
+        continue;
+      }
+      const task = this.respondToAccountUsageRequest(
+        request,
+        { ...sync, accountIds: [...sync.accountIds] },
+        peer
+      ).catch((error: unknown) => {
+        console.warn(`[codexAccounts] account usage response queued: ${describeError(error)}`);
+      });
+      this.accountUsageResponseInFlight.set(request.id, task);
+      void task.then(() => {
+        if (this.accountUsageResponseInFlight.get(request.id) === task) {
+          this.accountUsageResponseInFlight.delete(request.id);
+        }
+      });
     }
+  }
+
+  private async respondToAccountUsageRequest(
+    request: AccountUsageReadRequest,
+    sync: CredentialSyncRecord,
+    peer: SharingPeer
+  ): Promise<void> {
+    const packageValue = await this.buildAccountUsagePackage(sync, request.id);
+    const eventId = randomUUID();
+    const envelope = encryptSharingPayload(
+      packageValue,
+      this.keys!,
+      this.getProfile().userId,
+      peer.userId,
+      peer.encryptionPublicKey,
+      this.now()
+    );
+    await this.request(`/v1/sharing/usage-requests/${encodeURIComponent(request.id)}/response`, {
+      method: "POST",
+      body: JSON.stringify({
+        revision: packageValue.revision,
+        eventId,
+        envelope
+      })
+    });
   }
 
   private async processSentAccountUsageRequests(requests: readonly AccountUsageReadRequest[]): Promise<boolean> {
     let changed = false;
+    let stateChanged = false;
+    let sawValidResponse = false;
+    let firstError: string | undefined;
+    const acknowledgements: Array<{ key: string; operation: () => Promise<void> }> = [];
     const expired = this.accountUsageState.pendingRequests.filter((request) => request.expiresAt <= this.now());
     if (expired.length > 0) {
       this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
@@ -1146,7 +1181,9 @@ export class AccountSharingService implements vscode.Disposable {
       this.accountUsageLastError = "从设备未响应";
       await this.persistAccountUsageState();
       changed = true;
+      stateChanged = true;
     }
+    const candidates: Array<{ request: AccountUsageReadRequest; sync: CredentialSyncRecord; peer: SharingPeer }> = [];
     for (const request of requests) {
       if (request.state !== "responded" || !request.response) {
         continue;
@@ -1156,156 +1193,245 @@ export class AccountSharingService implements vscode.Disposable {
           candidate.syncId === request.syncId && candidate.role === "primary" && candidate.state === "active"
       );
       if (!sync) {
-        await this.acknowledgeAccountUsageRequest(request.id).catch(() => undefined);
+        acknowledgements.push({
+          key: `request:${request.id}`,
+          operation: () => this.acknowledgeAccountUsageRequest(request.id)
+        });
         continue;
       }
-      try {
-        const peer = this.state!.peers.find(
-          (candidate) => candidate.userId === sync.peerUserId && candidate.relationship === "trusted"
-        );
-        if (!peer) {
-          continue;
-        }
-        const packageValue = this.decryptAccountUsagePackage(request, peer);
-        const existing = this.accountUsageState.sources.find((source) => source.syncId === sync.syncId);
-        if (!existing || packageValue.revision > existing.revision) {
-          this.accountUsageState.sources = [
-            ...this.accountUsageState.sources.filter((source) => source.syncId !== sync.syncId),
-            {
-              syncId: sync.syncId,
-              sourceUserId: sync.peerUserId,
-              sourceDisplayName: peer.note?.trim() || peer.displayName,
-              revision: packageValue.revision,
-              calculatedAt: packageValue.calculatedAt,
-              receivedAt: this.now(),
-              accounts: packageValue.accounts
-            }
-          ];
-          changed = true;
-        }
-        const pendingCount = this.accountUsageState.pendingRequests.length;
-        this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
-          (pending) => pending.requestId !== request.id
-        );
-        changed ||= this.accountUsageState.pendingRequests.length !== pendingCount;
-        this.accountUsageLastError = undefined;
-        await this.persistAccountUsageState();
-        await this.acknowledgeAccountUsageRequest(request.id);
-      } catch (error) {
-        const nextError = describeError(error);
-        changed ||= this.accountUsageLastError !== nextError;
-        this.accountUsageLastError = nextError;
-        console.warn(`[codexAccounts] account usage response failed: ${this.accountUsageLastError}`);
+      const peer = this.state!.peers.find(
+        (candidate) => candidate.userId === sync.peerUserId && candidate.relationship === "trusted"
+      );
+      if (peer) {
+        candidates.push({ request, sync, peer });
       }
+    }
+    const decoded = await Promise.allSettled(
+      candidates.map((candidate) =>
+        Promise.resolve().then(() => ({
+          ...candidate,
+          packageValue: this.decryptAccountUsagePackage(candidate.request, candidate.peer)
+        }))
+      )
+    );
+    for (const result of decoded) {
+      if (result.status === "rejected") {
+        firstError ??= describeError(result.reason);
+        continue;
+      }
+      sawValidResponse = true;
+      const { request, sync, peer, packageValue } = result.value;
+      const existing = this.accountUsageState.sources.find((source) => source.syncId === sync.syncId);
+      if (!existing || packageValue.revision > existing.revision) {
+        this.accountUsageState.sources = [
+          ...this.accountUsageState.sources.filter((source) => source.syncId !== sync.syncId),
+          {
+            syncId: sync.syncId,
+            sourceUserId: sync.peerUserId,
+            sourceDisplayName: peer.note?.trim() || peer.displayName,
+            revision: packageValue.revision,
+            calculatedAt: packageValue.calculatedAt,
+            receivedAt: this.now(),
+            accounts: packageValue.accounts
+          }
+        ];
+        changed = true;
+        stateChanged = true;
+      }
+      const pendingCount = this.accountUsageState.pendingRequests.length;
+      this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
+        (pending) => pending.requestId !== request.id
+      );
+      if (this.accountUsageState.pendingRequests.length !== pendingCount) {
+        changed = true;
+        stateChanged = true;
+      }
+      acknowledgements.push({
+        key: `request:${request.id}`,
+        operation: () => this.acknowledgeAccountUsageRequest(request.id)
+      });
+    }
+    if (firstError) {
+      changed ||= this.accountUsageLastError !== firstError;
+      this.accountUsageLastError = firstError;
+      console.warn(`[codexAccounts] account usage response failed: ${firstError}`);
+    } else if (sawValidResponse && this.accountUsageLastError !== undefined) {
+      this.accountUsageLastError = undefined;
+      changed = true;
+    }
+    if (stateChanged) {
+      await this.persistAccountUsageState();
+    }
+    for (const acknowledgement of acknowledgements) {
+      this.enqueueAccountUsageAck(acknowledgement.key, acknowledgement.operation);
     }
     return changed;
   }
 
   private async processIncomingAccountUsageUpdates(updates: readonly AccountUsageUpdate[]): Promise<boolean> {
     let changed = false;
+    let stateChanged = false;
+    let sawValidUpdate = false;
+    let firstError: string | undefined;
+    const acknowledgements: Array<{ key: string; operation: () => Promise<void> }> = [];
+    const candidates: Array<{ update: AccountUsageUpdate; sync: CredentialSyncRecord; peer: SharingPeer }> = [];
     for (const update of updates) {
       const sync = this.state!.credentialSyncs.find(
         (candidate) =>
           candidate.syncId === update.syncId && candidate.role === "primary" && candidate.state === "active"
       );
       if (!sync) {
-        await this.acknowledgeAccountUsageUpdate(update.syncId, update.revision).catch(() => undefined);
-        continue;
-      }
-      try {
-        const peer = this.state!.peers.find(
-          (candidate) => candidate.userId === sync.peerUserId && candidate.relationship === "trusted"
-        );
-        if (!peer) {
-          continue;
-        }
-        const packageValue = this.decryptAccountUsagePackage(update, peer);
-        const existing = this.accountUsageState.sources.find((source) => source.syncId === sync.syncId);
-        if (!existing || packageValue.revision > existing.revision) {
-          this.accountUsageState.sources = [
-            ...this.accountUsageState.sources.filter((source) => source.syncId !== sync.syncId),
-            {
-              syncId: sync.syncId,
-              sourceUserId: sync.peerUserId,
-              sourceDisplayName: peer.note?.trim() || peer.displayName,
-              revision: packageValue.revision,
-              calculatedAt: packageValue.calculatedAt,
-              receivedAt: this.now(),
-              accounts: packageValue.accounts
-            }
-          ];
-          changed = true;
-          await this.persistAccountUsageState();
-        }
-        await this.acknowledgeAccountUsageUpdate(update.syncId, update.revision);
-        changed ||= this.accountUsageLastError !== undefined;
-        this.accountUsageLastError = undefined;
-      } catch (error) {
-        const nextError = describeError(error);
-        changed ||= this.accountUsageLastError !== nextError;
-        this.accountUsageLastError = nextError;
-        console.warn(`[codexAccounts] automatic account usage update failed: ${nextError}`);
-      }
-    }
-    return changed;
-  }
-
-  private async publishFollowerAccountUsageUpdates(): Promise<void> {
-    const syncs = this.state!.credentialSyncs.filter(
-      (sync) => sync.role === "follower" && sync.state === "active"
-    );
-    if (syncs.length === 0) {
-      return;
-    }
-    const snapshot = await readCachedAccountTokenUsage(getPrivateStatePaths(this.context).root);
-    if (!Number.isFinite(snapshot?.calculatedAt)) {
-      return;
-    }
-    const revision = Math.max(0, Math.floor(snapshot!.calculatedAt!));
-    const now = this.now();
-    const minimumIntervalMs = this.getAccountUsageSyncIntervalMs();
-    for (const sync of syncs) {
-      const previous = this.accountUsagePublishedRevisions.get(sync.syncId);
-      if (
-        previous &&
-        (revision <= previous.revision || now - previous.publishedAt < minimumIntervalMs)
-      ) {
+        acknowledgements.push({
+          key: `update:${update.syncId}:${update.revision}`,
+          operation: () => this.acknowledgeAccountUsageUpdate(update.syncId, update.revision)
+        });
         continue;
       }
       const peer = this.state!.peers.find(
         (candidate) => candidate.userId === sync.peerUserId && candidate.relationship === "trusted"
       );
-      if (!peer) {
-        continue;
-      }
-      try {
-        const packageValue = await this.buildAccountUsagePackage(sync, undefined, snapshot);
-        const eventId = randomUUID();
-        const envelope = encryptSharingPayload(
-          packageValue,
-          this.keys!,
-          this.getProfile().userId,
-          peer.userId,
-          peer.encryptionPublicKey,
-          now
-        );
-        const accepted = await this.request<AccountUsageUpdate>("/v1/sharing/usage-updates", {
-          method: "POST",
-          body: JSON.stringify({
-            syncId: sync.syncId,
-            revision: packageValue.revision,
-            eventId,
-            envelope
-          })
-        });
-        this.accountUsagePublishedRevisions.set(sync.syncId, {
-          revision: accepted.revision,
-          publishedAt: now
-        });
-      } catch (error) {
-        console.warn(`[codexAccounts] automatic account usage update queued: ${describeError(error)}`);
+      if (peer) {
+        candidates.push({ update, sync, peer });
       }
     }
+    const decoded = await Promise.allSettled(
+      candidates.map((candidate) =>
+        Promise.resolve().then(() => ({
+          ...candidate,
+          packageValue: this.decryptAccountUsagePackage(candidate.update, candidate.peer)
+        }))
+      )
+    );
+    for (const result of decoded) {
+      if (result.status === "rejected") {
+        firstError ??= describeError(result.reason);
+        continue;
+      }
+      sawValidUpdate = true;
+      const { update, sync, peer, packageValue } = result.value;
+      const existing = this.accountUsageState.sources.find((source) => source.syncId === sync.syncId);
+      if (!existing || packageValue.revision > existing.revision) {
+        this.accountUsageState.sources = [
+          ...this.accountUsageState.sources.filter((source) => source.syncId !== sync.syncId),
+          {
+            syncId: sync.syncId,
+            sourceUserId: sync.peerUserId,
+            sourceDisplayName: peer.note?.trim() || peer.displayName,
+            revision: packageValue.revision,
+            calculatedAt: packageValue.calculatedAt,
+            receivedAt: this.now(),
+            accounts: packageValue.accounts
+          }
+        ];
+        changed = true;
+        stateChanged = true;
+      }
+      acknowledgements.push({
+        key: `update:${update.syncId}:${update.revision}`,
+        operation: () => this.acknowledgeAccountUsageUpdate(update.syncId, update.revision)
+      });
+    }
+    if (firstError) {
+      changed ||= this.accountUsageLastError !== firstError;
+      this.accountUsageLastError = firstError;
+      console.warn(`[codexAccounts] automatic account usage update failed: ${firstError}`);
+    } else if (sawValidUpdate && this.accountUsageLastError !== undefined) {
+      this.accountUsageLastError = undefined;
+      changed = true;
+    }
+    if (stateChanged) {
+      await this.persistAccountUsageState();
+    }
+    for (const acknowledgement of acknowledgements) {
+      this.enqueueAccountUsageAck(acknowledgement.key, acknowledgement.operation);
+    }
+    return changed;
+  }
+
+  private scheduleFollowerAccountUsageUpdates(): void {
+    const syncs = this.state!.credentialSyncs.filter((sync) => sync.role === "follower" && sync.state === "active");
+    for (const sync of syncs) {
+      if (this.accountUsagePublishInFlight.has(sync.syncId)) {
+        continue;
+      }
+      const task = this.publishFollowerAccountUsageUpdate({ ...sync, accountIds: [...sync.accountIds] }).catch(
+        (error: unknown) => {
+          console.warn(`[codexAccounts] automatic account usage update queued: ${describeError(error)}`);
+        }
+      );
+      this.accountUsagePublishInFlight.set(sync.syncId, task);
+      void task.then(() => {
+        if (this.accountUsagePublishInFlight.get(sync.syncId) === task) {
+          this.accountUsagePublishInFlight.delete(sync.syncId);
+        }
+      });
+    }
+  }
+
+  private async publishFollowerAccountUsageUpdate(sync: CredentialSyncRecord): Promise<void> {
+    const snapshot = await readCachedAccountTokenUsage(getPrivateStatePaths(this.context).root);
+    if (!Number.isFinite(snapshot?.calculatedAt)) {
+      return;
+    }
+    const current = this.state!.credentialSyncs.find(
+      (candidate) => candidate.syncId === sync.syncId && candidate.role === "follower" && candidate.state === "active"
+    );
+    if (!current) {
+      return;
+    }
+    const revision = Math.max(0, Math.floor(snapshot!.calculatedAt!));
+    const now = this.now();
+    const previous = this.accountUsagePublishedRevisions.get(sync.syncId);
+    if (
+      previous &&
+      (revision <= previous.revision || now - previous.publishedAt < this.getAccountUsageSyncIntervalMs())
+    ) {
+      return;
+    }
+    const peer = this.state!.peers.find(
+      (candidate) => candidate.userId === sync.peerUserId && candidate.relationship === "trusted"
+    );
+    if (!peer) {
+      return;
+    }
+    const packageValue = await this.buildAccountUsagePackage(sync, undefined, snapshot);
+    const eventId = randomUUID();
+    const envelope = encryptSharingPayload(
+      packageValue,
+      this.keys!,
+      this.getProfile().userId,
+      peer.userId,
+      peer.encryptionPublicKey,
+      now
+    );
+    const accepted = await this.request<AccountUsageUpdate>("/v1/sharing/usage-updates", {
+      method: "POST",
+      body: JSON.stringify({
+        syncId: sync.syncId,
+        revision: packageValue.revision,
+        eventId,
+        envelope
+      })
+    });
+    this.accountUsagePublishedRevisions.set(sync.syncId, {
+      revision: accepted.revision,
+      publishedAt: this.now()
+    });
+  }
+
+  private enqueueAccountUsageAck(key: string, operation: () => Promise<void>): void {
+    if (this.accountUsageAckInFlight.has(key)) {
+      return;
+    }
+    const task = operation().catch((error: unknown) => {
+      console.warn(`[codexAccounts] account usage acknowledgement queued: ${describeError(error)}`);
+    });
+    this.accountUsageAckInFlight.set(key, task);
+    void task.then(() => {
+      if (this.accountUsageAckInFlight.get(key) === task) {
+        this.accountUsageAckInFlight.delete(key);
+      }
+    });
   }
 
   private async buildAccountUsagePackage(
@@ -1393,7 +1519,11 @@ export class AccountSharingService implements vscode.Disposable {
   }
 
   private async persistAccountUsageState(): Promise<void> {
-    await writeAccountUsageState(getPrivateStatePaths(this.context).root, this.accountUsageState);
+    const write = this.accountUsageStateWriteInFlight.then(() =>
+      writeAccountUsageState(getPrivateStatePaths(this.context).root, this.accountUsageState)
+    );
+    this.accountUsageStateWriteInFlight = write.catch(() => undefined);
+    await write;
   }
 
   private getDashboardAccountUsageSources(): DashboardAccountUsageSourceViewModel[] {
@@ -1703,20 +1833,65 @@ export class AccountSharingService implements vscode.Disposable {
     });
   }
 
-  private async clearCredentialSyncLocally(sync: CredentialSyncRecord): Promise<void> {
+  private async clearCredentialSyncLocally(sync: CredentialSyncRecord, removeFollowerAccounts = false): Promise<void> {
+    const accountIds = [...sync.accountIds];
+    // Remove the relationship from memory before touching the repository.
+    // Repository notifications can schedule a poll while follower accounts
+    // are being deleted; that poll must not re-enter this stopped sync.
+    this.state!.credentialSyncs = this.state!.credentialSyncs.filter((candidate) => candidate.syncId !== sync.syncId);
+    if (removeFollowerAccounts && sync.role === "follower") {
+      for (const accountId of accountIds) {
+        const account = await this.repo.getAccount(accountId).catch(() => undefined);
+        if (account?.credentialSync?.syncId !== sync.syncId || account.credentialSync.role !== "follower") {
+          continue;
+        }
+        await this.repo.setAccountCredentialSyncInfo(accountId, undefined);
+        await this.repo.removeAccount(accountId);
+      }
+    }
     for (const accountId of sync.accountIds) {
       const account = await this.repo.getAccount(accountId).catch(() => undefined);
-      if (account?.credentialSync?.syncId === sync.syncId) {
+      if (!removeFollowerAccounts && account?.credentialSync?.syncId === sync.syncId) {
         await this.repo.setAccountCredentialSyncInfo(accountId, undefined);
       }
     }
-    this.state!.credentialSyncs = this.state!.credentialSyncs.filter((candidate) => candidate.syncId !== sync.syncId);
+    if (!removeFollowerAccounts) {
+      await Promise.all(accountIds.map((accountId) => this.reconcileAccountCredentialSyncMarker(accountId)));
+    }
     await this.persistState();
     this.accountUsageState.sources = this.accountUsageState.sources.filter((source) => source.syncId !== sync.syncId);
     this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
       (request) => request.syncId !== sync.syncId
     );
     await this.persistAccountUsageState();
+  }
+
+  private async reconcileAccountCredentialSyncMarker(accountId: string): Promise<void> {
+    const account = await this.repo.getAccount(accountId).catch(() => undefined);
+    if (!account) {
+      return;
+    }
+    const sync = this.state!.credentialSyncs.find((candidate) => candidate.accountIds.includes(accountId));
+    const next = sync
+      ? {
+          syncId: sync.syncId,
+          role: sync.role,
+          peerUserId: sync.peerUserId,
+          peerDisplayName: sync.peerDisplayName,
+          since: sync.createdAt
+        }
+      : undefined;
+    const current = account.credentialSync;
+    if (
+      current?.syncId === next?.syncId &&
+      current?.role === next?.role &&
+      current?.peerUserId === next?.peerUserId &&
+      current?.peerDisplayName === next?.peerDisplayName &&
+      current?.since === next?.since
+    ) {
+      return;
+    }
+    await this.repo.setAccountCredentialSyncInfo(accountId, next);
   }
 
   /**

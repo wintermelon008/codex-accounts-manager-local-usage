@@ -529,12 +529,20 @@ export function SavedAccountCard(props: {
               </div>
             )}
             <div class="saved-back-footer" onClick={stopFlip} onKeyDown={stopFlip}>
-              {props.sharingEnabled !== false && !virtual && account.credentialSyncRole ? (
+              {props.sharingEnabled !== false && !virtual && account.credentialSyncRole === "follower" ? (
                 <ActionButton
                   class="saved-back-share-action saved-back-return-action"
                   icon={<span aria-hidden="true">↩</span>}
                   iconOnly
-                  label={props.lang === "zh" || props.lang === "zh-hant" ? "停止同步" : "Stop sync"}
+                  label={
+                    account.credentialSyncRole === "follower"
+                      ? props.lang === "zh" || props.lang === "zh-hant"
+                        ? "归还账号"
+                        : "Return account"
+                      : props.lang === "zh" || props.lang === "zh-hant"
+                        ? "停止同步"
+                        : "Stop sync"
+                  }
                   pending={props.returnSharedAccountPending}
                   disabled={props.busy}
                   onClick={() => onAction("returnSharedAccount", account.id)}
@@ -549,7 +557,7 @@ export function SavedAccountCard(props: {
                   disabled={props.busy}
                   onClick={() => onAction("returnSharedAccount", account.id)}
                 />
-              ) : props.sharingEnabled !== false && !virtual && !outgoingSharedAccount ? (
+              ) : props.sharingEnabled !== false && !virtual && (!outgoingSharedAccount || syncPrimary) ? (
                 <ActionButton
                   class="saved-back-share-action"
                   icon={<span aria-hidden="true">⇄</span>}

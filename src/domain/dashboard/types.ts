@@ -887,6 +887,7 @@ export interface DashboardActionPayload {
   sharingPeerUserId?: string;
   sharingDeadlineMs?: number;
   sharingMode?: "renewalSync" | "lease";
+  sharingSyncId?: string;
 }
 
 export interface DashboardActionResultPayload {
