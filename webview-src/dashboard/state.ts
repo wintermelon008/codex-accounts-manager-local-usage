@@ -5,6 +5,7 @@ import type {
   DashboardSettings,
   DashboardState
 } from "../../src/domain/dashboard/types";
+import { normalizeDashboardAccountPriority } from "../../src/domain/dashboard/accountPriority";
 
 export type PendingActionRequest = {
   requestId: string;
@@ -29,6 +30,7 @@ export type AppState = {
   lastEnabledAutoRefreshMinutes: number;
   now: number;
   selectedAccountIds: string[];
+  accountPriorityIds: string[];
   pendingActions: PendingActionRequest[];
   failedAction?: FailedDashboardAction;
 };
@@ -41,6 +43,7 @@ export type AppAction =
   | { type: "toggle-privacy" }
   | { type: "settings-patch"; patch: Partial<DashboardSettings> }
   | { type: "tick"; now: number }
+  | { type: "set-account-priority"; accountIds: string[] }
   | { type: "toggle-select"; accountId: string }
   | { type: "clear-selection" }
   | { type: "deselect-accounts"; accountIds: string[] }
@@ -57,6 +60,7 @@ export function createInitialState(): AppState {
     lastEnabledAutoRefreshMinutes: 15,
     now: Date.now(),
     selectedAccountIds: [],
+    accountPriorityIds: [],
     pendingActions: []
   };
 }
@@ -72,6 +76,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         snapshot: action.snapshot,
         seamlessRuntime: action.snapshot.seamlessRuntime ?? state.seamlessRuntime,
         selectedAccountIds,
+        accountPriorityIds: normalizeDashboardAccountPriority(action.snapshot.accountPriorityIds),
         lastEnabledAutoRefreshMinutes:
           action.snapshot.settings.autoRefreshMinutes > 0
             ? action.snapshot.settings.autoRefreshMinutes
@@ -83,6 +88,13 @@ export function reducer(state: AppState, action: AppAction): AppState {
         ...state,
         seamlessRuntime: action.runtime
       };
+    case "set-account-priority": {
+      const accountPriorityIds = normalizeDashboardAccountPriority(action.accountIds);
+      return accountPriorityIds.length === state.accountPriorityIds.length &&
+        accountPriorityIds.every((accountId, index) => accountId === state.accountPriorityIds[index])
+        ? state
+        : { ...state, accountPriorityIds };
+    }
     case "toggle-select":
       return {
         ...state,

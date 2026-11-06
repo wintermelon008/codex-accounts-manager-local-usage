@@ -168,7 +168,6 @@ export interface DashboardCopy {
   tokenAutomationAccessTokenInvalid: string;
   tokenAutomationReauthorize: string;
   tokenAutomationDisabled: string;
-  tokenAutomationQuota: string;
   resyncProfileBtn: string;
   syncProfileBtn: string;
   editTagsBtn: string;
@@ -215,7 +214,6 @@ export interface DashboardCopy {
   current: string;
   disabledTag: string;
   authErrorTag: string;
-  quotaErrorTag: string;
   reauthorizeBtn: string;
   reloadBtn: string;
   hourlyLabel: string;
@@ -764,6 +762,7 @@ export interface DashboardState {
   announcements: CodexAnnouncementState;
   indexHealth: CodexIndexHealthSummary;
   accounts: DashboardAccountViewModel[];
+  accountPriorityIds?: string[];
   localUsage?: DashboardLocalUsageViewModel;
   integrations?: DashboardIntegrationViewModel[];
   integrationSettings?: DashboardIntegrationSettingViewModel[];
@@ -927,6 +926,7 @@ export type DashboardClientMessage =
   | { type: "dashboard:ready" }
   | { type: "dashboard:account-order"; accountIds: string[] }
   | { type: "dashboard:account-scope"; accountIds: string[] }
+  | { type: "dashboard:account-priority"; accountIds: string[] }
   | {
       type: "dashboard:action";
       requestId: string;

@@ -1,5 +1,5 @@
 import type { DashboardAccountViewModel, DashboardSettings, DashboardState } from "../../src/domain/dashboard/types";
-import { getAccountHealthCategory, getManagedAccountState, isAccountInvalid } from "../../src/domain/accountHealth";
+import { getManagedAccountState, isAccountInvalid } from "../../src/domain/accountHealth";
 import { formatTimestamp } from "./helpers";
 
 export type AccountDiagnosticTone = "positive" | "warning" | "error" | "neutral";
@@ -121,15 +121,6 @@ function resolveHealthDiagnostic(
       title: labels.authTitle,
       message: account.healthMessage ?? labels.authMessage,
       nextStep: labels.authNextStep
-    };
-  }
-
-  if (kind === "quota" || getAccountHealthCategory(kind) === "quota_limited") {
-    return {
-      tone: "warning",
-      title: labels.quotaTitle,
-      message: labels.quotaMessage,
-      nextStep: labels.quotaNextStep
     };
   }
 

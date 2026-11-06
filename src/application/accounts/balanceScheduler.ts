@@ -1,4 +1,8 @@
 import { isAutomaticAccount, type CodexAccountRecord, type SeamlessQuotaBandSize, type SeamlessSwitchThreshold } from "../../core/types";
+import {
+  getSeamlessSwitchPriority,
+  reconcileSeamlessSwitchPriority
+} from "../../presentation/dashboard/accountPriority";
 
 export const QUOTA_BAND_SIZE = 20;
 export const BALANCE_QUOTA_MAX_AGE_MS = 15 * 60 * 1000;
@@ -58,6 +62,8 @@ export function selectBalanceCandidate(params: {
 
   const switchThreshold = params.switchThreshold ?? DEFAULT_SEAMLESS_SWITCH_THRESHOLD;
   const poolOrder = createPoolOrder(params.accounts, params.accountOrder);
+  reconcileSeamlessSwitchPriority(params.accounts);
+  const priorityOrder = createPriorityOrder(getSeamlessSwitchPriority());
   const candidates = params.accounts.filter(
     (account) =>
       account.id !== params.activeAccountId &&
@@ -91,12 +97,14 @@ export function selectBalanceCandidate(params: {
   if (thresholdRecoveryMode) {
     const recoveredWindowed = windowedCandidates
       .filter((account) => account.quotaSummary!.hourlyPercentage > switchThreshold)
-      .sort((left, right) => compareSeamlessCandidates(left, right, poolOrder))[0];
+      .sort((left, right) => compareSeamlessCandidates(left, right, poolOrder, priorityOrder))[0];
     if (recoveredWindowed) {
       return recoveredWindowed;
     }
 
-    const reserve = reserveCandidates.sort((left, right) => compareSeamlessCandidates(left, right, poolOrder))[0];
+    const reserve = reserveCandidates.sort((left, right) =>
+      compareSeamlessCandidates(left, right, poolOrder, priorityOrder)
+    )[0];
     if (reserve) {
       return reserve;
     }
@@ -114,7 +122,7 @@ export function selectBalanceCandidate(params: {
         getFiveHourQuotaBand(account.quotaSummary!.hourlyPercentage, params.quotaBandSize) >= params.activeBand &&
         account.quotaSummary!.hourlyPercentage > activeQuota.hourlyPercentage
     )
-    .sort((left, right) => compareSeamlessCandidates(left, right, poolOrder))[0];
+    .sort((left, right) => compareSeamlessCandidates(left, right, poolOrder, priorityOrder))[0];
 }
 
 function createPoolOrder(
@@ -133,6 +141,10 @@ function createPoolOrder(
     }
   }
   return order;
+}
+
+function createPriorityOrder(preferredOrder: readonly string[]): ReadonlyMap<string, number> {
+  return new Map(preferredOrder.map((accountId, index) => [accountId, index]));
 }
 
 export function isVerifiedFreeWindowedAccount(account: CodexAccountRecord, now = Date.now()): boolean {
@@ -202,8 +214,15 @@ export function hasUsableWeeklyQuota(account: CodexAccountRecord): boolean {
 function compareSeamlessCandidates(
   left: CodexAccountRecord,
   right: CodexAccountRecord,
-  poolOrder: ReadonlyMap<string, number>
+  poolOrder: ReadonlyMap<string, number>,
+  priorityOrder: ReadonlyMap<string, number>
 ): number {
+  const leftPriority = priorityOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+  const rightPriority = priorityOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+  if (leftPriority !== rightPriority) {
+    return leftPriority - rightPriority;
+  }
+
   const planPriorityDifference = getSeamlessPlanPriority(right.planType) - getSeamlessPlanPriority(left.planType);
   if (planPriorityDifference !== 0) {
     return planPriorityDifference;

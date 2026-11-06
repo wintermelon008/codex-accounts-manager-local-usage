@@ -12,8 +12,7 @@ export type AccountHealthKind =
   | "refresh_token_invalid"
   | "access_token_invalid"
   | "reauthorize"
-  | "disabled"
-  | "quota";
+  | "disabled";
 
 /** User-facing health categories shared by Dashboard and control consumers. */
 export type AccountHealthCategory =
@@ -23,8 +22,7 @@ export type AccountHealthCategory =
   | "expiring"
   | "temporary_error"
   | "credential_invalid"
-  | "disabled"
-  | "quota_limited";
+  | "disabled";
 
 /** Stable four-state account classification for local integrations. */
 export type ManagedAccountState = "usable" | "usable_no_renewal" | "unknown" | "auth_invalid";
@@ -47,7 +45,7 @@ export function getManagedAccountState(health: {
     return "auth_invalid";
   }
   if (
-    (health.availability === "usable" || health.availability === "quota_limited" || health.kind === "quota") &&
+    (health.availability === "usable" || health.availability === "quota_limited") &&
     health.renewal === "unavailable"
   ) {
     return "usable_no_renewal";
@@ -72,8 +70,7 @@ export function getManagedAccountState(health: {
     health.availability === "quota_limited" ||
     health.renewal === "succeeded" ||
     health.kind === "healthy" ||
-    health.kind === "expiring" ||
-    health.kind === "quota"
+    health.kind === "expiring"
   ) {
     return "usable";
   }
@@ -104,8 +101,6 @@ export function getAccountHealthCategory(kind: AccountHealthKind): AccountHealth
       return "temporary_error";
     case "disabled":
       return "disabled";
-    case "quota":
-      return "quota_limited";
     default:
       return "healthy";
   }

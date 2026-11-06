@@ -423,7 +423,14 @@ describe("Dashboard account selection", () => {
       { id: "refresh-failed", healthKind: "refresh_failed", dismissedHealth: false, isHidden: false },
       { id: "dismissed", healthKind: "disabled", dismissedHealth: true, isHidden: false },
       { id: "disabled", healthKind: "disabled", dismissedHealth: false, isHidden: false },
-      { id: "quota-warning", healthKind: "quota", dismissedHealth: false, isHidden: false },
+      {
+        id: "quota-usable",
+        healthKind: "healthy",
+        availability: "quota_limited",
+        renewal: "succeeded",
+        dismissedHealth: false,
+        isHidden: false
+      },
       { id: "hidden-invalid", healthKind: "access_token_invalid", dismissedHealth: false, isHidden: true }
     ] as DashboardState["accounts"];
 
@@ -487,7 +494,7 @@ describe("Dashboard account selection", () => {
       },
       {
         id: "quota-usable",
-        healthKind: "quota",
+        healthKind: "healthy",
         availability: "quota_limited",
         renewal: "succeeded",
         dismissedHealth: false,

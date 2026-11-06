@@ -22,6 +22,11 @@ import { isQuotaCountdownStartAvailable } from "../accounts/quotaCountdown";
 import { isFreePlanType, resolveLongQuotaLabel } from "../../utils/quotaLabels";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
 import { accountConcurrencyTracker, getPersistedAccountConcurrencySnapshot } from "../accounts/accountConcurrency";
+import {
+  clearSeamlessSwitchPriority,
+  getSeamlessSwitchPriority,
+  reconcileSeamlessSwitchPriority
+} from "../../presentation/dashboard/accountPriority";
 
 const DASHBOARD_TOKEN_READ_CONCURRENCY = 4;
 
@@ -71,6 +76,12 @@ export async function buildDashboardState(
     (account) =>
       !isSub2ApiAccount(account) || visibleVirtualAccountIds === undefined || visibleVirtualAccountIds.has(account.id)
   );
+  if (settings.seamlessSwitchEnabled) {
+    reconcileSeamlessSwitchPriority(accounts);
+  } else {
+    clearSeamlessSwitchPriority();
+  }
+  const accountPriorityIds = [...getSeamlessSwitchPriority()];
   const accountViewStateById = new Map<string, DashboardAccountViewState>();
   await runWithConcurrencyLimit(accounts, DASHBOARD_TOKEN_READ_CONCURRENCY, async (account) => {
     const tokens = isSub2ApiAccount(account) ? undefined : await repo.getTokens(account.id);
@@ -124,7 +135,8 @@ export async function buildDashboardState(
         providerCards.get(account.id),
         deactivatedMailboxEmails
       )
-    )
+    ),
+    accountPriorityIds
   };
 }
 
@@ -524,8 +536,6 @@ function formatHealthLabel(kind: DashboardAccountViewModel["healthKind"], copy: 
       return copy.tokenAutomationReauthorize;
     case "disabled":
       return copy.tokenAutomationDisabled;
-    case "quota":
-      return copy.tokenAutomationQuota;
     default:
       return copy.tokenAutomationHealthy;
   }
@@ -762,8 +772,6 @@ function getHealthPriority(health: ReturnType<typeof resolveAccountHealth>): num
       return 3;
     case "refresh_unavailable":
     case "refresh_token_invalid":
-      return 2;
-    case "quota":
       return 2;
     case "expiring":
       return 1;

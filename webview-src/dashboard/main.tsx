@@ -3,6 +3,12 @@ import { useEffect, useMemo, useReducer, useRef, useState } from "preact/hooks";
 import packageJson from "../../package.json";
 import type { CodexAccountGroup } from "../../src/core/types";
 import {
+  DASHBOARD_ACCOUNT_PRIORITY_LIMIT,
+  moveDashboardAccountPriority,
+  orderAccountsByPriority,
+  toggleDashboardAccountPriority
+} from "../../src/domain/dashboard/accountPriority";
+import {
   DASHBOARD_ACCOUNT_PAGE_SIZE_OPTIONS,
   DASHBOARD_ACCOUNTS_PAGE_SIZE,
   type DashboardHostMessage,
@@ -89,6 +95,28 @@ function getAccountGroupVisibilityKey(group: CodexAccountGroup): SeamlessSwitchG
   }
 }
 
+function getCurrentDashboardAccountId<T extends {
+  id: string;
+  isCurrentWindowAccount?: boolean;
+  providerActive?: boolean;
+  isActive?: boolean;
+}>(accounts: readonly T[]): string | undefined {
+  return (
+    accounts.find((account) => account.isCurrentWindowAccount)?.id ??
+    accounts.find((account) => account.providerActive === true)?.id ??
+    accounts.find((account) => account.isActive === true)?.id
+  );
+}
+
+function orderDashboardAccountsForDisplay<T extends {
+  id: string;
+  isCurrentWindowAccount?: boolean;
+  providerActive?: boolean;
+  isActive?: boolean;
+}>(accounts: readonly T[], priorityAccountIds: readonly string[]): T[] {
+  return orderAccountsByPriority(accounts, priorityAccountIds, getCurrentDashboardAccountId(accounts));
+}
+
 function App() {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
   const lastDashboardAccountOrderRef = useRef("");
@@ -119,6 +147,8 @@ function App() {
   const [accountsPage, setAccountsPage] = useState(1);
   const [accountsPageSize, setAccountsPageSize] = useState<DashboardAccountPageSize>(DASHBOARD_ACCOUNTS_PAGE_SIZE);
   const [accountPageJumpInput, setAccountPageJumpInput] = useState("");
+  const [priorityDragAccountId, setPriorityDragAccountId] = useState<string>();
+  const priorityDragStartedRef = useRef(false);
   const { patchSettings, sendAction, sendSetting, isActionPending, hasGlobalPendingAction } = useDashboardActions(
     state,
     dispatch
@@ -137,11 +167,26 @@ function App() {
       selectedHealthFilters,
       selectedSharingFilters
     );
-    return sortDashboardAccountsForDisplay(visibleAccounts, accountSort);
-  }, [accountSort, selectedHealthFilters, selectedPlanFilters, selectedSharingFilters, showHiddenAccounts, snapshot]);
+    const sortedAccounts = sortDashboardAccountsForDisplay(visibleAccounts, accountSort);
+    return orderDashboardAccountsForDisplay(sortedAccounts, state.accountPriorityIds);
+  }, [
+    accountSort,
+    selectedHealthFilters,
+    selectedPlanFilters,
+    selectedSharingFilters,
+    showHiddenAccounts,
+    snapshot,
+    state.accountPriorityIds
+  ]);
   const orderedAccounts = useMemo(
-    () => (snapshot ? sortDashboardAccountsForDisplay(snapshot.accounts, accountSort) : []),
-    [accountSort, snapshot]
+    () =>
+      snapshot
+        ? (() => {
+            const sortedAccounts = sortDashboardAccountsForDisplay(snapshot.accounts, accountSort);
+            return orderDashboardAccountsForDisplay(sortedAccounts, state.accountPriorityIds);
+          })()
+        : [],
+    [accountSort, snapshot, state.accountPriorityIds]
   );
   const advancedActiveAccount =
     orderedAccounts.find((account) => account.isCurrentWindowAccount) ??
@@ -331,7 +376,10 @@ function App() {
       return;
     }
 
-    const accountIds = sortDashboardAccountsForDisplay(snapshot.accounts, accountSort).map((account) => account.id);
+    const sortedAccounts = sortDashboardAccountsForDisplay(snapshot.accounts, accountSort);
+    const accountIds = orderDashboardAccountsForDisplay(sortedAccounts, state.accountPriorityIds).map(
+      (account) => account.id
+    );
     const orderSignature = accountIds.join("\u0000");
     if (lastDashboardAccountOrderRef.current === orderSignature) {
       return;
@@ -469,6 +517,50 @@ function App() {
 
   const selectedAccountIds = new Set(state.selectedAccountIds);
   const selectedCount = state.selectedAccountIds.length;
+  const priorityIndexById = new Map(state.accountPriorityIds.map((accountId, index) => [accountId, index]));
+  const publishPriority = (accountIds: readonly string[]): void => {
+    const next = [...accountIds];
+    dispatch({ type: "set-account-priority", accountIds: next });
+    postMessageToHost({ type: "dashboard:account-priority", accountIds: next });
+  };
+  const togglePriority = (accountId: string): void => {
+    if (priorityDragStartedRef.current) {
+      priorityDragStartedRef.current = false;
+      return;
+    }
+    publishPriority(toggleDashboardAccountPriority(state.accountPriorityIds, accountId));
+  };
+  const handlePriorityDragStart = (accountId: string, event: DragEvent): void => {
+    event.stopPropagation();
+    priorityDragStartedRef.current = true;
+    setPriorityDragAccountId(accountId);
+    event.dataTransfer?.setData("text/plain", accountId);
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+    }
+  };
+  const handlePriorityDragEnd = (): void => {
+    setPriorityDragAccountId(undefined);
+    window.setTimeout(() => {
+      priorityDragStartedRef.current = false;
+    }, 0);
+  };
+  const handlePriorityDragOver = (event: DragEvent): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+  };
+  const handlePriorityDrop = (targetAccountId: string, event: DragEvent): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const draggedAccountId = priorityDragAccountId ?? event.dataTransfer?.getData("text/plain");
+    if (draggedAccountId) {
+      publishPriority(moveDashboardAccountPriority(state.accountPriorityIds, draggedAccountId, targetAccountId));
+    }
+    setPriorityDragAccountId(undefined);
+  };
   const isAccountBusy = (accountId: string): boolean =>
     hasGlobalPendingAction || state.pendingActions.some((request) => request.accountId === accountId);
   const announcementUnreadCount = snapshot.announcements.unreadIds.length;
@@ -1222,6 +1314,18 @@ function App() {
                       providerActionPending={state.pendingActions.some(
                         (request) => request.action === "integrationAction" && request.accountId === account.id
                       )}
+                      priorityNumber={
+                        priorityIndexById.has(account.id)
+                          ? (priorityIndexById.get(account.id) as number) + 1
+                          : undefined
+                      }
+                      prioritySelectionAvailable={state.accountPriorityIds.length < DASHBOARD_ACCOUNT_PRIORITY_LIMIT}
+                      priorityDragging={priorityDragAccountId === account.id}
+                      onPriorityToggle={() => togglePriority(account.id)}
+                      onPriorityDragStart={(event) => handlePriorityDragStart(account.id, event)}
+                      onPriorityDragEnd={handlePriorityDragEnd}
+                      onPriorityDragOver={handlePriorityDragOver}
+                      onPriorityDrop={(event) => handlePriorityDrop(account.id, event)}
                       selected={selectedAccountIds.has(account.id)}
                       onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
                       onConfigureWakeup={() => {

@@ -4,10 +4,12 @@ import { getErrorMessage } from "../../core/errors";
 import { refreshQuota, type QuotaRefreshResult } from "../../services/quota";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
 import { withRenewingSchedulerLease } from "../../runtime/schedulerLease";
+import { recordQuotaAuthenticationSuccess } from "./accountState";
 
 export type HeadlessQuotaRefreshSummary = {
   total: number;
   succeeded: number;
+  succeededAccountIds: string[];
   failed: number;
   /** The shared scheduler lease was occupied; callers should retry later. */
   busy?: boolean;
@@ -54,7 +56,7 @@ export async function refreshImportedAccountQuotaHeadlessly(
   if (!leaseIsActive()) {
     return { stale: true };
   }
-  await repo.updateQuota(
+  const updatedAccount = await repo.updateQuota(
     accountId,
     result.quota,
     result.error,
@@ -62,6 +64,16 @@ export async function refreshImportedAccountQuotaHeadlessly(
     result.updatedPlanType,
     result.updatedSubscriptionActiveUntil
   );
+  if (result.accessTokenAccepted === true) {
+    const effectiveTokens = result.updatedTokens ?? tokens;
+    const providerAccountId = updatedAccount.accountId ?? account.accountId ?? effectiveTokens.accountId;
+    if (providerAccountId && effectiveTokens.accessToken) {
+      recordQuotaAuthenticationSuccess(accountId, {
+        ...effectiveTokens,
+        accountId: providerAccountId
+      });
+    }
+  }
   await repo.refreshSubscriptionState(accountId, true).catch(() => undefined);
   return result;
 }
@@ -119,6 +131,7 @@ export async function refreshAllQuotasHeadlessly(
     (account) => isAutomaticAccount(account) && account.credentialSync?.role !== "primary"
   );
   const failedAccountIds = requestedAccounts.filter(isSub2ApiAccount).map((account) => account.id);
+  const succeededAccountIds: string[] = [];
   let succeeded = 0;
 
   const result = await withRenewingSchedulerLease(
@@ -134,6 +147,7 @@ export async function refreshAllQuotasHeadlessly(
         const outcome = await refreshAccountQuotaHeadlessly(repo, account.id, leaseIsActive);
         if (outcome.status === "refreshed") {
           succeeded += 1;
+          succeededAccountIds.push(account.id);
         } else if (outcome.status === "failed") {
           failedAccountIds.push(account.id);
         }
@@ -145,6 +159,7 @@ export async function refreshAllQuotasHeadlessly(
     return {
       total: requestedAccounts.length + unknownAccountIds.length,
       succeeded: 0,
+      succeededAccountIds: [],
       failed: failedAccountIds.length,
       busy: true,
       unknownAccountIds,
@@ -155,6 +170,7 @@ export async function refreshAllQuotasHeadlessly(
   return {
     total: requestedAccounts.length + unknownAccountIds.length,
     succeeded,
+    succeededAccountIds,
     failed: failedAccountIds.length,
     unknownAccountIds,
     failedAccountIds

@@ -178,7 +178,6 @@ describe("saved account reauthorization key", () => {
 
   it.each([
     ["healthy", "pill ok", "正常"],
-    ["quota", "pill ok", "正常"],
     ["refresh_unavailable", "pill health-usable", "不可续期"],
     ["refresh_unavailable_unverified", "pill health-unknown", "未知"],
     ["unverified", "pill health-unknown", "未知"],
@@ -190,7 +189,7 @@ describe("saved account reauthorization key", () => {
     expect(pill?.props.children).toBe(label);
   });
 
-  it.each<AccountHealthKind>(["healthy", "quota", "expiring"])("does not add a key to %s", (kind) => {
+  it.each<AccountHealthKind>(["healthy", "expiring"])("does not add a key to %s", (kind) => {
     expect(renderCard(kind).button).toBeUndefined();
   });
 

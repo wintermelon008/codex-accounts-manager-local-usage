@@ -27,6 +27,7 @@ import {
 } from "./quota";
 import { handleCodexAppRestartPreference, promptWindowReloadForAccount } from "./switchEffects";
 import type { AccountSharingService } from "../../sharing";
+import { removeSeamlessSwitchPriorityAccount } from "../../presentation/dashboard/accountPriority";
 const REFRESH_ALL_SILENT_CONCURRENCY = 1;
 const REFRESH_ALL_MANUAL_CONCURRENCY = 2;
 const REFRESH_ALL_SILENT_DELAY_MS = 300;
@@ -236,6 +237,7 @@ export class AccountsCommandService {
         };
         if (outcome.status === "unavailable" && !virtualAccount && !gatewayRouteActive) {
           await this.repo.switchAccount(account.id);
+          removeSeamlessSwitchPriorityAccount(account.id);
           try {
             await this.resetSeamlessSwitchRuntime?.();
           } catch (error) {
@@ -278,6 +280,9 @@ export class AccountsCommandService {
     }
 
     if (!virtualAccount) {
+      if (runtimeOutcome.status === "switched") {
+        removeSeamlessSwitchPriorityAccount(account.id);
+      }
       this.view.markObservedAuthIdentity?.(account.id);
     }
     if (runtimeOutcome.status === "switched") {

@@ -29,6 +29,7 @@ import {
 } from "../../presentation/workbench/autoSwitchState";
 import { getDashboardAccountOrder } from "../../presentation/dashboard/accountOrder";
 import { getDashboardAccountScope } from "../../presentation/dashboard/accountScope";
+import { removeSeamlessSwitchPriorityAccount } from "../../presentation/dashboard/accountPriority";
 import {
   acknowledgeSeamlessQuotaBand,
   observeSeamlessQuotaBand,
@@ -575,6 +576,8 @@ async function executeSeamlessBalanceSwitch(params: {
     return false;
   }
 
+  removeSeamlessSwitchPriorityAccount(next.id);
+
   if (activeCapability === "windowed") {
     acknowledgeSeamlessQuotaBand(active.id, activeBand, quotaBandSize);
   }
@@ -606,6 +609,7 @@ async function convergeUsageLimitedRuntimeToGlobalAccount(
     return false;
   }
 
+  removeSeamlessSwitchPriorityAccount(globallyActive.id);
   view.markObservedAuthIdentity?.(globallyActive.id);
   view.refresh();
   return true;
@@ -688,6 +692,7 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
 
   const matchedRules = buildMatchedRules();
   await repo.switchAccount(next.id);
+  removeSeamlessSwitchPriorityAccount(next.id);
   clearAutoSwitchLock(active.id);
   recordAutoSwitchReason({
     fromAccountId: active.id,

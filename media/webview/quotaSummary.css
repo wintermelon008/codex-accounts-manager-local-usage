@@ -1782,6 +1782,44 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
   padding: 0 0 6px;
   position: relative;
 }
+.saved-priority-handle {
+  position: relative;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border: 1px solid var(--border-accent);
+  border-radius: 7px;
+  background: rgba(56, 139, 253, 0.1);
+  color: var(--accent-blue);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+.saved-priority-handle.is-numbered {
+  cursor: grab;
+}
+.saved-priority-handle.is-numbered:active {
+  cursor: grabbing;
+}
+.saved-priority-handle:hover,
+.saved-priority-handle:focus-visible {
+  border-color: var(--accent-blue);
+  background: rgba(56, 139, 253, 0.2);
+  box-shadow: 0 0 0 3px rgba(148, 163, 255, 0.14);
+  transform: translateY(-1px);
+}
+.saved-card-container.priority-dragging .saved-card {
+  border-color: var(--accent-blue);
+}
 .saved-title {
   min-width: 0;
   flex: 1;

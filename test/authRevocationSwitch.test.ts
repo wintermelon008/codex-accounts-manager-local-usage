@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { selectAuthRevocationCandidates } from "../src/application/accounts/authRevocationSwitch";
 import type { CodexAccountRecord } from "../src/core/types";
+import { clearSeamlessSwitchPriority, setSeamlessSwitchPriority } from "../src/presentation/dashboard/accountPriority";
+
+afterEach(() => {
+  clearSeamlessSwitchPriority();
+});
 
 function account(
   id: string,
@@ -84,5 +89,16 @@ describe("token-revocation switch candidates", () => {
         new Set(["active", "filtered-in"])
       ).map((candidate) => candidate.id)
     ).toEqual(["filtered-in"]);
+  });
+
+  it("puts the fixed priority queue ahead of Dashboard order", () => {
+    const accounts = [account("active"), account("fallback-a"), account("fallback-b")];
+    setSeamlessSwitchPriority(["fallback-b", "fallback-a"]);
+
+    expect(
+      selectAuthRevocationCandidates(accounts, "active", allGroupsVisible, ["active", "fallback-a", "fallback-b"]).map(
+        (candidate) => candidate.id
+      )
+    ).toEqual(["fallback-b", "fallback-a"]);
   });
 });

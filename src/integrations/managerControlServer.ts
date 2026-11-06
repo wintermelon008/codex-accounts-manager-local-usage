@@ -31,7 +31,7 @@ const MAX_REQUEST_BYTES = 16 * 1024;
 const MAX_IMPORT_REQUEST_BYTES = 2 * 1024 * 1024;
 const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
-export type ManagerControlHealth = "healthy" | "auth" | "quota" | "disabled" | "temporary";
+export type ManagerControlHealth = "healthy" | "auth" | "disabled" | "temporary";
 
 export type ManagerControlQuotaWindow = {
   percentage?: number;
@@ -57,6 +57,8 @@ export type ManagerControlAccount = {
   balancePoolEnabled: boolean;
   poolCapability: BalanceQuotaCapability;
   poolEligible: boolean;
+  /** Quota exhaustion is reported separately from account health. */
+  quotaLimited: boolean;
   health: ManagerControlHealth;
   healthKind?: AccountHealthInfo["kind"];
   availability?: AccountHealthInfo["availability"];
@@ -138,6 +140,8 @@ export type ManagerControlImportStatus = {
 export type ManagerControlRefreshSummary = {
   total: number;
   succeeded: number;
+  /** Account IDs whose quota endpoint accepted the current access token. */
+  succeededAccountIds?: string[];
   failed: number;
   /** The shared quota-refresh lease was occupied; the caller should retry. */
   busy?: boolean;
@@ -538,10 +542,11 @@ export class ManagerControlServer {
           summary.healthy += 1;
         } else if (account.health === "auth") {
           summary.authFailed += 1;
-        } else if (account.health === "quota") {
-          summary.quotaLimited += 1;
         } else if (account.health === "temporary") {
           summary.temporaryFailed += 1;
+        }
+        if (account.quotaLimited) {
+          summary.quotaLimited += 1;
         }
         if (account.balancePoolEnabled) {
           summary.poolEnabled += 1;
@@ -659,16 +664,12 @@ function mapAccount(
           ? "healthy"
           : state.kind === "access_token_invalid"
             ? "auth"
-            : state.kind === "quota"
-              ? "quota"
-              : "temporary"
+            : "temporary"
         : issueKind === "auth"
           ? "auth"
-          : issueKind === "quota"
-            ? "quota"
-            : temporaryRefreshFailure
-              ? "temporary"
-              : "healthy";
+          : issueKind === "quota" || temporaryRefreshFailure
+            ? "temporary"
+            : "healthy";
   return {
     id: account.id,
     email: account.email,
@@ -686,6 +687,7 @@ function mapAccount(
     balancePoolEnabled: Boolean(account.balancePoolEnabled),
     poolCapability: capability,
     poolEligible: !virtual && !account.isHidden && account.balancePoolEnabled === true && capability !== "unknown",
+    quotaLimited: !virtual && state?.availability === "quota_limited",
     health,
     healthKind: state?.kind,
     availability: state?.availability,

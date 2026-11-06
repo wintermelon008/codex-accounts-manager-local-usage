@@ -1,6 +1,11 @@
 import { isAutomaticAccount, type CodexAccountRecord } from "../../core/types";
 import { getSeamlessSwitchThreshold } from "../../infrastructure/config/extensionSettings";
 import { getBalanceQuotaCapability, getQuotaPlanPriority } from "./balanceScheduler";
+import {
+  clearSeamlessSwitchPriority,
+  getSeamlessSwitchPriority,
+  reconcileSeamlessSwitchPriority
+} from "../../presentation/dashboard/accountPriority";
 
 type GatewayFallbackConfiguration = {
   get<T>(section: string, defaultValue?: T): T;
@@ -37,6 +42,12 @@ export function selectGatewayFallbackCandidates(
   visibleAccountIds?: ReadonlySet<string>
 ): CodexAccountRecord[] {
   const switchThreshold = getSeamlessSwitchThreshold(configuration);
+  if (configuration.get<boolean>("seamlessSwitchEnabled", false)) {
+    reconcileSeamlessSwitchPriority(accounts);
+  } else {
+    clearSeamlessSwitchPriority();
+  }
+  const priorityOrder = new Map(getSeamlessSwitchPriority().map((accountId, index) => [accountId, index]));
   return accounts
     .filter((account) => {
       if (
@@ -53,7 +64,7 @@ export function selectGatewayFallbackCandidates(
       return capability !== "unknown" && account.quotaSummary!.weeklyPercentage > switchThreshold;
     })
     .slice()
-    .sort((left, right) => compareFallbackCandidates(left, right, now));
+    .sort((left, right) => compareFallbackCandidates(left, right, now, priorityOrder));
 }
 
 /**
@@ -111,7 +122,18 @@ function isGroupVisible(account: CodexAccountRecord, configuration: GatewayFallb
   }
 }
 
-function compareFallbackCandidates(left: CodexAccountRecord, right: CodexAccountRecord, now: number): number {
+function compareFallbackCandidates(
+  left: CodexAccountRecord,
+  right: CodexAccountRecord,
+  now: number,
+  priorityOrder: ReadonlyMap<string, number>
+): number {
+  const leftPriority = priorityOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+  const rightPriority = priorityOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+  if (leftPriority !== rightPriority) {
+    return leftPriority - rightPriority;
+  }
+
   const leftCapability = getBalanceQuotaCapability(left, now);
   const rightCapability = getBalanceQuotaCapability(right, now);
   if (leftCapability !== rightCapability) {

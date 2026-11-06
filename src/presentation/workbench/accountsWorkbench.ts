@@ -41,6 +41,7 @@ import { observeAccountAvailability } from "../../application/accounts/observeAv
 import {
   clearAccountStates,
   initAccountStatePersistence,
+  recordQuotaAuthenticationSuccess,
   recordRuntimeAuthenticationSuccess
 } from "../../application/accounts/accountState";
 import { getErrorMessage } from "../../core/errors";
@@ -50,6 +51,12 @@ import {
 } from "../../application/accounts/importIntoBalancePool";
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { initSeamlessSwitchRuntimeState, resetSeamlessSwitchRuntimeState } from "./seamlessSwitchState";
+import {
+  clearSeamlessSwitchPriority,
+  initSeamlessSwitchPriorityState,
+  reconcileSeamlessSwitchPriority,
+  removeSeamlessSwitchPriorityAccount
+} from "../dashboard/accountPriority";
 import {
   clearPendingRestartRecovery,
   formatRestartRecoveryReport,
@@ -187,7 +194,12 @@ export class AccountsWorkbench {
         await observeAccountAvailability(this.repo, event);
         this.refreshCoordinator.createRefreshView().refresh();
       },
-      (event) => this.handleCapacityRecovery(event)
+      (event) => this.handleCapacityRecovery(event),
+      (accountId) => {
+        const refreshView = this.refreshCoordinator.createRefreshView();
+        refreshView.markObservedAuthIdentity(accountId);
+        refreshView.refresh();
+      }
     );
     this.runtimeSwitchCoordinator = new RuntimeSwitchCoordinator(this.repo, this.hotSwitchRuntime, () =>
       isSeamlessSwitchEnabled()
@@ -349,7 +361,7 @@ export class AccountsWorkbench {
         email: account.email,
         requiresReauthorization: reauthorizationRequired,
         accountState,
-        quotaLimited: health.kind === "quota" || health.availability === "quota_limited",
+        quotaLimited: health.availability === "quota_limited",
         reauthorizationRecommended: reauthorizationRequired || accountState === "usable_no_renewal",
         reauthorizationRequired,
         healthKind: health.kind
@@ -372,6 +384,10 @@ export class AccountsWorkbench {
     registerDebugOutput(this.context);
     initAccountStatePersistence(this.context.globalState);
     initSeamlessSwitchRuntimeState(this.context);
+    initSeamlessSwitchPriorityState(this.context);
+    if (!isSeamlessSwitchEnabled()) {
+      clearSeamlessSwitchPriority();
+    }
     initAutoSwitchRuntimeState(this.context);
     await measureStep("repo.init", async () => {
       await this.repo.init();
@@ -404,12 +420,14 @@ export class AccountsWorkbench {
     });
     this.context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (!event.affectsConfiguration("codexAccounts.forceFastModeEnabled")) {
-          return;
+        if (event.affectsConfiguration("codexAccounts.seamlessSwitchEnabled") && !isSeamlessSwitchEnabled()) {
+          clearSeamlessSwitchPriority();
         }
-        void this.hotSwitchRuntime.setForceFastMode(isForceFastModeEnabled()).catch((error) => {
-          console.warn(`[codexAccounts] failed to update Fast mode in the active runtime: ${getErrorMessage(error)}`);
-        });
+        if (event.affectsConfiguration("codexAccounts.forceFastModeEnabled")) {
+          void this.hotSwitchRuntime.setForceFastMode(isForceFastModeEnabled()).catch((error) => {
+            console.warn(`[codexAccounts] failed to update Fast mode in the active runtime: ${getErrorMessage(error)}`);
+          });
+        }
       })
     );
     this.context.subscriptions.push({ dispose: () => this.repo.dispose() });
@@ -606,7 +624,29 @@ export class AccountsWorkbench {
     if (dispatch.job.result?.busy) {
       console.info("[codexAccounts] manager quota refresh is busy on another host; it will be retried");
     }
+    if (!dispatch.timedOut && dispatch.job.state === "completed") {
+      await this.recordDaemonQuotaSuccesses(dispatch.job.result?.succeededAccountIds ?? []);
+    }
     return true;
+  }
+
+  private async recordDaemonQuotaSuccesses(accountIds: readonly string[]): Promise<void> {
+    await runWithConcurrencyLimit(accountIds, 4, async (accountId) => {
+      try {
+        const account = await this.repo.getAccount(accountId);
+        const tokens = await this.repo.getTokens(accountId, { forceReload: true });
+        const providerAccountId = account?.accountId ?? tokens?.accountId;
+        if (!account || !providerAccountId || !tokens?.accessToken) {
+          return;
+        }
+        recordQuotaAuthenticationSuccess(accountId, {
+          ...tokens,
+          accountId: providerAccountId
+        });
+      } catch (error) {
+        console.warn(`[codexAccounts] could not record daemon quota evidence for ${accountId}: ${getErrorMessage(error)}`);
+      }
+    });
   }
 
   private async startManagerControlServer(): Promise<void> {
@@ -684,6 +724,7 @@ export class AccountsWorkbench {
       .filter((account) => isSub2ApiAccount(account))
       .map((account) => account.id);
     let succeeded = 0;
+    const succeededAccountIds: string[] = [];
 
     await runWithConcurrencyLimit(refreshableAccounts, 3, async (account) => {
       try {
@@ -694,6 +735,7 @@ export class AccountsWorkbench {
           warnQuota: false
         });
         succeeded += 1;
+        succeededAccountIds.push(account.id);
       } catch {
         failedAccountIds.push(account.id);
       }
@@ -704,6 +746,7 @@ export class AccountsWorkbench {
     return {
       total: requestedAccounts.length + unknownAccountIds.length,
       succeeded,
+      succeededAccountIds,
       failed: failedAccountIds.length,
       unknownAccountIds,
       failedAccountIds
@@ -887,7 +930,9 @@ export class AccountsWorkbench {
     const refreshedAccountIds = new Set<string>();
     let lastCandidateFailure: string | undefined;
     try {
-      const maximumCandidateAttempts = (await this.repo.listAccounts()).length;
+      const accounts = await this.repo.listAccounts();
+      reconcileSeamlessSwitchPriority(accounts);
+      const maximumCandidateAttempts = accounts.length;
       for (let candidateAttempt = 0; candidateAttempt < maximumCandidateAttempts; candidateAttempt += 1) {
         const candidate = await selectFreshGatewayFallbackCandidate(
           {
@@ -917,7 +962,11 @@ export class AccountsWorkbench {
             lastCandidateFailure = "The selected fallback account has no usable Codex credentials";
             continue;
           }
-          return await this.runtimeSwitchCoordinator.fallbackGatewayToChatGpt(candidate.id);
+          const outcome = await this.runtimeSwitchCoordinator.fallbackGatewayToChatGpt(candidate.id);
+          if (outcome.status === "switched") {
+            removeSeamlessSwitchPriorityAccount(candidate.id);
+          }
+          return outcome;
         } catch (error) {
           lastCandidateFailure = error instanceof Error ? error.message : String(error);
         }
@@ -985,6 +1034,7 @@ export class AccountsWorkbench {
         "automatic"
       );
       if (outcome.status === "switched") {
+        removeSeamlessSwitchPriorityAccount(candidate.id);
         const refreshView = this.refreshCoordinator.createRefreshView();
         refreshView.markObservedAuthIdentity?.(candidate.id);
         refreshView.refresh();
@@ -1083,6 +1133,9 @@ export class AccountsWorkbench {
         this.integrationHost.switchVirtualAccount(accountId, transactionOptions)
       );
       await this.recordRuntimeSwitchAuthentication(accountId, outcome);
+      if (outcome.status === "switched") {
+        removeSeamlessSwitchPriorityAccount(accountId);
+      }
       return this.resetRecoveryStateAfterExplicitSwitch(outcome, source);
     }
     if (source === "manual" && this.hotSwitchRuntime.isGatewayActive()) {
@@ -1101,10 +1154,16 @@ export class AccountsWorkbench {
         (transactionOptions) => this.integrationHost.deactivateVirtualAccount(gatewayAccount.id, transactionOptions)
       );
       await this.recordRuntimeSwitchAuthentication(accountId, outcome);
+      if (outcome.status === "switched") {
+        removeSeamlessSwitchPriorityAccount(accountId);
+      }
       return this.resetRecoveryStateAfterExplicitSwitch(outcome, source);
     }
     const outcome = await this.runtimeSwitchCoordinator.switchAccount(accountId, options, source);
     await this.recordRuntimeSwitchAuthentication(accountId, outcome);
+    if (outcome.status === "switched") {
+      removeSeamlessSwitchPriorityAccount(accountId);
+    }
     return this.resetRecoveryStateAfterExplicitSwitch(outcome, source);
   }
 

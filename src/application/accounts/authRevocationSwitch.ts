@@ -1,5 +1,9 @@
 import { isAutomaticAccount, type CodexAccountRecord } from "../../core/types";
 import { getDashboardAccountOrder } from "../../presentation/dashboard/accountOrder";
+import {
+  getSeamlessSwitchPriority,
+  reconcileSeamlessSwitchPriority
+} from "../../presentation/dashboard/accountPriority";
 
 type AuthRevocationConfiguration = {
   get<T>(section: string, defaultValue?: T): T;
@@ -24,8 +28,11 @@ export function selectAuthRevocationCandidates(
 ): CodexAccountRecord[] {
   const fallbackOrder = new Map(accounts.map((account, index) => [account.id, index]));
   const visibleOrder = new Map((accountOrder ?? []).map((accountId, index) => [accountId, index]));
+  reconcileSeamlessSwitchPriority(accounts);
+  const priorityOrder = new Map(getSeamlessSwitchPriority().map((accountId, index) => [accountId, index]));
   const orderOf = (account: CodexAccountRecord): number =>
     visibleOrder.get(account.id) ?? (accountOrder?.length ?? 0) + (fallbackOrder.get(account.id) ?? accounts.length);
+  const priorityOf = (account: CodexAccountRecord): number => priorityOrder.get(account.id) ?? Number.MAX_SAFE_INTEGER;
 
   return accounts
     .filter(
@@ -39,7 +46,10 @@ export function selectAuthRevocationCandidates(
         isVisibleGroup(account, configuration)
     )
     .slice()
-    .sort((left, right) => orderOf(left) - orderOf(right) || left.id.localeCompare(right.id));
+    .sort(
+      (left, right) =>
+        priorityOf(left) - priorityOf(right) || orderOf(left) - orderOf(right) || left.id.localeCompare(right.id)
+    );
 }
 
 function isVisibleGroup(account: CodexAccountRecord, configuration: AuthRevocationConfiguration): boolean {

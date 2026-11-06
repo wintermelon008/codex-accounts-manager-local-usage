@@ -25,6 +25,7 @@ import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
 import { clearDashboardAccountOrder, getDashboardAccountOrder, setDashboardAccountOrder } from "./accountOrder";
 import { clearDashboardAccountScope, setDashboardAccountScope } from "./accountScope";
+import { setSeamlessSwitchPriority } from "./accountPriority";
 import type { AccountSharingService } from "../../sharing";
 import { getActiveManagerIntegrationHost } from "../../integrations";
 import { readDashboardSeamlessRuntime, type HotSwitchRuntimeStatusSource } from "./seamlessRuntimeStatus";
@@ -169,6 +170,10 @@ class DashboardPanelController {
           },
           onAccountScope: (accountIds) => {
             setDashboardAccountScope(accountIds);
+          },
+          onAccountPriority: (accountIds) => {
+            setSeamlessSwitchPriority(accountIds);
+            this.schedulePublishState();
           },
           onAction: async (actionMessage) => {
             await this.handleActionMessage(actionMessage);

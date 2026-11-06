@@ -702,7 +702,6 @@ type DetailCopy = {
   saved: string;
   disabledTag: string;
   authErrorTag: string;
-  quotaErrorTag: string;
   showSensitive: string;
   hideSensitive: string;
   currentlyActive: string;
@@ -786,8 +785,6 @@ function renderHealthBadge(
       return `<span class="pill health-usable">${escapeHtml(copy.tokenAutomationRefreshUnavailable)}</span>`;
     case "disabled":
       return `<span class="pill error">${escapeHtml(copy.tokenAutomationDisabled)}</span>`;
-    case "quota":
-      return `<span class="pill warning">${escapeHtml(copy.tokenAutomationQuota)}</span>`;
     default:
       return "";
   }

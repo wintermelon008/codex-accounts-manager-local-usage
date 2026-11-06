@@ -235,42 +235,48 @@ export function SharingModal(props: {
             <section class="sharing-panel-section">
               <div class="sharing-section-title">{localized("续期同步", "續期同步", "Renewal sync")}</div>
               <div class="sharing-peer-list">
-                {(props.sharing.credentialSyncs ?? []).map((sync) => (
-                  <div class="sharing-peer-row" key={sync.syncId}>
-                    <div class="sharing-peer-copy">
-                      <strong>
-                        {sync.role === "primary"
-                          ? localized("主设备", "主設備", "Primary")
-                          : localized("从设备", "從設備", "Follower")}
-                        {sync.peerDisplayName ? ` · ${sync.peerDisplayName}` : ""}
-                      </strong>
-                      <code>{sync.peerUserId}</code>
-                      <span class="sharing-peer-state">
-                        {sync.state === "pending"
-                          ? localized("等待 Relay", "等待 Relay", "Waiting for Relay")
-                          : localized(
-                              `账号 ${sync.accountIds.length} · 版本 ${sync.version}`,
-                              `帳號 ${sync.accountIds.length} · 版本 ${sync.version}`,
-                              `${sync.accountIds.length} account(s) · version ${sync.version}`
-                            )}
-                      </span>
+                {(props.sharing.credentialSyncs ?? []).map((sync) => {
+                  const peerNote = props.sharing?.peers
+                    .find((peer) => peer.userId === sync.peerUserId)
+                    ?.note?.trim();
+                  const peerLabel = peerNote?.length ? peerNote : sync.peerDisplayName;
+                  return (
+                    <div class="sharing-peer-row" key={sync.syncId}>
+                      <div class="sharing-peer-copy">
+                        <strong>
+                          {sync.role === "primary"
+                            ? localized("主设备", "主設備", "Primary")
+                            : localized("从设备", "從設備", "Follower")}
+                          {peerLabel ? ` · ${peerLabel}` : ""}
+                        </strong>
+                        <code>{sync.peerUserId}</code>
+                        <span class="sharing-peer-state">
+                          {sync.state === "pending"
+                            ? localized("等待 Relay", "等待 Relay", "Waiting for Relay")
+                            : localized(
+                                `账号 ${sync.accountIds.length} · 版本 ${sync.version}`,
+                                `帳號 ${sync.accountIds.length} · 版本 ${sync.version}`,
+                                `${sync.accountIds.length} account(s) · version ${sync.version}`
+                              )}
+                        </span>
+                      </div>
+                      <button
+                        class="modal-secondary-btn sharing-danger-text"
+                        type="button"
+                        disabled={props.pending || sync.accountIds.length === 0}
+                        onClick={() =>
+                          props.onAction("returnSharedAccount", sync.accountIds[0], {
+                            sharingSyncId: sync.syncId
+                          })
+                        }
+                      >
+                        {sync.role === "follower"
+                          ? localized("归还账号", "歸還帳號", "Return account")
+                          : localized("停止同步", "停止同步", "Stop sync")}
+                      </button>
                     </div>
-                    <button
-                      class="modal-secondary-btn sharing-danger-text"
-                      type="button"
-                      disabled={props.pending || sync.accountIds.length === 0}
-                      onClick={() =>
-                        props.onAction("returnSharedAccount", sync.accountIds[0], {
-                          sharingSyncId: sync.syncId
-                        })
-                      }
-                    >
-                      {sync.role === "follower"
-                        ? localized("归还账号", "歸還帳號", "Return account")
-                        : localized("停止同步", "停止同步", "Stop sync")}
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           ) : null}

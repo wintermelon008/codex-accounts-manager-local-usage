@@ -47,8 +47,8 @@ describe("independent account availability and renewal", () => {
     [{ kind: "healthy", availability: "usable", renewal: "unknown" }, "usable"],
     [{ kind: "refresh_unavailable", availability: "usable", renewal: "unavailable" }, "usable_no_renewal"],
     [{ kind: "refresh_unavailable" }, "usable_no_renewal"],
-    [{ kind: "quota", availability: "quota_limited", renewal: "succeeded" }, "usable"],
-    [{ kind: "quota", availability: "quota_limited", renewal: "unavailable" }, "usable_no_renewal"],
+    [{ kind: "healthy", availability: "quota_limited", renewal: "succeeded" }, "usable"],
+    [{ kind: "refresh_unavailable", availability: "quota_limited", renewal: "unavailable" }, "usable_no_renewal"],
     [{ kind: "refresh_failed", availability: "usable", renewal: "network_failed" }, "unknown"],
     [{ kind: "refresh_token_invalid", availability: "usable", renewal: "unknown" }, "unknown"],
     [{ kind: "refresh_unavailable_unverified", availability: "unknown", renewal: "unavailable" }, "unknown"],
@@ -195,7 +195,7 @@ describe("independent account availability and renewal", () => {
     recordAvailability(observation("quota_limited"));
     const issued = { ...tokens, accessToken: "issued", refreshToken: "rotated" };
     recordRenewal(base.id, issued, "succeeded");
-    expect(health(base, issued)).toMatchObject({ kind: "quota", availability: "quota_limited", renewal: "succeeded" });
+    expect(health(base, issued)).toMatchObject({ kind: "healthy", availability: "quota_limited", renewal: "succeeded" });
   });
 
   it("a newer unresolved authentication rejection invalidates the older renewal confirmation", () => {
@@ -241,7 +241,7 @@ describe("independent account availability and renewal", () => {
 
   it("quota exhaustion is not an authentication failure and success clears it", () => {
     recordAvailability(observation("quota_limited"));
-    expect(health().kind).toBe("quota");
+    expect(health().kind).toBe("healthy");
     expect(isAccountInvalid(health().kind)).toBe(false);
     recordAvailability(observation("usable", 2));
     expect(health().kind).toBe("healthy");
@@ -252,8 +252,8 @@ describe("independent account availability and renewal", () => {
     recordAvailability({ ...observation("quota_limited"), observedAt: now - 10_000 });
     const quotaSummary = { hourlyResetTime: Math.floor(now / 1000) - 1 };
     expect(health({ ...base, quotaSummary })).toMatchObject({ kind: "unverified", availability: "unknown" });
-    expect(health({ ...base, quotaSummary: { hourlyResetTime: Math.floor(now / 1000) + 30 } }).kind).toBe("quota");
-    expect(health({ ...base, quotaSummary: { hourlyResetTime: Math.floor(now / 1000) - 30 } }).kind).toBe("quota");
+    expect(health({ ...base, quotaSummary: { hourlyResetTime: Math.floor(now / 1000) + 30 } }).kind).toBe("healthy");
+    expect(health({ ...base, quotaSummary: { hourlyResetTime: Math.floor(now / 1000) - 30 } }).kind).toBe("healthy");
     recordAvailability({ ...observation("auth_unavailable", 2), observedAt: now - 10_000 });
     expect(health({ ...base, quotaSummary }).kind).toBe("access_token_invalid");
   });

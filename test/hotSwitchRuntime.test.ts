@@ -166,12 +166,18 @@ describe("Codex hot-switch runtime setup", () => {
         activateUsageAttribution: vi.fn().mockResolvedValue({ active: true, localAccountId: "local-a" }),
         dispose: vi.fn()
       };
+      const onRuntimeAccountIdentity = vi.fn();
       const runtime = new CodexHotSwitchRuntime(
         {} as vscode.ExtensionContext,
         {
           listAccounts: vi.fn(async () => [account]),
           getTokens: vi.fn(async () => ({ idToken: "id", accessToken: "access", accountId: "workspace-a" }))
-        } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1]
+        } as unknown as ConstructorParameters<typeof CodexHotSwitchRuntime>[1],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        onRuntimeAccountIdentity
       );
       const internals = runtime as unknown as {
         bridge: typeof bridge;
@@ -190,6 +196,7 @@ describe("Codex hot-switch runtime setup", () => {
         accountId: "workspace-a",
         expectedEmail: "a@example.invalid"
       });
+      expect(onRuntimeAccountIdentity).toHaveBeenCalledWith("local-a");
       expect(internals.usageAttributionFailureReason).toBeNull();
       runtime.dispose();
     } finally {

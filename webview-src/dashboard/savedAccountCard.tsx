@@ -58,6 +58,14 @@ export function SavedAccountCard(props: {
   poolTogglePending: boolean;
   consumeResetCreditPending: boolean;
   providerActionPending: boolean;
+  priorityNumber?: number;
+  prioritySelectionAvailable?: boolean;
+  priorityDragging?: boolean;
+  onPriorityToggle: () => void;
+  onPriorityDragStart: (event: DragEvent) => void;
+  onPriorityDragEnd: () => void;
+  onPriorityDragOver: (event: DragEvent) => void;
+  onPriorityDrop: (event: DragEvent) => void;
   selected: boolean;
   onToggleSelected: () => void;
   onConfigureWakeup: () => void;
@@ -83,6 +91,14 @@ export function SavedAccountCard(props: {
 }) {
   const { account, copy, settings, now, onAction, privacyMode } = props;
   const virtual = account.accountKind === "sub2api" || account.manualOnly === true;
+  const priorityEligible =
+    settings.seamlessSwitchEnabled &&
+    !virtual &&
+    !account.isHidden &&
+    account.balancePoolEnabled &&
+    !account.isCurrentWindowAccount;
+  const showPriorityControl =
+    props.priorityNumber !== undefined || (priorityEligible && props.prioritySelectionAvailable !== false);
   const emailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const backEmailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const selectionLabel = props.selected ? copy.deselectAccount : copy.selectAccount;
@@ -115,7 +131,7 @@ export function SavedAccountCard(props: {
   const hasUsableRenewalWarning = healthFilter === "usable_no_renewal";
   const hasWarningHealth =
     !account.dismissedHealth &&
-    ["expiring", "refresh_failed", "refresh_token_invalid", "quota"].includes(account.healthKind);
+    ["expiring", "refresh_failed", "refresh_token_invalid"].includes(account.healthKind);
   const hasUnknownHealth = healthFilter === "unknown";
   const hasRecoverableRenewalWarning =
     !account.dismissedHealth &&
@@ -155,7 +171,8 @@ export function SavedAccountCard(props: {
     hasUsableRenewalWarning ? "health-usable" : "",
     hasUnknownHealth ? "health-unknown" : "",
     incomingSharedAccount ? "sharing-incoming" : "",
-    outgoingSharedAccount ? "sharing-outgoing" : ""
+    outgoingSharedAccount ? "sharing-outgoing" : "",
+    props.priorityDragging ? "priority-dragging" : ""
   ]
     .filter(Boolean)
     .join(" ");
@@ -174,7 +191,12 @@ export function SavedAccountCard(props: {
   };
 
   return (
-    <article id={getDashboardAccountCardDomId(account.id)} class={`saved-card-container ${cardStateClass}`}>
+    <article
+      id={getDashboardAccountCardDomId(account.id)}
+      class={`saved-card-container ${cardStateClass}`}
+      onDragOver={props.priorityNumber !== undefined ? props.onPriorityDragOver : undefined}
+      onDrop={props.priorityNumber !== undefined ? props.onPriorityDrop : undefined}
+    >
       <div class={`saved-card-inner ${flipped ? "flipped" : ""}`}>
         <section
           class={`saved-card saved-card-front ${cardStateClass}`}
@@ -257,6 +279,32 @@ export function SavedAccountCard(props: {
                 {!virtual ? renderHealthPill(account, props.lang) : null}
               </div>
             </div>
+            {showPriorityControl ? (
+              <button
+                class={`saved-priority-handle ${props.priorityNumber !== undefined ? "is-numbered" : "is-empty"}`}
+                type="button"
+                aria-label={
+                  props.priorityNumber !== undefined
+                    ? `Remove account from switch order ${props.priorityNumber}`
+                    : "Add account to switch order"
+                }
+                draggable={props.priorityNumber !== undefined}
+                onClick={(event) => {
+                  stopFlip(event);
+                  props.onPriorityToggle();
+                }}
+                onDragStart={(event) => {
+                  stopFlip(event);
+                  props.onPriorityDragStart(event);
+                }}
+                onDragEnd={(event) => {
+                  stopFlip(event);
+                  props.onPriorityDragEnd();
+                }}
+              >
+                {props.priorityNumber ?? "+"}
+              </button>
+            ) : null}
           </div>
 
           <div class="saved-progress">

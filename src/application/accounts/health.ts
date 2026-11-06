@@ -80,9 +80,11 @@ export function resolveAccountHealth(
   }
   let kind: AccountHealthKind;
   if (availability.kind === "auth_unavailable") kind = "access_token_invalid";
-  else if (availability.kind === "quota_limited") kind = "quota";
   else if (renewal === "unavailable")
-    kind = availability.kind === "usable" ? "refresh_unavailable" : "refresh_unavailable_unverified";
+    kind =
+      availability.kind === "usable" || availability.kind === "quota_limited"
+        ? "refresh_unavailable"
+        : "refresh_unavailable_unverified";
   else if (renewal === "network_failed") kind = "refresh_failed";
   else if (renewal === "refreshing") kind = "refreshing";
   else if (availability.kind === "unknown") kind = "unverified";

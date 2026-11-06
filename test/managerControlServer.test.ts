@@ -115,6 +115,35 @@ describe("ManagerControlServer", () => {
     });
   });
 
+  it("counts quota exhaustion independently of healthy and temporary account states", async () => {
+    const server = createServer({
+      getAccountHealth: async (account) =>
+        account.id === "account-2"
+          ? { kind: "access_token_invalid", issueKey: "auth", availability: "auth_unavailable" }
+          : {
+              kind: account.id === "account-1" ? "healthy" : "refresh_failed",
+              issueKey: account.id,
+              availability: "quota_limited"
+            }
+    });
+    const address = await server.start(0, "control-secret");
+    servers.push(server);
+
+    const response = await fetch(`http://${address.host}:${address.port}/api/manager/accounts`, {
+      headers: { authorization: "Bearer control-secret" }
+    });
+    const body = (await response.json()) as {
+      counts: Record<string, number>;
+      accounts: Array<Record<string, unknown>>;
+    };
+
+    expect(body.accounts.find((account) => account.id === "account-1")).toMatchObject({
+      health: "healthy",
+      quotaLimited: true
+    });
+    expect(body.counts).toMatchObject({ total: 3, healthy: 1, authFailed: 1, temporaryFailed: 1, quotaLimited: 2 });
+  });
+
   it("creates a refresh job and exposes redacted import status", async () => {
     const refreshed: string[][] = [];
     const server = createServer({

@@ -64,17 +64,50 @@ function isFileNotFound(error: unknown): boolean {
 /**
  * 写入 auth.json 文件
  *
- * OAuth 账号不写 auth_mode 字段（由 codex 根据 token 推断），仅写 tokens/last_refresh。
+ * 令牌轮换或账号切换只替换令牌字段，并保留官方 ChatGPT external-auth 元数据，
+ * 避免后台刷新或切号后官方扩展误判为未登录；没有已有 auth.json 时仍不主动写入 auth_mode。
+ * 无 refresh token 时写空字符串，满足 Codex TokenData 的必填字段要求。
  * 写入采用原子替换，并在 macOS 下同步 Keychain。
  *
  * @param tokens - 认证令牌
  */
 export async function writeAuthFile(tokens: CodexTokens): Promise<void> {
-  const authFile = buildAuthFile(tokens);
+  const authFile = await buildAuthFileForWrite(tokens);
   const content = JSON.stringify(authFile, null, 2);
 
   await writeAuthJsonAtomic(getAuthJsonPath(), content);
   await syncCodexKeychain(content);
+}
+
+async function buildAuthFileForWrite(tokens: CodexTokens): Promise<CodexAuthFile> {
+  const next = buildAuthFile(tokens);
+  const existing = await readAuthFile();
+  if (!existing) {
+    return next;
+  }
+
+  const existingRecord = existing as unknown as Record<string, unknown>;
+  const nextRecord = next as unknown as Record<string, unknown>;
+  for (const key of ["auth_mode", "api_base_url", "base_url"]) {
+    if (existingRecord[key] !== undefined) {
+      nextRecord[key] = existingRecord[key];
+    }
+  }
+
+  const existingTokens = existingRecord["tokens"];
+  const nextTokens = nextRecord["tokens"];
+  if (isRecord(existingTokens) && isRecord(nextTokens)) {
+    for (const key of ["oauth_provenance", "login_owner_id"]) {
+      if (existingTokens[key] !== undefined) {
+        nextTokens[key] = existingTokens[key];
+      }
+    }
+  }
+  return next;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
@@ -94,7 +127,7 @@ export function buildCodexImportFile(
     tokens: {
       id_token: tokens.idToken,
       access_token: tokens.accessToken,
-      refresh_token: tokens.refreshToken,
+      refresh_token: tokens.refreshToken ?? "",
       account_id: tokens.accountId ?? accountId
     },
     last_refresh: lastRefresh
@@ -110,7 +143,9 @@ function buildAuthFile(tokens: CodexTokens): CodexAuthFile {
     tokens: {
       id_token: tokens.idToken,
       access_token: tokens.accessToken,
-      refresh_token: tokens.refreshToken,
+      // Codex requires this field even for access-only follower credentials.
+      // Omitting it makes the entire auth.json unreadable on the next reload.
+      refresh_token: tokens.refreshToken ?? "",
       account_id: tokens.accountId
     },
     last_refresh: new Date().toISOString()

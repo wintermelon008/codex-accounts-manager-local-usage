@@ -6,6 +6,7 @@ import { setAvailabilityRuntime } from "../application/accounts/accountState";
 import { needsRefresh } from "../auth/oauth";
 import { ensureFreshAccountTokens, ensureFreshTokensWithLease } from "../auth/tokenRefreshCoordinator";
 import { isSub2ApiAccount, type CodexAccountRecord, type CodexTokens } from "../core/types";
+import { getErrorMessage } from "../core/errors";
 import { decodeJwtPayload, extractClaims } from "../utils/jwt";
 import {
   getCodexAccountsConfiguration,
@@ -147,7 +148,13 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
     private readonly handleAvailability?: (event: HotSwitchAvailabilityEvent) => Promise<void>,
     private readonly handleCapacityRecovery?: (
       event: HotSwitchCapacityRecoveryEvent
-    ) => Promise<HotSwitchCapacityRecoveryResult>
+    ) => Promise<HotSwitchCapacityRecoveryResult>,
+    /**
+     * Rehydrates the host-local current-account marker after the app-server
+     * has restarted. This is observational only; account/shared-state writes
+     * remain owned by the normal switch transaction and repository sync.
+     */
+    private readonly onRuntimeAccountIdentity?: (accountId: string) => void
   ) {}
 
   async initialize(): Promise<HotSwitchSetupResult> {
@@ -947,6 +954,17 @@ export class CodexHotSwitchRuntime implements vscode.Disposable {
         }
         if (identity.managedAccountId && identity.managedAccountId !== remoteAccountId) {
           throw new Error("The runtime identity does not match the managed account for usage attribution");
+        }
+
+        // The app-server keeps the effective OAuth identity across an
+        // Extension Host reload, while currentWindowRuntimeAccountId is
+        // intentionally process-local. Rehydrate that marker from the live
+        // runtime once the identity is verified so the Dashboard does not
+        // require a no-op switch away and back after every reload.
+        try {
+          this.onRuntimeAccountIdentity?.(account.id);
+        } catch (error) {
+          console.warn("[codexAccounts] runtime account identity callback failed:", getErrorMessage(error));
         }
 
         await bridge.activateUsageAttribution({

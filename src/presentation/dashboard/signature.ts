@@ -171,6 +171,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.indexHealth.lastErrorMessage ?? "",
     state.indexHealth.lastRecoveredAt ?? "",
     announcementSignature,
+    (state.accountPriorityIds ?? []).join(","),
     accountSignature,
     localUsageSignature,
     integrationsSignature,
