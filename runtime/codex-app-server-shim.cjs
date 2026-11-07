@@ -158,7 +158,7 @@ let clientSocketIdentity;
 const deferredOfficialLines = [];
 const pendingInternalRequests = new Map();
 const pendingChildModelListRequests = new Map();
-const startupAccountReadRequests = new Set();
+const startupAccountReadRequests = new Map();
 let pendingLoginCompletion;
 const pendingControlRequests = new Map();
 const recentSwitchOperations = new Map();
@@ -195,6 +195,7 @@ let clientReconnectPromise;
 let lastClientInitializeLine;
 const clientInputQueue = [];
 const clientPendingRequestIds = new Map();
+const clientReplayableAuthReads = new Map();
 const clientServerRequestIds = new Set();
 const pendingThreadCreationRequests = new Map();
 const pendingThreadReadRequests = new Map();
@@ -422,6 +423,9 @@ function handleAttachedClientInput(line) {
       lastClientInitializeLine = line;
     }
     clientPendingRequestIds.set(requestIdKey(message.id), message.id);
+    if (isReplayableAuthRead(message)) {
+      clientReplayableAuthReads.set(requestIdKey(message.id), line);
+    }
   }
   writeAttachedClientLine(line);
 }
@@ -496,6 +500,7 @@ function handleAttachedOwnerLine(line) {
       clientServerRequestIds.add(key);
     } else {
       clientPendingRequestIds.delete(key);
+      clientReplayableAuthReads.delete(key);
     }
   }
   process.stdout.write(`${line}\n`);
@@ -507,18 +512,33 @@ function handleAttachedOwnerDisconnect(socket) {
   }
   attachedClientSocket = undefined;
   for (const [key, id] of clientPendingRequestIds) {
-    process.stdout.write(
-      `${JSON.stringify({
-        id,
-        error: { code: -32001, message: "Manager runtime owner disconnected; request outcome is uncertain" }
-      })}\n`
-    );
+    const authRead = clientReplayableAuthReads.get(key);
+    if (authRead && !shutdownRequested && clientInputQueue.length < MAX_ATTACHED_REQUESTS) {
+      // Account discovery is safe to repeat after promotion. Failing these
+      // startup reads makes the official extension display a lost login.
+      clientInputQueue.push(authRead);
+    } else {
+      process.stdout.write(
+        `${JSON.stringify({
+          id,
+          error: { code: -32001, message: "Manager runtime owner disconnected; request outcome is uncertain" }
+        })}\n`
+      );
+    }
     clientPendingRequestIds.delete(key);
+    clientReplayableAuthReads.delete(key);
   }
   clientServerRequestIds.clear();
   if (!shutdownRequested) {
     void reconnectAsOwnerOrClient();
   }
+}
+
+function isReplayableAuthRead(message) {
+  return (
+    (message.method === "account/read" || message.method === "getAuthStatus") &&
+    message.params?.refreshToken !== true
+  );
 }
 
 async function reconnectAsOwnerOrClient() {
@@ -913,7 +933,11 @@ function handleOfficialLine(line) {
   }
 
   if (message.method === "account/read" && Object.prototype.hasOwnProperty.call(message, "id")) {
-    startupAccountReadRequests.add(requestIdKey(message.id));
+    startupAccountReadRequests.set(requestIdKey(message.id), {
+      line,
+      retryable: isReplayableAuthRead(message),
+      retried: false
+    });
   }
 
   if (rewriteThreadListProviderFilter(message)) {
@@ -1147,7 +1171,23 @@ function handleCodexLine(line) {
 
   if (Object.prototype.hasOwnProperty.call(message, "id") && !message.method) {
     const key = requestIdKey(message.id);
-    const startupAccountRead = startupAccountReadRequests.delete(key);
+    const startupAccountRead = startupAccountReadRequests.get(key);
+    if (
+      startupAccountRead?.retryable &&
+      !startupAccountRead.retried &&
+      !shutdownRequested &&
+      !childExited &&
+      message.error?.message === "workspace routing discovery timed out"
+    ) {
+      // Routing has a fixed 15-second discovery budget. A slow first
+      // connection can time out while a later read succeeds; retry only this
+      // read once and preserve all authentication and persistent errors.
+      startupAccountRead.retried = true;
+      if (writeChildLine(startupAccountRead.line)) {
+        return;
+      }
+    }
+    startupAccountReadRequests.delete(key);
     if (startupAccountRead && !startupModelRefreshNotificationSent) {
       startupModelRefreshNotificationSent = true;
       setImmediate(() => {

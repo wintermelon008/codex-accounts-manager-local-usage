@@ -474,7 +474,10 @@ export function SavedAccountCard(props: {
                 onClick={() => onAction("copyAccountImportJson", account.id)}
               />
             ) : null}
-            {!virtual && account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
+            {!virtual &&
+            !incomingSharedAccount &&
+            account.resetCreditsAvailable != null &&
+            account.resetCreditsAvailable > 0 ? (
               <ActionButton
                 icon={renderResetCreditsIcon()}
                 iconOnly

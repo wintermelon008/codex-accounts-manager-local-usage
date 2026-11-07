@@ -432,6 +432,15 @@ function AdvancedAccountFocus(props: {
         ))}
       </div>
       <div class="advanced-account-focus-details">
+        {!virtual &&
+        incomingSharedAccount &&
+        account.resetCreditsAvailable != null &&
+        account.resetCreditsAvailable > 0 ? (
+          <div>
+            <span>{props.copy.resetCreditsLabel}</span>
+            <strong>{account.resetCreditsAvailable}</strong>
+          </div>
+        ) : null}
         <div>
           <span>{props.lang === "zh" ? "健康状态" : "Health"}</span>
           <strong>{account.healthLabel}</strong>
@@ -555,7 +564,10 @@ function AdvancedAccountFocus(props: {
             onClick={() => props.onAction("copyAccountImportJson", account.id)}
           />
         ) : null}
-        {!virtual && account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
+        {!virtual &&
+        !incomingSharedAccount &&
+        account.resetCreditsAvailable != null &&
+        account.resetCreditsAvailable > 0 ? (
           <ActionButton
             class="advanced-account-action"
             icon={renderResetCreditsIcon()}
