@@ -28,10 +28,5 @@ tsconfig.eslint.json
 vite.webview.config.mts
 vitest.config.mts
 
-media/dashboard.png
-media/detail.png
-media/setting.png
-media/status_bar.png
-media/CT_logo_transparent_square_hd.png
 out/**/*.d.ts
 out/**/*.d.ts.map

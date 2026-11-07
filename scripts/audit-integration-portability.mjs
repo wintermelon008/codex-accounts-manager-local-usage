@@ -55,7 +55,6 @@ function isDeliverable(file) {
     file === "runtime/codex-app-server-shim.cjs" ||
     file === "webview-src/dashboard/host.ts" ||
     file === "webview-src/dashboard/main.tsx" ||
-    file === "webview-src/dashboard/integrationCards.tsx" ||
     file.startsWith("test/") ||
     file === "scripts/audit-integration-portability.mjs"
   );
