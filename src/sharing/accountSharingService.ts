@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import * as path from "node:path";
 import type { DashboardLanguage } from "../localization/languages";
 import type {
   DashboardAccountUsageSourceViewModel,
@@ -57,6 +58,7 @@ import {
   type AccountUsageState,
   writeAccountUsageState
 } from "./accountUsage";
+import { RelaySshFallbackTunnel, type RelaySshFallbackTransport } from "./relaySshFallback";
 
 const SHARING_STATE_KEY = "codexAccounts.accountSharing.v1";
 const SHARING_KEYS_SECRET = "codexAccounts.accountSharing.keys.v1";
@@ -88,6 +90,7 @@ type SharingServiceOptions = {
   relayUrl?: () => string;
   bootstrapToken?: () => string | undefined;
   switchAway?: SwitchAway;
+  relaySshFallback?: RelaySshFallbackTransport;
 };
 
 type SharingLocalStateFile = {
@@ -118,16 +121,20 @@ export class AccountSharingService implements vscode.Disposable {
   private readonly accountUsageAckInFlight = new Map<string, Promise<void>>();
   private accountUsageStateWriteInFlight: Promise<void> = Promise.resolve();
   private credentialSyncEndpointRetryAt = 0;
+  private relayPollActive = false;
   private localStatePath: string | undefined;
   private readonly returnConfirmationTimers = new Map<string, NodeJS.Timeout>();
   private readonly returnConfirmationAttempts = new Map<string, number>();
+  private relaySshFallback: RelaySshFallbackTransport | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly repo: AccountsRepository,
     private readonly onChanged: () => void,
     private readonly options: SharingServiceOptions = {}
-  ) {}
+  ) {
+    this.relaySshFallback = options.relaySshFallback;
+  }
 
   async initialize(): Promise<void> {
     if (this.initialized) {
@@ -155,6 +162,7 @@ export class AccountSharingService implements vscode.Disposable {
       void this.context.globalState.update(SHARING_ENABLED_KEY, true);
     }
     this.relayToken = localState.relayToken?.trim() || undefined;
+    this.relaySshFallback ??= await this.createRelaySshFallback();
     this.accountUsageState = await readAccountUsageState(getPrivateStatePaths(this.context).root);
     this.initialized = true;
     this.accountChangeSubscription = this.repo.onDidChangeAccounts((accountIds) => {
@@ -207,6 +215,7 @@ export class AccountSharingService implements vscode.Disposable {
     }
     this.returnConfirmationTimers.clear();
     this.returnConfirmationAttempts.clear();
+    this.relaySshFallback?.dispose();
   }
 
   isEnabled(): boolean {
@@ -348,13 +357,21 @@ export class AccountSharingService implements vscode.Disposable {
     if (this.disposed || !this.initialized || !this.enabled || this.pollInFlight) {
       return;
     }
+    this.relayPollActive = true;
     this.pollInFlight = this.pollInternal()
       .then(() => {
+        this.relaySshFallback?.recordDirectSuccess();
         this.lastSyncAt = this.now();
         this.lastSyncError = undefined;
         void this.persistSyncHealth();
       })
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
+        this.relayPollActive = false;
+        if (isRetriableNetworkError(error)) {
+          await this.warmRelaySshFallback();
+        } else {
+          this.relaySshFallback?.recordDirectSuccess();
+        }
         this.lastSyncAt = this.now();
         const message = describeError(error);
         this.lastSyncError = message;
@@ -367,6 +384,7 @@ export class AccountSharingService implements vscode.Disposable {
         }
       })
       .finally(() => {
+        this.relayPollActive = false;
         this.pollInFlight = undefined;
       });
     await this.pollInFlight;
@@ -2561,9 +2579,9 @@ export class AccountSharingService implements vscode.Disposable {
     if (token) {
       headers.set("authorization", `Bearer ${token}`);
     }
-    const performRequest = async (): Promise<T> => {
+    const performRequest = async (baseUrl: string): Promise<T> => {
       const response = await fetchWithTimeout(
-        `${relayUrl}${path}`,
+        `${baseUrl}${path}`,
         { ...init, headers },
         SHARING_REQUEST_TIMEOUT_MS,
         "Sharing Relay request"
@@ -2583,19 +2601,110 @@ export class AccountSharingService implements vscode.Disposable {
       return body as T;
     };
 
-    // GET polling is safe to retry when DERP briefly loses the TCP path. Do
-    // not replay POSTs: a response can be lost after the server has applied a
-    // state change, and replaying an acknowledgement/return is unnecessary.
-    if ((init.method ?? "GET").toUpperCase() === "GET") {
-      return retryWithBackoff(performRequest, {
-        delaysMs: SHARING_GET_RETRY_DELAYS_MS,
-        shouldRetryError: (error) => {
-          const statusCode = readStatusCode(error);
-          return statusCode === undefined ? isRetriableNetworkError(error) : isRetriableHttpStatus(statusCode);
-        }
-      });
+    const method = (init.method ?? "GET").toUpperCase();
+    const requestWithRetry = (baseUrl: string): Promise<T> => {
+      // GET polling is safe to retry when DERP briefly loses the TCP path. Do
+      // not replay POSTs: a response can be lost after the server has applied a
+      // state change, and replaying an acknowledgement/return is unnecessary.
+      if (method === "GET") {
+        return retryWithBackoff(() => performRequest(baseUrl), {
+          delaysMs: SHARING_GET_RETRY_DELAYS_MS,
+          shouldRetryError: (error) => {
+            const statusCode = readStatusCode(error);
+            return statusCode === undefined ? isRetriableNetworkError(error) : isRetriableHttpStatus(statusCode);
+          }
+        });
+      }
+      return performRequest(baseUrl);
+    };
+
+    const fallback = this.relaySshFallback;
+    if (fallback?.isActive()) {
+      const lease = await fallback.acquire();
+      try {
+        return await requestWithRetry(lease.baseUrl);
+      } finally {
+        lease.release();
+      }
     }
-    return performRequest();
+
+    try {
+      const response = await requestWithRetry(relayUrl);
+      if (!this.relayPollActive) {
+        fallback?.recordDirectSuccess();
+      }
+      return response;
+    } catch (error) {
+      if (!fallback || !isRetriableNetworkError(error)) {
+        // An HTTP response, including an API error, proves that the direct
+        // Relay path is reachable and must not advance the failure counter.
+        if (!this.relayPollActive) {
+          fallback?.recordDirectSuccess();
+        }
+        throw error;
+      }
+      if (this.relayPollActive) {
+        throw error;
+      }
+      if (!fallback.recordDirectNetworkFailure()) {
+        throw error;
+      }
+
+      let lease;
+      try {
+        lease = await fallback.acquire();
+      } catch {
+        throw error;
+      }
+      try {
+        // Do not replay an uncertain write. The next poll uses the same
+        // tunnel and retries the durable pending operation normally.
+        if (method !== "GET") {
+          throw error;
+        }
+        return await requestWithRetry(lease.baseUrl);
+      } finally {
+        lease.release();
+      }
+    }
+  }
+
+  private async warmRelaySshFallback(): Promise<void> {
+    const fallback = this.relaySshFallback;
+    if (!fallback || !fallback.recordDirectNetworkFailure()) {
+      return;
+    }
+    try {
+      const lease = await fallback.acquire();
+      lease.release();
+    } catch {
+      // Keep the original Relay error visible; the next poll can retry the
+      // same fallback acquisition after its backoff.
+    }
+  }
+
+  private async createRelaySshFallback(): Promise<RelaySshFallbackTransport | undefined> {
+    const configured = vscode.workspace
+      .getConfiguration("codexAccounts")
+      .get<{ enabled?: boolean; sshAlias?: string }>("sharingRelaySshFallback", {});
+    let enabled = configured.enabled === true;
+    let sshAlias = configured.sshAlias?.trim() || "Vserver";
+    try {
+      const localConfig = JSON.parse(
+        await readFile(path.join(getPrivateStatePaths(this.context).root, "relay-ssh-fallback.json"), "utf8")
+      ) as { enabled?: unknown; sshAlias?: unknown };
+      enabled = localConfig.enabled === true;
+      if (typeof localConfig.sshAlias === "string" && localConfig.sshAlias.trim()) {
+        sshAlias = localConfig.sshAlias.trim();
+      }
+    } catch {
+      // The local opt-in file is optional; the normal VS Code setting remains
+      // the fallback configuration when it is absent or malformed.
+    }
+    if (!enabled || !sshAlias) {
+      return undefined;
+    }
+    return new RelaySshFallbackTunnel({ sshAlias });
   }
 
   private async loadLocalState(legacyDisplayName?: string): Promise<SharingLocalStateFile> {

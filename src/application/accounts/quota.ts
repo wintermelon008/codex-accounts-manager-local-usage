@@ -151,11 +151,7 @@ export async function refreshSingleQuota(
     // Record the refresh failure before persisting the successful quota probe,
     // so health resolution can use the new quota timestamp as proof that the
     // existing access token is still accepted.
-    markTokenAutomationRefreshFailure(
-      accountId,
-      result.tokenRefreshFailure.message,
-      result.tokenRefreshFailure.kind
-    );
+    markTokenAutomationRefreshFailure(accountId, result.tokenRefreshFailure.message, result.tokenRefreshFailure.kind);
   }
   const updatedAccount = await repo.updateQuota(
     accountId,
@@ -229,11 +225,7 @@ export async function refreshImportedAccountQuota(
     return {};
   }
   if (result.tokenRefreshFailure) {
-    markTokenAutomationRefreshFailure(
-      accountId,
-      result.tokenRefreshFailure.message,
-      result.tokenRefreshFailure.kind
-    );
+    markTokenAutomationRefreshFailure(accountId, result.tokenRefreshFailure.message, result.tokenRefreshFailure.kind);
   }
   const updatedAccount = await repo.updateQuota(
     accountId,
@@ -287,8 +279,10 @@ async function syncResetCreditsSnapshot(
   initialTokens: Parameters<typeof runAuthenticatedAccountRequest>[3]
 ): Promise<void> {
   try {
-    const snapshot = await runAuthenticatedAccountRequest(repo, accountId, (tokens) =>
-      fetchResetCredits(tokens.accessToken, remoteAccountId),
+    const snapshot = await runAuthenticatedAccountRequest(
+      repo,
+      accountId,
+      (tokens) => fetchResetCredits(tokens.accessToken, remoteAccountId),
       initialTokens
     );
     if (updatedAccount.quotaSummary) {
@@ -434,18 +428,19 @@ async function runSeamlessBalanceSwitchForActiveQuota(
 
   try {
     return await executeSeamlessBalanceSwitch({
-      accounts: scopedAccounts,
+      // Reconcile priorities against the complete snapshot; temporary filters
+      // only restrict targets and must not consume queued accounts.
+      accounts,
       active,
       activeCapability,
       config,
       now,
       view,
-      runtimeUsageLimit:
-        options.trigger === "runtimeUsageLimit" || options.trigger === "runtimeUsageLimitExhaustion",
+      runtimeUsageLimit: options.trigger === "runtimeUsageLimit" || options.trigger === "runtimeUsageLimitExhaustion",
       capacityRecovery: capacityRecoveryTrigger,
       quotaBandSwitchEnabled,
       lowQuotaSwitchEnabled,
-      visibleAccountIds: dashboardAccountScope
+      visibleAccountIds: new Set(scopedAccounts.map((account) => account.id))
     });
   } finally {
     await lease.release();
@@ -545,10 +540,10 @@ async function executeSeamlessBalanceSwitch(params: {
   const switchOptions = capacityRecovery
     ? { gracePeriodMs: 0, longTurnPolicy: "interruptAndContinue" as const }
     : thresholdSwitch
-    ? { gracePeriodMs: 0, recoverRecentUsageLimitedTurns: true }
-    : afterExhaustionRecoveryEnabled
-      ? { recoverRecentUsageLimitedTurns: true }
-      : undefined;
+      ? { gracePeriodMs: 0, recoverRecentUsageLimitedTurns: true }
+      : afterExhaustionRecoveryEnabled
+        ? { recoverRecentUsageLimitedTurns: true }
+        : undefined;
   const runtimeOutcome = (await (switchOptions
     ? view.switchRuntimeAccount?.(next.id, switchOptions)
     : view.switchRuntimeAccount?.(next.id))) ?? { status: "unavailable" as const };

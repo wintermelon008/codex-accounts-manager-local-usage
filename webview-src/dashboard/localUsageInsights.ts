@@ -62,6 +62,14 @@ type ZonedDateTimeParts = {
 // adding their token prices here would report a false amount for audio or image usage.
 const API_RATE_CARDS: Array<{ matches: (model: string) => boolean; rates: ApiRateCard }> = [
   {
+    matches: (model) => model === "gpt-6.2-astra" || model.startsWith("gpt-6.2-astra-"),
+    rates: { inputPerMillionUsd: 8, cachedInputPerMillionUsd: 0.4, outputPerMillionUsd: 40 }
+  },
+  {
+    matches: (model) => model === "gpt-6.2-sol" || model.startsWith("gpt-6.2-sol-"),
+    rates: { inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.1, outputPerMillionUsd: 10 }
+  },
+  {
     matches: (model) => model === "gpt-6" || model.startsWith("gpt-6-astra"),
     rates: { inputPerMillionUsd: 10, cachedInputPerMillionUsd: 1, outputPerMillionUsd: 50 }
   },
@@ -546,7 +554,9 @@ function createBar(
   };
 }
 
-function modelsByDate(rows: readonly DashboardLocalUsageDayModelViewModel[]): Map<string, DashboardLocalUsageDayModelViewModel[]> {
+function modelsByDate(
+  rows: readonly DashboardLocalUsageDayModelViewModel[]
+): Map<string, DashboardLocalUsageDayModelViewModel[]> {
   const result = new Map<string, DashboardLocalUsageDayModelViewModel[]>();
   for (const row of rows) {
     const bucket = result.get(row.date) ?? [];

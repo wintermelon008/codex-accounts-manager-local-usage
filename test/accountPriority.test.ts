@@ -61,10 +61,78 @@ describe("Dashboard account priority", () => {
     expect(getSeamlessSwitchPriority()).toEqual(["later"]);
   });
 
+  it.each(["free", "plus"])("puts a queued %s account ahead of an unqueued Pro account", (planType) => {
+    const now = 10_000_000;
+    const active = quotaAccount("active", now, 40);
+    const pro = quotaAccount("pro", now, 100);
+    pro.planType = "pro";
+    const first = quotaAccount("first", now, 60);
+    first.planType = planType;
+    setSeamlessSwitchPriority([first.id]);
+
+    expect(
+      selectBalanceCandidate({
+        accounts: [active, pro, first],
+        activeAccountId: active.id,
+        activeBand: 2,
+        accountOrder: [pro.id, first.id],
+        now
+      })?.id
+    ).toBe(first.id);
+  });
+
+  it("honors queue order across reserve and windowed candidates before plan tier", () => {
+    const now = 10_000_000;
+    const active = quotaAccount("active", now, 1);
+    const pro = quotaAccount("pro", now, 100);
+    pro.planType = "pro";
+    const plus = quotaAccount("plus", now, 90);
+    plus.planType = "plus";
+    const freeReserve = quotaAccount("free-reserve", now, 0);
+    freeReserve.planType = "free";
+    freeReserve.quotaSummary!.hourlyWindowPresent = false;
+    setSeamlessSwitchPriority([freeReserve.id, plus.id]);
+    const params = {
+      accounts: [active, pro, plus, freeReserve],
+      activeAccountId: active.id,
+      activeBand: 1,
+      now
+    };
+
+    expect(selectBalanceCandidate(params)?.id).toBe(freeReserve.id);
+    setSeamlessSwitchPriority([plus.id, freeReserve.id]);
+    expect(selectBalanceCandidate(params)?.id).toBe(plus.id);
+    clearSeamlessSwitchPriority();
+    expect(selectBalanceCandidate(params)?.id).toBe(pro.id);
+  });
+
+  it("skips queued targets with unsafe quota or outside the visible scope", () => {
+    const now = 10_000_000;
+    const active = quotaAccount("active", now, 1);
+    const depleted = quotaAccount("depleted", now, 1);
+    const filteredOut = quotaAccount("filtered-out", now, 90);
+    const safe = quotaAccount("safe", now, 80);
+    setSeamlessSwitchPriority([depleted.id, filteredOut.id, safe.id]);
+
+    expect(
+      selectBalanceCandidate({
+        accounts: [active, depleted, filteredOut, safe],
+        activeAccountId: active.id,
+        activeBand: 1,
+        visibleAccountIds: new Set([active.id, depleted.id, safe.id]),
+        now
+      })?.id
+    ).toBe(safe.id);
+    expect(getSeamlessSwitchPriority()).toEqual([depleted.id, filteredOut.id, safe.id]);
+  });
+
   it("uses priority order for Gateway fallback after freshness eligibility", () => {
     const now = 10_000_000;
     const first = quotaAccount("first", now, 40);
+    first.planType = "free";
+    first.quotaSummary!.hourlyWindowPresent = false;
     const later = quotaAccount("later", now, 95);
+    later.planType = "pro";
     setSeamlessSwitchPriority(["first", "later"]);
 
     const config = {
@@ -76,6 +144,11 @@ describe("Dashboard account priority", () => {
     expect(selectGatewayFallbackCandidates([later, first], config, now).map((account) => account.id)).toEqual([
       "first",
       "later"
+    ]);
+    clearSeamlessSwitchPriority();
+    expect(selectGatewayFallbackCandidates([first, later], config, now).map((account) => account.id)).toEqual([
+      "later",
+      "first"
     ]);
   });
 });

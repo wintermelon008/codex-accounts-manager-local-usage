@@ -73,7 +73,6 @@ describe("deriveLocalUsageRange", () => {
     expect(formatLocalUsageAxisLabel(sevenDayBar, "7w", usage.timeZone)).toBe("08.24(+6)");
     expect(formatLocalUsageAxisLabel(monthBar, "7m", usage.timeZone)).toBe("04");
   });
-
 });
 
 describe("estimateStandardApiCost", () => {
@@ -164,6 +163,26 @@ describe("estimateStandardApiCost", () => {
     ]);
 
     expect(price.amountUsd).toBeCloseTo(11.05, 8);
+    expect(price.pricedTokens).toBe(2_000_000);
+    expect(price.unpricedTokens).toBe(0);
+  });
+
+  it.each([
+    ["gpt-6.2-sol", 11.05],
+    ["gpt-6.2-astra", 44.2],
+    ["gpt-6.2-sol-2026-11-17", 11.05],
+    ["gpt-6.2-astra-2026-11-17", 44.2]
+  ] as const)("prices %s including cached input", (model, amountUsd) => {
+    const price = estimateStandardApiCost([
+      modelUsage(model, {
+        inputTokens: 1_000_000,
+        cachedInputTokens: 500_000,
+        outputTokens: 1_000_000,
+        totalTokens: 2_000_000
+      })
+    ]);
+
+    expect(price.amountUsd).toBeCloseTo(amountUsd, 8);
     expect(price.pricedTokens).toBe(2_000_000);
     expect(price.unpricedTokens).toBe(0);
   });
@@ -351,7 +370,7 @@ function shortUsageSnapshot(): DashboardLocalUsageViewModel {
 
 function shanghaiTimestamp(date: string, hour: number): number {
   const [year, month, day] = date.split("-").map(Number);
-  return Date.UTC(year ?? 0, (month ?? 1) - 1, (day ?? 1), hour) - 8 * 60 * 60 * 1000;
+  return Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1, hour) - 8 * 60 * 60 * 1000;
 }
 
 function dayUsage(date: string, eventCount: number, totalTokens: number): DashboardLocalUsageDayViewModel {

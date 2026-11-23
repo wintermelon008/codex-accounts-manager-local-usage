@@ -1,4 +1,9 @@
-import { isAutomaticAccount, type CodexAccountRecord, type SeamlessQuotaBandSize, type SeamlessSwitchThreshold } from "../../core/types";
+import {
+  isAutomaticAccount,
+  type CodexAccountRecord,
+  type SeamlessQuotaBandSize,
+  type SeamlessSwitchThreshold
+} from "../../core/types";
 import {
   getSeamlessSwitchPriority,
   reconcileSeamlessSwitchPriority
@@ -78,8 +83,6 @@ export function selectBalanceCandidate(params: {
         hasFreshFreeSwitchThresholdQuota(account, now)) &&
       account.quotaSummary!.weeklyPercentage > switchThreshold
   );
-  const windowedCandidates = candidates.filter((account) => getBalanceQuotaCapability(account, now) === "windowed");
-  const reserveCandidates = candidates.filter((account) => getBalanceQuotaCapability(account, now) === "reserve");
   const activeQuota = active.quotaSummary!;
   const activeAtSwitchThreshold =
     activeCapability === "windowed"
@@ -95,30 +98,23 @@ export function selectBalanceCandidate(params: {
     params.forceRecoveryMode === true;
 
   if (thresholdRecoveryMode) {
-    const recoveredWindowed = windowedCandidates
-      .filter((account) => account.quotaSummary!.hourlyPercentage > switchThreshold)
+    return candidates
+      .filter(
+        (account) =>
+          getBalanceQuotaCapability(account, now) === "reserve" ||
+          account.quotaSummary!.hourlyPercentage > switchThreshold
+      )
       .sort((left, right) => compareSeamlessCandidates(left, right, poolOrder, priorityOrder))[0];
-    if (recoveredWindowed) {
-      return recoveredWindowed;
-    }
-
-    const reserve = reserveCandidates.sort((left, right) =>
-      compareSeamlessCandidates(left, right, poolOrder, priorityOrder)
-    )[0];
-    if (reserve) {
-      return reserve;
-    }
-
-    return undefined;
   }
 
   if (activeCapability !== "windowed") {
     return undefined;
   }
 
-  return windowedCandidates
+  return candidates
     .filter(
       (account) =>
+        getBalanceQuotaCapability(account, now) === "windowed" &&
         getFiveHourQuotaBand(account.quotaSummary!.hourlyPercentage, params.quotaBandSize) >= params.activeBand &&
         account.quotaSummary!.hourlyPercentage > activeQuota.hourlyPercentage
     )
@@ -221,6 +217,14 @@ function compareSeamlessCandidates(
   const rightPriority = priorityOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER;
   if (leftPriority !== rightPriority) {
     return leftPriority - rightPriority;
+  }
+
+  // Only eligible candidates reach this comparison. Explicit queue positions
+  // take precedence over the default windowed-before-reserve preference.
+  const leftHasFiveHourQuota = hasUsableFiveHourQuota(left);
+  const rightHasFiveHourQuota = hasUsableFiveHourQuota(right);
+  if (leftHasFiveHourQuota !== rightHasFiveHourQuota) {
+    return Number(rightHasFiveHourQuota) - Number(leftHasFiveHourQuota);
   }
 
   const planPriorityDifference = getSeamlessPlanPriority(right.planType) - getSeamlessPlanPriority(left.planType);

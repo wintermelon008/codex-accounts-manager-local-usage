@@ -5,6 +5,12 @@ import { FREE_SWITCH_THRESHOLD_QUOTA_MAX_AGE_MS } from "../src/application/accou
 import type { CodexAccountRecord } from "../src/core/types";
 import type { AccountsRepository } from "../src/storage";
 import { initSeamlessSwitchRuntimeState } from "../src/presentation/workbench/seamlessSwitchState";
+import {
+  clearSeamlessSwitchPriority,
+  getSeamlessSwitchPriority,
+  setSeamlessSwitchPriority
+} from "../src/presentation/dashboard/accountPriority";
+import { clearDashboardAccountScope, setDashboardAccountScope } from "../src/presentation/dashboard/accountScope";
 
 describe("seamless 5-hour quota-band switching", () => {
   beforeEach(() => {
@@ -17,6 +23,8 @@ describe("seamless 5-hour quota-band switching", () => {
   });
 
   afterEach(() => {
+    clearSeamlessSwitchPriority();
+    clearDashboardAccountScope();
     vi.restoreAllMocks();
   });
 
@@ -647,6 +655,77 @@ describe("seamless 5-hour quota-band switching", () => {
       gracePeriodMs: 0,
       recoverRecentUsageLimitedTurns: true
     });
+  });
+
+  it.each([undefined, "runtimeUsageLimit", "runtimeUsageLimitExhaustion", "runtimeCapacityRecovery"] as const)(
+    "selects a queued Free reserve before a Pro windowed account for trigger %s",
+    async (trigger) => {
+      configure({
+        seamlessSwitchEnabled: true,
+        seamlessSwitchLowQuotaEnabled: true,
+        seamlessSwitchThreshold: 3,
+        hotSwitchEnabled: true
+      });
+      const active = account("active", true, 2);
+      const pro = account("pro", false, 90);
+      pro.planType = "pro";
+      const reserve = reserveAccount("reserve", false, 100);
+      reserve.planType = "free";
+      const repo = repository(active, pro, reserve);
+      setSeamlessSwitchPriority([reserve.id, pro.id]);
+      const switchRuntimeAccount = vi.fn(async () => switched(reserve));
+
+      await expect(
+        maybeSeamlessBalanceSwitchForActiveQuota(
+          repo as unknown as AccountsRepository,
+          { refresh: vi.fn(), switchRuntimeAccount },
+          { trigger, activeAccountId: active.id }
+        )
+      ).resolves.toBe(true);
+
+      expect(switchRuntimeAccount).toHaveBeenCalledWith(
+        reserve.id,
+        trigger === "runtimeCapacityRecovery"
+          ? { gracePeriodMs: 0, longTurnPolicy: "interruptAndContinue" }
+          : { gracePeriodMs: 0, recoverRecentUsageLimitedTurns: true }
+      );
+      expect(getSeamlessSwitchPriority()).toEqual([pro.id]);
+    }
+  );
+
+  it.each(["group", "dashboard"])("preserves queued accounts excluded by the %s filter", async (filter) => {
+    configure({
+      seamlessSwitchEnabled: true,
+      seamlessSwitchLowQuotaEnabled: true,
+      seamlessSwitchThreshold: 3,
+      seamlessSwitchGroupAVisible: filter !== "group",
+      hotSwitchEnabled: true
+    });
+    const active = account("active", true, 2);
+    const groupA = account("group-a", false, 100);
+    groupA.accountGroup = "A";
+    groupA.planType = "free";
+    const candidate = account("candidate", false, 90);
+    candidate.planType = "pro";
+    const repo = repository(active, groupA, candidate);
+    setSeamlessSwitchPriority([groupA.id, candidate.id]);
+    if (filter === "dashboard") {
+      setDashboardAccountScope([active.id, candidate.id]);
+    }
+    const switchRuntimeAccount = vi.fn(async () => switched(candidate));
+
+    await expect(
+      maybeSeamlessBalanceSwitchForActiveQuota(repo as unknown as AccountsRepository, {
+        refresh: vi.fn(),
+        switchRuntimeAccount
+      })
+    ).resolves.toBe(true);
+
+    expect(switchRuntimeAccount).toHaveBeenCalledWith(candidate.id, {
+      gracePeriodMs: 0,
+      recoverRecentUsageLimitedTurns: true
+    });
+    expect(getSeamlessSwitchPriority()).toEqual([groupA.id]);
   });
 
   it("enters reserve only after every safe windowed pool account reaches the threshold", async () => {
