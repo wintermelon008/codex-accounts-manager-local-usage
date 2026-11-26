@@ -1,4 +1,5 @@
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -48,7 +49,17 @@ async function handleRequest(request, response, { sessions, config, usage, shari
     return;
   }
   if (request.method === "GET" && url.pathname === "/healthz") {
-    sendJson(response, 200, { ok: true, service: "codex-accounts-manager-gateway", api: "v1" }, config);
+    sendJson(
+      response,
+      200,
+      {
+        ok: true,
+        service: "codex-accounts-manager-gateway",
+        api: "v1",
+        sharingRelayConfigured: Boolean(sharingRelay)
+      },
+      config
+    );
     return;
   }
   if (url.pathname === "/v1/sharing" || url.pathname.startsWith("/v1/sharing/")) {
@@ -264,6 +275,7 @@ async function handleSharingRequest(request, response, url, sharingRelay, config
     return;
   }
 
+  const requestId = request.headers["x-request-id"]?.toString().trim() || randomUUID();
   try {
     await sharingRelay.init();
     const token = readBearerToken(request);
@@ -543,8 +555,22 @@ async function handleSharingRequest(request, response, url, sharingRelay, config
     sendJson(response, 404, { error: "not found" }, config);
   } catch (error) {
     const status = typeof error?.statusCode === "number" ? error.statusCode : 400;
-    writeSharingAudit(config, `request-failed method=${request.method} path=${url.pathname} status=${status}`);
-    sendJson(response, status, { error: error instanceof Error ? error.message : String(error) }, config);
+    const message = error instanceof Error ? error.message : String(error);
+    writeSharingAudit(
+      config,
+      `request-failed requestId=${requestId} method=${request.method} path=${url.pathname} status=${status} error=${message}`
+    );
+    sendJson(
+      response,
+      status,
+      {
+        error: message,
+        errorCode: "sharing_relay_request_failed",
+        requestId,
+        hint: "Relay 已收到请求但处理失败；请用 requestId 查询 Relay 日志。"
+      },
+      config
+    );
   }
 }
 

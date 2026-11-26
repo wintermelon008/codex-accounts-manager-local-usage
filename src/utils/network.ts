@@ -1,6 +1,6 @@
 import { NetworkError, ErrorCode } from "../core/errors";
 import { fetch as undiciFetch } from "undici";
-import { getCodexProxyDispatcher } from "../infrastructure/config/proxyEnvironment";
+import { getActiveCodexProxySettings, getCodexProxyDispatcher } from "../infrastructure/config/proxyEnvironment";
 
 const DEFAULT_FETCH_TIMEOUT_MS = 15000;
 const DEFAULT_RETRY_DELAYS_MS = [300, 800, 1500] as const;
@@ -53,10 +53,16 @@ export async function fetchWithTimeout(
     return buffered;
   } catch (error) {
     if (timedOut) {
-      throw new NetworkError(`${timeoutLabel} timed out after ${Math.round(timeoutMs / 1000)}s`, {
+      throw new NetworkError(formatTimeoutMessage(input, timeoutLabel, timeoutMs, phase), {
         code: ErrorCode.NETWORK_ERROR,
         cause: error,
-        context: { timeoutMs, timeoutLabel, phase }
+        context: {
+          timeoutMs,
+          timeoutLabel,
+          phase,
+          requestUrl: getRequestUrl(input),
+          proxy: getProxyTimeoutContext(input)
+        }
       });
     }
     throw error;
@@ -141,4 +147,85 @@ export function isRetriableNetworkError(error: unknown): boolean {
 
 function sleep(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function formatTimeoutMessage(
+  input: string | URL | globalThis.Request,
+  timeoutLabel: string,
+  timeoutMs: number,
+  phase: string
+): string {
+  const requestUrl = getRequestUrl(input);
+  const target = requestUrl ? ` while contacting ${requestUrl}` : "";
+  const route = getProxyTimeoutContext(input);
+  const routeHint = route
+    ? ` Route: ${route}.`
+    : " Check Tailscale connectivity, the Relay port, and the active proxy settings.";
+  return `${timeoutLabel} timed out after ${Math.max(1, Math.ceil(timeoutMs / 1000))}s during ${phase}${target}.${routeHint}`;
+}
+
+function getRequestUrl(input: string | URL | globalThis.Request): string | undefined {
+  try {
+    return new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function getProxyTimeoutContext(input: string | URL | globalThis.Request): string | undefined {
+  const settings = getActiveCodexProxySettings();
+  const requestUrl = getRequestUrl(input);
+  if (!settings || !requestUrl) {
+    return undefined;
+  }
+  const url = new URL(requestUrl);
+  const noProxy = settings.noProxy?.trim();
+  if (noProxy && matchesNoProxy(url.hostname, noProxy)) {
+    return `direct connection because NO_PROXY matches ${url.hostname}`;
+  }
+  const proxy = url.protocol === "https:" ? settings.httpsProxy : settings.httpProxy;
+  if (!proxy) {
+    return `direct connection (no HTTPS_PROXY/HTTP_PROXY configured)`;
+  }
+  const safeProxy = redactProxyCredentials(proxy);
+  return noProxy
+    ? `proxy ${safeProxy}; NO_PROXY does not match ${url.hostname} (add ${url.hostname} to NO_PROXY/no_proxy and restart VS Code)`
+    : `proxy ${safeProxy}; NO_PROXY/no_proxy does not include ${url.hostname} (add it and restart VS Code)`;
+}
+
+function matchesNoProxy(hostname: string, value: string): boolean {
+  const normalizedHost = hostname.toLowerCase().replace(/\.$/u, "");
+  return value.split(",").some((rawToken) => {
+    const token = rawToken.trim().toLowerCase();
+    if (!token) {
+      return false;
+    }
+    if (token === "*") {
+      return true;
+    }
+    let hostToken: string = token.includes("://") ? token : (token.split(":", 1)[0] ?? "");
+    try {
+      hostToken = token.includes("://") ? new URL(token).hostname : hostToken;
+    } catch {
+      return false;
+    }
+    const normalizedToken = hostToken
+      .replace(/^\[|\]$/gu, "")
+      .replace(/^\*\./u, "")
+      .replace(/^\./u, "");
+    return normalizedHost === normalizedToken || normalizedHost.endsWith(`.${normalizedToken}`);
+  });
+}
+
+function redactProxyCredentials(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "[redacted]";
+      url.password = "[redacted]";
+    }
+    return url.toString();
+  } catch {
+    return "[configured proxy]";
+  }
 }

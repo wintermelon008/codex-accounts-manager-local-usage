@@ -2589,12 +2589,13 @@ export class AccountSharingService implements vscode.Disposable {
       const body = (await response.json().catch(() => undefined)) as { error?: unknown } | undefined;
       if (!response.ok) {
         const detail = typeof body?.error === "string" ? body.error : `Sharing Relay returned HTTP ${response.status}`;
+        const diagnostic = `${detail} [${response.status} ${baseUrl}${path}]`;
         if (response.status === 401 && token && token === this.relayToken) {
           this.relayToken = undefined;
           this.relayRegistrationValidatedAt = undefined;
           void this.persistLocalState().catch(() => undefined);
         }
-        const error = new Error(detail);
+        const error = new Error(diagnostic);
         Object.assign(error, { statusCode: response.status });
         throw error;
       }

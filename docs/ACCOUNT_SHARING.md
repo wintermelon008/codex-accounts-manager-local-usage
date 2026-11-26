@@ -79,22 +79,22 @@ curl.exe --max-time 5 http://100.114.125.9:43120/healthz
 
 ### 2. 安装最新核心 Manager
 
-向好友提供同一份已审阅的 `0.1.21-l8` VSIX，例如：
+向好友提供同一份已审阅的 `0.1.21-l9` VSIX，例如：
 
 ```text
-codex-account-manager-0.1.21-l8.vsix
+codex-account-manager-0.1.21-l9.vsix
 ```
 
 Ubuntu：
 
 ```bash
-code --install-extension codex-account-manager-0.1.21-l8.vsix --force
+code --install-extension codex-account-manager-0.1.21-l9.vsix --force
 ```
 
 Windows PowerShell：
 
 ```powershell
-code --install-extension .\codex-account-manager-0.1.21-l8.vsix --force
+code --install-extension .\codex-account-manager-0.1.21-l9.vsix --force
 ```
 
 也可以在 VS Code 中执行 **Extensions: Install from VSIX…**。安装后必须 reload；如果使用 Remote-SSH，VSIX 必须安装在真正运行 Manager、Codex `auth.json` 和扩展状态的远端扩展宿主，而不是只安装在本地窗口。
@@ -171,7 +171,7 @@ Relay 为每个同步关系保留一个端到端加密的最新凭据快照和�
 | --- | --- | --- |
 | `healthz` 超时或连接拒绝 | Tailscale 登录、ACL、Relay 主机端口 `43120`、Relay 服务 | 先执行 `tailscale ping vserver`，再执行 `curl .../healthz`；确认好友访问的是当前 Tailscale 地址 |
 | `sharing relay enrollment token is invalid` | bootstrap token 没有传给实际 Extension Host，或 VS Code 未重启 | 关闭并重新启动 VS Code；Ubuntu/Remote-SSH 检查 `manager-control.env`，Windows 检查启动 VS Code 的 PowerShell 环境；不要把 token 放进 settings.json |
-| `Sharing Relay request timed out` | Tailscale 路径抖动、代理接管、ACL 未放行 | 将 Relay 主机加入 `NO_PROXY`，确认 `43120` 可达；两台 Manager 必须使用同一个 Relay URL |
+| `Sharing Relay request timed out ... Route: proxy ...` | Relay 地址被代理接管，或 Tailscale 路径/ACL 不可达 | 查看错误中的目标地址和 `NO_PROXY` 匹配结果；将 Relay 主机加入 `NO_PROXY`/`no_proxy`，然后完全重启 VS Code；确认 `43120` 可达；两台 Manager 必须使用同一个 Relay URL |
 | 能看到好友但收不到共享 | 好友请求是否已接受、接收端 Manager 是否在线、双方是否使用同一 Relay | 在双方共享弹窗中手动执行一次同步，并确认好友关系为已接受；共享包会在接收端下一次轮询处理 |
 | 共享导入提示本地已有账号 | 邮箱或 `accountId` 与好友端已有记录冲突 | Manager 默认拒绝覆盖，先确认好友端是否已有该账号，不要直接删除未备份的本地账号 |
 | 主设备仍显示已共享 | owner 尚未写回最新凭据或网络暂时中断 | 保持双方 Manager 在线等待自动确认；从设备侧已删除本地共享账号，不要重复归还 |

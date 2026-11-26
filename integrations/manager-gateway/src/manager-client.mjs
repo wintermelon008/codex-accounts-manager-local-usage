@@ -67,9 +67,13 @@ export function createManagerClient(options) {
         throw error;
       }
       if (error?.name === "AbortError") {
-        throw new ManagerControlError("Manager 控制接口响应超时。", undefined);
+        throw new ManagerControlError(
+          `Manager 控制接口响应超时（${Math.round(timeoutMs / 1000)} 秒）：${baseUrl}${path}；请确认 VS Code Manager/Extension Host 正在运行且控制端口可达。`,
+          undefined
+        );
       }
-      throw new ManagerControlError("无法连接到 Manager 控制接口。", undefined);
+      const detail = error instanceof Error && error.message ? `：${error.message}` : "";
+      throw new ManagerControlError(`无法连接到 Manager 控制接口 ${baseUrl}${path}${detail}`, undefined);
     } finally {
       clearTimeout(timeout);
     }

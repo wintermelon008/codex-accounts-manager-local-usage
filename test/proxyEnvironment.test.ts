@@ -164,6 +164,21 @@ describe("Codex proxy environment", () => {
     await expect(request).rejects.toBe(reason);
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  it("explains the direct Relay route when a Tailscale address times out", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        })
+    );
+    configureCodexProxyEnvironment({ noProxy: "localhost,100.114.125.9" });
+
+    await expect(fetchWithTimeout("http://100.114.125.9:43120/healthz", {}, 10, "Sharing Relay request")).rejects.toThrow(
+      "direct connection because NO_PROXY matches 100.114.125.9"
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
 
 function listen(server: http.Server): Promise<void> {

@@ -6,6 +6,7 @@ import { getCodexHome } from "../../codex/authFile";
 const PROXY_ENV_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"] as const;
 let proxyDispatcher: Dispatcher | undefined;
 let proxyConfigurationError: CodexProxyConfigurationError | undefined;
+let activeProxySettings: ProxySettings | undefined;
 
 export interface ProxySettings {
   httpProxy?: string;
@@ -53,6 +54,7 @@ export async function getConfiguredProxySettings(httpsProxyOverride?: string): P
 
 export function configureCodexProxyEnvironment(settings: ProxySettings): boolean {
   disposeCodexProxyEnvironment();
+  activeProxySettings = { ...settings };
   if (!settings.httpProxy && !settings.httpsProxy) {
     return false;
   }
@@ -73,6 +75,10 @@ export function getCodexProxyDispatcher(): Dispatcher | undefined {
   return proxyDispatcher;
 }
 
+export function getActiveCodexProxySettings(): ProxySettings | undefined {
+  return activeProxySettings ? { ...activeProxySettings } : undefined;
+}
+
 export function getCodexProxyConfigurationError(): CodexProxyConfigurationError | undefined {
   return proxyConfigurationError;
 }
@@ -81,6 +87,7 @@ export function disposeCodexProxyEnvironment(): void {
   const dispatcher = proxyDispatcher;
   proxyDispatcher = undefined;
   proxyConfigurationError = undefined;
+  activeProxySettings = undefined;
   if (dispatcher) {
     void dispatcher.close().catch(() => undefined);
   }

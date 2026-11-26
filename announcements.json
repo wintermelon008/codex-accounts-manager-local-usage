@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-11-codex-accounts-0-1-21-l8-relay-billing",
+      "id": "ann-2026-11-codex-accounts-0-1-21-l9-relay-diagnostics",
       "type": "feature",
       "priority": 700,
-      "releaseVersion": "0.1.21-l8",
-      "title": "Codex Accounts Manager 0.1.21-l8 — Relay fallback and billing",
-      "summary": "More resilient sharing recovery, account priorities, and GPT-6.2 usage pricing.",
-      "content": "This stable local build adds the l8 sharing recovery and local usage updates.\n1. An optional user-level SSH fallback can recover Relay polling after repeated transient network failures without replaying uncertain writes.\n2. Seamless switching honors the manual priority queue across eligible quota capabilities and preserves temporarily filtered entries.\n3. Local usage estimates include GPT-6.2 Sol and GPT-6.2 Astra, including cached input and dated model names.\n4. Existing multi-device sharing state and reload-safe account handling remain unchanged.",
+      "releaseVersion": "0.1.21-l9",
+      "title": "Codex Accounts Manager 0.1.21-l9 — Relay diagnostics",
+      "summary": "Concrete proxy, timeout, and Relay request diagnostics.",
+      "content": "This stable local build makes Relay and Manager network failures actionable.\n1. Timeout errors show the target URL, timeout phase, effective direct/proxy route, and NO_PROXY match result.\n2. Proxy credentials are redacted from diagnostics.\n3. Relay-side failures return an error code and request ID for log lookup.\n4. Health checks report whether the sharing Relay is configured.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -20,9 +20,9 @@
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.21-l8 — Relay fallback 与计费改进",
-          "summary": "共享链路恢复、账号优先顺序，以及 GPT-6.2 用量价格。",
-          "content": "本稳定本地版本新增 l8 的共享恢复与本机用量改进。\n1. 可选的用户级 SSH fallback 会在 Relay 临时网络连续失败后恢复轮询，不重放结果不确定的写请求。\n2. 无感切号在合格的额度能力之间统一遵守手动优先队列，并保留暂时被筛选排除的队列项。\n3. 本机用量估算新增 GPT-6.2 Sol 和 GPT-6.2 Astra，支持缓存输入与带日期后缀的模型名。\n4. 保留现有多设备共享状态和 reload 后的账号恢复行为。"
+          "title": "Codex Accounts Manager 0.1.21-l9 — Relay 诊断改进",
+          "summary": "具体显示代理、超时和 Relay 请求诊断。",
+          "content": "本稳定本地版本让 Relay 与 Manager 的网络故障更容易定位。\n1. 超时错误显示目标 URL、超时阶段、实际直连/代理路径和 NO_PROXY 匹配结果。\n2. 诊断信息会脱敏代理凭据。\n3. Relay 侧处理失败时返回错误码和 requestId，便于查询日志。\n4. 健康检查报告共享 Relay 是否已配置。"
         }
       }
     }
