@@ -549,6 +549,8 @@ export interface DashboardAccountViewModel {
   metrics: DashboardMetricViewModel[];
 }
 
+export type DashboardAccountUsageRefreshStatus = "pending" | "updated" | "cached" | "failed" | "timedOut";
+
 export interface DashboardAccountUsageSourceViewModel {
   accountId?: string;
   sourceUserId: string;
@@ -557,6 +559,8 @@ export interface DashboardAccountUsageSourceViewModel {
   syncId?: string;
   calculatedAt?: number;
   receivedAt?: number;
+  refreshStatus?: DashboardAccountUsageRefreshStatus;
+  refreshExpiresAt?: number;
   stale?: boolean;
   tokenUsage?: DashboardAccountTokenUsageViewModel;
   lifetimeTokenUsage?: DashboardAccountLifetimeTokenUsageViewModel;
@@ -846,6 +850,7 @@ export interface DashboardOAuthSessionDescriptor {
 }
 
 export interface DashboardActionPayload {
+  refreshFollowerUsage?: boolean;
   wakeupTask?: WakeupTaskInput;
   wakeupTaskId?: string;
   accountIds?: string[];

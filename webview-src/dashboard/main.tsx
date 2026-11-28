@@ -580,9 +580,7 @@ function App() {
   const hideAccountsPending = isActionPending("hideAccounts");
   const unhideAccountsPending = isActionPending("unhideAccounts");
   const setAccountGroupPending = isActionPending("setAccountGroup");
-  const localUsageRefreshPending =
-    isActionPending("refreshLocalUsage") ||
-    snapshot.sharing?.usageReadPending === true;
+  const localUsageRefreshPending = isActionPending("refreshLocalUsage");
   const unlockCodexSessionLocksPending = isActionPending("unlockCodexSessionLocks");
   const repairRuntimePending = isActionPending("repairRuntime");
   const integrationActionPending = isActionPending("integrationAction");
@@ -1301,6 +1299,7 @@ function App() {
                       switchPending={isActionPending("switch", account.id)}
                       reauthorizePending={isActionPending("reauthorize", account.id)}
                       refreshPending={isActionPending("refresh", account.id)}
+                      sharedUsageRefreshAvailable={snapshot.sharing?.relayConfigured === true}
                       copyImportJsonPending={isActionPending("copyAccountImportJson", account.id)}
                       copyImportJsonSucceeded={modals.copyFeedbackKey === `account-import-json:${account.id}`}
                       shareAccountsPending={isActionPending("shareAccounts", account.id)}

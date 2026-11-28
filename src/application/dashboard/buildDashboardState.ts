@@ -342,6 +342,7 @@ export function resolveAccountUsageSources(
       sourceUserId: sharing.userId,
       sourceLabel: localLabel,
       sourceRole: accountSyncRole,
+      calculatedAt: tokenUsage?.calculatedAt,
       tokenUsage,
       lifetimeTokenUsage
     },

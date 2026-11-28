@@ -4,6 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { DashboardLanguage } from "../localization/languages";
 import type {
+  DashboardAccountUsageRefreshStatus,
   DashboardAccountUsageSourceViewModel,
   DashboardCredentialSyncViewModel,
   DashboardSharingViewModel
@@ -16,7 +17,11 @@ import {
 } from "../application/dashboard/buildDashboardState";
 import type { AccountsRepository } from "../storage";
 import { getPrivateStatePaths } from "../storage";
-import { readCachedAccountTokenUsage, type AccountTokenUsageSnapshot } from "../services/localUsageAnalytics";
+import {
+  LocalUsageAnalyticsService,
+  readCachedAccountTokenUsage,
+  type AccountTokenUsageSnapshot
+} from "../services/localUsageAnalytics";
 import { previewSharedEntry, restoreSharedTokens } from "../storage/sharedAccounts";
 import { ensureFreshAccountTokens } from "../auth/tokenRefreshCoordinator";
 import { withRenewingSchedulerLease } from "../runtime/schedulerLease";
@@ -91,6 +96,13 @@ type SharingServiceOptions = {
   bootstrapToken?: () => string | undefined;
   switchAway?: SwitchAway;
   relaySshFallback?: RelaySshFallbackTransport;
+  usageAnalytics?: Pick<LocalUsageAnalyticsService, "refreshAccountTokenUsage">;
+};
+
+type AccountUsageRefreshResult = {
+  requestId: string;
+  createdAt: number;
+  status: Exclude<DashboardAccountUsageRefreshStatus, "pending">;
 };
 
 type SharingLocalStateFile = {
@@ -115,6 +127,9 @@ export class AccountSharingService implements vscode.Disposable {
   private lastSyncError: string | undefined;
   private accountUsageState: AccountUsageState = createEmptyAccountUsageState();
   private accountUsageLastError: string | undefined;
+  private readonly usageAnalytics: Pick<LocalUsageAnalyticsService, "refreshAccountTokenUsage">;
+  private readonly accountUsageRefreshResults = new Map<string, AccountUsageRefreshResult>();
+  private readonly accountUsageRefreshResponses = new Map<string, { body: string; expiresAt: number }>();
   private readonly accountUsagePublishedRevisions = new Map<string, { revision: number; publishedAt: number }>();
   private readonly accountUsagePublishInFlight = new Map<string, Promise<void>>();
   private readonly accountUsageResponseInFlight = new Map<string, Promise<void>>();
@@ -134,6 +149,13 @@ export class AccountSharingService implements vscode.Disposable {
     private readonly options: SharingServiceOptions = {}
   ) {
     this.relaySshFallback = options.relaySshFallback;
+    this.usageAnalytics =
+      options.usageAnalytics ??
+      new LocalUsageAnalyticsService({
+        globalStoragePath: getPrivateStatePaths(context).root,
+        backgroundRefreshEnabled: false,
+        now: options.now
+      });
   }
 
   async initialize(): Promise<void> {
@@ -285,29 +307,54 @@ export class AccountSharingService implements vscode.Disposable {
     }));
   }
 
-  async refreshRemoteAccountUsage(): Promise<void> {
+  async refreshRemoteAccountUsage(accountId: string, syncId?: string): Promise<void> {
     this.assertInitialized();
     this.assertEnabled();
-    const syncs = this.state!.credentialSyncs.filter((sync) => sync.role === "primary" && sync.state === "active");
+    const syncs = this.state!.credentialSyncs.filter(
+      (sync) =>
+        sync.role === "primary" &&
+        sync.state === "active" &&
+        sync.accountIds.includes(accountId) &&
+        (syncId === undefined || sync.syncId === syncId)
+    );
     if (syncs.length === 0) {
       throw new Error("当前没有可读取的从设备用量");
     }
     await this.ensureRelayRegistration();
     const response = await this.request<{ requests: AccountUsageReadRequest[] }>("/v1/sharing/usage-requests", {
       method: "POST",
-      body: JSON.stringify({ syncIds: syncs.map((sync) => sync.syncId) })
+      body: JSON.stringify({ syncIds: syncs.map((sync) => sync.syncId), refresh: true })
     });
     const requests = response.requests ?? [];
-    const requestById = new Map(this.accountUsageState.pendingRequests.map((request) => [request.requestId, request]));
+    if (requests.length === 0 || requests.some((request) => request.refresh !== true)) {
+      throw new Error("当前共享 Relay 不支持从设备用量刷新");
+    }
     for (const request of requests) {
-      requestById.set(request.id, {
+      const result = this.accountUsageRefreshResults.get(request.syncId);
+      const previous = this.accountUsageState.pendingRequests.find(
+        (entry) => entry.refresh && entry.syncId === request.syncId
+      );
+      if (
+        (previous && previous.createdAt > request.createdAt) ||
+        result?.requestId === request.id ||
+        (result && result.createdAt > request.createdAt)
+      ) {
+        continue;
+      }
+      if (!this.state!.credentialSyncs.some((sync) => sync.syncId === request.syncId && sync.state === "active")) {
+        continue;
+      }
+      this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
+        (entry) => !entry.refresh || entry.syncId !== request.syncId
+      );
+      this.accountUsageState.pendingRequests.push({
         requestId: request.id,
         syncId: request.syncId,
+        refresh: true,
         createdAt: request.createdAt,
         expiresAt: request.expiresAt
       });
     }
-    this.accountUsageState.pendingRequests = [...requestById.values()];
     this.accountUsageLastError = undefined;
     await this.persistAccountUsageState();
     this.onChanged();
@@ -467,6 +514,11 @@ export class AccountSharingService implements vscode.Disposable {
       (request) => request.fromUserId !== userId && request.toUserId !== userId
     );
     this.accountUsageState.sources = this.accountUsageState.sources.filter((source) => source.sourceUserId !== userId);
+    for (const sync of this.state!.credentialSyncs) {
+      if (sync.peerUserId === userId) {
+        this.accountUsageRefreshResults.delete(sync.syncId);
+      }
+    }
     this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
       (request) =>
         !this.state!.credentialSyncs.some((sync) => sync.syncId === request.syncId && sync.peerUserId === userId)
@@ -551,6 +603,8 @@ export class AccountSharingService implements vscode.Disposable {
     this.relayToken = undefined;
     this.relayRegistrationValidatedAt = undefined;
     this.accountUsageState = createEmptyAccountUsageState();
+    this.accountUsageRefreshResults.clear();
+    this.accountUsageRefreshResponses.clear();
     await this.persistState();
     await this.persistAccountUsageState();
     this.onChanged();
@@ -983,7 +1037,6 @@ export class AccountSharingService implements vscode.Disposable {
     }
     let changed = false;
     let publishError: unknown;
-    let usageChanged = false;
     let incoming: {
       credentialSyncs: CredentialSyncRelayRecord[];
       usageRequests?: AccountUsageReadRequest[];
@@ -1006,7 +1059,9 @@ export class AccountSharingService implements vscode.Disposable {
       throw error;
     }
     this.processIncomingAccountUsageRequests(incoming.usageRequests ?? []);
-    usageChanged = await this.processIncomingAccountUsageUpdates(incoming.usageUpdates ?? []);
+    if (await this.processIncomingAccountUsageUpdates(incoming.usageUpdates ?? [])) {
+      this.onChanged();
+    }
     for (const remote of incoming.credentialSyncs ?? []) {
       const local = this.state!.credentialSyncs.find((candidate) => candidate.syncId === remote.syncId);
       if (remote.state === "stopped") {
@@ -1086,7 +1141,9 @@ export class AccountSharingService implements vscode.Disposable {
       usageRequests?: AccountUsageReadRequest[];
       usageUpdates?: AccountUsageUpdate[];
     }>("/v1/sharing/credential-syncs/sent");
-    usageChanged ||= await this.processSentAccountUsageRequests(sent.usageRequests ?? []);
+    if (await this.processSentAccountUsageRequests(sent.usageRequests ?? [])) {
+      this.onChanged();
+    }
     for (const remote of sent.credentialSyncs ?? []) {
       const local = this.state!.credentialSyncs.find(
         (candidate) => candidate.syncId === remote.syncId && candidate.role === "primary"
@@ -1114,7 +1171,7 @@ export class AccountSharingService implements vscode.Disposable {
       }
     }
     this.scheduleFollowerAccountUsageUpdates();
-    if (changed || usageChanged) {
+    if (changed) {
       await this.persistState();
       this.onChanged();
     }
@@ -1124,15 +1181,33 @@ export class AccountSharingService implements vscode.Disposable {
   }
 
   private processIncomingAccountUsageRequests(requests: readonly AccountUsageReadRequest[]): void {
+    const now = this.now();
+    for (const [id, response] of this.accountUsageRefreshResponses) {
+      if (response.expiresAt <= now) {
+        this.accountUsageRefreshResponses.delete(id);
+      }
+    }
     const followerSyncs = this.state!.credentialSyncs.filter(
       (sync) => sync.role === "follower" && sync.state === "active"
     );
     if (followerSyncs.length === 0 || requests.length === 0) {
       return;
     }
+    const refreshDeadline = requests.reduce(
+      (latest, request) => (request.refresh ? Math.max(latest, request.expiresAt) : latest),
+      now
+    );
+    let freshUsage: Promise<AccountTokenUsageSnapshot> | undefined;
+    const refreshUsage = (): Promise<AccountTokenUsageSnapshot> =>
+      (freshUsage ??= this.usageAnalytics
+        .refreshAccountTokenUsage(Math.max(0, refreshDeadline - this.now()))
+        .then((snapshot) => {
+          this.onChanged();
+          return snapshot;
+        }));
     for (const request of requests) {
       const sync = followerSyncs.find((candidate) => candidate.syncId === request.syncId);
-      if (!sync || request.state !== "pending") {
+      if (!sync || request.state !== "pending" || request.expiresAt <= now) {
         continue;
       }
       if (this.accountUsageResponseInFlight.has(request.id)) {
@@ -1147,7 +1222,8 @@ export class AccountSharingService implements vscode.Disposable {
       const task = this.respondToAccountUsageRequest(
         request,
         { ...sync, accountIds: [...sync.accountIds] },
-        peer
+        peer,
+        refreshUsage
       ).catch((error: unknown) => {
         console.warn(`[codexAccounts] account usage response queued: ${describeError(error)}`);
       });
@@ -1163,26 +1239,61 @@ export class AccountSharingService implements vscode.Disposable {
   private async respondToAccountUsageRequest(
     request: AccountUsageReadRequest,
     sync: CredentialSyncRecord,
-    peer: SharingPeer
+    peer: SharingPeer,
+    refreshUsage: () => Promise<AccountTokenUsageSnapshot>
   ): Promise<void> {
-    const packageValue = await this.buildAccountUsagePackage(sync, request.id);
-    const eventId = randomUUID();
-    const envelope = encryptSharingPayload(
-      packageValue,
-      this.keys!,
-      this.getProfile().userId,
-      peer.userId,
-      peer.encryptionPublicKey,
-      this.now()
-    );
+    let body = this.accountUsageRefreshResponses.get(request.id)?.body;
+    if (!body) {
+      let packageValue: AccountUsagePackage;
+      if (request.refresh) {
+        try {
+          const snapshot = await refreshUsage();
+          packageValue = {
+            ...(await this.buildAccountUsagePackage(sync, request.id, snapshot)),
+            refreshResult: "updated"
+          };
+        } catch (error) {
+          console.warn("[codexAccounts] requested account usage scan failed", error);
+          packageValue = {
+            schema: ACCOUNT_USAGE_PACKAGE_SCHEMA,
+            syncId: sync.syncId,
+            requestId: request.id,
+            revision: 0,
+            accounts: [],
+            refreshResult: "failed"
+          };
+        }
+      } else {
+        packageValue = await this.buildAccountUsagePackage(sync, request.id);
+      }
+      if (
+        this.disposed ||
+        request.expiresAt <= this.now() ||
+        !this.state!.credentialSyncs.some(
+          (candidate) => candidate.syncId === sync.syncId && candidate.role === "follower" && candidate.state === "active"
+        )
+      ) {
+        return;
+      }
+      const envelope = encryptSharingPayload(
+        packageValue,
+        this.keys!,
+        this.getProfile().userId,
+        peer.userId,
+        peer.encryptionPublicKey,
+        this.now()
+      );
+      body = JSON.stringify({ revision: packageValue.revision, eventId: randomUUID(), envelope });
+      if (request.refresh) {
+        // A retry must send the original response after an uncertain POST.
+        this.accountUsageRefreshResponses.set(request.id, { body, expiresAt: request.expiresAt });
+      }
+    }
     await this.request(`/v1/sharing/usage-requests/${encodeURIComponent(request.id)}/response`, {
       method: "POST",
-      body: JSON.stringify({
-        revision: packageValue.revision,
-        eventId,
-        envelope
-      })
+      body
     });
+    this.accountUsageRefreshResponses.delete(request.id);
   }
 
   private async processSentAccountUsageRequests(requests: readonly AccountUsageReadRequest[]): Promise<boolean> {
@@ -1191,16 +1302,6 @@ export class AccountSharingService implements vscode.Disposable {
     let sawValidResponse = false;
     let firstError: string | undefined;
     const acknowledgements: Array<{ key: string; operation: () => Promise<void> }> = [];
-    const expired = this.accountUsageState.pendingRequests.filter((request) => request.expiresAt <= this.now());
-    if (expired.length > 0) {
-      this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
-        (request) => request.expiresAt > this.now()
-      );
-      this.accountUsageLastError = "从设备未响应";
-      await this.persistAccountUsageState();
-      changed = true;
-      stateChanged = true;
-    }
     const candidates: Array<{ request: AccountUsageReadRequest; sync: CredentialSyncRecord; peer: SharingPeer }> = [];
     for (const request of requests) {
       if (request.state !== "responded" || !request.response) {
@@ -1239,22 +1340,13 @@ export class AccountSharingService implements vscode.Disposable {
       }
       sawValidResponse = true;
       const { request, sync, peer, packageValue } = result.value;
-      const existing = this.accountUsageState.sources.find((source) => source.syncId === sync.syncId);
-      if (!existing || packageValue.revision > existing.revision) {
-        this.accountUsageState.sources = [
-          ...this.accountUsageState.sources.filter((source) => source.syncId !== sync.syncId),
-          {
-            syncId: sync.syncId,
-            sourceUserId: sync.peerUserId,
-            sourceDisplayName: peer.note?.trim() || peer.displayName,
-            revision: packageValue.revision,
-            calculatedAt: packageValue.calculatedAt,
-            receivedAt: this.now(),
-            accounts: packageValue.accounts
-          }
-        ];
+      if (packageValue.refreshResult !== "failed" && this.applyAccountUsageSnapshot(sync, peer, packageValue)) {
         changed = true;
         stateChanged = true;
+      }
+      if (request.refresh) {
+        const status = packageValue.refreshResult ?? "cached";
+        changed = this.recordAccountUsageRefreshResult(request.syncId, request.id, request.createdAt, status) || changed;
       }
       const pendingCount = this.accountUsageState.pendingRequests.length;
       this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
@@ -1269,6 +1361,21 @@ export class AccountSharingService implements vscode.Disposable {
         operation: () => this.acknowledgeAccountUsageRequest(request.id)
       });
     }
+    const now = this.now();
+    const expired = this.accountUsageState.pendingRequests.filter((request) => request.expiresAt <= now);
+    if (expired.length > 0) {
+      this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
+        (request) => request.expiresAt > now
+      );
+      for (const request of expired) {
+        if (request.refresh) {
+          this.recordAccountUsageRefreshResult(request.syncId, request.requestId, request.createdAt, "timedOut");
+        }
+      }
+      firstError ??= "从设备未响应";
+      changed = true;
+      stateChanged = true;
+    }
     if (firstError) {
       changed ||= this.accountUsageLastError !== firstError;
       this.accountUsageLastError = firstError;
@@ -1277,7 +1384,7 @@ export class AccountSharingService implements vscode.Disposable {
       this.accountUsageLastError = undefined;
       changed = true;
     }
-    if (stateChanged) {
+    if (stateChanged || sawValidResponse) {
       await this.persistAccountUsageState();
     }
     for (const acknowledgement of acknowledgements) {
@@ -1288,7 +1395,6 @@ export class AccountSharingService implements vscode.Disposable {
 
   private async processIncomingAccountUsageUpdates(updates: readonly AccountUsageUpdate[]): Promise<boolean> {
     let changed = false;
-    let stateChanged = false;
     let sawValidUpdate = false;
     let firstError: string | undefined;
     const acknowledgements: Array<{ key: string; operation: () => Promise<void> }> = [];
@@ -1327,23 +1433,7 @@ export class AccountSharingService implements vscode.Disposable {
       }
       sawValidUpdate = true;
       const { update, sync, peer, packageValue } = result.value;
-      const existing = this.accountUsageState.sources.find((source) => source.syncId === sync.syncId);
-      if (!existing || packageValue.revision > existing.revision) {
-        this.accountUsageState.sources = [
-          ...this.accountUsageState.sources.filter((source) => source.syncId !== sync.syncId),
-          {
-            syncId: sync.syncId,
-            sourceUserId: sync.peerUserId,
-            sourceDisplayName: peer.note?.trim() || peer.displayName,
-            revision: packageValue.revision,
-            calculatedAt: packageValue.calculatedAt,
-            receivedAt: this.now(),
-            accounts: packageValue.accounts
-          }
-        ];
-        changed = true;
-        stateChanged = true;
-      }
+      changed = this.applyAccountUsageSnapshot(sync, peer, packageValue) || changed;
       acknowledgements.push({
         key: `update:${update.syncId}:${update.revision}`,
         operation: () => this.acknowledgeAccountUsageUpdate(update.syncId, update.revision)
@@ -1357,13 +1447,48 @@ export class AccountSharingService implements vscode.Disposable {
       this.accountUsageLastError = undefined;
       changed = true;
     }
-    if (stateChanged) {
+    if (sawValidUpdate) {
       await this.persistAccountUsageState();
     }
     for (const acknowledgement of acknowledgements) {
       this.enqueueAccountUsageAck(acknowledgement.key, acknowledgement.operation);
     }
     return changed;
+  }
+
+  private applyAccountUsageSnapshot(sync: CredentialSyncRecord, peer: SharingPeer, snapshot: AccountUsagePackage): boolean {
+    const existing = this.accountUsageState.sources.find((source) => source.syncId === sync.syncId);
+    if (existing && snapshot.revision <= existing.revision) {
+      return false;
+    }
+    const note = peer.note?.trim();
+    this.accountUsageState.sources = [
+      ...this.accountUsageState.sources.filter((source) => source.syncId !== sync.syncId),
+      {
+        syncId: sync.syncId,
+        sourceUserId: sync.peerUserId,
+        sourceDisplayName: note ? note : peer.displayName,
+        revision: snapshot.revision,
+        calculatedAt: snapshot.calculatedAt,
+        receivedAt: this.now(),
+        accounts: snapshot.accounts
+      }
+    ];
+    return true;
+  }
+
+  private recordAccountUsageRefreshResult(
+    syncId: string,
+    requestId: string,
+    createdAt: number,
+    status: AccountUsageRefreshResult["status"]
+  ): boolean {
+    const previous = this.accountUsageRefreshResults.get(syncId);
+    if (previous && (previous.createdAt > createdAt || (previous.requestId === requestId && previous.status === status))) {
+      return false;
+    }
+    this.accountUsageRefreshResults.set(syncId, { requestId, createdAt, status });
+    return true;
   }
 
   private scheduleFollowerAccountUsageUpdates(): void {
@@ -1495,12 +1620,19 @@ export class AccountSharingService implements vscode.Disposable {
       userId: peer.userId,
       identityPublicKey: peer.identityPublicKey
     }) as AccountUsagePackage;
+    const refreshResult = value?.refreshResult;
+    const invalidRefreshResult =
+      refreshResult !== undefined &&
+      (!isReadRequest ||
+        !request.refresh ||
+        (refreshResult !== "failed" && (refreshResult !== "updated" || value.calculatedAt === undefined)));
     if (
       value?.schema !== ACCOUNT_USAGE_PACKAGE_SCHEMA ||
       value.syncId !== request.syncId ||
       (expectedRequestId === undefined ? value.requestId !== undefined : value.requestId !== expectedRequestId) ||
       !Number.isSafeInteger(value.revision) ||
       (value.calculatedAt !== undefined && !Number.isFinite(value.calculatedAt)) ||
+      invalidRefreshResult ||
       !Array.isArray(value.accounts) ||
       value.accounts.length > MAX_SHARED_ACCOUNTS ||
       value.accounts.some((entry) => !isAccountUsagePackageEntry(entry))
@@ -1545,27 +1677,40 @@ export class AccountSharingService implements vscode.Disposable {
   }
 
   private getDashboardAccountUsageSources(): DashboardAccountUsageSourceViewModel[] {
-    const activePrimarySyncs = new Set(
-      this.state!.credentialSyncs.filter((sync) => sync.role === "primary" && sync.state === "active").map(
-        (sync) => sync.syncId
-      )
+    const sourcesBySyncId = new Map(this.accountUsageState.sources.map((source) => [source.syncId, source]));
+    const pendingBySyncId = new Map(
+      this.accountUsageState.pendingRequests
+        .filter((request) => request.refresh)
+        .map((request) => [request.syncId, request])
     );
-    return this.accountUsageState.sources
-      .filter((source) => activePrimarySyncs.has(source.syncId))
-      .flatMap((source) =>
-        source.accounts.map((account) => ({
-          accountId: account.accountId,
-          syncId: source.syncId,
-          sourceUserId: source.sourceUserId,
-          sourceLabel: source.sourceDisplayName || source.sourceUserId,
-          sourceRole: "follower" as const,
-          calculatedAt: source.calculatedAt,
-          receivedAt: source.receivedAt,
-          stale: source.calculatedAt === undefined || this.now() - source.calculatedAt > 30 * 60 * 1000,
-          tokenUsage: account.tokenUsage,
-          lifetimeTokenUsage: account.lifetimeTokenUsage
-        }))
-      );
+    const now = this.now();
+    const syncs = this.state!.credentialSyncs.filter((sync) => sync.role === "primary" && sync.state === "active");
+    return syncs.flatMap((sync) => {
+      const source = sourcesBySyncId.get(sync.syncId);
+      const peer = this.state!.peers.find((candidate) => candidate.userId === sync.peerUserId);
+      const sourceLabel = [peer?.note?.trim(), peer?.displayName, source?.sourceDisplayName, sync.peerDisplayName]
+        .find((label) => label) ?? sync.peerUserId;
+      const pending = pendingBySyncId.get(sync.syncId);
+      const result = this.accountUsageRefreshResults.get(sync.syncId);
+      const refreshPending = pending && (!result || pending.createdAt >= result.createdAt);
+      return sync.accountIds.map((accountId): DashboardAccountUsageSourceViewModel => {
+        const account = source?.accounts.find((entry) => entry.accountId === accountId);
+        return {
+          accountId,
+          syncId: sync.syncId,
+          sourceUserId: sync.peerUserId,
+          sourceLabel,
+          sourceRole: "follower",
+          calculatedAt: source?.calculatedAt,
+          receivedAt: source?.receivedAt,
+          refreshStatus: refreshPending ? "pending" : result?.status,
+          refreshExpiresAt: refreshPending ? pending.expiresAt : undefined,
+          stale: source?.calculatedAt === undefined || now - source.calculatedAt > 30 * 60 * 1_000,
+          tokenUsage: account?.tokenUsage,
+          lifetimeTokenUsage: account?.lifetimeTokenUsage
+        };
+      });
+    });
   }
 
   private async publishCredentialSyncRecord(
@@ -1878,6 +2023,7 @@ export class AccountSharingService implements vscode.Disposable {
     }
     await this.persistState();
     this.accountUsageState.sources = this.accountUsageState.sources.filter((source) => source.syncId !== sync.syncId);
+    this.accountUsageRefreshResults.delete(sync.syncId);
     this.accountUsageState.pendingRequests = this.accountUsageState.pendingRequests.filter(
       (request) => request.syncId !== sync.syncId
     );

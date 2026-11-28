@@ -1,6 +1,7 @@
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type {
+  DashboardAccountUsageSourceViewModel,
   DashboardAccountViewModel,
   DashboardActionPayload,
   DashboardCopy,
@@ -9,6 +10,7 @@ import type {
   DashboardState
 } from "../../src/domain/dashboard/types";
 import {
+  formatTimestamp,
   getAccountHealthCategory,
   getDashboardHealthFilter,
   getDashboardSharingFilter,
@@ -47,6 +49,7 @@ export function SavedAccountCard(props: {
   switchPending: boolean;
   reauthorizePending: boolean;
   refreshPending: boolean;
+  sharedUsageRefreshAvailable?: boolean;
   copyImportJsonPending: boolean;
   copyImportJsonSucceeded: boolean;
   shareAccountsPending: boolean;
@@ -177,6 +180,11 @@ export function SavedAccountCard(props: {
     .filter(Boolean)
     .join(" ");
   const visibleMetrics = virtual ? [] : account.metrics.filter((metric) => metric.visible);
+  const usageCopy = sharedUsageCopy[props.lang === "zh" || props.lang === "zh-hant" ? props.lang : "en"];
+  const refreshFollowerUsage =
+    syncPrimary &&
+    props.sharedUsageRefreshAvailable === true &&
+    account.tokenUsageSources?.some((source) => source.sourceRole === "follower" && source.syncId) === true;
   const stopFlip = (event: Event): void => {
     event.stopPropagation();
   };
@@ -342,18 +350,34 @@ export function SavedAccountCard(props: {
           ) : null}
           {account.tokenUsageSources?.length ? (
             <div class="saved-token-usage-sources">
-              {account.tokenUsageSources.map((source) => (
-                <div
-                  class={`saved-token-usage-source ${source.stale ? "is-stale" : ""}`}
-                  key={`${source.sourceUserId}:${source.syncId ?? "local"}`}
-                  title={formatAccountTokenUsageSourceTitle(source, props.lang)}
-                >
-                  <span class="saved-token-usage-source-label">{source.sourceLabel}</span>
-                  <span class="saved-token-usage-source-value">
-                    {formatAccountTokenUsageSource(source, props.lang)}
-                  </span>
-                </div>
-              ))}
+              {account.tokenUsageSources.map((source) => {
+                const status = resolveUsageRefreshStatus(source, now);
+                const calculatedAt = formatTimestamp(source.calculatedAt, "");
+                return (
+                  <div
+                    class={`saved-token-usage-source ${source.stale ? "is-stale" : ""}`}
+                    key={`${source.sourceUserId}:${source.syncId ?? "local"}`}
+                    title={formatAccountTokenUsageSourceTitle(source, props.lang)}
+                  >
+                    <div class="saved-token-usage-source-info">
+                      <span class="saved-token-usage-source-label">{source.sourceLabel}</span>
+                      {calculatedAt ? (
+                        <span class="saved-token-usage-source-time" title={copy.localUsageUpdated}>
+                          {calculatedAt}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div class="saved-token-usage-source-value">
+                      {formatAccountTokenUsageSource(source, props.lang)}
+                      {status ? (
+                        <span class="saved-token-usage-source-meta" aria-live="polite">
+                          {usageCopy[status]}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : account.tokenUsage ? (
             <>
@@ -461,7 +485,11 @@ export function SavedAccountCard(props: {
                 label={copy.refreshBtn}
                 pending={props.refreshPending}
                 disabled={props.busy}
-                onClick={() => onAction("refresh", account.id)}
+                onClick={() =>
+                  refreshFollowerUsage
+                    ? onAction("refresh", account.id, { refreshFollowerUsage: true })
+                    : onAction("refresh", account.id)
+                }
               />
             ) : null}
             {!virtual ? (
@@ -793,6 +821,37 @@ function formatAccountTokenUsage(account: DashboardAccountViewModel, lang: Dashb
     return "";
   }
   return formatTokenUsageSummary(usage, lang);
+}
+
+const sharedUsageCopy = {
+  en: {
+    pending: "Waiting for device",
+    updated: "Updated",
+    cached: "Cached reply",
+    failed: "Scan failed",
+    timedOut: "No update received"
+  },
+  zh: {
+    pending: "等待设备更新",
+    updated: "已更新",
+    cached: "仅收到缓存",
+    failed: "统计失败",
+    timedOut: "本次未收到更新"
+  },
+  "zh-hant": {
+    pending: "等待裝置更新",
+    updated: "已更新",
+    cached: "僅收到快取",
+    failed: "統計失敗",
+    timedOut: "本次未收到更新"
+  }
+};
+
+function resolveUsageRefreshStatus(source: DashboardAccountUsageSourceViewModel, now: number) {
+  if (source.refreshStatus === "pending" && source.refreshExpiresAt !== undefined && source.refreshExpiresAt <= now) {
+    return "timedOut";
+  }
+  return source.refreshStatus;
 }
 
 function formatAccountTokenUsageSource(

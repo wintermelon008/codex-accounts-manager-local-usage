@@ -246,6 +246,29 @@ export class LocalUsageAnalyticsService {
     await this.startRefresh(onRefreshed, true);
   }
 
+  async refreshAccountTokenUsage(waitForLeaseMs: number): Promise<AccountTokenUsageSnapshot> {
+    const lease = await tryAcquireSharedFileLease(this.scanLeasePath(), LOCAL_USAGE_SCAN_LEASE_MS, waitForLeaseMs);
+    if (!lease) {
+      throw new Error("The local usage scanner is busy");
+    }
+    try {
+      const { accountTokenUsage: scanned } = await this.scanUsage(LOCAL_USAGE_SHORT_PERIOD_DAYS);
+      if (scanned.status !== "ready" || scanned.calculatedAt === undefined) {
+        throw new Error("Fresh account usage is unavailable");
+      }
+      await this.syncAccountTokenUsageFromCache();
+      if (!(await lease.renew())) {
+        throw new Error("The local usage scan lease expired");
+      }
+      const snapshot = mergeAccountTokenUsageSnapshots(this.accountTokenUsage, scanned);
+      await this.writeAccountTokenUsageCache(snapshot);
+      this.accountTokenUsage = snapshot;
+      return snapshot;
+    } finally {
+      await lease.release();
+    }
+  }
+
   async getSnapshots(onRefreshed?: () => void): Promise<LocalUsageSnapshots> {
     await this.syncSnapshotsFromCache();
 
@@ -262,7 +285,7 @@ export class LocalUsageAnalyticsService {
           now,
           LOCAL_USAGE_SHORT_PERIOD_DAYS
         ),
-        accountTokenUsage: createEmptyAccountTokenUsageSnapshot("loading", now)
+        accountTokenUsage: this.accountTokenUsage ?? createEmptyAccountTokenUsageSnapshot("loading", now)
       };
     }
 
@@ -374,7 +397,11 @@ export class LocalUsageAnalyticsService {
 
   private async refreshWithLease(force = false): Promise<void> {
     const previousCalculatedAt = this.snapshot?.calculatedAt;
-    const lease = await tryAcquireSharedFileLease(this.scanLeasePath(), LOCAL_USAGE_SCAN_LEASE_MS);
+    const lease = await tryAcquireSharedFileLease(
+      this.scanLeasePath(),
+      LOCAL_USAGE_SCAN_LEASE_MS,
+      force ? LOCAL_USAGE_SCAN_LEASE_MS : 0
+    );
     if (!lease) {
       await this.waitForPeerRefresh(previousCalculatedAt);
       return;
@@ -382,7 +409,10 @@ export class LocalUsageAnalyticsService {
 
     try {
       await this.syncSnapshotsFromCache();
-      if (!force && this.snapshot && isSnapshotFresh(this.snapshot, this.now())) {
+      const refreshedWhileWaiting =
+        (this.snapshot?.calculatedAt ?? Number.NEGATIVE_INFINITY) >
+        (previousCalculatedAt ?? Number.NEGATIVE_INFINITY);
+      if (this.snapshot && (force ? refreshedWhileWaiting : isSnapshotFresh(this.snapshot, this.now()))) {
         return;
       }
 
@@ -395,16 +425,19 @@ export class LocalUsageAnalyticsService {
     }
   }
 
-  private async scanAndPersist(): Promise<void> {
-    const scanPeriodDays = this.resolveScanPeriodDays();
-    const scanned = await this.combinedScanner({
+  private scanUsage(periodDays: number): Promise<LocalUsageSnapshots> {
+    return this.combinedScanner({
       sessionsPath: this.sessionsPath,
-      periodDays: scanPeriodDays,
+      periodDays,
       shortPeriodDays: LOCAL_USAGE_SHORT_PERIOD_DAYS,
       timeZone: this.timeZone,
       now: this.now(),
       usageAttributionDirectory: this.usageAttributionDirectory
     });
+  }
+
+  private async scanAndPersist(): Promise<void> {
+    const scanned = await this.scanUsage(this.resolveScanPeriodDays());
     const snapshot = mergeLocalUsageSnapshots(this.snapshot, scanned.localUsage, this.timeZone, this.now());
 
     await this.syncSnapshotsFromCache();
@@ -441,9 +474,11 @@ export class LocalUsageAnalyticsService {
       nextRefreshAt: nextLocalUsageRefreshAt(calculatedAt, this.timeZone)
     };
     this.cacheCoverage = createUsageCoverage(this.snapshot);
-    this.accountTokenUsage = createEmptyAccountTokenUsageSnapshot("unavailable", calculatedAt);
     await this.writeCache(this.snapshot, this.cacheCoverage).catch(() => undefined);
-    await this.writeAccountTokenUsageCache(this.accountTokenUsage).catch(() => undefined);
+    if (!this.accountTokenUsage) {
+      this.accountTokenUsage = createEmptyAccountTokenUsageSnapshot("unavailable", calculatedAt);
+      await this.writeAccountTokenUsageCache(this.accountTokenUsage).catch(() => undefined);
+    }
   }
 
   private async waitForPeerRefresh(previousCalculatedAt: number | undefined): Promise<void> {

@@ -14,7 +14,8 @@ type ButtonProps = Parameters<typeof ActionButton>[0];
 function renderCard(
   healthKind: AccountHealthKind,
   accountOverrides: Partial<DashboardAccountViewModel> = {},
-  busy = false
+  busy = false,
+  cardOverrides: Partial<CardProps> = {}
 ) {
   const onAction = vi.fn();
   const tree = SavedAccountCard({
@@ -29,7 +30,7 @@ function renderCard(
       ...accountOverrides
     } as DashboardAccountViewModel,
     lang: "zh",
-    copy: { reauthorizeBtn: "重新认证" } as CardProps["copy"],
+    copy: { reauthorizeBtn: "重新认证", refreshBtn: "刷新配额" } as CardProps["copy"],
     settings: {} as CardProps["settings"],
     now: Date.now(),
     privacyMode: false,
@@ -48,6 +49,7 @@ function renderCard(
     providerActionPending: false,
     selected: false,
     onToggleSelected: vi.fn(),
+    ...cardOverrides,
     onAction
   });
   const buttons: VNode<ButtonProps>[] = [];
@@ -61,7 +63,7 @@ function renderCard(
     visit(node.props.children);
   }
   visit(tree);
-  return { tree, button: buttons.find((node) => node.props.label === "重新认证"), onAction };
+  return { tree, buttons, button: buttons.find((node) => node.props.label === "重新认证"), onAction };
 }
 
 function collectText(node: ComponentChildren): string {
@@ -81,6 +83,40 @@ function collectText(node: ComponentChildren): string {
 }
 
 describe("saved account reauthorization key", () => {
+  it("uses the existing quota refresh button to request usage from all followers", () => {
+    const account: Partial<DashboardAccountViewModel> = {
+      credentialSyncRole: "primary",
+      tokenUsageSources: [{
+        sourceUserId: "online",
+        syncId: "sync-online",
+        sourceLabel: "U280",
+        sourceRole: "follower",
+        refreshStatus: "pending",
+        refreshExpiresAt: 100
+      }, {
+        sourceUserId: "offline",
+        syncId: "sync-offline",
+        sourceLabel: "Lab",
+        sourceRole: "follower",
+        stale: true
+      }]
+    };
+    const props = { sharedUsageRefreshAvailable: true, now: 90 };
+    const { tree, buttons, onAction } = renderCard("healthy", account, false, props);
+    expect(collectText(tree)).toContain("等待设备更新");
+    expect(buttons.every((node) => !node.props.label?.startsWith("更新从设备"))).toBe(true);
+    const refresh = buttons.find((node) => node.props.label === "刷新配额");
+    expect(refresh?.props).toMatchObject({ disabled: false, iconOnly: true });
+    refresh?.props.onClick();
+    expect(onAction).toHaveBeenCalledExactlyOnceWith("refresh", "selected-account", { refreshFollowerUsage: true });
+
+    const expired = renderCard("healthy", account, false, { ...props, now: 100 });
+    expect(collectText(expired.tree)).toContain("本次未收到更新");
+    const follower = renderCard("healthy", { ...account, credentialSyncRole: "follower" }, false, props);
+    follower.buttons.find((node) => node.props.label === "刷新配额")?.props.onClick();
+    expect(follower.onAction).toHaveBeenCalledExactlyOnceWith("refresh", "selected-account");
+  });
+
   it("renders primary and follower usage as separate card rows", () => {
     const { tree } = renderCard("healthy", {
       credentialSyncRole: "primary",

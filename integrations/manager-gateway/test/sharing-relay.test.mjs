@@ -350,12 +350,25 @@ describe("Manager sharing Relay", () => {
       body: JSON.stringify({ syncIds: ["usage-sync-12345678"] })
     });
     assert.equal(created.status, 201);
-    const request = (await created.json()).requests[0];
+    const cachedRead = (await created.json()).requests[0];
+    assert.equal(cachedRead.refresh, undefined);
+    const createRefresh = () => fetch(`${baseUrl}/v1/sharing/usage-requests`, {
+      method: "POST",
+      headers: { ...auth[0], "content-type": "application/json" },
+      body: JSON.stringify({ syncIds: ["usage-sync-12345678"], refresh: true })
+    });
+    const refresh = await createRefresh();
+    assert.equal(refresh.status, 201);
+    const request = (await refresh.json()).requests[0];
+    assert.notEqual(request.id, cachedRead.id);
+    assert.equal(request.refresh, true);
+    assert.equal((await (await createRefresh()).json()).requests[0].id, request.id);
 
     const followerInbox = await fetch(`${baseUrl}/v1/sharing/credential-syncs/inbox`, { headers: auth[1] });
     const inboxBody = await followerInbox.json();
-    assert.equal(inboxBody.usageRequests[0].id, request.id);
-    assert.equal(inboxBody.usageRequests[0].toUserId, profiles[1].userId);
+    const followerRequest = inboxBody.usageRequests.find((candidate) => candidate.id === request.id);
+    assert.equal(followerRequest.toUserId, profiles[1].userId);
+    assert.equal(followerRequest.refresh, true);
 
     const response = await fetch(`${baseUrl}/v1/sharing/usage-requests/${request.id}/response`, {
       method: "POST",
@@ -370,8 +383,9 @@ describe("Manager sharing Relay", () => {
 
     const primarySent = await fetch(`${baseUrl}/v1/sharing/credential-syncs/sent`, { headers: auth[0] });
     const sentBody = await primarySent.json();
-    assert.equal(sentBody.usageRequests[0].response.revision, 3);
-    assert.equal(sentBody.usageRequests[0].response.envelope.ciphertext, "usage-opaque");
+    const sentRequest = sentBody.usageRequests.find((candidate) => candidate.id === request.id);
+    assert.equal(sentRequest.response.revision, 3);
+    assert.equal(sentRequest.response.envelope.ciphertext, "usage-opaque");
 
     const acknowledged = await fetch(`${baseUrl}/v1/sharing/usage-requests/${request.id}/ack`, {
       method: "POST",
@@ -379,7 +393,7 @@ describe("Manager sharing Relay", () => {
     });
     assert.equal(acknowledged.status, 200);
     const afterAck = await fetch(`${baseUrl}/v1/sharing/credential-syncs/sent`, { headers: auth[0] });
-    assert.deepEqual((await afterAck.json()).usageRequests, []);
+    assert.deepEqual((await afterAck.json()).usageRequests.map((candidate) => candidate.id), [cachedRead.id]);
 
     const update = await fetch(`${baseUrl}/v1/sharing/usage-updates`, {
       method: "POST",

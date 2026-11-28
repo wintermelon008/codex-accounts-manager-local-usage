@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,8 +19,13 @@ vi.mock("../src/auth/tokenRefreshCoordinator", () => ({
 }));
 
 import { AccountSharingService } from "../src/sharing/accountSharingService";
+import { LocalUsageAnalyticsService } from "../src/services/localUsageAnalytics";
+import { encryptSharingPayload, type SharingKeyMaterial } from "../src/sharing/crypto";
+import { ACCOUNT_USAGE_PACKAGE_SCHEMA } from "../src/sharing/types";
 import type { CodexAccountRecord, SharedCodexAccountJson } from "../src/core/types";
-import type { CredentialSyncRecord, SharingLease, SharingTransfer } from "../src/sharing/types";
+import type { CredentialSyncRecord, SharingLease, SharingPeer, SharingTransfer } from "../src/sharing/types";
+import { createSharingRelay } from "../integrations/manager-gateway/src/sharing-relay.mjs";
+import { createGatewayServer, listen } from "../integrations/manager-gateway/src/server.mjs";
 
 const directories: string[] = [];
 
@@ -288,6 +293,7 @@ describe("AccountSharingService manual remote usage reads", () => {
                 fromUserId: service.getProfile().userId,
                 toUserId: sync.peerUserId,
                 state: "pending",
+                refresh: true,
                 createdAt: 1_000,
                 expiresAt: 61_000
               }
@@ -299,14 +305,15 @@ describe("AccountSharingService manual remote usage reads", () => {
       throw new Error(`unexpected request: ${url}`);
     });
 
-    await service.refreshRemoteAccountUsage();
+    await service.refreshRemoteAccountUsage("account-1");
+    await expect(service.refreshRemoteAccountUsage("another-account", sync.syncId)).rejects.toThrow("从设备用量");
 
     expect(poll).toHaveBeenCalledOnce();
     expect(calls.map((call) => call.url)).toEqual([
       "https://relay.example.invalid/v1/sharing/register",
       "https://relay.example.invalid/v1/sharing/usage-requests"
     ]);
-    expect(JSON.parse(calls[1]?.body ?? "{}")).toEqual({ syncIds: [sync.syncId] });
+    expect(JSON.parse(calls[1]?.body ?? "{}")).toEqual({ syncIds: [sync.syncId], refresh: true });
 
     const after = JSON.parse(await readFile(sharingStatePath, "utf8")) as { state: unknown };
     expect(after.state).toEqual(before.state);
@@ -316,9 +323,186 @@ describe("AccountSharingService manual remote usage reads", () => {
     expect(service.getDashboardView()).toMatchObject({
       usageReadAvailable: true,
       usageReadPending: true,
-      accountUsageSources: []
+      accountUsageSources: [{ syncId: sync.syncId, refreshStatus: "pending", refreshExpiresAt: 61_000 }]
     });
     service.dispose();
+  });
+});
+
+describe("AccountSharingService follower usage refresh", () => {
+  it("scans an online follower and updates its row while another follower times out", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codex-sharing-fresh-usage-"));
+    directories.push(directory);
+    const staticTime = Date.parse("2026-07-14T12:00:00.000Z");
+    let now = staticTime;
+    const resetAt = Math.floor(now / 1_000) + 3600;
+    const accountId = "shared-account";
+    const account = {
+      id: accountId,
+      quotaSummary: { hourlyWindowPresent: true, hourlyResetTime: resetAt, hourlyWindowMinutes: 300 }
+    } as CodexAccountRecord;
+    const sessionsPath = path.join(directory, "sessions");
+    const attributionDirectory = path.join(directory, "attribution");
+    const timestamp = new Date(now - 1_000).toISOString();
+    await Promise.all([mkdir(sessionsPath), mkdir(attributionDirectory)]);
+    await writeFile(path.join(sessionsPath, "rollout.jsonl"), [
+      { type: "session_meta", payload: { id: "example-thread" } },
+      { type: "turn_context", payload: { model: "gpt-5.6-sol" } },
+      {
+        type: "event_msg",
+        timestamp,
+        payload: {
+          type: "token_count",
+          rate_limits: { primary: { resets_at: resetAt, window_minutes: 300 } },
+          info: { last_token_usage: { input_tokens: 30, output_tokens: 12, total_tokens: 42 } }
+        }
+      }
+    ].map((value) => JSON.stringify(value)).join("\n") + "\n");
+    await writeFile(path.join(attributionDirectory, "activity.jsonl"), JSON.stringify({
+      v: 1, t: now - 2_000, th: "example-thread", a: accountId
+    }) + "\n");
+
+    const relay = createSharingRelay({ stateDir: path.join(directory, "relay"), bootstrapToken: "test-enroll", now: () => now });
+    const server = createGatewayServer({
+      sessions: { maxSessions: 1 },
+      config: { server: { host: "127.0.0.1", port: 0, corsOrigin: "*" } },
+      sharingRelay: relay
+    });
+    const address = await listen(server, "127.0.0.1", 0);
+    const devices: AccountSharingService[] = [];
+    try {
+      await relay.init();
+      fetchWithTimeoutMock.mockImplementation((input: string | URL, init: RequestInit) => fetch(input, init));
+      const createDevice = async (name: string) => {
+        const storage = path.join(directory, name);
+        const usageAnalytics = new LocalUsageAnalyticsService({
+          globalStoragePath: storage,
+          sessionsPath,
+          usageAttributionDirectory: attributionDirectory,
+          now: () => now,
+          timeZone: "UTC"
+        });
+        const scan = vi.spyOn(usageAnalytics, "refreshAccountTokenUsage");
+        const service = new AccountSharingService({
+          globalStorageUri: { fsPath: storage },
+          globalState: { get: vi.fn(), update: vi.fn() },
+          secrets: { delete: vi.fn() }
+        } as never, {
+          listAccounts: vi.fn(async () => []),
+          getAccount: vi.fn(async () => account),
+          exportSharedAccounts: vi.fn(async () => []),
+          onDidChangeAccounts: vi.fn(() => ({ dispose: vi.fn() }))
+        } as never, vi.fn(), {
+          now: () => now,
+          relayUrl: () => `http://127.0.0.1:${address.port}`,
+          usageAnalytics
+        });
+        devices.push(service);
+        await service.initialize();
+        const profile = service.getProfile();
+        const { mailboxToken } = await relay.registerProfile(profile, "test-enroll");
+        const runtime = service as unknown as {
+          state: { credentialSyncs: CredentialSyncRecord[]; peers: SharingPeer[] };
+          keys: SharingKeyMaterial;
+          relayToken: string;
+          relayRegistrationValidatedAt: number;
+          pollCredentialSyncs: () => Promise<void>;
+          publishCredentialSyncRecord: () => Promise<void>;
+          accountUsageResponseInFlight: Map<string, Promise<void>>;
+          accountUsageAckInFlight: Map<string, Promise<void>>;
+        };
+        runtime.relayToken = mailboxToken;
+        runtime.relayRegistrationValidatedAt = now;
+        return { service, profile, runtime, mailboxToken, scan };
+      };
+      const primary = await createDevice("primary");
+      const online = await createDevice("online");
+      const offline = await createDevice("offline");
+      vi.spyOn(primary.service, "poll").mockResolvedValue(undefined);
+      vi.spyOn(primary.runtime, "publishCredentialSyncRecord").mockResolvedValue(undefined);
+      for (const device of [online, offline]) {
+        const request = await relay.createRequest(primary.profile.userId, device.profile.userId, primary.mailboxToken);
+        await relay.updateRequest(request.id, device.profile.userId, true, device.mailboxToken);
+        primary.runtime.state.peers.push({ ...device.profile, relationship: "trusted", addedAt: now });
+        device.runtime.state.peers.push({ ...primary.profile, relationship: "trusted", addedAt: now });
+        const syncId = device === online ? "usage-sync-online" : "usage-sync-offline";
+        await relay.createCredentialSync(primary.profile.userId, {
+          syncId, recipientUserId: device.profile.userId, version: 1, eventId: "credential-event-1234",
+          envelope: { ciphertext: "fixture-credential-envelope" }
+        }, primary.mailboxToken);
+        const sync = { syncId, state: "active" as const, accountIds: [accountId], version: 1, createdAt: now };
+        primary.runtime.state.credentialSyncs.push({ ...sync, role: "primary", peerUserId: device.profile.userId });
+        device.runtime.state.credentialSyncs.push({
+          ...sync, role: "follower", peerUserId: primary.profile.userId, acknowledgedVersion: 1
+        });
+      }
+      const rows = () => primary.service.getDashboardView().accountUsageSources;
+      expect(rows()).toMatchObject([{ syncId: "usage-sync-online" }, { syncId: "usage-sync-offline" }]);
+
+      await primary.service.refreshRemoteAccountUsage(accountId);
+      expect(rows()).toMatchObject([{ refreshStatus: "pending" }, { refreshStatus: "pending" }]);
+      await online.runtime.pollCredentialSyncs();
+      await Promise.all(online.runtime.accountUsageResponseInFlight.values());
+      expect(online.scan).toHaveBeenCalledOnce();
+
+      const publishTime = now - 1_000;
+      const offlineSnapshot = {
+        schema: ACCOUNT_USAGE_PACKAGE_SCHEMA,
+        syncId: "usage-sync-offline",
+        revision: publishTime,
+        calculatedAt: publishTime,
+        accounts: [{ accountId }]
+      };
+      const encryptOffline = (payload: unknown) => encryptSharingPayload(
+        payload, offline.runtime.keys, offline.profile.userId, primary.profile.userId,
+        primary.profile.encryptionPublicKey, now
+      );
+      await relay.publishUsageUpdate(offline.profile.userId, {
+        syncId: offlineSnapshot.syncId,
+        revision: publishTime,
+        eventId: "automatic-usage-update",
+        envelope: encryptOffline(offlineSnapshot)
+      }, offline.mailboxToken);
+      await primary.runtime.pollCredentialSyncs();
+      expect(rows()).toMatchObject([
+        { refreshStatus: "updated", calculatedAt: staticTime, tokenUsage: { totalTokens: 42 } },
+        { refreshStatus: "pending", calculatedAt: publishTime }
+      ]);
+      expect(primary.scan).not.toHaveBeenCalled();
+      expect(offline.scan).not.toHaveBeenCalled();
+
+      now += 60_001;
+      await primary.runtime.pollCredentialSyncs();
+      expect(rows()).toMatchObject([{ refreshStatus: "updated" }, { refreshStatus: "timedOut", calculatedAt: publishTime }]);
+
+      await primary.service.refreshRemoteAccountUsage(accountId, offlineSnapshot.syncId);
+      const pending = await relay.listIncomingUsageReadRequests(offline.profile.userId, offline.mailboxToken);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toMatchObject({ syncId: offlineSnapshot.syncId, refresh: true });
+      // An older follower replies with its cache and no result of a new scan.
+      await relay.respondToUsageReadRequest(pending[0].id, offline.profile.userId, {
+        revision: publishTime,
+        eventId: "legacy-usage-response",
+        envelope: encryptOffline({ ...offlineSnapshot, requestId: pending[0].id })
+      }, offline.mailboxToken);
+      await primary.runtime.pollCredentialSyncs();
+      expect(rows()).toMatchObject([{ refreshStatus: "updated" }, { refreshStatus: "cached", calculatedAt: publishTime }]);
+
+      online.scan.mockRejectedValueOnce(new Error("Injected session scan failure"));
+      await primary.service.refreshRemoteAccountUsage(accountId, "usage-sync-online");
+      await online.runtime.pollCredentialSyncs();
+      await Promise.all(online.runtime.accountUsageResponseInFlight.values());
+      await primary.runtime.pollCredentialSyncs();
+      expect(rows()).toMatchObject([
+        { refreshStatus: "failed", calculatedAt: staticTime, tokenUsage: { totalTokens: 42 } },
+        { refreshStatus: "cached", calculatedAt: publishTime }
+      ]);
+      await Promise.all(primary.runtime.accountUsageAckInFlight.values());
+    } finally {
+      devices.forEach((device) => device.dispose());
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 

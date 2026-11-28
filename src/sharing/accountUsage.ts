@@ -14,6 +14,7 @@ export type AccountUsageState = {
 export type AccountUsagePendingRequest = {
   requestId: string;
   syncId: string;
+  refresh?: true;
   createdAt: number;
   expiresAt: number;
 };
@@ -94,6 +95,7 @@ function isPendingRequest(value: unknown): value is AccountUsagePendingRequest {
   return Boolean(
     typeof candidate.requestId === "string" &&
     typeof candidate.syncId === "string" &&
+    (candidate.refresh === undefined || candidate.refresh === true) &&
     typeof candidate.createdAt === "number" &&
     typeof candidate.expiresAt === "number"
   );

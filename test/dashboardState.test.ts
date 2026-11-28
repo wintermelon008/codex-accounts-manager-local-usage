@@ -136,6 +136,18 @@ describe("buildMetrics", () => {
 
 describe("resolveAccountTokenUsage", () => {
   it("keeps follower cards local even when a shared usage source is present in state", () => {
+    const localTokenUsage = {
+      status: "waiting" as const,
+      window: "hourly" as const,
+      resetAt: 1_800_000_000,
+      calculatedAt: 1_800_000_123_000,
+      byModel: [],
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+      totalTokens: 0
+    };
     const account = {
       id: "account",
       email: "account@example.com",
@@ -151,7 +163,7 @@ describe("resolveAccountTokenUsage", () => {
     };
     const sources = resolveAccountUsageSources(
       account,
-      undefined,
+      localTokenUsage,
       undefined,
       {
         userId: "rw_follower_1234567890",
@@ -174,11 +186,15 @@ describe("resolveAccountTokenUsage", () => {
     );
 
     expect(sources).toHaveLength(1);
-    expect(sources?.[0]).toMatchObject({ sourceRole: "follower", sourceUserId: "rw_follower_1234567890" });
+    expect(sources?.[0]).toMatchObject({
+      sourceRole: "follower",
+      sourceUserId: "rw_follower_1234567890",
+      calculatedAt: localTokenUsage.calculatedAt
+    });
 
     const primarySources = resolveAccountUsageSources(
       { ...account, credentialSync: { ...account.credentialSync, role: "primary" as const } },
-      undefined,
+      localTokenUsage,
       undefined,
       {
         userId: "rw_primary_1234567890",
@@ -200,6 +216,7 @@ describe("resolveAccountTokenUsage", () => {
       "zh"
     );
     expect(primarySources).toHaveLength(2);
+    expect(primarySources?.[0]).toMatchObject({ sourceLabel: "主设备（本机）", calculatedAt: localTokenUsage.calculatedAt });
     expect(primarySources?.[1]).toMatchObject({ sourceLabel: "U280", sourceRole: "follower" });
   });
 

@@ -1178,6 +1178,43 @@ describe("scanLocalUsageSessions", () => {
 });
 
 describe("LocalUsageAnalyticsService", () => {
+  it("limits a peer request to recent usage and retains the cache if its scan fails", async () => {
+    const root = await createTempDirectory();
+    let now = NOW;
+    const scanner = vi.fn<LocalUsageCombinedScanner>(async ({ periodDays, now: scannedAt }) => ({
+      localUsage: readySnapshot(periodDays, scannedAt, 42),
+      accountTokenUsage: {
+        status: "ready",
+        isRefreshing: false,
+        calculatedAt: scannedAt,
+        windowsByAccount: { account: [buildTestAccountUsageWindow(1_800_000_000, 42, scannedAt)] }
+      }
+    }));
+    const service = new LocalUsageAnalyticsService({
+      globalStoragePath: root,
+      now: () => now,
+      timeZone: TIME_ZONE,
+      enabledRanges: ["7m"],
+      backgroundRefreshEnabled: false,
+      combinedScanner: scanner
+    });
+    await expect(service.refreshAccountTokenUsage(1_000)).resolves.toMatchObject({
+      calculatedAt: NOW,
+      windowsByAccount: { account: [expect.objectContaining({ totalTokens: 42 })] }
+    });
+    expect(scanner).toHaveBeenCalledWith(expect.objectContaining({ periodDays: 4 }));
+    await expect(readFile(path.join(root, "local-usage-analytics-v9.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(service.getSnapshots()).resolves.toMatchObject({
+      localUsage: { status: "loading" },
+      accountTokenUsage: { status: "ready", calculatedAt: NOW }
+    });
+
+    now += 100;
+    scanner.mockRejectedValueOnce(new Error("Scan failed"));
+    await expect(service.refreshAccountTokenUsage(1_000)).rejects.toThrow("Scan failed");
+    await expect(readCachedAccountTokenUsage(root)).resolves.toMatchObject({ calculatedAt: NOW });
+  });
+
   it("retains lifetime account usage across refreshes without double counting a window", async () => {
     const root = await createTempDirectory();
     const storagePath = path.join(root, "storage");

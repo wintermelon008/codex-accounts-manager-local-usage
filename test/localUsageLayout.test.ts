@@ -313,20 +313,26 @@ describe("local usage dashboard placement and responsive guards", () => {
     expect(stylesheet).toContain("text-overflow: ellipsis");
   });
 
-  it("renders shared account usage as source rows and binds its read to the local refresh button", () => {
+  it("uses the card quota refresh for follower usage and keeps local refresh independent", () => {
     const card = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/savedAccountCard.tsx"), "utf8");
     const main = fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/main.tsx"), "utf8");
     const stylesheet = fs.readFileSync(path.join(projectRoot, "media/webview/quotaSummary.css"), "utf8");
 
     expect(card).toContain("tokenUsageSources?.length");
     expect(card).toContain("saved-token-usage-source");
+    expect(card).toContain("saved-token-usage-source-time");
+    expect(card).toContain('onAction("refresh", account.id, { refreshFollowerUsage: true })');
+    expect(card).not.toContain("saved-token-usage-refresh");
     expect(main).toContain('sendAction("refreshLocalUsage")');
-    expect(main).not.toContain('sendAction("refreshSharedUsage")');
-    expect(main).not.toContain("snapshot.sharing?.usageReadAvailable");
+    expect(main).toContain('const localUsageRefreshPending = isActionPending("refreshLocalUsage");');
+    expect(main).not.toContain("usageReadPending");
     expect(
       fs.readFileSync(path.join(projectRoot, "webview-src/dashboard/localUsageSection.tsx"), "utf8")
     ).not.toContain("onRefreshSharedUsage");
     expect(stylesheet).toContain(".saved-token-usage-sources");
+    expect(stylesheet).toContain(".saved-token-usage-source-info");
+    expect(stylesheet).toContain("display: flex");
+    expect(stylesheet).not.toContain(".saved-token-usage-refresh");
     expect(stylesheet).not.toContain(".local-usage-header-actions");
   });
 

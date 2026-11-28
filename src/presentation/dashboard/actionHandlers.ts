@@ -321,7 +321,10 @@ async function runDashboardAction(
       if (!ctx.accountSharing) {
         throw new Error("账号共享服务尚未启动");
       }
-      await ctx.accountSharing.refreshRemoteAccountUsage();
+      if (!account) {
+        throw new Error("请选择要刷新从设备用量的账号");
+      }
+      await ctx.accountSharing.refreshRemoteAccountUsage(account.id, payload?.sharingSyncId);
       return undefined;
     case "repairRuntime": {
       const lockCleanup = await clearStaleCodexSessionLocks();
@@ -445,6 +448,11 @@ async function runDashboardAction(
       return undefined;
     case "refresh":
       if (account) {
+        if (payload?.refreshFollowerUsage === true && ctx.accountSharing?.isEnabled()) {
+          void ctx.accountSharing.refreshRemoteAccountUsage(account.id).catch((error: unknown) => {
+            console.warn("[codexAccounts] follower usage refresh failed", toFailureMessage(error));
+          });
+        }
         await vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
       }
       return undefined;

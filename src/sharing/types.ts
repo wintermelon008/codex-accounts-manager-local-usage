@@ -89,6 +89,7 @@ export type AccountUsagePackage = {
   syncId: string;
   /** Present for one-shot reads; omitted for automatic follower updates. */
   requestId?: string;
+  refreshResult?: "updated" | "failed";
   revision: number;
   calculatedAt?: number;
   accounts: AccountUsagePackageEntry[];
@@ -100,13 +101,14 @@ export type AccountUsagePackageEntry = {
   lifetimeTokenUsage?: DashboardAccountLifetimeTokenUsageViewModel;
 };
 
-/** A one-shot request for a follower's already-cached account usage. */
+/** A one-shot request for cached or freshly computed follower usage. */
 export type AccountUsageReadRequest = {
   id: string;
   syncId: string;
   fromUserId: string;
   toUserId: string;
   state: "pending" | "responded";
+  refresh?: true;
   createdAt: number;
   expiresAt: number;
   response?: {

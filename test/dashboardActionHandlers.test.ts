@@ -229,29 +229,54 @@ describe("executeDashboardActionMessage", () => {
     expect(result.status).toBe("completed");
   });
 
-  it("starts a manual remote usage read without waiting for follower data", async () => {
-    const refreshRemoteAccountUsage = vi.fn().mockResolvedValue(undefined);
-    const result = await executeDashboardActionMessage(
-      {
-        context: {} as DashboardActionContext["context"],
-        repo: {} as DashboardActionContext["repo"],
-        resolveLanguage: () => "zh",
-        schedulePublishState: vi.fn(),
-        publishState: vi.fn(),
-        accountSharing: { refreshRemoteAccountUsage } as unknown as DashboardActionContext["accountSharing"],
-        oauth: {} as DashboardActionContext["oauth"],
-        announcements: {} as DashboardActionContext["announcements"],
-        getAnnouncementOptions: () => ({ version: "0.1.21-l6", locale: "zh" })
-      },
-      {
-        type: "dashboard:action",
-        action: "refreshSharedUsage",
-        requestId: "req-shared-usage-refresh"
-      }
+  it.each(["quota only", "follower pending", "relay failed"])("completes quota refresh with %s", async (mode) => {
+    const account = { id: "shared-account" };
+    const refreshRemoteAccountUsage = vi.fn(
+      () => mode === "relay failed" ? Promise.reject(new Error("Relay unavailable")) : new Promise<void>(() => {})
     );
+    const refreshLocalUsage = vi.fn().mockResolvedValue(undefined);
+    const quotaCommand = vi.mocked(vscode.commands.executeCommand);
+    quotaCommand.mockClear();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const includeFollowers = mode !== "quota only";
+      const result = await executeDashboardActionMessage(
+        {
+          context: {} as DashboardActionContext["context"],
+          repo: { getAccount: vi.fn().mockResolvedValue(account) } as unknown as DashboardActionContext["repo"],
+          resolveLanguage: () => "zh",
+          schedulePublishState: vi.fn(),
+          publishState: vi.fn(),
+          refreshLocalUsage,
+          accountSharing: {
+            isEnabled: () => true,
+            refreshRemoteAccountUsage
+          } as unknown as DashboardActionContext["accountSharing"],
+          oauth: {} as DashboardActionContext["oauth"],
+          announcements: {} as DashboardActionContext["announcements"],
+          getAnnouncementOptions: () => ({ version: "0.1.21-l9", locale: "zh" })
+        },
+        {
+          type: "dashboard:action",
+          action: "refresh",
+          requestId: "req-quota-refresh",
+          accountId: account.id,
+          payload: includeFollowers ? { refreshFollowerUsage: true } : undefined
+        }
+      );
 
-    expect(refreshRemoteAccountUsage).toHaveBeenCalledOnce();
-    expect(result.status).toBe("completed");
+      expect(quotaCommand).toHaveBeenCalledExactlyOnceWith("codexAccounts.refreshQuota", account);
+      if (includeFollowers) {
+        expect(refreshRemoteAccountUsage).toHaveBeenCalledExactlyOnceWith(account.id);
+      } else {
+        expect(refreshRemoteAccountUsage).not.toHaveBeenCalled();
+      }
+      expect(refreshLocalUsage).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: "completed", errorMessage: undefined });
+      expect(warn).toHaveBeenCalledTimes(mode === "relay failed" ? 1 : 0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("force-clears stale Codex session locks and reports active writers", async () => {

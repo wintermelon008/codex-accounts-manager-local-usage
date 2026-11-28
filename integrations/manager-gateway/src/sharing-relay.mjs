@@ -306,14 +306,17 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
       await ensureInitialized();
       assertUserToken(fromUserId, token);
       await expireUsageReadRequests();
-      const syncIds = normalizeSyncIds(payload?.syncIds);
+      const syncs = normalizeSyncIds(payload?.syncIds).map((syncId) =>
+        requireActiveCredentialSync(syncId, fromUserId)
+      );
+      const refresh = payload?.refresh === true;
       const requests = [];
-      for (const syncId of syncIds) {
-        const sync = requireActiveCredentialSync(syncId, fromUserId);
+      for (const sync of syncs) {
         const duplicate = state.usageRequests.find(
           (request) =>
-            request.syncId === syncId &&
+            request.syncId === sync.syncId &&
             request.fromUserId === fromUserId &&
+            (request.refresh === true) === refresh &&
             request.state === "pending" &&
             request.expiresAt > now()
         );
@@ -323,10 +326,11 @@ export function createSharingRelay({ stateDir, bootstrapToken, now = () => Date.
         }
         const request = {
           id: randomUUID(),
-          syncId,
+          syncId: sync.syncId,
           fromUserId,
           toUserId: sync.toUserId,
           state: "pending",
+          ...(refresh ? { refresh: true } : {}),
           createdAt: now(),
           expiresAt: now() + USAGE_REQUEST_TTL_MS
         };
@@ -893,6 +897,7 @@ function publicUsageReadRequest(request) {
     fromUserId: request.fromUserId,
     toUserId: request.toUserId,
     state: request.state,
+    refresh: request.refresh,
     createdAt: request.createdAt,
     expiresAt: request.expiresAt,
     response: request.response
